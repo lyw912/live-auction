@@ -9,6 +9,7 @@ import (
 
 	"live-auction/backend/internal/auction"
 	"live-auction/backend/internal/config"
+	"live-auction/backend/internal/realtime"
 	"live-auction/backend/internal/storage"
 )
 
@@ -23,10 +24,12 @@ func NewRouter(cfg config.Config, deps *storage.Dependencies, log *slog.Logger) 
 	r.Get("/readyz", health.Readiness)
 	r.Get("/api/health", health.Readiness)
 
+	rt := realtime.NewServer(deps.Postgres, deps.Redis)
 	auctionHandler := AuctionHandler{
 		Config: cfg,
 		Deps:   deps,
 		Repo:   auction.NewRepository(deps.Postgres),
+		RT:     rt,
 	}
 	r.Route("/api", func(r chi.Router) {
 		r.Use(mockAuthMiddleware(cfg))
@@ -44,8 +47,10 @@ func NewRouter(cfg config.Config, deps *storage.Dependencies, log *slog.Logger) 
 		r.Get("/orders", auctionHandler.ListOrders)
 		r.Get("/users/me/orders", auctionHandler.ListOrders)
 		r.Post("/orders/{id}/pay-mock", auctionHandler.PayMock)
+		r.Post("/auth/ws-ticket", auctionHandler.CreateWSTicket)
 		r.Get("/rooms/{room_id}/auctions", auctionHandler.ListRoomAuctions)
 	})
+	r.Get("/ws", rt.ServeWS)
 
 	return r
 }

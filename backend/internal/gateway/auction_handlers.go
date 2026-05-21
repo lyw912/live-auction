@@ -13,6 +13,7 @@ import (
 	"live-auction/backend/internal/auction"
 	"live-auction/backend/internal/config"
 	apierrors "live-auction/backend/internal/platform/errors"
+	"live-auction/backend/internal/realtime"
 	"live-auction/backend/internal/storage"
 )
 
@@ -20,6 +21,7 @@ type AuctionHandler struct {
 	Config config.Config
 	Deps   *storage.Dependencies
 	Repo   *auction.Repository
+	RT     *realtime.Server
 }
 
 type uploadURLRequest struct {
@@ -155,6 +157,40 @@ func (h AuctionHandler) ListOrders(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := h.Repo.ListOrders(r.Context(), user.ID, user.Role)
 	writeResult(w, r, http.StatusOK, result, err)
+}
+
+func (h AuctionHandler) CreateWSTicket(w http.ResponseWriter, r *http.Request) {
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	var req struct {
+		RoomID    string `json:"room_id"`
+		AuctionID string `json:"auction_id"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "invalid json body", 400))
+		return
+	}
+	if err := h.RT.ValidateRoomAuction(r.Context(), req.RoomID, req.AuctionID); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	token, err := h.RT.TicketStore().Issue(r.Context(), realtime.Ticket{
+		UserID:    user.ID,
+		Role:      user.Role,
+		RoomID:    req.RoomID,
+		AuctionID: req.AuctionID,
+	})
+	if err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ticket":        token,
+		"expires_in_ms": int(realtime.TicketTTL / time.Millisecond),
+	})
 }
 
 func decodeJSON(r *http.Request, target any) error {
