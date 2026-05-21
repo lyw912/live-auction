@@ -122,6 +122,41 @@ func (h AuctionHandler) GetAuction(w http.ResponseWriter, r *http.Request) {
 	writeResult(w, r, http.StatusOK, result, err)
 }
 
+func (h AuctionHandler) PlaceBid(w http.ResponseWriter, r *http.Request) {
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	var req auction.BidInput
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "invalid json body", 400))
+		return
+	}
+	result, err := h.Repo.PlaceBid(r.Context(), chi.URLParam(r, "id"), user.ID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context()))
+	writeResult(w, r, http.StatusOK, result, err)
+}
+
+func (h AuctionHandler) PayMock(w http.ResponseWriter, r *http.Request) {
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	result, err := h.Repo.PayMock(r.Context(), chi.URLParam(r, "id"), user.ID, r.Header.Get("Idempotency-Key"), traceID(r.Context()))
+	writeResult(w, r, http.StatusOK, result, err)
+}
+
+func (h AuctionHandler) ListOrders(w http.ResponseWriter, r *http.Request) {
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	result, err := h.Repo.ListOrders(r.Context(), user.ID, user.Role)
+	writeResult(w, r, http.StatusOK, result, err)
+}
+
 func decodeJSON(r *http.Request, target any) error {
 	defer r.Body.Close()
 	return json.NewDecoder(r.Body).Decode(target)

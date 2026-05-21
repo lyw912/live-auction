@@ -50,3 +50,8 @@ func requireHost(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+func currentUser(r *http.Request) (AuthUser, bool) {
+	user, ok := r.Context().Value(authUserKey{}).(AuthUser)
+	return user, ok
+}
