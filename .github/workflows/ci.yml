@@ -7,14 +7,20 @@ on:
       - main
 
 jobs:
-  placeholder:
-    name: repository skeleton
+  backend:
+    name: backend
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
       - name: Validate required docs
         run: |
           test -f README.md
           test -f CLAUDE.md
           test -f docs/setup_guide.md
           test -f docs/design-v2-industrial/12-engineering-rules.md
+      - name: Test backend
+        working-directory: backend
+        run: go test ./...
