@@ -215,6 +215,9 @@ func (r *Repository) Start(ctx context.Context, auctionID string, traceID string
 	if err != nil {
 		return Auction{}, mapPGError(err)
 	}
+	if err := upsertSchedulerJob(ctx, tx, "END_AUCTION", "auction", auctionID, "end:"+auctionID, endAt); err != nil {
+		return Auction{}, err
+	}
 	if err := appendAuctionEvent(ctx, tx, auctionID, "auction_started", traceID, map[string]any{
 		"start_at": now,
 		"end_at":   endAt,
@@ -418,6 +421,21 @@ func appendAuctionEvent(ctx context.Context, tx pgx.Tx, auctionID string, eventT
 		INSERT INTO outbox_delivery (outbox_id, status)
 		VALUES ($1, 'PENDING')
 	`, outboxID)
+	return err
+}
+
+func upsertSchedulerJob(ctx context.Context, tx pgx.Tx, jobType string, targetType string, targetID string, idempotencyKey string, runAt time.Time) error {
+	_, err := tx.Exec(ctx, `
+		INSERT INTO scheduler_jobs (id, job_type, target_type, target_id, idempotency_key, run_at, status, next_attempt_at)
+		VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', $6)
+		ON CONFLICT (job_type, target_type, target_id, idempotency_key)
+		DO UPDATE SET run_at = EXCLUDED.run_at,
+		              status = CASE WHEN scheduler_jobs.status IN ('SUCCEEDED','DEAD') THEN scheduler_jobs.status ELSE 'PENDING' END,
+		              next_attempt_at = EXCLUDED.next_attempt_at,
+		              locked_by = NULL,
+		              locked_until = NULL,
+		              updated_at = now()
+	`, "job_"+uuid.NewString(), jobType, targetType, targetID, idempotencyKey, runAt)
 	return err
 }
 

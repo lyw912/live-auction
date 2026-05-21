@@ -15,6 +15,7 @@ import (
 	"live-auction/backend/internal/outbox"
 	"live-auction/backend/internal/platform/logger"
 	"live-auction/backend/internal/realtime"
+	"live-auction/backend/internal/scheduler"
 	"live-auction/backend/internal/storage"
 )
 
@@ -36,6 +37,7 @@ func main() {
 	go outbox.NewRelay(deps.Postgres, deps.Redis, "server-main").
 		WithPublisher(rt.PublishAuctionEvent).
 		Run(ctx, log, 500*time.Millisecond)
+	go scheduler.NewRunner(deps.Postgres, "server-main").Run(ctx, log, 500*time.Millisecond)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,

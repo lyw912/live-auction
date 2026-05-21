@@ -27,8 +27,10 @@ const (
 
 	OrderStatusPending    = "ORDER_PENDING"
 	OrderStatusPaid       = "PAID"
+	OrderStatusExpired    = "ORDER_EXPIRED"
 	DepositStatusHeld     = "HELD"
 	DepositStatusRefunded = "REFUNDED"
+	DepositStatusForfeit  = "FORFEITED"
 )
 
 type BidInput struct {
@@ -141,6 +143,9 @@ func (r *Repository) PayMock(ctx context.Context, orderID string, userID string,
 	}
 	if winnerID != userID {
 		return PaymentResponse{}, apierrors.New(apierrors.CodeForbiddenRoom, "only winner can pay order", http.StatusForbidden)
+	}
+	if status == OrderStatusExpired {
+		return PaymentResponse{}, apierrors.New(apierrors.CodeOrderAlreadyExpired, "order already expired", http.StatusConflict)
 	}
 	now := time.Now().UTC()
 	if status != OrderStatusPaid {
@@ -337,11 +342,15 @@ func (r *Repository) evaluateAndApplyBid(ctx context.Context, tx pgx.Tx, a locke
 
 func createOrderForSoldAuction(ctx context.Context, tx pgx.Tx, a lockedAuction, winnerID string, amountCents int64) error {
 	deposit := CalculateDeposit(amountCents, int64(a.DepositBPS), a.DepositFloorCents, a.DepositCapCents)
-	_, err := tx.Exec(ctx, `
+	orderID := "ord_" + uuid.NewString()
+	expireAt := time.Now().UTC().Add(15 * time.Minute)
+	if _, err := tx.Exec(ctx, `
 		INSERT INTO orders (id, auction_id, winner_id, amount_cents, status, deposit_cents, deposit_status, expire_at)
 		VALUES ($1, $2, $3, $4, 'ORDER_PENDING', $5, 'HELD', $6)
-	`, "ord_"+uuid.NewString(), a.ID, winnerID, amountCents, deposit, time.Now().UTC().Add(15*time.Minute))
-	return err
+	`, orderID, a.ID, winnerID, amountCents, deposit, expireAt); err != nil {
+		return err
+	}
+	return upsertSchedulerJob(ctx, tx, "EXPIRE_ORDER", "order", orderID, "expire:"+orderID, expireAt)
 }
 
 func insertBidRow(ctx context.Context, tx pgx.Tx, bidID string, auctionID string, userID string, input BidInput, seq int64, status string, rejectReason *string, requestHash string, responseJSON []byte, traceID string) error {
