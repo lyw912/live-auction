@@ -12,6 +12,7 @@ import (
 
 	"live-auction/backend/internal/config"
 	"live-auction/backend/internal/gateway"
+	"live-auction/backend/internal/outbox"
 	"live-auction/backend/internal/platform/logger"
 	"live-auction/backend/internal/storage"
 )
@@ -29,6 +30,8 @@ func main() {
 		os.Exit(1)
 	}
 	defer deps.Close()
+
+	go outbox.NewRelay(deps.Postgres, deps.Redis, "server-main").Run(ctx, log, 500*time.Millisecond)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
