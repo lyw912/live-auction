@@ -109,6 +109,16 @@ func (h AuctionHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 	writeResult(w, r, http.StatusOK, result, err)
 }
 
+func (h AuctionHandler) NarrateStart(w http.ResponseWriter, r *http.Request) {
+	result, err := h.Repo.NarrateStart(r.Context(), chi.URLParam(r, "id"), traceID(r.Context()))
+	writeResult(w, r, http.StatusOK, result, err)
+}
+
+func (h AuctionHandler) NarrateStop(w http.ResponseWriter, r *http.Request) {
+	result, err := h.Repo.NarrateStop(r.Context(), chi.URLParam(r, "id"), traceID(r.Context()))
+	writeResult(w, r, http.StatusOK, result, err)
+}
+
 func (h AuctionHandler) ListAuctions(w http.ResponseWriter, r *http.Request) {
 	result, err := h.Repo.ListAuctions(r.Context(), r.URL.Query().Get("room_id"))
 	writeResult(w, r, http.StatusOK, result, err)

@@ -167,8 +167,10 @@ func TestRetryJitterStaggersFailedJobs(t *testing.T) {
 	quiesceSchedulerJobs(t, db)
 	ctx := context.Background()
 	now := time.Now().UTC()
-	insertUnsupportedJob(t, db, "job_retry_a", now.Add(-time.Second))
-	insertUnsupportedJob(t, db, "job_retry_b", now.Add(-time.Second))
+	jobA := "job_retry_a_" + uuid.NewString()
+	jobB := "job_retry_b_" + uuid.NewString()
+	insertUnsupportedJob(t, db, jobA, now.Add(-time.Second))
+	insertUnsupportedJob(t, db, jobB, now.Add(-time.Second))
 
 	runner := NewRunner(db, "retry-jitter")
 	runner.now = func() time.Time { return now }
@@ -182,8 +184,8 @@ func TestRetryJitterStaggersFailedJobs(t *testing.T) {
 		}
 	}
 
-	nextA := selectNextAttemptAt(t, db, "job_retry_a")
-	nextB := selectNextAttemptAt(t, db, "job_retry_b")
+	nextA := selectNextAttemptAt(t, db, jobA)
+	nextB := selectNextAttemptAt(t, db, jobB)
 	if nextA.Equal(nextB) {
 		t.Fatalf("next_attempt_at not staggered: %s", nextA)
 	}

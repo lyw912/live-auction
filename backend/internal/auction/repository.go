@@ -264,6 +264,76 @@ func (r *Repository) Cancel(ctx context.Context, auctionID string, traceID strin
 	return r.GetAuction(ctx, auctionID)
 }
 
+func (r *Repository) NarrateStart(ctx context.Context, auctionID string, traceID string) (Auction, error) {
+	tx, err := r.beginTx(ctx)
+	if err != nil {
+		return Auction{}, err
+	}
+	defer rollback(ctx, tx)
+
+	var status Status
+	var roomID string
+	if err := tx.QueryRow(ctx, `SELECT status, room_id FROM auctions WHERE id = $1 FOR UPDATE`, auctionID).Scan(&status, &roomID); err != nil {
+		return Auction{}, mapNotFound(err)
+	}
+	if status == StatusSold || status == StatusEnded || status == StatusCancelled {
+		return Auction{}, apierrors.New(apierrors.CodeInvalidNarrateTarget, "terminal auction cannot narrate", 409)
+	}
+	var activeID string
+	err = tx.QueryRow(ctx, `SELECT id FROM auctions WHERE room_id = $1 AND status = 'ACTIVE' LIMIT 1`, roomID).Scan(&activeID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return Auction{}, err
+	}
+	if err == nil && activeID != auctionID {
+		return Auction{}, apierrors.New(apierrors.CodeInvalidNarrateTarget, "room active auction must be narrating target", 409)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE auctions
+		SET is_narrating = true, narrating_started_at = now(), updated_at = now()
+		WHERE id = $1
+	`, auctionID); err != nil {
+		return Auction{}, mapPGError(err)
+	}
+	if err := appendAuctionEvent(ctx, tx, auctionID, "narrate_started", traceID, map[string]any{
+		"room_id": roomID,
+	}); err != nil {
+		return Auction{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Auction{}, err
+	}
+	return r.GetAuction(ctx, auctionID)
+}
+
+func (r *Repository) NarrateStop(ctx context.Context, auctionID string, traceID string) (Auction, error) {
+	tx, err := r.beginTx(ctx)
+	if err != nil {
+		return Auction{}, err
+	}
+	defer rollback(ctx, tx)
+
+	var roomID string
+	if err := tx.QueryRow(ctx, `SELECT room_id FROM auctions WHERE id = $1 FOR UPDATE`, auctionID).Scan(&roomID); err != nil {
+		return Auction{}, mapNotFound(err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE auctions
+		SET is_narrating = false, narrating_started_at = NULL, updated_at = now()
+		WHERE id = $1
+	`, auctionID); err != nil {
+		return Auction{}, err
+	}
+	if err := appendAuctionEvent(ctx, tx, auctionID, "narrate_stopped", traceID, map[string]any{
+		"room_id": roomID,
+	}); err != nil {
+		return Auction{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Auction{}, err
+	}
+	return r.GetAuction(ctx, auctionID)
+}
+
 func (r *Repository) ListAuctions(ctx context.Context, roomID string) ([]Auction, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT a.id
@@ -501,6 +571,8 @@ func mapPGError(err error) error {
 		switch pgErr.ConstraintName {
 		case "ux_auctions_room_active":
 			return apierrors.New(apierrors.CodeConflictRoomHasActiveAuction, "room already has active auction", 409)
+		case "ux_auctions_room_narrating":
+			return apierrors.New(apierrors.CodeConflictRoomHasNarration, "room already has narrating auction", 409)
 		case "ck_auctions_cap_reachable":
 			return apierrors.New(apierrors.CodeInvalidAuctionRuleCapUnreachable, "cap price is unreachable", 400)
 		}
