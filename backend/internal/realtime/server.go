@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -20,10 +21,18 @@ type Server struct {
 	db     *pgxpool.Pool
 	redis  *redis.Client
 	ticket *TicketStore
+	hub    *Hub
 }
 
 func NewServer(db *pgxpool.Pool, redisClient *redis.Client) *Server {
-	return &Server{db: db, redis: redisClient, ticket: NewTicketStore(redisClient)}
+	return NewServerWithHub(db, redisClient, NewHub(defaultAuctionQueueSize))
+}
+
+func NewServerWithHub(db *pgxpool.Pool, redisClient *redis.Client, hub *Hub) *Server {
+	if hub == nil {
+		hub = NewHub(defaultAuctionQueueSize)
+	}
+	return &Server{db: db, redis: redisClient, ticket: NewTicketStore(redisClient), hub: hub}
 }
 
 func (s *Server) TicketStore() *TicketStore {
@@ -74,15 +83,47 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
+	slow := make(chan struct{})
+	var closeSlow sync.Once
+	sub := s.hub.Subscribe(auctionID, func() { closeSlow.Do(func() { close(slow) }) })
+	defer s.hub.Unsubscribe(auctionID, sub)
+
+	writeCtx, cancelWrite := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancelWrite()
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	for _, message := range s.recoveryMessages(ctx, auctionID, lastSeq) {
-		if err := conn.Write(ctx, websocket.MessageText, message); err != nil {
+		if err := conn.Write(writeCtx, websocket.MessageText, message); err != nil {
 			_ = conn.Close(websocket.StatusPolicyViolation, string(apierrors.CodeSlowConsumer))
 			return
 		}
 	}
-	<-r.Context().Done()
+
+	for {
+		select {
+		case message, ok := <-sub.Messages():
+			if !ok {
+				_ = conn.Close(websocket.StatusPolicyViolation, string(apierrors.CodeSlowConsumer))
+				return
+			}
+			ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+			err := conn.Write(ctx, websocket.MessageText, message)
+			cancel()
+			if err != nil {
+				_ = conn.Close(websocket.StatusPolicyViolation, string(apierrors.CodeSlowConsumer))
+				return
+			}
+		case <-slow:
+			_ = conn.Close(websocket.StatusPolicyViolation, string(apierrors.CodeSlowConsumer))
+			return
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
+func (s *Server) PublishAuctionEvent(ctx context.Context, auctionID string, payload []byte) {
+	s.hub.Publish(ctx, auctionID, payload)
 }
 
 func (s *Server) recoveryMessages(ctx context.Context, auctionID string, lastSeq int64) [][]byte {

@@ -30,6 +30,7 @@ type Relay struct {
 	workerID     string
 	historyLimit int64
 	historyTTL   time.Duration
+	publisher    func(context.Context, string, []byte)
 }
 
 func (r *Relay) Run(ctx context.Context, log *slog.Logger, interval time.Duration) {
@@ -77,6 +78,11 @@ func NewRelay(db *pgxpool.Pool, redisClient *redis.Client, workerID string) *Rel
 		historyLimit: DefaultHistoryLimit,
 		historyTTL:   DefaultHistoryTTL,
 	}
+}
+
+func (r *Relay) WithPublisher(publisher func(context.Context, string, []byte)) *Relay {
+	r.publisher = publisher
+	return r
 }
 
 func (r *Relay) ProcessOne(ctx context.Context) (bool, error) {
@@ -161,8 +167,13 @@ func (r *Relay) publish(ctx context.Context, event Event) error {
 	pipe.LTrim(ctx, eventsKey, -r.historyLimit, -1)
 	pipe.Expire(ctx, eventsKey, r.historyTTL)
 	pipe.Set(ctx, snapshotKey, data, r.historyTTL)
-	_, err = pipe.Exec(ctx)
-	return err
+	if _, err = pipe.Exec(ctx); err != nil {
+		return err
+	}
+	if r.publisher != nil {
+		r.publisher(ctx, event.AuctionID, data)
+	}
+	return nil
 }
 
 func (r *Relay) markPublished(ctx context.Context, outboxID int64) error {

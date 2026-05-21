@@ -14,6 +14,7 @@ import (
 	"live-auction/backend/internal/gateway"
 	"live-auction/backend/internal/outbox"
 	"live-auction/backend/internal/platform/logger"
+	"live-auction/backend/internal/realtime"
 	"live-auction/backend/internal/storage"
 )
 
@@ -31,11 +32,14 @@ func main() {
 	}
 	defer deps.Close()
 
-	go outbox.NewRelay(deps.Postgres, deps.Redis, "server-main").Run(ctx, log, 500*time.Millisecond)
+	rt := realtime.NewServer(deps.Postgres, deps.Redis)
+	go outbox.NewRelay(deps.Postgres, deps.Redis, "server-main").
+		WithPublisher(rt.PublishAuctionEvent).
+		Run(ctx, log, 500*time.Millisecond)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           gateway.NewRouter(cfg, deps, log),
+		Handler:           gateway.NewRouterWithRealtime(cfg, deps, log, rt),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

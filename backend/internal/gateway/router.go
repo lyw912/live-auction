@@ -14,6 +14,10 @@ import (
 )
 
 func NewRouter(cfg config.Config, deps *storage.Dependencies, log *slog.Logger) http.Handler {
+	return NewRouterWithRealtime(cfg, deps, log, realtime.NewServer(deps.Postgres, deps.Redis))
+}
+
+func NewRouterWithRealtime(cfg config.Config, deps *storage.Dependencies, log *slog.Logger, rt *realtime.Server) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP)
 	r.Use(traceMiddleware)
@@ -24,7 +28,6 @@ func NewRouter(cfg config.Config, deps *storage.Dependencies, log *slog.Logger) 
 	r.Get("/readyz", health.Readiness)
 	r.Get("/api/health", health.Readiness)
 
-	rt := realtime.NewServer(deps.Postgres, deps.Redis)
 	auctionHandler := AuctionHandler{
 		Config: cfg,
 		Deps:   deps,
