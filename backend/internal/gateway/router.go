@@ -34,6 +34,7 @@ func NewRouterWithRealtime(cfg config.Config, deps *storage.Dependencies, log *s
 		Repo:   auction.NewRepository(deps.Postgres),
 		RT:     rt,
 	}
+	monitorHandler := MonitorHandler{Deps: deps}
 	r.Route("/api", func(r chi.Router) {
 		r.Use(mockAuthMiddleware(cfg))
 		r.With(requireHost).Post("/items/upload-url", auctionHandler.CreateUploadURL)
@@ -54,6 +55,10 @@ func NewRouterWithRealtime(cfg config.Config, deps *storage.Dependencies, log *s
 		r.Post("/orders/{id}/pay-mock", auctionHandler.PayMock)
 		r.Post("/auth/ws-ticket", auctionHandler.CreateWSTicket)
 		r.Get("/rooms/{room_id}/auctions", auctionHandler.ListRoomAuctions)
+		r.With(requireHost).Get("/monitor/auctions", monitorHandler.Auctions)
+		r.With(requireHost).Get("/monitor/anomalies", monitorHandler.Anomalies)
+		r.With(requireHost).Get("/monitor/outbox", monitorHandler.Outbox)
+		r.With(requireHost).Get("/monitor/scheduler", monitorHandler.Scheduler)
 	})
 	r.Get("/ws", rt.ServeWS)
 
