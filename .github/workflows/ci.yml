@@ -1,0 +1,20 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  placeholder:
+    name: repository skeleton
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate required docs
+        run: |
+          test -f README.md
+          test -f CLAUDE.md
+          test -f docs/setup_guide.md
+          test -f docs/design-v2-industrial/12-engineering-rules.md

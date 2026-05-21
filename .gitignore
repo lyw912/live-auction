@@ -1,0 +1,33 @@
+.codex/
+.serena/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Go
+backend/bin/
+backend/coverage.out
+backend/tmp/
+
+# Node / frontend
+node_modules/
+dist/
+build/
+coverage/
+playwright-report/
+test-results/
+
+# Local infra data
+infra/.data/
+
+# Logs
+*.log
