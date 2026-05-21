@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"live-auction/backend/internal/auction"
 	"live-auction/backend/internal/config"
 	"live-auction/backend/internal/storage"
 )
@@ -21,6 +22,26 @@ func NewRouter(cfg config.Config, deps *storage.Dependencies, log *slog.Logger) 
 	r.Get("/healthz", health.Liveness)
 	r.Get("/readyz", health.Readiness)
 	r.Get("/api/health", health.Readiness)
+
+	auctionHandler := AuctionHandler{
+		Config: cfg,
+		Deps:   deps,
+		Repo:   auction.NewRepository(deps.Postgres),
+	}
+	r.Route("/api", func(r chi.Router) {
+		r.Use(mockAuthMiddleware(cfg))
+		r.With(requireHost).Post("/items/upload-url", auctionHandler.CreateUploadURL)
+		r.With(requireHost).Post("/items", auctionHandler.CreateItem)
+		r.With(requireHost).Post("/auctions", auctionHandler.CreateAuction)
+		r.Get("/auctions", auctionHandler.ListAuctions)
+		r.Get("/auctions/{id}", auctionHandler.GetAuction)
+		r.With(requireHost).Patch("/auctions/{id}/rules", auctionHandler.UpdateRules)
+		r.With(requireHost).Post("/auctions/{id}/schedule", auctionHandler.Schedule)
+		r.With(requireHost).Post("/auctions/{id}/unschedule", auctionHandler.Unschedule)
+		r.With(requireHost).Post("/auctions/{id}/start", auctionHandler.Start)
+		r.With(requireHost).Post("/auctions/{id}/cancel", auctionHandler.Cancel)
+		r.Get("/rooms/{room_id}/auctions", auctionHandler.ListRoomAuctions)
+	})
 
 	return r
 }

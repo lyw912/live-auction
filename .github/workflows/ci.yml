@@ -10,6 +10,22 @@ jobs:
   backend:
     name: backend
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: live_auction
+          POSTGRES_USER: live_auction
+          POSTGRES_PASSWORD: live_auction
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U live_auction -d live_auction"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://live_auction:live_auction@localhost:5432/live_auction?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -21,6 +37,11 @@ jobs:
           test -f CLAUDE.md
           test -f docs/setup_guide.md
           test -f docs/design-v2-industrial/12-engineering-rules.md
+      - name: Install goose
+        run: go install github.com/pressly/goose/v3/cmd/goose@v3.27.1
+      - name: Run migrations
+        working-directory: backend
+        run: goose -dir migrations postgres "$DATABASE_URL" up
       - name: Test backend
         working-directory: backend
         run: go test ./...
