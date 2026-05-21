@@ -29,6 +29,7 @@ type Runner struct {
 	db       *pgxpool.Pool
 	workerID string
 	now      func() time.Time
+	lastNow  time.Time
 }
 
 type Job struct {
@@ -79,6 +80,9 @@ func (r *Runner) Run(ctx context.Context, log *slog.Logger, interval time.Durati
 }
 
 func (r *Runner) ProcessOne(ctx context.Context) (bool, error) {
+	if paused, err := r.pauseOnClockRollback(ctx); err != nil || paused {
+		return false, err
+	}
 	job, ok, err := r.claimOne(ctx)
 	if err != nil || !ok {
 		return ok, err
@@ -90,6 +94,36 @@ func (r *Runner) ProcessOne(ctx context.Context) (bool, error) {
 		return true, err
 	}
 	return true, nil
+}
+
+func (r *Runner) pauseOnClockRollback(ctx context.Context) (bool, error) {
+	now := r.now()
+	if !r.lastNow.IsZero() && r.lastNow.Sub(now) > time.Second {
+		if err := r.writeClockRollbackAnomaly(ctx, r.lastNow, now); err != nil {
+			return true, err
+		}
+		r.lastNow = now
+		return true, nil
+	}
+	r.lastNow = now
+	return false, nil
+}
+
+func (r *Runner) writeClockRollbackAnomaly(ctx context.Context, previous time.Time, current time.Time) error {
+	payload, err := json.Marshal(map[string]any{
+		"worker_id":   r.workerID,
+		"previous_at": previous,
+		"current_at":  current,
+		"rollback_ms": previous.Sub(current).Milliseconds(),
+	})
+	if err != nil {
+		return err
+	}
+	_, err = r.db.Exec(ctx, `
+		INSERT INTO system_anomaly_events (severity, type, message, payload_json)
+		VALUES ('HIGH', 'CLOCK_STEP_BACKWARD', $1, $2)
+	`, "scheduler detected clock step backward", payload)
+	return err
 }
 
 func (r *Runner) claimOne(ctx context.Context) (Job, bool, error) {

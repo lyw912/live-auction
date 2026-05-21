@@ -191,6 +191,48 @@ func TestRetryJitterStaggersFailedJobs(t *testing.T) {
 	}
 }
 
+func TestClockStepBackwardWritesAnomalyAndSkipsJob(t *testing.T) {
+	db := openDB(t)
+	quiesceSchedulerJobs(t, db)
+	ctx := context.Background()
+	repo := auction.NewRepository(db)
+	row := createActiveAuction(t, repo, db)
+	forceAuctionEndAt(t, db, row.ID, time.Now().UTC().Add(-time.Second))
+
+	runner := NewRunner(db, "clock-rollback")
+	firstNow := time.Now().UTC()
+	runner.now = func() time.Time { return firstNow }
+	if ok, err := runner.ProcessOne(ctx); err != nil || !ok {
+		t.Fatalf("initial ProcessOne ok=%v err=%v", ok, err)
+	}
+
+	second := createActiveAuction(t, repo, db)
+	forceAuctionEndAt(t, db, second.ID, time.Now().UTC().Add(-time.Second))
+	rolledBack := firstNow.Add(-2 * time.Second)
+	runner.now = func() time.Time { return rolledBack }
+	ok, err := runner.ProcessOne(ctx)
+	if err != nil {
+		t.Fatalf("rollback ProcessOne: %v", err)
+	}
+	if ok {
+		t.Fatalf("rollback ProcessOne processed job")
+	}
+	got, err := repo.GetAuction(ctx, second.ID)
+	if err != nil {
+		t.Fatalf("GetAuction: %v", err)
+	}
+	if got.Status != auction.StatusActive {
+		t.Fatalf("status = %s, want ACTIVE because rollback pauses scheduler", got.Status)
+	}
+	var anomalies int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM system_anomaly_events WHERE type = 'CLOCK_STEP_BACKWARD'`).Scan(&anomalies); err != nil {
+		t.Fatalf("count anomalies: %v", err)
+	}
+	if anomalies == 0 {
+		t.Fatalf("expected CLOCK_STEP_BACKWARD anomaly")
+	}
+}
+
 func openDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("DATABASE_URL")
