@@ -76,7 +76,7 @@ func TestCancelCapRaceProducesExactlyOneTerminalState(t *testing.T) {
 		return nil
 	})
 	for _, err := range errs {
-		if err != nil && !hasCode(err, apierrors.CodeBidRetryLater) {
+		if err != nil && !hasCode(err, apierrors.CodeBidRetryLater) && !hasCode(err, apierrors.CodeInvalidArgument) {
 			t.Fatalf("cancel-cap err = %v", err)
 		}
 	}

@@ -95,7 +95,7 @@ func (r *Repository) PlaceBid(ctx context.Context, auctionID string, userID stri
 
 	locked, err := lockAuctionForBid(ctx, tx, auctionID)
 	if err != nil {
-		return BidResponse{}, err
+		return BidResponse{}, mapPGError(err)
 	}
 	response, bidStatus, rejectCode, err := r.evaluateAndApplyBid(ctx, tx, locked, userID, input, traceID, requestHash)
 	if err != nil {
@@ -217,7 +217,7 @@ func lockAuctionForBid(ctx context.Context, tx pgx.Tx, auctionID string) (locked
 		&a.MaxExtendCount, &a.DepositBPS, &a.DepositFloorCents, &a.DepositCapCents,
 	)
 	if err != nil {
-		return lockedAuction{}, mapNotFound(err)
+		return lockedAuction{}, mapPGError(mapNotFound(err))
 	}
 	return a, nil
 }
@@ -377,12 +377,13 @@ func upsertProcessing(ctx context.Context, tx pgx.Tx, scopeType string, scopeID 
 
 	var storedHash string
 	var status string
+	var lockedUntil *time.Time
 	if err := tx.QueryRow(ctx, `
-		SELECT request_hash, status
+		SELECT request_hash, status, locked_until
 		FROM idempotency_records
 		WHERE scope_type = $1 AND scope_id = $2 AND user_id = $3 AND idempotency_key = $4
 		FOR UPDATE
-	`, scopeType, scopeID, userID, idempotencyKey).Scan(&storedHash, &status); err != nil {
+	`, scopeType, scopeID, userID, idempotencyKey).Scan(&storedHash, &status, &lockedUntil); err != nil {
 		return err
 	}
 	if storedHash != requestHash {
@@ -390,6 +391,16 @@ func upsertProcessing(ctx context.Context, tx pgx.Tx, scopeType string, scopeID 
 	}
 	if status == IdempotencyStatusCompleted {
 		return apierrors.New(apierrors.CodeProcessingRetryLater, "idempotency completed after replay probe; retry to fetch result", http.StatusConflict)
+	}
+	if status == IdempotencyStatusProcessing && lockedUntil != nil && time.Now().UTC().After(*lockedUntil) {
+		if _, err := tx.Exec(ctx, `
+			UPDATE idempotency_records
+			SET status = 'FAILED', locked_until = NULL, completed_at = now(), result_code = $5
+			WHERE scope_type = $1 AND scope_id = $2 AND user_id = $3 AND idempotency_key = $4
+		`, scopeType, scopeID, userID, idempotencyKey, apierrors.CodeIdempotencyTimeout); err != nil {
+			return err
+		}
+		return apierrors.New(apierrors.CodeIdempotencyTimeout, "previous idempotent operation timed out", http.StatusConflict)
 	}
 	return apierrors.New(apierrors.CodeProcessingRetryLater, "same idempotency key is still processing", http.StatusConflict)
 }
@@ -409,11 +420,12 @@ func (r *Repository) completedIdempotency(ctx context.Context, scopeType string,
 	var storedHash string
 	var status string
 	var responseJSON []byte
+	var lockedUntil *time.Time
 	err := r.db.QueryRow(ctx, `
-		SELECT request_hash, status, response_json
+		SELECT request_hash, status, response_json, locked_until
 		FROM idempotency_records
 		WHERE scope_type = $1 AND scope_id = $2 AND user_id = $3 AND idempotency_key = $4
-	`, scopeType, scopeID, userID, idempotencyKey).Scan(&storedHash, &status, &responseJSON)
+	`, scopeType, scopeID, userID, idempotencyKey).Scan(&storedHash, &status, &responseJSON, &lockedUntil)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return BidResponse{}, false, nil
 	}
@@ -422,6 +434,9 @@ func (r *Repository) completedIdempotency(ctx context.Context, scopeType string,
 	}
 	if storedHash != requestHash {
 		return BidResponse{}, false, apierrors.New(apierrors.CodeIdempotencyKeyReusedWithDifferentRequest, "idempotency key reused with different request", http.StatusConflict)
+	}
+	if status == IdempotencyStatusProcessing && lockedUntil != nil && time.Now().UTC().After(*lockedUntil) {
+		return BidResponse{}, false, r.markIdempotencyTimeout(ctx, scopeType, scopeID, userID, idempotencyKey)
 	}
 	if status != IdempotencyStatusCompleted {
 		return BidResponse{}, false, apierrors.New(apierrors.CodeProcessingRetryLater, "same idempotency key is still processing", http.StatusConflict)
@@ -437,11 +452,12 @@ func (r *Repository) completedPaymentIdempotency(ctx context.Context, scopeID st
 	var storedHash string
 	var status string
 	var responseJSON []byte
+	var lockedUntil *time.Time
 	err := r.db.QueryRow(ctx, `
-		SELECT request_hash, status, response_json
+		SELECT request_hash, status, response_json, locked_until
 		FROM idempotency_records
 		WHERE scope_type = 'payment' AND scope_id = $1 AND user_id = $2 AND idempotency_key = $3
-	`, scopeID, userID, idempotencyKey).Scan(&storedHash, &status, &responseJSON)
+	`, scopeID, userID, idempotencyKey).Scan(&storedHash, &status, &responseJSON, &lockedUntil)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PaymentResponse{}, false, nil
 	}
@@ -451,6 +467,9 @@ func (r *Repository) completedPaymentIdempotency(ctx context.Context, scopeID st
 	if storedHash != requestHash {
 		return PaymentResponse{}, false, apierrors.New(apierrors.CodeIdempotencyKeyReusedWithDifferentRequest, "idempotency key reused with different request", http.StatusConflict)
 	}
+	if status == IdempotencyStatusProcessing && lockedUntil != nil && time.Now().UTC().After(*lockedUntil) {
+		return PaymentResponse{}, false, r.markIdempotencyTimeout(ctx, "payment", scopeID, userID, idempotencyKey)
+	}
 	if status != IdempotencyStatusCompleted {
 		return PaymentResponse{}, false, apierrors.New(apierrors.CodeProcessingRetryLater, "same idempotency key is still processing", http.StatusConflict)
 	}
@@ -459,6 +478,19 @@ func (r *Repository) completedPaymentIdempotency(ctx context.Context, scopeID st
 		return PaymentResponse{}, false, err
 	}
 	return resp, true, nil
+}
+
+func (r *Repository) markIdempotencyTimeout(ctx context.Context, scopeType string, scopeID string, userID string, idempotencyKey string) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE idempotency_records
+		SET status = 'FAILED', locked_until = NULL, completed_at = now(), result_code = $5
+		WHERE scope_type = $1 AND scope_id = $2 AND user_id = $3 AND idempotency_key = $4
+		  AND status = 'PROCESSING'
+	`, scopeType, scopeID, userID, idempotencyKey, apierrors.CodeIdempotencyTimeout)
+	if err != nil {
+		return err
+	}
+	return apierrors.New(apierrors.CodeIdempotencyTimeout, "previous idempotent operation timed out", http.StatusConflict)
 }
 
 func bidRequestHash(auctionID string, userID string, clientBidID string, amountCents int64) string {

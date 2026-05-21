@@ -566,8 +566,14 @@ func mapNotFound(err error) error {
 }
 
 func mapPGError(err error) error {
+	if err == nil {
+		return nil
+	}
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
+		if pgErr.Code == "55P03" {
+			return apierrors.New(apierrors.CodeBidRetryLater, "database row is busy; retry later", 409)
+		}
 		switch pgErr.ConstraintName {
 		case "ux_auctions_room_active":
 			return apierrors.New(apierrors.CodeConflictRoomHasActiveAuction, "room already has active auction", 409)
