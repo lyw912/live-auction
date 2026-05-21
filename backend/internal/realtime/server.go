@@ -18,10 +18,13 @@ import (
 )
 
 type Server struct {
-	db     *pgxpool.Pool
-	redis  *redis.Client
-	ticket *TicketStore
-	hub    *Hub
+	db                *pgxpool.Pool
+	redis             *redis.Client
+	ticket            *TicketStore
+	hub               *Hub
+	snapshotSemaphore chan struct{}
+	snapshotGroup     *snapshotGroup
+	rebuildSnapshotFn func(context.Context, string) ([]byte, error)
 }
 
 func NewServer(db *pgxpool.Pool, redisClient *redis.Client) *Server {
@@ -32,7 +35,16 @@ func NewServerWithHub(db *pgxpool.Pool, redisClient *redis.Client, hub *Hub) *Se
 	if hub == nil {
 		hub = NewHub(defaultAuctionQueueSize)
 	}
-	return &Server{db: db, redis: redisClient, ticket: NewTicketStore(redisClient), hub: hub}
+	server := &Server{
+		db:                db,
+		redis:             redisClient,
+		ticket:            NewTicketStore(redisClient),
+		hub:               hub,
+		snapshotSemaphore: make(chan struct{}, 4),
+		snapshotGroup:     newSnapshotGroup(),
+	}
+	server.rebuildSnapshotFn = server.rebuildSnapshotFromDB
+	return server
 }
 
 func (s *Server) TicketStore() *TicketStore {
@@ -154,14 +166,31 @@ func (s *Server) snapshotMessage(ctx context.Context, auctionID string) [][]byte
 	if err == nil && len(payload) > 0 {
 		return [][]byte{payload}
 	}
-	snapshot, err := s.rebuildSnapshot(ctx, auctionID)
+	snapshot, err := s.snapshotGroup.Do(ctx, auctionID, func() ([]byte, error) {
+		return s.rebuildSnapshotBounded(ctx, auctionID)
+	})
 	if err != nil {
-		return nil
+		if stale := s.staleSnapshot(ctx, auctionID); len(stale) > 0 {
+			return [][]byte{stale}
+		}
+		return [][]byte{snapshotUnavailable(auctionID)}
 	}
 	return [][]byte{snapshot}
 }
 
-func (s *Server) rebuildSnapshot(ctx context.Context, auctionID string) ([]byte, error) {
+func (s *Server) rebuildSnapshotBounded(ctx context.Context, auctionID string) ([]byte, error) {
+	select {
+	case s.snapshotSemaphore <- struct{}{}:
+		defer func() { <-s.snapshotSemaphore }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+		return nil, errSnapshotRebuildSaturated
+	}
+	return s.rebuildSnapshotFn(ctx, auctionID)
+}
+
+func (s *Server) rebuildSnapshotFromDB(ctx context.Context, auctionID string) ([]byte, error) {
 	var payload []byte
 	err := s.db.QueryRow(ctx, `
 		SELECT jsonb_build_object(
@@ -188,6 +217,23 @@ func (s *Server) rebuildSnapshot(ctx context.Context, auctionID string) ([]byte,
 	return payload, nil
 }
 
+func (s *Server) staleSnapshot(ctx context.Context, auctionID string) []byte {
+	payload, err := s.redis.Get(ctx, "auction:"+auctionID+":snapshot").Bytes()
+	if err != nil || len(payload) == 0 {
+		return nil
+	}
+	var message map[string]any
+	if err := json.Unmarshal(payload, &message); err != nil {
+		return payload
+	}
+	message["stale"] = true
+	data, err := json.Marshal(message)
+	if err != nil {
+		return payload
+	}
+	return data
+}
+
 func ticketFromProtocols(protocols []string) string {
 	for _, protocol := range protocols {
 		for _, part := range strings.Split(protocol, ",") {
@@ -212,4 +258,15 @@ func eventSeq(payload []byte) (int64, bool) {
 
 func IsInvalidTicket(err error) bool {
 	return errors.Is(err, ErrInvalidTicket)
+}
+
+var errSnapshotRebuildSaturated = errors.New("snapshot rebuild saturated")
+
+func snapshotUnavailable(auctionID string) []byte {
+	payload, _ := json.Marshal(map[string]any{
+		"event_type":     "snapshot_unavailable",
+		"auction_id":     auctionID,
+		"retry_after_ms": 1000,
+	})
+	return payload
 }

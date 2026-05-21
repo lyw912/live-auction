@@ -8,6 +8,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -141,6 +143,80 @@ func TestHubClosesSlowConsumerOnBoundedQueueOverflow(t *testing.T) {
 	case <-closed:
 	case <-time.After(time.Second):
 		t.Fatalf("slow consumer was not closed")
+	}
+}
+
+func TestSnapshotRebuildSingleflightBoundsReconnectStorm(t *testing.T) {
+	db := openDBForRealtime(t)
+	rdb := openRedisForRealtime(t)
+	repo := auction.NewRepository(db)
+	auctionRow := createActiveAuctionForRealtime(t, repo, db)
+	rt := NewServer(db, rdb)
+	if err := rdb.Del(context.Background(), "auction:"+auctionRow.ID+":events", "auction:"+auctionRow.ID+":snapshot").Err(); err != nil {
+		t.Fatalf("redis cleanup: %v", err)
+	}
+
+	var rebuilds atomic.Int32
+	release := make(chan struct{})
+	rt.rebuildSnapshotFn = func(_ context.Context, auctionID string) ([]byte, error) {
+		rebuilds.Add(1)
+		<-release
+		return []byte(`{"event_type":"snapshot","auction_id":"` + auctionID + `","seq":1,"source":"db","stale":false,"payload":{}}`), nil
+	}
+
+	const clients = 12
+	var wg sync.WaitGroup
+	wg.Add(clients)
+	results := make([]string, clients)
+	for i := 0; i < clients; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			messages := rt.snapshotMessage(context.Background(), auctionRow.ID)
+			if len(messages) != 1 {
+				t.Errorf("messages len = %d, want 1", len(messages))
+				return
+			}
+			results[i] = string(messages[0])
+		}()
+	}
+	waitForCondition(t, func() bool { return rebuilds.Load() == 1 })
+	close(release)
+	wg.Wait()
+	if rebuilds.Load() != 1 {
+		t.Fatalf("rebuilds = %d, want 1", rebuilds.Load())
+	}
+	for _, got := range results {
+		if !strings.Contains(got, `"event_type":"snapshot"`) {
+			t.Fatalf("unexpected snapshot result: %s", got)
+		}
+	}
+}
+
+func TestSnapshotRebuildSaturationFallsBackToStaleOrUnavailable(t *testing.T) {
+	db := openDBForRealtime(t)
+	rdb := openRedisForRealtime(t)
+	repo := auction.NewRepository(db)
+	auctionRow := createActiveAuctionForRealtime(t, repo, db)
+	rt := NewServer(db, rdb)
+	rt.snapshotSemaphore = make(chan struct{}, 1)
+	rt.snapshotSemaphore <- struct{}{}
+
+	if err := rdb.Del(context.Background(), "auction:"+auctionRow.ID+":snapshot").Err(); err != nil {
+		t.Fatalf("redis cleanup: %v", err)
+	}
+	messages := rt.snapshotMessage(context.Background(), auctionRow.ID)
+	if len(messages) != 1 || !strings.Contains(string(messages[0]), "snapshot_unavailable") {
+		t.Fatalf("unavailable message = %q", messages)
+	}
+
+	stale := `{"event_type":"snapshot","auction_id":"` + auctionRow.ID + `","seq":1,"source":"redis","stale":false,"payload":{}}`
+	if err := rdb.Set(context.Background(), "auction:"+auctionRow.ID+":snapshot", stale, time.Minute).Err(); err != nil {
+		t.Fatalf("set stale snapshot: %v", err)
+	}
+	messages = rt.snapshotMessage(context.Background(), auctionRow.ID)
+	if len(messages) != 1 || !strings.Contains(string(messages[0]), `"stale":false`) {
+		t.Fatalf("redis snapshot should be returned before rebuild, got %q", messages)
 	}
 }
 
@@ -285,4 +361,16 @@ func responseStatus(response *http.Response) any {
 		return nil
 	}
 	return response.StatusCode
+}
+
+func waitForCondition(t *testing.T, fn func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if fn() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("condition not met before deadline")
 }
