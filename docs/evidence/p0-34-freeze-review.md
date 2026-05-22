@@ -26,9 +26,9 @@ This record is the P0 freeze gate for moving to P1. It does not replace the deta
 
 ## Review Result
 
-READY FOR P1 WITH DOCUMENTED RISKS.
+SUPERSEDED BY `docs/evidence/p0-36-p0-repair-and-p1-entry-review.md`.
 
-No remaining P0 correctness, demo, reproducibility, or documentation-honesty blocker is intentionally left open. The latest product audit is stored at `docs/reviews/p0-product-audit-2026-05-23.md`; the older 2026-05-22 review remains historical evidence of issues that were fixed before this freeze.
+This record remains historical freeze evidence. A later hostile review found the outbox poison proof in this file was not reliably reproducible in a dirty shared local database. The fix and updated P1 entry decision are recorded in `p0-36-p0-repair-and-p1-entry-review.md`.
 
 ## Final P0 Fix
 

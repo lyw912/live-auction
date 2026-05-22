@@ -247,9 +247,10 @@ func (r *Repository) PayMock(ctx context.Context, orderID string, userID string,
 	}
 
 	var winnerID string
+	var auctionID string
 	var status string
 	var paidAt *time.Time
-	if err := tx.QueryRow(ctx, `SELECT winner_id, status, paid_at FROM orders WHERE id = $1 FOR UPDATE`, orderID).Scan(&winnerID, &status, &paidAt); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT auction_id, winner_id, status, paid_at FROM orders WHERE id = $1 FOR UPDATE`, orderID).Scan(&auctionID, &winnerID, &status, &paidAt); err != nil {
 		return PaymentResponse{}, mapOrderNotFound(err)
 	}
 	if winnerID != userID {
@@ -273,6 +274,17 @@ func (r *Repository) PayMock(ctx context.Context, orderID string, userID string,
 		paidAt = &now
 	}
 	resp := PaymentResponse{OrderID: orderID, OrderStatus: OrderStatusPaid, PaidAt: *paidAt, DepositStatus: DepositStatusRefunded}
+	if status != OrderStatusPaid {
+		if err := appendAuctionEvent(ctx, tx, auctionID, "order_paid", traceID, map[string]any{
+			"order_id":       orderID,
+			"user_id":        userID,
+			"order_status":   OrderStatusPaid,
+			"deposit_status": DepositStatusRefunded,
+			"paid_at":        *paidAt,
+		}); err != nil {
+			return PaymentResponse{}, err
+		}
+	}
 	responseJSON, err := json.Marshal(resp)
 	if err != nil {
 		return PaymentResponse{}, err

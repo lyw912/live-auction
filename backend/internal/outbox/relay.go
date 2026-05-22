@@ -114,8 +114,10 @@ func (r *Relay) claimOne(ctx context.Context) (Event, bool, error) {
 		SELECT e.id, e.aggregate_type, e.aggregate_id, e.auction_id, e.seq, e.event_type, e.payload_json, e.created_at
 		FROM outbox_events e
 		JOIN outbox_delivery d ON d.outbox_id = e.id
-		WHERE d.status IN ('PENDING','FAILED')
-		  AND d.next_attempt_at <= now()
+		WHERE (
+		    (d.status IN ('PENDING','FAILED') AND d.next_attempt_at <= now())
+		    OR (d.status = 'PUBLISHING' AND d.locked_until < now())
+		  )
 		  AND NOT EXISTS (
 		    SELECT 1
 		    FROM outbox_events e2

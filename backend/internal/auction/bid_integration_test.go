@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	apierrors "live-auction/backend/internal/platform/errors"
@@ -163,6 +164,25 @@ func TestPlaceBidCapSoldCreatesOrderAndPaymentIsIdempotent(t *testing.T) {
 	if !pay3.PaidAt.Equal(pay1.PaidAt) {
 		t.Fatalf("paid_at changed on second payment key: %s != %s", pay3.PaidAt, pay1.PaidAt)
 	}
+	var orderPaidEvents int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM auction_events WHERE auction_id = $1 AND event_type = 'order_paid'`, auction.ID).Scan(&orderPaidEvents); err != nil {
+		t.Fatalf("count order_paid events: %v", err)
+	}
+	if orderPaidEvents != 1 {
+		t.Fatalf("order_paid events = %d, want 1", orderPaidEvents)
+	}
+	var orderPaidOutbox int
+	if err := db.QueryRow(ctx, `
+		SELECT count(*)
+		FROM outbox_events e
+		JOIN outbox_delivery d ON d.outbox_id = e.id
+		WHERE e.auction_id = $1 AND e.event_type = 'order_paid'
+	`, auction.ID).Scan(&orderPaidOutbox); err != nil {
+		t.Fatalf("count order_paid outbox: %v", err)
+	}
+	if orderPaidOutbox != 1 {
+		t.Fatalf("order_paid outbox = %d, want 1", orderPaidOutbox)
+	}
 }
 
 func TestListBidAndOrderHistoryRows(t *testing.T) {
@@ -171,12 +191,13 @@ func TestListBidAndOrderHistoryRows(t *testing.T) {
 	repo := NewRepository(db)
 	capPrice := int64(20_000)
 	auction := createActiveAuction(t, repo, db, &capPrice)
+	userID := createTestUser(t, db)
 
 	input := BidInput{ClientBidID: "bid-history-1", AmountCents: 20_000}
-	if _, err := repo.PlaceBid(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_history"); err != nil {
+	if _, err := repo.PlaceBid(ctx, auction.ID, userID, input.ClientBidID, input, "tr_history"); err != nil {
 		t.Fatalf("PlaceBid: %v", err)
 	}
-	bids, err := repo.ListBidHistory(ctx, "user_1")
+	bids, err := repo.ListBidHistory(ctx, userID)
 	if err != nil {
 		t.Fatalf("ListBidHistory: %v", err)
 	}
@@ -184,7 +205,7 @@ func TestListBidAndOrderHistoryRows(t *testing.T) {
 		t.Fatalf("unexpected bid history: %#v", bids)
 	}
 
-	orders, err := repo.ListOrders(ctx, "user_1", "user")
+	orders, err := repo.ListOrders(ctx, userID, "user")
 	if err != nil {
 		t.Fatalf("ListOrders: %v", err)
 	}
@@ -249,6 +270,15 @@ func createActiveAuctionWithRule(t *testing.T, repo *Repository, db *pgxpool.Poo
 		t.Fatalf("Start: %v", err)
 	}
 	return auction
+}
+
+func createTestUser(t *testing.T, db *pgxpool.Pool) string {
+	t.Helper()
+	userID := "user_test_" + uuid.NewString()
+	if _, err := db.Exec(context.Background(), `INSERT INTO users (id, role, display_name) VALUES ($1, 'user', 'Test User')`, userID); err != nil {
+		t.Fatalf("insert test user: %v", err)
+	}
+	return userID
 }
 
 func assertBidTruthRows(t *testing.T, db *pgxpool.Pool, auctionID string, bidCount int, acceptedCount int, newEvents int, idemCount int) {

@@ -540,6 +540,48 @@ test('H5 server terminal events drive sold, ended, and cancelled states', async 
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
 });
 
+test('H5 order realtime events update winner payment state', async ({ page }) => {
+  await page.goto('/?stateMatrix=1');
+  await page.getByRole('button', { name: '成交', exact: true }).click();
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('auction:event', {
+      detail: {
+        auction_id: 'auc_live',
+        event_type: 'order_paid',
+        seq: 42,
+        payload: {
+          user_id: 'user_1',
+          order_id: 'ord_pending',
+          order_status: 'PAID',
+          deposit_status: 'REFUNDED'
+        }
+      }
+    }));
+  });
+  await expect(page.getByLabel('auction-state').locator('.eyebrow')).toHaveText('已支付');
+  await expect(page.getByTestId('bid-cta')).toBeDisabled();
+
+  await page.getByRole('button', { name: '成交', exact: true }).click();
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('auction:event', {
+      detail: {
+        auction_id: 'auc_live',
+        event_type: 'order_expired',
+        seq: 43,
+        payload: {
+          user_id: 'user_1',
+          order_id: 'ord_pending',
+          order_status: 'ORDER_EXPIRED',
+          deposit_status: 'FORFEITED'
+        }
+      }
+    }));
+  });
+  await expect(page.getByLabel('auction-state').locator('.eyebrow')).toHaveText('订单已超时');
+  await expect(page.getByTestId('bid-cta')).toBeDisabled();
+});
+
 test('H5 interaction surface has no unacceptable animation longtask', async ({ page }) => {
   await page.addInitScript(() => {
     const target = window as typeof window & { __longTasks?: number[] };

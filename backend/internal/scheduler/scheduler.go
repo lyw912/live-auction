@@ -268,12 +268,14 @@ func (r *Runner) processExpireOrder(ctx context.Context, job Job) error {
 	now := r.now()
 	var status string
 	var expireAt time.Time
+	var auctionID string
+	var winnerID string
 	if err := tx.QueryRow(ctx, `
-		SELECT status, expire_at
+		SELECT status, expire_at, auction_id, winner_id
 		FROM orders
 		WHERE id = $1
 		FOR UPDATE
-	`, job.TargetID).Scan(&status, &expireAt); err != nil {
+	`, job.TargetID).Scan(&status, &expireAt, &auctionID, &winnerID); err != nil {
 		return err
 	}
 	if status != "ORDER_PENDING" {
@@ -287,6 +289,15 @@ func (r *Runner) processExpireOrder(ctx context.Context, job Job) error {
 		SET status = 'ORDER_EXPIRED', deposit_status = 'FORFEITED'
 		WHERE id = $1
 	`, job.TargetID); err != nil {
+		return err
+	}
+	if err := appendAuctionEvent(ctx, tx, auctionID, "order_expired", "scheduler:"+r.workerID, map[string]any{
+		"order_id":       job.TargetID,
+		"user_id":        winnerID,
+		"order_status":   "ORDER_EXPIRED",
+		"deposit_status": "FORFEITED",
+		"expired_at":     now,
+	}); err != nil {
 		return err
 	}
 	return r.markSucceededTx(ctx, tx, job.ID)

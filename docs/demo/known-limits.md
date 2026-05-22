@@ -11,6 +11,7 @@ Commit: pending
 - PC console supports the P0 host workflow for local demo: item creation, auction creation, selected-auction rule save, schedule/start/cancel/narrate controls, order list, and diagnostics. It is not a complete merchant CMS.
 - Mock auth uses `X-Mock-Role` and `X-Mock-User-Id`; there is no real login, SMS, account binding, or room membership system. Any mock user can enter a valid local demo room.
 - Payment is mock payment; no external payment provider is integrated.
+- Payment success and order expiry are now emitted through the auction event/outbox stream for realtime H5 recovery, but payment provider callbacks, refunds, disputes, and settlement reconciliation are outside P0.
 
 ## Correctness Scope
 

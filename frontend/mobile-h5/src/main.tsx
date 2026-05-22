@@ -35,7 +35,7 @@ type Scenario = {
 };
 
 type BidPhase = 'idle' | 'pending' | 'accepted' | 'rejected' | 'confirm_required' | 'confirming';
-type PaymentPhase = 'idle' | 'pending' | 'paid' | 'failed';
+type PaymentPhase = 'idle' | 'pending' | 'paid' | 'failed' | 'expired';
 type RecoveryPhase = 'idle' | 'recovering';
 type ConnectionPhase = 'connecting' | 'connected' | 'recovering' | 'disconnected';
 
@@ -65,6 +65,8 @@ type AuctionRealtimeEvent = {
     current_winner_id?: string;
     user_id?: string;
     reason?: string;
+    order_status?: string;
+    deposit_status?: string;
   };
 };
 
@@ -287,6 +289,20 @@ function App() {
           feedback: '支付未确认，请重试',
           cta: '重新支付',
           ctaDisabled: false,
+          winner: true,
+          sold: true
+        };
+      }
+      if (paymentPhase === 'expired') {
+        return {
+          key: 'sold_winner',
+          title: '订单已超时',
+          status: 'ORDER_EXPIRED',
+          price: soldPrice,
+          leader: '支付窗口关闭',
+          feedback: '订单已超时',
+          cta: '已超时',
+          ctaDisabled: true,
           winner: true,
           sold: true
         };
@@ -557,6 +573,20 @@ function App() {
       setSelected('cancelled');
       setBidFeedback(detail.payload?.reason ?? '主播已取消');
       setBidPhase('idle');
+    } else if (detail.event_type === 'order_paid') {
+      if (detail.payload?.user_id === currentUserID) {
+        setPaymentPhase('paid');
+        setSelected('sold_winner');
+        if (detail.payload?.order_id) setPayableOrderID(detail.payload.order_id);
+      }
+      setBidFeedback('订单状态已同步');
+    } else if (detail.event_type === 'order_expired') {
+      if (detail.payload?.user_id === currentUserID) {
+        setPaymentPhase('expired');
+        setSelected('sold_winner');
+        if (detail.payload?.order_id) setPayableOrderID(detail.payload.order_id);
+      }
+      setBidFeedback('订单已超时');
     } else if (detail.payload?.user_id && detail.payload.user_id !== currentUserID) {
       setBidPhase('idle');
       setConfirmToken('');

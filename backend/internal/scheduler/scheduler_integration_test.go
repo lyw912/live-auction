@@ -155,6 +155,8 @@ func TestOrderExpireMarksPendingOrderOnceAndPaymentRejects(t *testing.T) {
 	if _, err := repo.PayMock(ctx, orderID, "user_1", "pay-expired", auction.PaymentInput{Confirm: true}, "tr_pay"); !hasCode(err, apierrors.CodeOrderAlreadyExpired) {
 		t.Fatalf("PayMock expired err = %v, want ORDER_ALREADY_EXPIRED", err)
 	}
+	assertAuctionEvent(t, db, row.ID, "order_expired")
+	assertOutboxEvent(t, db, row.ID, "order_expired")
 	if ok, err := NewRunner(db, "order-expire-again").ProcessOne(ctx); err != nil {
 		t.Fatalf("ProcessOne again: %v", err)
 	} else if ok {
@@ -426,6 +428,17 @@ func assertAuctionEventCount(t *testing.T, db *pgxpool.Pool, auctionID string, e
 	}
 	if count != want {
 		t.Fatalf("%s events = %d, want %d", eventType, count, want)
+	}
+}
+
+func assertOutboxEvent(t *testing.T, db *pgxpool.Pool, auctionID string, eventType string) {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(context.Background(), `SELECT count(*) FROM outbox_events WHERE auction_id = $1 AND event_type = $2`, auctionID, eventType).Scan(&count); err != nil {
+		t.Fatalf("count outbox events: %v", err)
+	}
+	if count == 0 {
+		t.Fatalf("outbox event %s not found for auction %s", eventType, auctionID)
 	}
 }
 
