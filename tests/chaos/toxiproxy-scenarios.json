@@ -1,0 +1,66 @@
+{
+  "proxies": [
+    {
+      "name": "postgres",
+      "listen": "0.0.0.0:15432",
+      "upstream": "postgres:5432"
+    },
+    {
+      "name": "redis",
+      "listen": "0.0.0.0:16379",
+      "upstream": "redis:6379"
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "redis_latency_reconnect",
+      "proxy": "redis",
+      "toxics": [
+        {
+          "name": "redis_downstream_latency",
+          "type": "latency",
+          "stream": "downstream",
+          "toxicity": 1,
+          "attributes": {
+            "latency": 800,
+            "jitter": 200
+          }
+        }
+      ],
+      "expected": "WS reconnect either recovers via delayed Redis history/snapshot or returns guarded unavailable state; bid truth remains PostgreSQL-authoritative."
+    },
+    {
+      "name": "redis_timeout_reconnect",
+      "proxy": "redis",
+      "toxics": [
+        {
+          "name": "redis_timeout",
+          "type": "timeout",
+          "stream": "downstream",
+          "toxicity": 1,
+          "attributes": {
+            "timeout": 1500
+          }
+        }
+      ],
+      "expected": "Reconnect/snapshot path degrades safely and does not stampede DB beyond bounded rebuild guard."
+    },
+    {
+      "name": "postgres_bid_latency",
+      "proxy": "postgres",
+      "toxics": [
+        {
+          "name": "postgres_bid_latency",
+          "type": "latency",
+          "stream": "downstream",
+          "toxicity": 1,
+          "attributes": {
+            "latency": 700,
+            "jitter": 100
+          }
+        }
+      ],
+      "expected": "Bid path returns business retry/failure without duplicate money state; no client-side winner decision."
+    }
+  ]
+}
