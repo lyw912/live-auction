@@ -223,7 +223,30 @@ func (r *Relay) markFailure(ctx context.Context, event Event, publishErr error) 
 			return err
 		}
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	if attempts >= maxAttempts {
+		r.publishGapNotice(ctx, event)
+	}
+	return nil
+}
+
+func (r *Relay) publishGapNotice(ctx context.Context, event Event) {
+	if r.publisher == nil {
+		return
+	}
+	payload, err := json.Marshal(map[string]any{
+		"auction_id":     event.AuctionID,
+		"event_type":     "outbox_gap_notice",
+		"missing_seq":    []int64{event.Seq},
+		"outbox_id":      event.OutboxID,
+		"server_time_ms": time.Now().UTC().UnixMilli(),
+	})
+	if err != nil {
+		return
+	}
+	r.publisher(ctx, event.AuctionID, payload)
 }
 
 func (r *Relay) RebuildSnapshot(ctx context.Context, auctionID string) ([]byte, error) {

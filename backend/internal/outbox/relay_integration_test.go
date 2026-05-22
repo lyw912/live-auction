@@ -99,7 +99,12 @@ func TestRelayPoisonMarksDeadAndWritesAnomaly(t *testing.T) {
 
 	badRedis := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: 0})
 	t.Cleanup(func() { _ = badRedis.Close() })
-	relay := NewRelay(db, badRedis, "poison-worker")
+	var publishedAuctionID string
+	var publishedPayload []byte
+	relay := NewRelay(db, badRedis, "poison-worker").WithPublisher(func(_ context.Context, auctionID string, payload []byte) {
+		publishedAuctionID = auctionID
+		publishedPayload = append([]byte(nil), payload...)
+	})
 	ok, err := relay.ProcessOne(ctx)
 	if !ok {
 		t.Fatalf("expected claimed event")
@@ -126,6 +131,20 @@ func TestRelayPoisonMarksDeadAndWritesAnomaly(t *testing.T) {
 	}
 	if anomalies != 1 {
 		t.Fatalf("anomalies = %d, want 1", anomalies)
+	}
+	if publishedAuctionID != auctionRow.ID {
+		t.Fatalf("gap notice auction = %q, want %q", publishedAuctionID, auctionRow.ID)
+	}
+	var notice struct {
+		EventType  string  `json:"event_type"`
+		AuctionID  string  `json:"auction_id"`
+		MissingSeq []int64 `json:"missing_seq"`
+	}
+	if err := json.Unmarshal(publishedPayload, &notice); err != nil {
+		t.Fatalf("unmarshal gap notice: %v", err)
+	}
+	if notice.EventType != "outbox_gap_notice" || notice.AuctionID != auctionRow.ID || len(notice.MissingSeq) != 1 {
+		t.Fatalf("unexpected gap notice: %#v", notice)
 	}
 }
 

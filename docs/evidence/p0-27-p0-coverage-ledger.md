@@ -46,6 +46,7 @@ PASS for documentation honesty. This file does not complete the remaining gaps; 
 | H5 UI | state matrix, pending/rejected bid, recovering CTA disable, SOLD winner/loser, payment double-click, fat-finger confirm UI contract, bid/order history, live backend REST smoke, room auction selection and current-auction payment target, animation longtask smoke | `p0-18-frontend-state-surfaces.md`, `p0-20-h5-bid-protocol.md`, `p0-21-h5-payment-double-click.md`, `p0-22-h5-snapshot-recovery.md`, `p0-24-h5-fat-finger-confirm.md`, `p0-25-h5-history-ui.md`, `p0-30-h5-live-backend-rest-smoke.md`, `p0-33-animation-longtask.md` |
 | PC UI | rule cap validation, backend save error, full P0 rule fields, focused cross-field rule guardrails, diagnostics tabs | `p0-19-pc-rule-validation.md`, `p0-23-pc-rule-save.md`, `p0-26-pc-full-rule-fields.md` |
 | Load smoke | final-second bid burst smoke, outbox drain smoke, watcher fanout/slow-consumer smoke, reconnect-storm singleflight evidence | `docs/perf/p0-load-smoke-2026-05-22.md`, `p0-15-reconnect-storm-snapshot-bounding.md` |
+| Freeze review | final P0 review, outbox poison gap notice fix, ship-gate verdict | `p0-34-freeze-review.md` |
 
 ## Mocked vs Live Coverage
 
@@ -78,4 +79,4 @@ The remaining gap is not a money-correctness or demo blocker while no performanc
 
 ## Next Action
 
-Treat P0 correctness/demo gates as covered. Only run final performance baselines if the project wants to publish P99/QPS/fanout numbers.
+P0 is ready for P1 with documented risks. Only run final performance baselines if the project wants to publish P99/QPS/fanout numbers.
