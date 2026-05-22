@@ -31,3 +31,17 @@ test('PC console renders control tables and real diagnostic API rows', async ({ 
   await page.getByRole('tab', { name: 'Scheduler' }).click();
   await expect(page.getByText('END_AUCTION')).toBeVisible();
 });
+
+test('PC rule form blocks unreachable cap and offers legal caps', async ({ page }) => {
+  await page.goto('/');
+
+  await page.getByLabel('cap-price-cents').fill('55555');
+  await expect(page.getByText('封顶价必须落在起拍价 + N * 加价幅度')).toBeVisible();
+  await expect(page.getByRole('button', { name: '保存规则' })).toBeDisabled();
+  await expect(page.getByTestId('cap-suggestions').getByRole('button', { name: '¥550.00' })).toBeVisible();
+  await expect(page.getByTestId('cap-suggestions').getByRole('button', { name: '¥600.00' })).toBeVisible();
+
+  await page.getByTestId('cap-suggestions').getByRole('button', { name: '¥600.00' }).click();
+  await expect(page.getByText('封顶价可达，预计 10 口到顶')).toBeVisible();
+  await expect(page.getByRole('button', { name: '保存规则' })).toBeEnabled();
+});

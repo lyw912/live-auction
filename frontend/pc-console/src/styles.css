@@ -85,6 +85,27 @@ body {
   min-width: 0;
 }
 
+.rule-panel .arco-input-number {
+  width: 100%;
+}
+
+.cap-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: -4px 0 14px;
+}
+
+.cap-suggestions button {
+  min-height: 32px;
+  border: 1px solid #c9d8d2;
+  border-radius: 8px;
+  background: #eef6f3;
+  color: #155540;
+  padding: 0 10px;
+  font-weight: 700;
+}
+
 .order-line {
   min-height: 44px;
   border-bottom: 1px solid #edf1ef;
