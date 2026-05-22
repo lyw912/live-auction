@@ -38,7 +38,7 @@ PASS for documentation honesty. This file does not complete the remaining gaps; 
 | Auction rules/lifecycle | rule validation, cap reachability, create/schedule/start, PATCH vs START race | `p0-05-auction-rule-lifecycle.md`, `p0-19-pc-rule-validation.md`, `p0-23-pc-rule-save.md`, `p0-26-pc-full-rule-fields.md` |
 | Bid truth path | accepted bid, rejected bid, cap SOLD order, payment double click, idempotency | `p0-06-p0-07-bid-truth-path.md`, `p0-21-h5-payment-double-click.md`, `p0-24-h5-fat-finger-confirm.md` |
 | Outbox/projection | tx-to-outbox, Redis projection, relay ordering | `p0-08-p0-09-outbox-redis-projection.md`, `p0-11-websocket-completion.md` |
-| WebSocket/recovery | ticket foundation, replay/snapshot recovery, bounded reconnect rebuild, slow consumer/backpressure | `p0-10-websocket-ticket-recovery.md`, `p0-11-websocket-completion.md`, `p0-15-reconnect-storm-snapshot-bounding.md` |
+| WebSocket/recovery | ticket foundation, browser ticket/subprotocol connect contract, replay/snapshot recovery, bounded reconnect rebuild, slow consumer/backpressure | `p0-10-websocket-ticket-recovery.md`, `p0-11-websocket-completion.md`, `p0-15-reconnect-storm-snapshot-bounding.md`, `p0-28-h5-websocket-ticket-connect.md` |
 | Scheduler | end auction, winner/no-winner close, order expiry, retry/lease behavior | `p0-12-scheduler-end-order-expire.md`, `p0-17-clock-step-backward.md` |
 | Concurrency | final-second bid, cancel/cap race, narrate race, active race | `p0-13-concurrency-and-narration.md` |
 | Diagnostics | real monitor diagnostic producers and host ACL | `p0-14-monitor-diagnostics-apis.md` |
@@ -52,7 +52,7 @@ The Playwright frontend suite validates browser behavior and API payload contrac
 
 It does not prove:
 
-- H5 obtains a real WebSocket ticket from the backend and opens a browser-compatible WebSocket connection.
+- H5 obtains a real WebSocket ticket from a live backend process and opens a real browser WebSocket against that backend.
 - H5 consumes live backend outbox events end-to-end.
 - PC/H5 run against the live backend for all mocked REST paths.
 - Cross-tab or multi-client frontend race behavior under real network jitter.
@@ -63,7 +63,7 @@ Those remain separate integration slices.
 
 | Gate | Current status | Required next evidence |
 |---|---|---|
-| H5 real WebSocket connect | Backend has ticket/WS tests; frontend does not yet connect to live WS | Add H5 ticket request, browser WS connect, event handling, and Playwright coverage with a local WS mock or live backend smoke |
+| H5 live backend WebSocket smoke | Frontend now covers ticket request, browser subprotocol connect, and event handling with a browser WS mock | Add live backend smoke coverage proving the Vite H5 app can obtain a backend-issued ticket, connect to Go `/ws`, and consume outbox-driven events |
 | H5 live backend REST smoke | UI contract is mocked | Add live backend smoke tests for bid, confirm, payment, snapshot, history, and order paths or document why each is backend-only |
 | Redis down bid limit | Not applicable yet; no bid rate-limit implementation exists | Either implement bid rate-limit degradation or explicitly record P0 scope adjustment |
 | Redis down reconnect | Snapshot unavailable behavior is partly guarded; ticket issue/consume still depends on Redis | Add backend tests/evidence for Redis-down ticket/snapshot/reconnect behavior and anomaly output |

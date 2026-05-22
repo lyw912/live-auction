@@ -1,5 +1,76 @@
 import { expect, test } from '@playwright/test';
 
+test.beforeEach(async ({ page }) => {
+  await page.route('/api/auth/ws-ticket', async (route, request) => {
+    await route.fulfill({
+      json: {
+        ticket: request.postDataJSON().auction_id === 'auc_live' ? 'ticket_test' : '',
+        expires_in_ms: 60000
+      }
+    });
+  });
+  await page.addInitScript(() => {
+    class MockAuctionWebSocket extends EventTarget {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSING = 2;
+      static CLOSED = 3;
+      readonly CONNECTING = 0;
+      readonly OPEN = 1;
+      readonly CLOSING = 2;
+      readonly CLOSED = 3;
+      binaryType: BinaryType = 'blob';
+      bufferedAmount = 0;
+      extensions = '';
+      protocol = 'auction.v1';
+      readyState = MockAuctionWebSocket.CONNECTING;
+      onopen: ((event: Event) => void) | null = null;
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      onerror: ((event: Event) => void) | null = null;
+      onclose: ((event: CloseEvent) => void) | null = null;
+      url: string;
+      shouldRecord: boolean;
+
+      constructor(url: string | URL, protocols?: string | string[]) {
+        super();
+        this.url = String(url);
+        this.shouldRecord = this.url.includes('/ws?');
+        const protocolList = Array.isArray(protocols) ? protocols : protocols ? [protocols] : [];
+        if (this.shouldRecord) {
+          (window as typeof window & { __auctionWS?: unknown[] }).__auctionWS = [
+            ...((window as typeof window & { __auctionWS?: unknown[] }).__auctionWS ?? []),
+            { url: this.url, protocols: protocolList, socket: this }
+          ];
+        }
+        window.setTimeout(() => {
+          this.readyState = MockAuctionWebSocket.OPEN;
+          const event = new Event('open');
+          this.onopen?.(event);
+          this.dispatchEvent(event);
+        }, 0);
+      }
+
+      close() {
+        this.readyState = MockAuctionWebSocket.CLOSED;
+        const event = new CloseEvent('close');
+        this.onclose?.(event);
+        this.dispatchEvent(event);
+      }
+
+      send() {
+        return undefined;
+      }
+
+      dispatchServerMessage(payload: unknown) {
+        const event = new MessageEvent('message', { data: JSON.stringify(payload) });
+        this.onmessage?.(event);
+        this.dispatchEvent(event);
+      }
+    }
+    window.WebSocket = MockAuctionWebSocket as unknown as typeof WebSocket;
+  });
+});
+
 test('H5 disables bid CTA for unsafe states and keeps text inside controls', async ({ page }) => {
   await page.goto('/');
   const unsafeStates = ['领先中', '提交中', '恢复中', '已断开', '已成交', '流拍', '已取消'];
@@ -22,6 +93,51 @@ test('H5 disables bid CTA for unsafe states and keeps text inside controls', asy
     expect(box.height).toBeGreaterThan(20);
     expect(box.width).toBeGreaterThan(24);
   }
+});
+
+test('H5 opens browser WebSocket with ticket subprotocol and consumes authoritative events', async ({ page }) => {
+  const ticketRequest = new Promise<Record<string, unknown>>((resolve) => {
+    void page.route('/api/auth/ws-ticket', async (route, request) => {
+      resolve(request.postDataJSON() as Record<string, unknown>);
+      await route.fulfill({
+        json: {
+          ticket: 'ticket_live',
+          expires_in_ms: 60000
+        }
+      });
+    });
+  });
+
+  await page.goto('/');
+  await expect(page.getByText('WebSocket 已连接 · 状态来自服务端事件')).toBeVisible();
+  await expect.poll(async () => page.evaluate(() => {
+    const entries = (window as typeof window & { __auctionWS?: Array<{ url: string; protocols: string[] }> }).__auctionWS ?? [];
+    return entries.filter(({ url }) => url.includes('/ws?')).map(({ url, protocols }) => ({ url, protocols }));
+  })).toEqual([
+    {
+      url: 'ws://127.0.0.1:5173/ws?room_id=room_main&auction_id=auc_live&last_seq=41',
+      protocols: ['auction.v1', 'ticket.ticket_live']
+    }
+  ]);
+  await expect(ticketRequest).resolves.toEqual({ room_id: 'room_main', auction_id: 'auc_live' });
+
+  await page.evaluate(() => {
+    const [entry] = ((window as typeof window & { __auctionWS?: Array<{ url: string; socket: { dispatchServerMessage: (payload: unknown) => void } }> }).__auctionWS ?? [])
+      .filter(({ url }) => url.includes('/ws?'));
+    entry.socket.dispatchServerMessage({
+      auction_id: 'auc_live',
+      event_type: 'bid_accepted',
+      seq: 42,
+      payload: {
+        current_price_cents: 40000,
+        leader_user_masked: '陈**'
+      }
+    });
+  });
+
+  await expect(page.getByText('event seq 42')).toBeVisible();
+  await expect(page.getByText('¥400.00')).toBeVisible();
+  await expect(page.getByText('陈** 领先')).toBeVisible();
 });
 
 test('H5 recovering and disconnected states show stale marker', async ({ page }) => {

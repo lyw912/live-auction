@@ -37,6 +37,7 @@ type Scenario = {
 type BidPhase = 'idle' | 'pending' | 'accepted' | 'rejected' | 'confirm_required' | 'confirming';
 type PaymentPhase = 'idle' | 'pending' | 'paid' | 'failed';
 type RecoveryPhase = 'idle' | 'recovering';
+type ConnectionPhase = 'connecting' | 'connected' | 'recovering' | 'disconnected';
 
 type BidResponse = {
   result?: string;
@@ -73,7 +74,12 @@ type SnapshotResponse = {
 };
 
 type HistoryRow = Record<string, unknown>;
+type WSTicketResponse = {
+  ticket?: string;
+  expires_in_ms?: number;
+};
 
+const roomID = 'room_main';
 const auctionID = 'auc_live';
 const orderID = 'ord_pending';
 const currentUserID = 'user_1';
@@ -145,7 +151,25 @@ function App() {
   const [historyError, setHistoryError] = useState('');
   const [bidHistory, setBidHistory] = useState<HistoryRow[]>([]);
   const [orderHistory, setOrderHistory] = useState<HistoryRow[]>([]);
+  const [connectionPhase, setConnectionPhase] = useState<ConnectionPhase>('connecting');
   const paymentInFlight = useRef(false);
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const lastSeqRef = useRef(lastSeq);
+  const currentPriceRef = useRef(currentPriceCents);
+  const leaderMaskedRef = useRef(leaderMasked);
+
+  useEffect(() => {
+    lastSeqRef.current = lastSeq;
+  }, [lastSeq]);
+
+  useEffect(() => {
+    currentPriceRef.current = currentPriceCents;
+  }, [currentPriceCents]);
+
+  useEffect(() => {
+    leaderMaskedRef.current = leaderMasked;
+  }, [leaderMasked]);
 
   const scenario = useMemo<Scenario>(() => {
     if (selected === 'sold_winner') {
@@ -194,6 +218,19 @@ function App() {
     }
     if (selected !== 'active_bids') {
       return scenarios.find((item) => item.key === selected) ?? scenarios[0];
+    }
+    if (connectionPhase === 'disconnected') {
+      return {
+        key: 'disconnected',
+        title: '已断开',
+        status: 'DISCONNECTED',
+        price: formatCents(currentPriceCents),
+        leader: '重连中',
+        feedback: '正在重新连接',
+        cta: '重连中',
+        ctaDisabled: true,
+        stale: true
+      };
     }
     if (recoveryPhase === 'recovering') {
       return {
@@ -281,7 +318,7 @@ function App() {
       cta: `出价 ${formatCents(nextBidCents)}`,
       ctaDisabled: false
     };
-  }, [bidFeedback, bidPhase, confirmAmountCents, currentPriceCents, lastSeq, leaderMasked, nextBidCents, paymentPhase, recoveryPhase, selected]);
+  }, [bidFeedback, bidPhase, confirmAmountCents, connectionPhase, currentPriceCents, lastSeq, leaderMasked, nextBidCents, paymentPhase, recoveryPhase, selected]);
 
   const applyAcceptedBid = (payload: BidResponse) => {
     const acceptedPrice = payload.current_price_cents ?? currentPriceCents;
@@ -307,6 +344,7 @@ function App() {
   const recoverFromSnapshot = async () => {
     setSelected('active_bids');
     setRecoveryPhase('recovering');
+    setConnectionPhase((phase) => phase === 'disconnected' ? phase : 'recovering');
     try {
       const response = await fetch(`/api/auctions/${auctionID}`);
       const snapshot = await response.json() as SnapshotResponse;
@@ -316,30 +354,111 @@ function App() {
       }
       applySnapshot(snapshot);
       setRecoveryPhase('idle');
+      setConnectionPhase('connected');
     } catch {
       setBidFeedback('snapshot unavailable，继续同步');
     }
   };
 
+  const handleRealtimeEvent = (detail: AuctionRealtimeEvent) => {
+    if (!detail || detail.auction_id !== auctionID) return;
+    const currentSeq = lastSeqRef.current;
+    if (detail.event_type === 'outbox_gap_notice' || (detail.seq != null && detail.seq > currentSeq + 1)) {
+      void recoverFromSnapshot();
+      return;
+    }
+    if (detail.seq == null || detail.seq <= currentSeq) return;
+    const price = detail.payload?.current_price_cents ?? currentPriceRef.current;
+    setCurrentPriceCents(price);
+    setNextBidCents(price + 5_000);
+    setLastSeq(detail.seq);
+    setLeaderMasked(detail.payload?.leader_user_masked ?? leaderMaskedRef.current);
+    setBidFeedback(`event seq ${detail.seq}`);
+    setConnectionPhase('connected');
+  };
+
   useEffect(() => {
     const onAuctionEvent = (event: Event) => {
       const detail = (event as CustomEvent<AuctionRealtimeEvent>).detail;
-      if (!detail || detail.auction_id !== auctionID) return;
-      if (detail.event_type === 'outbox_gap_notice' || (detail.seq != null && detail.seq > lastSeq + 1)) {
-        void recoverFromSnapshot();
-        return;
-      }
-      if (detail.seq == null || detail.seq <= lastSeq) return;
-      const price = detail.payload?.current_price_cents ?? currentPriceCents;
-      setCurrentPriceCents(price);
-      setNextBidCents(price + 5_000);
-      setLastSeq(detail.seq);
-      setLeaderMasked(detail.payload?.leader_user_masked ?? leaderMasked);
-      setBidFeedback(`event seq ${detail.seq}`);
+      handleRealtimeEvent(detail);
     };
     window.addEventListener('auction:event', onAuctionEvent);
     return () => window.removeEventListener('auction:event', onAuctionEvent);
-  }, [currentPriceCents, lastSeq, leaderMasked]);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const clearReconnect = () => {
+      if (reconnectTimerRef.current != null) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+    };
+    const scheduleReconnect = () => {
+      clearReconnect();
+      reconnectTimerRef.current = window.setTimeout(() => {
+        if (!cancelled) void connectWebSocket();
+      }, 2_000);
+    };
+    const connectWebSocket = async () => {
+      setConnectionPhase((phase) => phase === 'recovering' ? phase : 'connecting');
+      try {
+        const ticketResponse = await fetch('/api/auth/ws-ticket', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Mock-Role': 'user',
+            'X-Mock-User-Id': currentUserID
+          },
+          body: JSON.stringify({ room_id: roomID, auction_id: auctionID })
+        });
+        const ticketPayload = await ticketResponse.json() as WSTicketResponse;
+        if (!ticketResponse.ok || !ticketPayload.ticket) {
+          throw new Error('ws ticket unavailable');
+        }
+        if (cancelled) return;
+        const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
+        const wsURL = `${scheme}://${window.location.host}/ws?room_id=${encodeURIComponent(roomID)}&auction_id=${encodeURIComponent(auctionID)}&last_seq=${lastSeqRef.current}`;
+        const socket = new WebSocket(wsURL, ['auction.v1', `ticket.${ticketPayload.ticket}`]);
+        wsRef.current = socket;
+        socket.onopen = () => {
+          if (!cancelled) setConnectionPhase('connected');
+        };
+        socket.onmessage = (message) => {
+          try {
+            handleRealtimeEvent(JSON.parse(String(message.data)) as AuctionRealtimeEvent);
+          } catch {
+            setBidFeedback('实时消息解析失败，正在同步');
+            void recoverFromSnapshot();
+          }
+        };
+        socket.onerror = () => {
+          if (!cancelled) {
+            setConnectionPhase('disconnected');
+          }
+        };
+        socket.onclose = () => {
+          if (!cancelled) {
+            setConnectionPhase('disconnected');
+            scheduleReconnect();
+          }
+        };
+      } catch {
+        if (!cancelled) {
+          setConnectionPhase('disconnected');
+          scheduleReconnect();
+        }
+      }
+    };
+
+    void connectWebSocket();
+    return () => {
+      cancelled = true;
+      clearReconnect();
+      wsRef.current?.close();
+      wsRef.current = null;
+    };
+  }, []);
 
   const submitBid = async () => {
     if (selected !== 'active_bids' || scenario.ctaDisabled) return;
@@ -489,8 +608,8 @@ function App() {
           <strong>{scenario.feedback}</strong>
         </div>
         <div className="signal-row">
-          {scenario.stale ? <WifiOff size={16} /> : <Wifi size={16} />}
-          <span>{scenario.stale ? '状态可能已过期' : '状态来自服务端事件'}</span>
+          {scenario.stale || connectionPhase === 'disconnected' ? <WifiOff size={16} /> : <Wifi size={16} />}
+          <span>{scenario.stale ? '状态可能已过期' : connectionPhase === 'connected' ? 'WebSocket 已连接 · 状态来自服务端事件' : 'WebSocket 连接中 · 状态来自服务端事件'}</span>
         </div>
         <div className="bid-stepper">
           <button type="button" aria-label="decrease">-</button>
