@@ -1,0 +1,125 @@
+:root {
+  font-family: Inter, "Segoe UI", Arial, sans-serif;
+  color: #1f2933;
+  background: #f3f6f8;
+}
+
+body {
+  margin: 0;
+}
+
+.console-shell {
+  min-height: 100vh;
+}
+
+.sider {
+  background: #14251f;
+  color: #e7f1ed;
+  padding: 18px 14px;
+}
+
+.brand {
+  height: 40px;
+  display: flex;
+  align-items: center;
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.sider nav {
+  display: grid;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.sider nav span {
+  height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  border-radius: 8px;
+  background: rgba(255,255,255,.06);
+}
+
+.content {
+  padding: 20px;
+  background: #f3f6f8;
+}
+
+.toolbar,
+.section-title,
+.order-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.toolbar h1,
+.band h2 {
+  margin: 0;
+  letter-spacing: 0;
+}
+
+.toolbar p {
+  margin: 4px 0 0;
+  color: #65756f;
+}
+
+.band {
+  margin-top: 16px;
+  padding: 16px;
+  background: #fff;
+  border: 1px solid #dde5e2;
+  border-radius: 8px;
+}
+
+.two-column {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(320px, .9fr);
+  gap: 16px;
+}
+
+.rule-panel {
+  min-width: 0;
+}
+
+.order-line {
+  min-height: 44px;
+  border-bottom: 1px solid #edf1ef;
+}
+
+.order-line:last-child {
+  border-bottom: 0;
+}
+
+.diagnostics {
+  margin-bottom: 24px;
+}
+
+.section-title {
+  margin-bottom: 12px;
+}
+
+.section-title span,
+.empty-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #64736d;
+}
+
+.empty-state {
+  min-height: 96px;
+  justify-content: center;
+  width: 100%;
+  border: 1px dashed #ccd7d3;
+  border-radius: 8px;
+}
+
+@media (max-width: 900px) {
+  .two-column {
+    grid-template-columns: 1fr;
+  }
+}

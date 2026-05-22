@@ -20,6 +20,8 @@ backend/tmp/
 
 # Node / frontend
 node_modules/
+.pnpm-store/
+*.tsbuildinfo
 dist/
 build/
 coverage/

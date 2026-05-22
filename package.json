@@ -1,0 +1,17 @@
+{
+  "name": "live-auction-workspace",
+  "private": true,
+  "scripts": {
+    "dev:h5": "pnpm --filter mobile-h5 dev --host 127.0.0.1 --port 5173",
+    "dev:pc": "pnpm --filter pc-console dev --host 127.0.0.1 --port 5174",
+    "build": "pnpm --filter mobile-h5 build && pnpm --filter pc-console build",
+    "test:e2e": "node tests/e2e/run-playwright.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.45.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "typescript": "^5.5.3",
+    "vite": "^5.3.3"
+  },
+  "packageManager": "pnpm@11.2.2"
+}
