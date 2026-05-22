@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import http from 'node:http';
+import net from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -9,7 +10,8 @@ const node = process.execPath;
 const viteCli = join(root, 'node_modules', 'vite', 'bin', 'vite.js');
 const playwrightCli = join(root, 'node_modules', '@playwright', 'test', 'cli.js');
 const backendURL = process.env.LIVE_AUCTION_API_TARGET || 'http://127.0.0.1:18080';
-const h5URL = process.env.LIVE_AUCTION_H5_URL || 'http://127.0.0.1:5175';
+const h5URL = process.env.LIVE_AUCTION_H5_URL || 'http://127.0.0.1:5176';
+const pcURL = process.env.LIVE_AUCTION_PC_URL || 'http://127.0.0.1:5177';
 const children = [];
 
 function spawnLogged(command, args, options = {}) {
@@ -70,6 +72,22 @@ function waitFor(url, deadlineMs = 30_000) {
   });
 }
 
+function assertTCPPortFree(url) {
+  const parsed = new URL(url);
+  const host = parsed.hostname;
+  const port = Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80));
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', (error) => {
+      reject(new Error(`${host}:${port} is already in use before live smoke startup: ${error.message}`));
+    });
+    server.once('listening', () => {
+      server.close(() => resolve());
+    });
+    server.listen(port, host);
+  });
+}
+
 function stopChildren() {
   for (const child of children.splice(0)) {
     if (!child.killed) child.kill();
@@ -88,7 +106,8 @@ async function runPlaywright() {
       cwd: root,
       env: {
         ...process.env,
-        LIVE_AUCTION_H5_URL: h5URL
+        LIVE_AUCTION_H5_URL: h5URL,
+        LIVE_AUCTION_PC_URL: pcURL
       },
       stdio: 'inherit',
       windowsHide: true
@@ -98,6 +117,10 @@ async function runPlaywright() {
 }
 
 try {
+  await assertTCPPortFree(backendURL);
+  await assertTCPPortFree(h5URL);
+  await assertTCPPortFree(pcURL);
+
   const backendEnv = {
     HTTP_ADDR: '127.0.0.1:18080'
   };
@@ -120,14 +143,29 @@ try {
     '--host',
     '127.0.0.1',
     '--port',
-    '5175'
+    new URL(h5URL).port
   ], {
     env: {
       LIVE_AUCTION_API_TARGET: backendURL
     },
-    label: 'vite:5175'
+    label: `vite:${new URL(h5URL).port}`
   });
   await waitFor(h5URL);
+
+  spawnLogged(node, [
+    viteCli,
+    'frontend/pc-console',
+    '--host',
+    '127.0.0.1',
+    '--port',
+    new URL(pcURL).port
+  ], {
+    env: {
+      LIVE_AUCTION_API_TARGET: backendURL
+    },
+    label: 'vite:5177'
+  });
+  await waitFor(pcURL);
 
   const code = await runPlaywright();
   stopChildren();

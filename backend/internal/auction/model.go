@@ -34,6 +34,17 @@ type Rule struct {
 	FrozenAt                *time.Time `json:"frozen_at,omitempty"`
 }
 
+type UpdateRulesInput struct {
+	StartPriceCents int64  `json:"start_price_cents"`
+	IncrementCents  int64  `json:"increment_cents"`
+	CapPriceCents   *int64 `json:"cap_price_cents"`
+	Rule
+}
+
+type CancelInput struct {
+	Reason string `json:"reason"`
+}
+
 type Auction struct {
 	ID                string     `json:"id"`
 	RoomID            string     `json:"room_id"`

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -74,7 +75,7 @@ func (h AuctionHandler) CreateAuction(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h AuctionHandler) UpdateRules(w http.ResponseWriter, r *http.Request) {
-	var req auction.Rule
+	var req auction.UpdateRulesInput
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "invalid json body", 400))
 		return
@@ -105,7 +106,11 @@ func (h AuctionHandler) Start(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h AuctionHandler) Cancel(w http.ResponseWriter, r *http.Request) {
-	result, err := h.Repo.Cancel(r.Context(), chi.URLParam(r, "id"), traceID(r.Context()))
+	var req auction.CancelInput
+	if r.Body != http.NoBody {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	result, err := h.Repo.Cancel(r.Context(), chi.URLParam(r, "id"), req, traceID(r.Context()))
 	writeResult(w, r, http.StatusOK, result, err)
 }
 
@@ -170,7 +175,12 @@ func (h AuctionHandler) PayMock(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
 		return
 	}
-	result, err := h.Repo.PayMock(r.Context(), chi.URLParam(r, "id"), user.ID, r.Header.Get("Idempotency-Key"), traceID(r.Context()))
+	var req auction.PaymentInput
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "invalid json body", 400))
+		return
+	}
+	result, err := h.Repo.PayMock(r.Context(), chi.URLParam(r, "id"), user.ID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context()))
 	writeResult(w, r, http.StatusOK, result, err)
 }
 
@@ -240,6 +250,27 @@ func (h AuctionHandler) CreateWSTicket(w http.ResponseWriter, r *http.Request) {
 		"ticket":        token,
 		"expires_in_ms": int(realtime.TicketTTL / time.Millisecond),
 	})
+}
+
+func (h AuctionHandler) CreateChatMessage(w http.ResponseWriter, r *http.Request) {
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	var req auction.CreateChatInput
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "invalid json body", 400))
+		return
+	}
+	result, err := h.Repo.CreateChatMessage(r.Context(), chi.URLParam(r, "room_id"), user.ID, req, traceID(r.Context()))
+	writeResult(w, r, http.StatusCreated, result, err)
+}
+
+func (h AuctionHandler) ListChatMessages(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	result, err := h.Repo.ListChatMessages(r.Context(), chi.URLParam(r, "room_id"), limit)
+	writeResult(w, r, http.StatusOK, map[string]any{"items": result}, err)
 }
 
 func decodeJSON(r *http.Request, target any) error {

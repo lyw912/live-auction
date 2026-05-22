@@ -62,7 +62,7 @@ func TestCancelCapRaceProducesExactlyOneTerminalState(t *testing.T) {
 
 	errs := runConcurrently(2, func(i int) error {
 		if i == 0 {
-			_, err := repo.Cancel(ctx, row.ID, "tr_cancel_cap")
+			_, err := repo.Cancel(ctx, row.ID, CancelInput{Reason: "race cancel"}, "tr_cancel_cap")
 			return err
 		}
 		input := BidInput{ClientBidID: "cap-race-bid", AmountCents: capPrice}

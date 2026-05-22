@@ -34,15 +34,17 @@ pnpm dev:pc
 
 ## Flow
 
-1. Open PC console and confirm active auction/rule data for `room_main`.
-2. Open H5. The browser enters `room_main`, loads active auctions from `GET /api/rooms/room_main/auctions`, and selects the active auction returned by the API.
-3. Confirm H5 obtains a WebSocket ticket and shows connected realtime state.
-4. Place a normal bid. H5 enters pending state and only updates after the backend accepts or a live server event arrives.
-5. Place a high bid that crosses the fat-finger threshold. H5 shows confirm UI and only submits `POST /api/auctions/{auction_id}/bids/confirm` after confirmation.
-6. Trigger or inspect a reject path such as self-leading or invalid amount; verify reason-specific copy and no optimistic success.
-7. Show order/payment state. H5 selects the pending order for the active auction and calls mock payment once.
-8. Open PC diagnostics tabs and show active auction, reject, outbox, scheduler, recovery, and anomaly data from real backend producers.
-9. Run the live backend H5 smoke if a scripted demo proof is needed:
+1. Open PC console and confirm active auction/rule/order data for `room_main`.
+2. In PC console, create a local demo item and DRAFT auction, save full rule fields on the selected auction, then schedule/start/cancel or narrate as needed for the demo branch.
+3. Open H5. The browser enters `room_main`, loads active auctions from `GET /api/rooms/room_main/auctions`, and selects the active auction returned by the API.
+4. Confirm H5 obtains a WebSocket ticket and shows connected realtime state.
+5. Send a chat message from H5 and confirm it appears in the room chat list.
+6. Place a normal bid. H5 enters pending state and only updates after the backend accepts or a live server event arrives.
+7. Place a high bid that crosses the fat-finger threshold. H5 shows confirm UI and only submits `POST /api/auctions/{auction_id}/bids/confirm` after confirmation.
+8. Trigger or inspect a reject path such as self-leading or invalid amount; verify reason-specific copy and no optimistic success.
+9. Drive the active auction to cap/SOLD. H5 refreshes the winner's order from `/api/users/me/orders`, selects the newly generated pending order for the active auction, and calls mock payment once.
+10. Open PC diagnostics tabs and show active auction, reject, outbox, scheduler, recovery, and anomaly data from real backend producers.
+11. Run the live backend H5 smoke if a scripted demo proof is needed:
 
 ```powershell
 pnpm test:e2e:h5-live
@@ -50,8 +52,8 @@ pnpm test:e2e:h5-live
 
 ## Evidence To Capture
 
-- Browser screenshots of H5 connected, pending bid, fat-finger confirm, accepted state, paid state, and diagnostics tabs.
-- Backend logs around `POST /api/auth/ws-ticket`, bid, confirm, order payment, and monitor routes.
+- Browser screenshots of H5 connected, pending bid, fat-finger confirm, cap SOLD, generated order/payment, paid state, PC host live flow, and diagnostics tabs.
+- Backend logs around `POST /api/auth/ws-ticket`, bid, confirm, generated order payment, PC item/auction/rule/lifecycle APIs, and monitor routes.
 - Test output from `pnpm test:e2e:h5-live`.
 - Optional DB rows from `auctions`, `bids`, `orders`, `auction_events`, `outbox_events`, and `anomalies`.
 

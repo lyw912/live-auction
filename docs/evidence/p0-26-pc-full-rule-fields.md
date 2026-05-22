@@ -33,6 +33,8 @@ Result:
   - deposit floor cents
   - deposit cap cents
 - `PATCH /api/auctions/auc_next/rules` body now includes those backend field names.
+- Backend `PATCH /api/auctions/{id}/rules` now accepts and persists `start_price_cents`, `increment_cents`, `cap_price_cents`, and the full embedded rule in one DRAFT-only update.
+- Repository tests verify the money fields update the selected auction and reset `current_price_cents` before schedule/start.
 - E2E validates the submitted backend contract body.
 - E2E also blocks invalid cross-field UI combinations for extension seconds, fat-finger threshold vs increment, and deposit floor vs cap before save.
 - Backend still remains final authority for rule acceptance.
@@ -58,9 +60,9 @@ passed
 ```
 
 Known limits:
-- E2E uses mocked save responses; live backend integration remains future work.
+- E2E uses mocked save responses; backend persistence is proven by Go tests, not browser-to-live-backend PC smoke.
 - Frontend cross-field validation is still a guardrail, not final authority; backend remains authoritative.
 - Rule inputs are compact operational controls, not a final polished console layout.
 
 Next action:
-- Add animation longtask evidence before claiming animation performance, or leave load/perf gates unclaimed.
+- Add a dedicated live PC browser smoke if P1 wants end-to-end host workflow evidence beyond API and mocked browser contract coverage.

@@ -140,18 +140,23 @@ func TestPlaceBidCapSoldCreatesOrderAndPaymentIsIdempotent(t *testing.T) {
 		t.Fatalf("order status = %s/%s, want pending/held", status, depositStatus)
 	}
 
-	pay1, err := repo.PayMock(ctx, orderID, "user_1", "pay-1", "tr_pay")
+	_, err = repo.PayMock(ctx, orderID, "user_1", "pay-missing-confirm", PaymentInput{}, "tr_pay")
+	if !hasCode(err, apierrors.CodeInvalidArgument) {
+		t.Fatalf("PayMock missing confirm err = %v, want INVALID_ARGUMENT", err)
+	}
+
+	pay1, err := repo.PayMock(ctx, orderID, "user_1", "pay-1", PaymentInput{Confirm: true}, "tr_pay")
 	if err != nil {
 		t.Fatalf("PayMock: %v", err)
 	}
-	pay2, err := repo.PayMock(ctx, orderID, "user_1", "pay-1", "tr_pay")
+	pay2, err := repo.PayMock(ctx, orderID, "user_1", "pay-1", PaymentInput{Confirm: true}, "tr_pay")
 	if err != nil {
 		t.Fatalf("PayMock replay: %v", err)
 	}
 	if pay1.OrderStatus != OrderStatusPaid || pay2.OrderStatus != pay1.OrderStatus || pay2.OrderID != pay1.OrderID {
 		t.Fatalf("unexpected payment replay: %#v %#v", pay1, pay2)
 	}
-	pay3, err := repo.PayMock(ctx, orderID, "user_1", "pay-2", "tr_pay")
+	pay3, err := repo.PayMock(ctx, orderID, "user_1", "pay-2", PaymentInput{Confirm: true}, "tr_pay")
 	if err != nil {
 		t.Fatalf("PayMock second key: %v", err)
 	}
@@ -195,7 +200,7 @@ func TestCancelActiveThenLaterBidRejects(t *testing.T) {
 	repo := NewRepository(db)
 	auction := createActiveAuction(t, repo, db, nil)
 
-	cancelled, err := repo.Cancel(ctx, auction.ID, "tr_cancel")
+	cancelled, err := repo.Cancel(ctx, auction.ID, CancelInput{Reason: "test cancel"}, "tr_cancel")
 	if err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}

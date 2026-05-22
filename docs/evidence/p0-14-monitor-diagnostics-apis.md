@@ -26,7 +26,10 @@ Monitor API tests use the full gateway router with mock auth and real PostgreSQL
 - `GET /api/monitor/anomalies` returns real `system_anomaly_events` rows.
 - `GET /api/monitor/outbox` returns real outbox delivery rows and lag.
 - `GET /api/monitor/scheduler` returns real scheduler jobs.
+- `GET /api/monitor/rejects` returns recent rejected bid rows with trace/source identifiers.
+- `GET /api/monitor/recovery` returns reconnect/history/snapshot source mix from `user_activity_events`.
 - Monitor endpoints are host-only.
+- PC diagnostics renders auctions, rejects, recovery, anomalies, outbox, and scheduler tabs from these APIs.
 
 ## Result
 
@@ -53,8 +56,8 @@ None.
 
 ## Known Limits
 
-This slice implements backend diagnostic APIs. PC diagnostic UI pages and frontend screenshot/overlap gates remain separate P0 frontend work.
+This slice proves backend diagnostic APIs and the PC diagnostic tabs at browser contract level. The PC Playwright suite uses mocked route responses, so it is UI contract coverage, not a live backend browser run.
 
 ## Next Action
 
-Continue P0 with reconnect-storm DB rebuild bounding or frontend H5/PC state gates.
+Keep diagnostic rows source-linked as new P1 observability panels are added.

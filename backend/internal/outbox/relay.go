@@ -264,10 +264,18 @@ func (r *Relay) RebuildSnapshot(ctx context.Context, auctionID string) ([]byte, 
 				'current_winner_id', a.current_winner_id,
 				'end_at', a.end_at,
 				'accepted_bid_count', a.accepted_bid_count,
-				'extend_count', a.extend_count
+				'extend_count', a.extend_count,
+				'reason', cancel_event.payload_json->>'reason'
 			)
 		)
 		FROM auctions a
+		LEFT JOIN LATERAL (
+			SELECT ev.payload_json
+			FROM auction_events ev
+			WHERE ev.auction_id = a.id AND ev.event_type = 'auction_cancelled'
+			ORDER BY ev.seq DESC
+			LIMIT 1
+		) cancel_event ON true
 		WHERE a.id = $1
 	`, auctionID).Scan(&payload)
 	if err != nil {

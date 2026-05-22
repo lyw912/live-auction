@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -106,7 +107,7 @@ func (r *Repository) CreateAuction(ctx context.Context, input CreateAuctionInput
 	return r.GetAuction(ctx, auctionID)
 }
 
-func (r *Repository) UpdateRules(ctx context.Context, auctionID string, rule Rule, traceID string) (Auction, error) {
+func (r *Repository) UpdateRules(ctx context.Context, auctionID string, input UpdateRulesInput, traceID string) (Auction, error) {
 	tx, err := r.beginTx(ctx)
 	if err != nil {
 		return Auction{}, err
@@ -114,38 +115,43 @@ func (r *Repository) UpdateRules(ctx context.Context, auctionID string, rule Rul
 	defer rollback(ctx, tx)
 
 	var status Status
-	var startPriceCents int64
-	var incrementCents int64
-	var capPriceCents *int64
 	var ruleVersion int
 	if err := tx.QueryRow(ctx, `
-		SELECT status, start_price_cents, increment_cents, cap_price_cents, rule_version
+		SELECT status, rule_version
 		FROM auctions
 		WHERE id = $1
 		FOR UPDATE
-	`, auctionID).Scan(&status, &startPriceCents, &incrementCents, &capPriceCents, &ruleVersion); err != nil {
+	`, auctionID).Scan(&status, &ruleVersion); err != nil {
 		return Auction{}, mapNotFound(err)
 	}
 	if status != StatusDraft {
 		return Auction{}, apierrors.New(apierrors.CodeRuleFrozenAfterScheduled, "rules can only be changed while auction is DRAFT", 409)
 	}
-	if err := validateRuleAgainstAuction(startPriceCents, incrementCents, capPriceCents, rule); err != nil {
+	if err := validateRuleAgainstAuction(input.StartPriceCents, input.IncrementCents, input.CapPriceCents, input.Rule); err != nil {
 		return Auction{}, err
 	}
 
 	nextVersion := ruleVersion + 1
-	if err := insertRule(ctx, tx, auctionID, nextVersion, rule, nil); err != nil {
+	if err := insertRule(ctx, tx, auctionID, nextVersion, input.Rule, nil); err != nil {
 		return Auction{}, err
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE auctions
-		SET rule_version = $2, updated_at = now()
+		SET start_price_cents = $2,
+		    increment_cents = $3,
+		    cap_price_cents = $4,
+		    current_price_cents = $2,
+		    rule_version = $5,
+		    updated_at = now()
 		WHERE id = $1
-	`, auctionID, nextVersion); err != nil {
+	`, auctionID, input.StartPriceCents, input.IncrementCents, input.CapPriceCents, nextVersion); err != nil {
 		return Auction{}, err
 	}
 	if err := appendAuctionEvent(ctx, tx, auctionID, "rules_updated", traceID, map[string]any{
-		"rule_version": nextVersion,
+		"rule_version":      nextVersion,
+		"start_price_cents": input.StartPriceCents,
+		"increment_cents":   input.IncrementCents,
+		"cap_price_cents":   input.CapPriceCents,
 	}); err != nil {
 		return Auction{}, err
 	}
@@ -230,7 +236,7 @@ func (r *Repository) Start(ctx context.Context, auctionID string, traceID string
 	return r.GetAuction(ctx, auctionID)
 }
 
-func (r *Repository) Cancel(ctx context.Context, auctionID string, traceID string) (Auction, error) {
+func (r *Repository) Cancel(ctx context.Context, auctionID string, input CancelInput, traceID string) (Auction, error) {
 	tx, err := r.beginTx(ctx)
 	if err != nil {
 		return Auction{}, err
@@ -244,6 +250,10 @@ func (r *Repository) Cancel(ctx context.Context, auctionID string, traceID strin
 	if status == StatusSold || status == StatusEnded || status == StatusCancelled {
 		return Auction{}, apierrors.New(apierrors.CodeInvalidArgument, "terminal auction cannot be cancelled", 409)
 	}
+	reason := strings.TrimSpace(input.Reason)
+	if reason == "" {
+		reason = "host_cancelled"
+	}
 	_, err = tx.Exec(ctx, `
 		UPDATE auctions
 		SET status = 'CANCELLED', is_narrating = false, narrating_started_at = NULL,
@@ -255,6 +265,7 @@ func (r *Repository) Cancel(ctx context.Context, auctionID string, traceID strin
 	}
 	if err := appendAuctionEvent(ctx, tx, auctionID, "auction_cancelled", traceID, map[string]any{
 		"previous_status": status,
+		"reason":          reason,
 	}); err != nil {
 		return Auction{}, err
 	}

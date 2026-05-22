@@ -22,7 +22,7 @@ Environment:
 - Backend tests use local PostgreSQL/Redis test setup
 
 Result:
-- H5 SOLD winner CTA calls `POST /api/orders/ord_pending/pay-mock`.
+- H5 SOLD winner CTA calls `POST /api/orders/{order_id}/pay-mock`; this route-mocked E2E uses fixture id `ord_pending`.
 - Request includes `Idempotency-Key` and `{ "confirm": true }`.
 - Payment pending disables the CTA and keeps the UI waiting for server confirmation.
 - Double-clicking the payment CTA sends one mocked payment request.
@@ -50,8 +50,8 @@ passed
 
 Known limits:
 - Payment API is mocked in E2E; this slice proves client double-click behavior, not live backend integration.
-- Real order list/history is not yet wired into H5.
-- Payment failure copy is minimal and should be expanded when backend integration is added.
+- Live backend order generation/payment is covered separately by `p0-30-h5-live-backend-rest-smoke.md`.
+- Payment failure copy is minimal and should be expanded in P1.
 
 Next action:
-- Add H5 out-of-order/snapshot recovery client gate or wire H5 APIs to the backend dev server.
+- Preserve one-click payment idempotency when real payment provider integration is added.

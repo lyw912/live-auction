@@ -172,7 +172,7 @@ func TestSnapshotRebuildSingleflightBoundsReconnectStorm(t *testing.T) {
 		i := i
 		go func() {
 			defer wg.Done()
-			messages := rt.snapshotMessage(context.Background(), auctionRow.ID)
+			messages, _ := rt.snapshotMessage(context.Background(), auctionRow.ID)
 			if len(messages) != 1 {
 				t.Errorf("messages len = %d, want 1", len(messages))
 				return
@@ -205,7 +205,7 @@ func TestSnapshotRebuildSaturationFallsBackToStaleOrUnavailable(t *testing.T) {
 	if err := rdb.Del(context.Background(), "auction:"+auctionRow.ID+":snapshot").Err(); err != nil {
 		t.Fatalf("redis cleanup: %v", err)
 	}
-	messages := rt.snapshotMessage(context.Background(), auctionRow.ID)
+	messages, _ := rt.snapshotMessage(context.Background(), auctionRow.ID)
 	if len(messages) != 1 || !strings.Contains(string(messages[0]), "snapshot_unavailable") {
 		t.Fatalf("unavailable message = %q", messages)
 	}
@@ -224,7 +224,7 @@ func TestSnapshotRebuildSaturationFallsBackToStaleOrUnavailable(t *testing.T) {
 	if err := rdb.Set(context.Background(), "auction:"+auctionRow.ID+":snapshot", stale, time.Minute).Err(); err != nil {
 		t.Fatalf("set stale snapshot: %v", err)
 	}
-	messages = rt.snapshotMessage(context.Background(), auctionRow.ID)
+	messages, _ = rt.snapshotMessage(context.Background(), auctionRow.ID)
 	if len(messages) != 1 || !strings.Contains(string(messages[0]), `"stale":false`) {
 		t.Fatalf("redis snapshot should be returned before rebuild, got %q", messages)
 	}

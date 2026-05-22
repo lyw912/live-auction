@@ -27,6 +27,15 @@ test.beforeEach(async ({ page }) => {
       }
     });
   });
+  await page.route('/api/rooms/room_main/chat?limit=30', async (route) => {
+    await route.fulfill({
+      json: {
+        items: [
+          { id: 1, room_id: 'room_main', user_id: 'user_2', body: '这个茶盏釉色不错', created_at: '2026-05-22T13:00:00Z' }
+        ]
+      }
+    });
+  });
   await page.route('/api/auth/ws-ticket', async (route, request) => {
     await route.fulfill({
       json: {
@@ -97,8 +106,13 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-test('H5 disables bid CTA for unsafe states and keeps text inside controls', async ({ page }) => {
+test('H5 does not expose test state matrix in normal demo entry', async ({ page }) => {
   await page.goto('/');
+  await expect(page.getByLabel('state-matrix')).toHaveCount(0);
+});
+
+test('H5 disables bid CTA for unsafe states and keeps text inside controls', async ({ page }) => {
+  await page.goto('/?stateMatrix=1');
   const unsafeStates = ['领先中', '提交中', '恢复中', '已断开', '已成交', '流拍', '已取消'];
   for (const state of unsafeStates) {
     await page.getByRole('button', { name: state }).click();
@@ -136,12 +150,16 @@ test('H5 opens browser WebSocket with ticket subprotocol and consumes authoritat
 
   await page.goto('/');
   await expect(page.getByText('WebSocket 已连接 · 状态来自服务端事件')).toBeVisible();
+  const expectedWSURL = await page.evaluate(() => {
+    const wsScheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${wsScheme}//${window.location.host}/ws?room_id=room_main&auction_id=auc_live&last_seq=41`;
+  });
   await expect.poll(async () => page.evaluate(() => {
     const entries = (window as typeof window & { __auctionWS?: Array<{ url: string; protocols: string[] }> }).__auctionWS ?? [];
     return entries.filter(({ url }) => url.includes('/ws?')).map(({ url, protocols }) => ({ url, protocols }));
   })).toEqual([
     {
-      url: 'ws://127.0.0.1:5173/ws?room_id=room_main&auction_id=auc_live&last_seq=41',
+      url: expectedWSURL,
       protocols: ['auction.v1', 'ticket.ticket_live']
     }
   ]);
@@ -167,7 +185,7 @@ test('H5 opens browser WebSocket with ticket subprotocol and consumes authoritat
 });
 
 test('H5 recovering and disconnected states show stale marker', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/?stateMatrix=1');
   await page.getByRole('button', { name: '恢复中' }).click();
   await expect(page.getByText('状态可能已过期')).toBeVisible();
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
@@ -201,7 +219,7 @@ test('H5 bid stays pending until authoritative accepted response', async ({ page
     });
   });
 
-  await page.goto('/');
+  await page.goto('/?stateMatrix=1');
   await page.getByRole('button', { name: '竞价中' }).click();
   await page.getByTestId('bid-cta').click();
   const bidRequest = await bidArrived;
@@ -232,7 +250,7 @@ test('H5 rejected bid shows business copy and re-enables CTA', async ({ page }) 
     });
   });
 
-  await page.goto('/');
+  await page.goto('/?stateMatrix=1');
   await page.getByRole('button', { name: '竞价中' }).click();
   await page.getByTestId('bid-cta').click();
 
@@ -280,7 +298,7 @@ test('H5 fat-finger confirm waits for confirm API before accepted UI', async ({ 
     });
   });
 
-  await page.goto('/');
+  await page.goto('/?stateMatrix=1');
   await page.getByRole('button', { name: '竞价中' }).click();
   await page.getByTestId('bid-cta').click();
   await expect(page.getByText('确认 ¥900.00 出价')).toBeVisible();
@@ -326,7 +344,7 @@ test('H5 payment double click sends one mock payment and reaches paid UI', async
     });
   });
 
-  await page.goto('/');
+  await page.goto('/?stateMatrix=1');
   await page.getByRole('button', { name: '成交', exact: true }).click();
   const payButton = page.getByTestId('bid-cta');
   await payButton.dblclick();
@@ -370,7 +388,7 @@ test('H5 seq gap enters recovering and resumes from fresh snapshot', async ({ pa
     });
   });
 
-  await page.goto('/');
+  await page.goto('/?stateMatrix=1');
   await page.getByRole('button', { name: '竞价中' }).click();
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent('auction:event', {
@@ -415,7 +433,7 @@ test('H5 stale snapshot keeps recovering CTA disabled', async ({ page }) => {
     });
   });
 
-  await page.goto('/');
+  await page.goto('/?stateMatrix=1');
   await page.getByRole('button', { name: '竞价中' }).click();
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent('auction:event', {
@@ -462,6 +480,66 @@ test('H5 renders bid and order history from user APIs', async ({ page }) => {
   await expect(page.getByText('¥600.00 · PAID')).toBeVisible();
 });
 
+test('H5 chat reads seed messages and sends room chat API', async ({ page }) => {
+  let chatBody: Record<string, unknown> | undefined;
+  await page.route('/api/rooms/room_main/chat', async (route, request) => {
+    chatBody = request.postDataJSON() as Record<string, unknown>;
+    await route.fulfill({
+      status: 201,
+      json: {
+        id: 2,
+        room_id: 'room_main',
+        user_id: 'user_1',
+        body: chatBody.body,
+        created_at: '2026-05-22T13:00:05Z'
+      }
+    });
+  });
+
+  await page.goto('/');
+  await expect(page.getByTestId('chat-panel').getByText('这个茶盏釉色不错')).toBeVisible();
+  await page.getByLabel('chat-input').fill('我跟一口');
+  await page.getByRole('button', { name: 'send-chat' }).click();
+  await expect(page.getByTestId('chat-panel').getByText('我跟一口')).toBeVisible();
+  expect(chatBody?.body).toBe('我跟一口');
+  expect(String(chatBody?.client_msg_id ?? '')).toBeTruthy();
+});
+
+test('H5 server terminal events drive sold, ended, and cancelled states', async ({ page }) => {
+  await page.goto('/?stateMatrix=1');
+  await page.getByRole('button', { name: '竞价中' }).click();
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('auction:event', {
+      detail: {
+        auction_id: 'auc_live',
+        event_type: 'auction_sold',
+        seq: 42,
+        payload: {
+          amount_cents: 60000,
+          user_id: 'user_2',
+          leader_user_masked: '赵**'
+        }
+      }
+    }));
+  });
+  await expect(page.getByLabel('auction-state').locator('.eyebrow')).toHaveText('已成交');
+  await expect(page.getByTestId('bid-cta')).toBeDisabled();
+
+  await page.getByRole('button', { name: '竞价中' }).click();
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('auction:event', {
+      detail: {
+        auction_id: 'auc_live',
+        event_type: 'auction_cancelled',
+        seq: 43,
+        payload: { current_price_cents: 60000, reason: '主播已取消' }
+      }
+    }));
+  });
+  await expect(page.getByLabel('auction-state').locator('.eyebrow')).toHaveText('已取消');
+  await expect(page.getByTestId('bid-cta')).toBeDisabled();
+});
+
 test('H5 interaction surface has no unacceptable animation longtask', async ({ page }) => {
   await page.addInitScript(() => {
     const target = window as typeof window & { __longTasks?: number[] };
@@ -481,7 +559,7 @@ test('H5 interaction surface has no unacceptable animation longtask', async ({ p
     }
   });
 
-  await page.goto('/');
+  await page.goto('/?stateMatrix=1');
   await page.getByRole('button', { name: '竞价中' }).click();
   await page.getByRole('button', { name: 'increase' }).click();
   await page.getByRole('button', { name: 'decrease' }).click();

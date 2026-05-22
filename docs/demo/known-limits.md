@@ -7,9 +7,9 @@ Commit: pending
 ## Demo Scope
 
 - The P0 demo uses deterministic local room `room_main`; H5 does not yet provide a full room selector.
-- The H5 app selects active auction and payable order IDs from backend API responses, but the entry room is fixed for local smoke and demo repeatability.
-- PC console focuses on auction rules, diagnostics, and P0 host controls. It is not a complete merchant CMS.
-- Mock auth uses `X-Mock-Role` and `X-Mock-User-Id`; there is no real login, SMS, or account binding.
+- The H5 app selects active auction and payable order IDs from backend API responses, and the live smoke proves a cap SOLD bid generates the payable order before mock payment. The entry room is still fixed for local smoke and demo repeatability.
+- PC console supports the P0 host workflow for local demo: item creation, auction creation, selected-auction rule save, schedule/start/cancel/narrate controls, order list, and diagnostics. It is not a complete merchant CMS.
+- Mock auth uses `X-Mock-Role` and `X-Mock-User-Id`; there is no real login, SMS, account binding, or room membership system. Any mock user can enter a valid local demo room.
 - Payment is mock payment; no external payment provider is integrated.
 
 ## Correctness Scope
@@ -22,8 +22,8 @@ Commit: pending
 
 ## Evidence Scope
 
-- P0 correctness/demo gates are covered by Go tests, Playwright tests, live H5 backend smoke, and committed evidence records under `docs/evidence/`.
-- Frontend unit/E2E route mocks prove UI state contracts; live backend coverage is limited to the explicit H5 live smoke evidence files.
+- P0 correctness/demo gates are covered by Go tests, Playwright tests, live H5/PC backend smoke, and committed evidence records under `docs/evidence/`.
+- Frontend unit/E2E route mocks prove UI state contracts; live backend coverage is limited to the explicit H5/PC live smoke tests.
 - `docs/perf/p0-load-smoke-2026-05-22.md` is a local smoke baseline only.
 - No QPS, online-user capacity, production P99/P999, or fanout capacity claim is allowed until a formal native 3-run k6 baseline is recorded.
 

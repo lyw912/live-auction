@@ -23,11 +23,12 @@ Environment:
 - Backend tests use local PostgreSQL/Redis test setup
 
 Result:
-- PC rule form `保存规则` calls `PATCH /api/auctions/auc_next/rules`.
+- PC rule form `保存规则` calls `PATCH /api/auctions/{selected_auction_id}/rules`; the selected DRAFT auction is used instead of a fixed target.
 - Request body uses backend contract fields:
   - `start_price_cents`
   - `increment_cents`
   - `cap_price_cents`
+  - duration, extension, fat-finger, and deposit fields covered in `p0-26-pc-full-rule-fields.md`
 - Successful response shows saved state.
 - Backend `INVALID_AUCTION_RULE_CAP_UNREACHABLE` response is surfaced even when frontend validation passes.
 - Backend `details.suggested_caps` are rendered as clickable cap suggestions.
@@ -54,9 +55,8 @@ passed
 ```
 
 Known limits:
-- E2E uses mocked backend responses; this slice proves PC client contract and error surfacing.
-- Full rule schema fields for duration, extension, fat-finger, and deposit are not yet represented.
-- Real backend integration against a live dev server remains future work.
+- E2E uses mocked backend responses; this slice proves PC browser contract and error surfacing.
+- Backend persistence for start price, increment, cap, and full rule fields is covered by Go repository/gateway tests.
 
 Next action:
-- Add H5 fat-finger confirm or wire H5/PC to a live backend dev server smoke path.
+- Add a dedicated live PC browser smoke if P1 wants browser-to-live-backend host workflow evidence beyond mocked contract coverage.

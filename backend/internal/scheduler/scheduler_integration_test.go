@@ -152,7 +152,7 @@ func TestOrderExpireMarksPendingOrderOnceAndPaymentRejects(t *testing.T) {
 	if status != auction.OrderStatusExpired || depositStatus != auction.DepositStatusForfeit {
 		t.Fatalf("order = %s/%s, want expired/forfeited", status, depositStatus)
 	}
-	if _, err := repo.PayMock(ctx, orderID, "user_1", "pay-expired", "tr_pay"); !hasCode(err, apierrors.CodeOrderAlreadyExpired) {
+	if _, err := repo.PayMock(ctx, orderID, "user_1", "pay-expired", auction.PaymentInput{Confirm: true}, "tr_pay"); !hasCode(err, apierrors.CodeOrderAlreadyExpired) {
 		t.Fatalf("PayMock expired err = %v, want ORDER_ALREADY_EXPIRED", err)
 	}
 	if ok, err := NewRunner(db, "order-expire-again").ProcessOne(ctx); err != nil {

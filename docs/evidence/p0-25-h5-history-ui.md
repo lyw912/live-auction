@@ -52,7 +52,7 @@ passed
 ```
 
 Known limits:
-- E2E uses mocked history APIs; live backend integration remains future work.
+- This evidence file uses mocked history APIs; the live H5 smoke separately reads backend bid/order history for the deterministic demo auction.
 - History rows are compact summaries and do not yet open detail views.
 - Pagination is not implemented.
 

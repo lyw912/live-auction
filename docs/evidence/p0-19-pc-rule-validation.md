@@ -54,9 +54,8 @@ passed
 ```
 
 Known limits:
-- The rule form is still not wired to `PATCH /api/auctions/{id}/rules`.
-- Backend validation is already tested separately; this slice only proves frontend blocking and suggestions.
-- Duration, extension, fat-finger, and deposit fields are not yet represented in the PC rule form.
+- This slice focuses on frontend validation and suggestions. Backend authority and full field persistence are covered by `p0-23-pc-rule-save.md` and `p0-26-pc-full-rule-fields.md`.
+- Playwright coverage is route-mocked browser contract coverage, not a live backend browser run.
 
 Next action:
-- Wire PC rule save to backend and surface backend `INVALID_AUCTION_RULE_CAP_UNREACHABLE` responses, or move to H5 real bid/recovery integration.
+- Preserve parity with backend rule validation whenever rule semantics change.

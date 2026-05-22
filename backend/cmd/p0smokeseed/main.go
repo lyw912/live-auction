@@ -58,6 +58,7 @@ func seed(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client) error {
 		DELETE FROM orders WHERE auction_id = 'auc_live';
 		DELETE FROM auction_rules WHERE auction_id = 'auc_live';
 		DELETE FROM auctions WHERE id = 'auc_live';
+		DELETE FROM chat_messages WHERE room_id = 'room_main';
 
 		INSERT INTO users (id, role, display_name, city)
 		VALUES
@@ -114,14 +115,11 @@ func seed(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client) error {
 		  5000, 50000, now()
 		);
 
-		INSERT INTO orders (
-		  id, auction_id, winner_id, amount_cents, status,
-		  deposit_cents, deposit_status, expire_at
-		)
-		VALUES (
-		  'ord_pending', 'auc_live', 'user_1', 60000, 'ORDER_PENDING',
-		  6000, 'HELD', now() + interval '15 minutes'
-		);
+		INSERT INTO chat_messages (room_id, user_id, client_msg_id, body)
+		VALUES
+		  ('room_main', 'user_2', 'seed_chat_1', '这件拍品状态不错'),
+		  ('room_main', 'user_3', 'seed_chat_2', '最后十秒再看')
+		ON CONFLICT DO NOTHING;
 	`)
 	if err != nil {
 		return err

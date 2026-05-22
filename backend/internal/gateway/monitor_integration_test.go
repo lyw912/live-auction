@@ -33,6 +33,8 @@ func TestMonitorRoutesReturnRealDBRowsAndRequireHost(t *testing.T) {
 	assertMonitorHasItems(t, router, "/api/monitor/anomalies", "type", "MONITOR_TEST")
 	assertMonitorHasItems(t, router, "/api/monitor/outbox", "aggregate_id", row.ID)
 	assertMonitorHasItems(t, router, "/api/monitor/scheduler", "target_id", row.ID)
+	assertMonitorHasItems(t, router, "/api/monitor/rejects", "auction_id", row.ID)
+	assertMonitorHasItems(t, router, "/api/monitor/recovery", "room_id", row.RoomID)
 }
 
 func assertMonitorForbiddenForUser(t *testing.T, router http.Handler, path string) {
@@ -131,6 +133,21 @@ func createMonitorAuction(t *testing.T, repo *auction.Repository, db *pgxpool.Po
 	started, err := repo.Start(context.Background(), row.ID, "tr_monitor")
 	if err != nil {
 		t.Fatalf("Start: %v", err)
+	}
+	if _, err := repo.PlaceBid(context.Background(), started.ID, "user_1", "monitor-low", auction.BidInput{
+		ClientBidID:   "monitor-low",
+		AmountCents:   1,
+		ClientSeenSeq: started.Seq,
+	}, "tr_monitor_reject"); err != nil {
+		t.Fatalf("PlaceBid reject path: %v", err)
+	}
+	if _, err := db.Exec(context.Background(), `
+		INSERT INTO user_activity_events (room_id, auction_id, user_id, event_type, source, payload_json)
+		VALUES
+		  ($1, $2, 'user_1', 'ws_reconnect', 'ws', '{"last_seq": 1}'),
+		  ($1, $2, 'user_1', 'ws_recovered', 'ws', '{"source": "db"}')
+	`, started.RoomID, started.ID); err != nil {
+		t.Fatalf("insert recovery activity: %v", err)
 	}
 	return started
 }

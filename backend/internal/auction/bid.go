@@ -60,6 +60,10 @@ type ConfirmBidInput struct {
 	IdempotencyKey string `json:"idempotency_key"`
 }
 
+type PaymentInput struct {
+	Confirm bool `json:"confirm"`
+}
+
 type Order struct {
 	ID            string     `json:"id"`
 	AuctionID     string     `json:"auction_id"`
@@ -221,9 +225,12 @@ func (r *Repository) ConfirmBid(ctx context.Context, auctionID string, userID st
 	return response, nil
 }
 
-func (r *Repository) PayMock(ctx context.Context, orderID string, userID string, idempotencyKey string, traceID string) (PaymentResponse, error) {
+func (r *Repository) PayMock(ctx context.Context, orderID string, userID string, idempotencyKey string, input PaymentInput, traceID string) (PaymentResponse, error) {
 	if idempotencyKey == "" {
 		return PaymentResponse{}, apierrors.New(apierrors.CodeInvalidArgument, "Idempotency-Key is required", http.StatusBadRequest)
+	}
+	if !input.Confirm {
+		return PaymentResponse{}, apierrors.New(apierrors.CodeInvalidArgument, "confirm must be true", http.StatusBadRequest)
 	}
 	requestHash := paymentRequestHash(orderID, userID, idempotencyKey)
 	if replay, ok, err := r.completedPaymentIdempotency(ctx, orderID, userID, idempotencyKey, requestHash); err != nil || ok {
@@ -441,23 +448,26 @@ func (r *Repository) evaluateAndApplyBid(ctx context.Context, tx pgx.Tx, a locke
 	if result == BidResultAcceptedSold {
 		eventType = "auction_sold"
 	}
-	if err := appendAuctionEvent(ctx, tx, a.ID, eventType, traceID, map[string]any{
+	eventPayload := map[string]any{
 		"bid_id":              bidID,
 		"user_id":             userID,
 		"amount_cents":        input.AmountCents,
 		"result":              result,
 		"current_price_cents": input.AmountCents,
-	}); err != nil {
-		return BidResponse{}, "", nil, err
 	}
 	var seq int64
-	if err := tx.QueryRow(ctx, `SELECT seq FROM auctions WHERE id = $1`, a.ID).Scan(&seq); err != nil {
-		return BidResponse{}, "", nil, err
-	}
 	if result == BidResultAcceptedSold {
-		if err := createOrderForSoldAuction(ctx, tx, a, userID, input.AmountCents); err != nil {
+		orderID, err := createOrderForSoldAuction(ctx, tx, a, userID, input.AmountCents)
+		if err != nil {
 			return BidResponse{}, "", nil, err
 		}
+		eventPayload["order_id"] = orderID
+	}
+	if err := appendAuctionEvent(ctx, tx, a.ID, eventType, traceID, eventPayload); err != nil {
+		return BidResponse{}, "", nil, err
+	}
+	if err := tx.QueryRow(ctx, `SELECT seq FROM auctions WHERE id = $1`, a.ID).Scan(&seq); err != nil {
+		return BidResponse{}, "", nil, err
 	}
 	resp := BidResponse{
 		Result:            result,
@@ -472,7 +482,7 @@ func (r *Repository) evaluateAndApplyBid(ctx context.Context, tx pgx.Tx, a locke
 	return resp, "ACCEPTED", nil, nil
 }
 
-func createOrderForSoldAuction(ctx context.Context, tx pgx.Tx, a lockedAuction, winnerID string, amountCents int64) error {
+func createOrderForSoldAuction(ctx context.Context, tx pgx.Tx, a lockedAuction, winnerID string, amountCents int64) (string, error) {
 	deposit := CalculateDeposit(amountCents, int64(a.DepositBPS), a.DepositFloorCents, a.DepositCapCents)
 	orderID := "ord_" + uuid.NewString()
 	expireAt := time.Now().UTC().Add(15 * time.Minute)
@@ -480,9 +490,12 @@ func createOrderForSoldAuction(ctx context.Context, tx pgx.Tx, a lockedAuction, 
 		INSERT INTO orders (id, auction_id, winner_id, amount_cents, status, deposit_cents, deposit_status, expire_at)
 		VALUES ($1, $2, $3, $4, 'ORDER_PENDING', $5, 'HELD', $6)
 	`, orderID, a.ID, winnerID, amountCents, deposit, expireAt); err != nil {
-		return err
+		return "", err
 	}
-	return upsertSchedulerJob(ctx, tx, "EXPIRE_ORDER", "order", orderID, "expire:"+orderID, expireAt)
+	if err := upsertSchedulerJob(ctx, tx, "EXPIRE_ORDER", "order", orderID, "expire:"+orderID, expireAt); err != nil {
+		return "", err
+	}
+	return orderID, nil
 }
 
 func insertBidRow(ctx context.Context, tx pgx.Tx, bidID string, auctionID string, userID string, input BidInput, seq int64, status string, rejectReason *string, requestHash string, responseJSON []byte, traceID string) error {

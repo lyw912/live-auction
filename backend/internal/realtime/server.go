@@ -105,8 +105,18 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 	defer cancelWrite()
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	for _, message := range s.recoveryMessages(ctx, auctionID, lastSeq) {
+	messages, recoverySource := s.recoveryMessages(ctx, auctionID, lastSeq)
+	_ = s.recordWSActivity(ctx, roomID, auctionID, ticket.UserID, "ws_reconnect", map[string]any{
+		"last_seq": lastSeq,
+	})
+	_ = s.recordWSActivity(ctx, roomID, auctionID, ticket.UserID, "ws_recovered", map[string]any{
+		"source": recoverySource,
+	})
+	for _, message := range messages {
 		if err := conn.Write(writeCtx, websocket.MessageText, message); err != nil {
+			_ = s.recordWSActivity(ctx, roomID, auctionID, ticket.UserID, "ws_slow_consumer_closed", map[string]any{
+				"phase": "recovery",
+			})
 			_ = conn.Close(websocket.StatusPolicyViolation, string(apierrors.CodeSlowConsumer))
 			return
 		}
@@ -116,6 +126,9 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 		select {
 		case message, ok := <-sub.Messages():
 			if !ok {
+				_ = s.recordWSActivity(r.Context(), roomID, auctionID, ticket.UserID, "ws_slow_consumer_closed", map[string]any{
+					"phase": "queue_closed",
+				})
 				_ = conn.Close(websocket.StatusPolicyViolation, string(apierrors.CodeSlowConsumer))
 				return
 			}
@@ -123,10 +136,16 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 			err := conn.Write(ctx, websocket.MessageText, message)
 			cancel()
 			if err != nil {
+				_ = s.recordWSActivity(r.Context(), roomID, auctionID, ticket.UserID, "ws_slow_consumer_closed", map[string]any{
+					"phase": "write",
+				})
 				_ = conn.Close(websocket.StatusPolicyViolation, string(apierrors.CodeSlowConsumer))
 				return
 			}
 		case <-slow:
+			_ = s.recordWSActivity(r.Context(), roomID, auctionID, ticket.UserID, "ws_slow_consumer_closed", map[string]any{
+				"phase": "backpressure",
+			})
 			_ = conn.Close(websocket.StatusPolicyViolation, string(apierrors.CodeSlowConsumer))
 			return
 		case <-r.Context().Done():
@@ -139,7 +158,7 @@ func (s *Server) PublishAuctionEvent(ctx context.Context, auctionID string, payl
 	s.hub.Publish(ctx, auctionID, payload)
 }
 
-func (s *Server) recoveryMessages(ctx context.Context, auctionID string, lastSeq int64) [][]byte {
+func (s *Server) recoveryMessages(ctx context.Context, auctionID string, lastSeq int64) ([][]byte, string) {
 	values, err := s.redis.LRange(ctx, "auction:"+auctionID+":events", 0, -1).Result()
 	if err == nil {
 		var out [][]byte
@@ -156,16 +175,16 @@ func (s *Server) recoveryMessages(ctx context.Context, auctionID string, lastSeq
 			next++
 		}
 		if len(out) > 0 {
-			return out
+			return out, "history"
 		}
 	}
 	return s.snapshotMessage(ctx, auctionID)
 }
 
-func (s *Server) snapshotMessage(ctx context.Context, auctionID string) [][]byte {
+func (s *Server) snapshotMessage(ctx context.Context, auctionID string) ([][]byte, string) {
 	payload, err := s.redis.Get(ctx, "auction:"+auctionID+":snapshot").Bytes()
 	if err == nil && len(payload) > 0 {
-		return [][]byte{payload}
+		return [][]byte{payload}, snapshotSource(payload, "redis")
 	}
 	snapshot, err := s.snapshotGroup.Do(ctx, auctionID, func() ([]byte, error) {
 		return s.rebuildSnapshotBounded(ctx, auctionID)
@@ -175,11 +194,11 @@ func (s *Server) snapshotMessage(ctx context.Context, auctionID string) [][]byte
 			_ = s.recordSnapshotSaturated(ctx, auctionID)
 		}
 		if stale := s.staleSnapshot(ctx, auctionID); len(stale) > 0 {
-			return [][]byte{stale}
+			return [][]byte{stale}, "redis"
 		}
-		return [][]byte{snapshotUnavailable(auctionID)}
+		return [][]byte{snapshotUnavailable(auctionID)}, "snapshot_unavailable"
 	}
-	return [][]byte{snapshot}
+	return [][]byte{snapshot}, snapshotSource(snapshot, "db")
 }
 
 func (s *Server) rebuildSnapshotBounded(ctx context.Context, auctionID string) ([]byte, error) {
@@ -208,10 +227,18 @@ func (s *Server) rebuildSnapshotFromDB(ctx context.Context, auctionID string) ([
 				'current_price_cents', a.current_price_cents,
 				'current_winner_id', a.current_winner_id,
 				'end_at', a.end_at,
-				'accepted_bid_count', a.accepted_bid_count
+				'accepted_bid_count', a.accepted_bid_count,
+				'reason', cancel_event.payload_json->>'reason'
 			)
 		)
 		FROM auctions a
+		LEFT JOIN LATERAL (
+			SELECT ev.payload_json
+			FROM auction_events ev
+			WHERE ev.auction_id = a.id AND ev.event_type = 'auction_cancelled'
+			ORDER BY ev.seq DESC
+			LIMIT 1
+		) cancel_event ON true
 		WHERE a.id = $1
 	`, auctionID).Scan(&payload)
 	if err != nil {
@@ -273,6 +300,38 @@ func eventSeq(payload []byte) (int64, bool) {
 		return 0, false
 	}
 	return event.Seq, true
+}
+
+func snapshotSource(payload []byte, fallback string) string {
+	var event struct {
+		EventType string `json:"event_type"`
+		Source    string `json:"source"`
+	}
+	if err := json.Unmarshal(payload, &event); err != nil {
+		return fallback
+	}
+	if event.EventType == "snapshot_unavailable" {
+		return "snapshot_unavailable"
+	}
+	if event.Source != "" {
+		return event.Source
+	}
+	return fallback
+}
+
+func (s *Server) recordWSActivity(ctx context.Context, roomID string, auctionID string, userID string, eventType string, payload map[string]any) error {
+	if s.db == nil {
+		return nil
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(ctx, `
+		INSERT INTO user_activity_events (room_id, auction_id, user_id, event_type, source, payload_json)
+		VALUES ($1, $2, $3, $4, 'ws', $5)
+	`, roomID, auctionID, userID, eventType, data)
+	return err
 }
 
 func IsInvalidTicket(err error) bool {

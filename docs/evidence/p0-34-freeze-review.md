@@ -2,7 +2,7 @@
 
 Feature/Gate: Final P0 freeze review before P1
 
-Date: 2026-05-22
+Date: 2026-05-23
 
 Commit: finalized by this record's commit
 
@@ -28,7 +28,7 @@ This record is the P0 freeze gate for moving to P1. It does not replace the deta
 
 READY FOR P1 WITH DOCUMENTED RISKS.
 
-No remaining P0 correctness, demo, reproducibility, or documentation-honesty blocker is intentionally left open.
+No remaining P0 correctness, demo, reproducibility, or documentation-honesty blocker is intentionally left open. The latest product audit is stored at `docs/reviews/p0-product-audit-2026-05-23.md`; the older 2026-05-22 review remains historical evidence of issues that were fixed before this freeze.
 
 ## Final P0 Fix
 
@@ -57,7 +57,9 @@ PASS
 | State machine | PASS | lifecycle, cancel/cap/end/scheduler gates covered |
 | Outbox/recovery | PASS | relay order, poison DEAD + anomaly + gap notice, WS recovery covered |
 | Frontend safety | PASS | no optimistic success, disabled recovery CTA, payment double-click, longtask smoke |
-| Diagnostics | PASS | monitor pages use real backend producers |
+| Host workflow | PASS | PC console uses live APIs for item/auction creation, selected-auction rules, lifecycle controls, orders |
+| Diagnostics | PASS | monitor pages use real backend producers for auctions, rejects, recovery, anomalies, outbox, scheduler |
+| H5 live SOLD/payment | PASS | H5 live smoke proves cap SOLD creates a generated order before mock payment |
 | Reproducibility | PASS | setup guide, demo flow, seed command, test commands documented |
 | Security hygiene | PASS | `.env` ignored, no committed real secrets, WS tickets not logged in query/path |
 | Performance honesty | PASS | local smoke only; no QPS/P99/fanout capacity claim |

@@ -43,12 +43,20 @@ func TestRepositoryCreateScheduleStartLifecycle(t *testing.T) {
 
 	updatedRule := validRule()
 	updatedRule.DurationSeconds = 120
-	auction, err = repo.UpdateRules(ctx, auction.ID, updatedRule, "tr_test")
+	auction, err = repo.UpdateRules(ctx, auction.ID, UpdateRulesInput{
+		StartPriceCents: 20_000,
+		IncrementCents:  10_000,
+		CapPriceCents:   ptrInt64(50_000),
+		Rule:            updatedRule,
+	}, "tr_test")
 	if err != nil {
 		t.Fatalf("UpdateRules: %v", err)
 	}
 	if auction.RuleVersion != 2 {
 		t.Fatalf("rule_version = %d, want 2", auction.RuleVersion)
+	}
+	if auction.StartPriceCents != 20_000 || auction.IncrementCents != 10_000 || auction.CapPriceCents == nil || *auction.CapPriceCents != 50_000 || auction.CurrentPriceCents != 20_000 {
+		t.Fatalf("rule money fields not updated: %#v", auction)
 	}
 
 	auction, err = repo.Schedule(ctx, auction.ID, nil, "tr_test")
@@ -62,7 +70,12 @@ func TestRepositoryCreateScheduleStartLifecycle(t *testing.T) {
 		t.Fatalf("expected rule frozen_at after schedule")
 	}
 
-	_, err = repo.UpdateRules(ctx, auction.ID, validRule(), "tr_test")
+	_, err = repo.UpdateRules(ctx, auction.ID, UpdateRulesInput{
+		StartPriceCents: auction.StartPriceCents,
+		IncrementCents:  auction.IncrementCents,
+		CapPriceCents:   auction.CapPriceCents,
+		Rule:            validRule(),
+	}, "tr_test")
 	if !hasCode(err, apierrors.CodeRuleFrozenAfterScheduled) {
 		t.Fatalf("UpdateRules after schedule err = %v, want RULE_FROZEN_AFTER_SCHEDULED", err)
 	}
@@ -102,6 +115,50 @@ func TestRepositoryRejectsUnreachableCap(t *testing.T) {
 	}, "tr_test")
 	if !hasCode(err, apierrors.CodeInvalidAuctionRuleCapUnreachable) {
 		t.Fatalf("CreateAuction err = %v, want INVALID_AUCTION_RULE_CAP_UNREACHABLE", err)
+	}
+}
+
+func TestRepositoryCancelStoresReasonInEvent(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	repo := NewRepository(db)
+	roomID := createTestRoom(t, db)
+
+	item, err := repo.CreateItem(ctx, CreateItemInput{Title: "Cancel Item"})
+	if err != nil {
+		t.Fatalf("CreateItem: %v", err)
+	}
+	auction, err := repo.CreateAuction(ctx, CreateAuctionInput{
+		RoomID:          roomID,
+		ItemID:          item.ID,
+		StartPriceCents: 10_000,
+		IncrementCents:  5_000,
+		CapPriceCents:   ptrInt64(30_000),
+		Rule:            validRule(),
+	}, "tr_cancel_reason")
+	if err != nil {
+		t.Fatalf("CreateAuction: %v", err)
+	}
+
+	cancelled, err := repo.Cancel(ctx, auction.ID, CancelInput{Reason: "主播临时下架"}, "tr_cancel_reason")
+	if err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if cancelled.Status != StatusCancelled {
+		t.Fatalf("status = %s, want CANCELLED", cancelled.Status)
+	}
+	var reason string
+	if err := db.QueryRow(ctx, `
+		SELECT payload_json->>'reason'
+		FROM auction_events
+		WHERE auction_id = $1 AND event_type = 'auction_cancelled'
+		ORDER BY seq DESC
+		LIMIT 1
+	`, auction.ID).Scan(&reason); err != nil {
+		t.Fatalf("read cancel event reason: %v", err)
+	}
+	if reason != "主播临时下架" {
+		t.Fatalf("cancel reason = %q", reason)
 	}
 }
 

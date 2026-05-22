@@ -75,6 +75,10 @@ body {
   border-radius: 8px;
 }
 
+.arco-table-tr.selected-row .arco-table-td {
+  background: #e8f5f0;
+}
+
 .two-column {
   display: grid;
   grid-template-columns: minmax(0, 1.1fr) minmax(320px, .9fr);
@@ -87,6 +91,28 @@ body {
 
 .rule-panel .arco-input-number {
   width: 100%;
+}
+
+.rule-panel .arco-input,
+.rule-panel .arco-textarea {
+  width: 100%;
+}
+
+.native-input {
+  width: 100%;
+  min-height: 32px;
+  box-sizing: border-box;
+  border: 1px solid #c9d8d2;
+  border-radius: 6px;
+  background: #fff;
+  color: #1f2933;
+  padding: 4px 10px;
+}
+
+.control-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
 }
 
 .rule-subgrid {

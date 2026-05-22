@@ -68,6 +68,26 @@ type monitorSchedulerRow struct {
 	UpdatedAt     time.Time  `json:"updated_at"`
 }
 
+type monitorRejectRow struct {
+	Time              time.Time `json:"time"`
+	AuctionID         string    `json:"auction_id"`
+	UserID            string    `json:"user_id"`
+	AmountCents       int64     `json:"amount_cents"`
+	CurrentPriceCents int64     `json:"current_price_cents"`
+	RejectReason      string    `json:"reject_reason"`
+	TraceID           string    `json:"trace_id"`
+}
+
+type monitorRecoveryRow struct {
+	RoomID                  string `json:"room_id"`
+	ReconnectCountRecent    int64  `json:"reconnect_count_recent"`
+	HistoryRecovered        int64  `json:"history_recovered"`
+	SnapshotRecovered       int64  `json:"snapshot_recovered"`
+	SnapshotFromDB          int64  `json:"snapshot_from_db"`
+	SnapshotStale           int64  `json:"snapshot_stale"`
+	SlowConsumerDisconnects int64  `json:"slow_consumer_disconnects"`
+}
+
 func (h MonitorHandler) Auctions(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.Deps.Postgres.Query(r.Context(), `
 		SELECT a.id, a.room_id, i.title, a.status, a.current_price_cents,
@@ -183,6 +203,76 @@ func (h MonitorHandler) Scheduler(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var row monitorSchedulerRow
 		if err := rows.Scan(&row.JobID, &row.JobType, &row.TargetType, &row.TargetID, &row.RunAt, &row.Status, &row.Attempts, &row.LockedUntil, &row.NextAttemptAt, &row.LastError, &row.UpdatedAt); err != nil {
+			writeError(w, r, internalMonitorError(err))
+			return
+		}
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, r, internalMonitorError(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": result})
+}
+
+func (h MonitorHandler) Rejects(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.Deps.Postgres.Query(r.Context(), `
+		SELECT b.created_at, b.auction_id, b.user_id, b.amount_cents,
+		       a.current_price_cents, COALESCE(b.reject_reason, ''), b.trace_id
+		FROM bids b
+		JOIN auctions a ON a.id = b.auction_id
+		WHERE b.status = 'REJECTED'
+		ORDER BY b.created_at DESC
+		LIMIT $1
+	`, monitorLimit(r))
+	if err != nil {
+		writeError(w, r, internalMonitorError(err))
+		return
+	}
+	defer rows.Close()
+
+	result := []monitorRejectRow{}
+	for rows.Next() {
+		var row monitorRejectRow
+		if err := rows.Scan(&row.Time, &row.AuctionID, &row.UserID, &row.AmountCents, &row.CurrentPriceCents, &row.RejectReason, &row.TraceID); err != nil {
+			writeError(w, r, internalMonitorError(err))
+			return
+		}
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, r, internalMonitorError(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": result})
+}
+
+func (h MonitorHandler) Recovery(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.Deps.Postgres.Query(r.Context(), `
+		SELECT COALESCE(room_id, '-') AS room_id,
+		       count(*) FILTER (WHERE event_type = 'ws_reconnect') AS reconnect_count_recent,
+		       count(*) FILTER (WHERE event_type = 'ws_recovered' AND payload_json->>'source' = 'history') AS history_recovered,
+		       count(*) FILTER (WHERE event_type = 'ws_recovered' AND payload_json->>'source' IN ('snapshot','db','redis')) AS snapshot_recovered,
+		       count(*) FILTER (WHERE event_type = 'ws_recovered' AND payload_json->>'source' = 'db') AS snapshot_from_db,
+		       count(*) FILTER (WHERE event_type = 'ws_recovered' AND payload_json->>'stale' = 'true') AS snapshot_stale,
+		       count(*) FILTER (WHERE event_type = 'ws_slow_consumer_closed') AS slow_consumer_disconnects
+		FROM user_activity_events
+		WHERE created_at >= now() - interval '10 minutes'
+		  AND event_type IN ('ws_reconnect','ws_recovered','ws_slow_consumer_closed')
+		GROUP BY COALESCE(room_id, '-')
+		ORDER BY reconnect_count_recent DESC, room_id
+		LIMIT $1
+	`, monitorLimit(r))
+	if err != nil {
+		writeError(w, r, internalMonitorError(err))
+		return
+	}
+	defer rows.Close()
+
+	result := []monitorRecoveryRow{}
+	for rows.Next() {
+		var row monitorRecoveryRow
+		if err := rows.Scan(&row.RoomID, &row.ReconnectCountRecent, &row.HistoryRecovered, &row.SnapshotRecovered, &row.SnapshotFromDB, &row.SnapshotStale, &row.SlowConsumerDisconnects); err != nil {
 			writeError(w, r, internalMonitorError(err))
 			return
 		}

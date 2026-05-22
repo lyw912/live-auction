@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { AlertTriangle, CheckCircle2, ChevronUp, CreditCard, History, Radio, RefreshCw, Wifi, WifiOff } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronUp, CreditCard, History, MessageCircle, Radio, RefreshCw, Send, Wifi, WifiOff } from 'lucide-react';
 import './styles.css';
 
 type AuctionState =
@@ -41,6 +41,7 @@ type ConnectionPhase = 'connecting' | 'connected' | 'recovering' | 'disconnected
 
 type BidResponse = {
   result?: string;
+  auction_id?: string;
   seq?: number;
   current_price_cents?: number;
   current_winner_id?: string;
@@ -56,9 +57,14 @@ type AuctionRealtimeEvent = {
   event_type: string;
   seq?: number;
   payload?: {
+    status?: string;
     current_price_cents?: number;
+    amount_cents?: number;
+    order_id?: string;
     leader_user_masked?: string;
+    current_winner_id?: string;
     user_id?: string;
+    reason?: string;
   };
 };
 
@@ -74,12 +80,28 @@ type SnapshotResponse = {
   source?: string;
   stale?: boolean;
   payload?: {
+    status?: string;
     current_price_cents?: number;
+    current_winner_id?: string;
     leader_user_masked?: string;
+    reason?: string;
   };
 };
 
 type HistoryRow = Record<string, unknown>;
+type ChatMessage = {
+  id: number;
+  room_id: string;
+  user_id: string;
+  body: string;
+  created_at: string;
+};
+type OrderRow = {
+  order_id?: string;
+  auction_id?: string;
+  amount_cents?: number;
+  order_status?: string;
+};
 type AuctionSummary = {
   id: string;
   room_id?: string;
@@ -162,7 +184,12 @@ function rejectCopy(code?: string | null) {
   }
 }
 
+function isTestMatrixEnabled() {
+  return new URLSearchParams(window.location.search).get('stateMatrix') === '1';
+}
+
 function App() {
+  const showStateMatrix = useMemo(isTestMatrixEnabled, []);
   const [selected, setSelected] = useState<AuctionState>('active_bids');
   const [bidPhase, setBidPhase] = useState<BidPhase>('idle');
   const [paymentPhase, setPaymentPhase] = useState<PaymentPhase>('idle');
@@ -179,10 +206,16 @@ function App() {
   const [historyError, setHistoryError] = useState('');
   const [bidHistory, setBidHistory] = useState<HistoryRow[]>([]);
   const [orderHistory, setOrderHistory] = useState<HistoryRow[]>([]);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatDraft, setChatDraft] = useState('');
+  const [chatSending, setChatSending] = useState(false);
   const [connectionPhase, setConnectionPhase] = useState<ConnectionPhase>('connecting');
   const [activeAuctionID, setActiveAuctionID] = useState('');
   const [activeIncrementCents, setActiveIncrementCents] = useState(5_000);
   const [payableOrderID, setPayableOrderID] = useState('');
+  const [payableOrderAmountCents, setPayableOrderAmountCents] = useState(0);
+  const [terminalPriceCents, setTerminalPriceCents] = useState(0);
+  const [terminalWinnerID, setTerminalWinnerID] = useState('');
   const [lotTitle, setLotTitle] = useState('青瓷手作茶盏');
   const paymentInFlight = useRef(false);
   const wsRef = useRef<WebSocket | null>(null);
@@ -215,12 +248,13 @@ function App() {
 
   const scenario = useMemo<Scenario>(() => {
     if (selected === 'sold_winner') {
+      const soldPrice = formatCents(payableOrderAmountCents || terminalPriceCents || currentPriceCents);
       if (paymentPhase === 'pending') {
         return {
           key: 'sold_winner',
           title: '支付中',
           status: 'SOLD',
-          price: '¥600.00',
+          price: soldPrice,
           leader: '你已拍中',
           feedback: '等待服务端确认支付',
           cta: '支付中',
@@ -234,7 +268,7 @@ function App() {
           key: 'sold_winner',
           title: '已支付',
           status: 'PAID',
-          price: '¥600.00',
+          price: soldPrice,
           leader: '订单已支付',
           feedback: '保证金已处理',
           cta: '已支付',
@@ -248,7 +282,7 @@ function App() {
           key: 'sold_winner',
           title: '支付失败',
           status: 'SOLD',
-          price: '¥600.00',
+          price: soldPrice,
           leader: '你已拍中',
           feedback: '支付未确认，请重试',
           cta: '重新支付',
@@ -257,6 +291,31 @@ function App() {
           sold: true
         };
       }
+      return {
+        key: 'sold_winner',
+        title: '成交',
+        status: 'SOLD',
+        price: soldPrice,
+        leader: '你已拍中',
+        feedback: payableOrderID ? '订单待支付' : '正在同步订单',
+        cta: payableOrderID ? '去支付' : '同步订单中',
+        ctaDisabled: !payableOrderID,
+        winner: true,
+        sold: true
+      };
+    }
+    if (selected === 'sold_loser') {
+      return {
+        key: 'sold_loser',
+        title: '已成交',
+        status: 'SOLD',
+        price: formatCents(terminalPriceCents || currentPriceCents),
+        leader: terminalWinnerID ? `${terminalWinnerID.slice(0, 2)}** 拍中` : '已拍出',
+        feedback: '本场已结束',
+        cta: '已结束',
+        ctaDisabled: true,
+        sold: true
+      };
     }
     if (selected !== 'active_bids') {
       return scenarios.find((item) => item.key === selected) ?? scenarios[0];
@@ -373,7 +432,7 @@ function App() {
       cta: `出价 ${formatCents(nextBidCents)}`,
       ctaDisabled: false
     };
-  }, [activeAuctionID, bidFeedback, bidPhase, confirmAmountCents, connectionPhase, currentPriceCents, lastSeq, leaderMasked, nextBidCents, paymentPhase, recoveryPhase, selected]);
+  }, [activeAuctionID, bidFeedback, bidPhase, confirmAmountCents, connectionPhase, currentPriceCents, lastSeq, leaderMasked, nextBidCents, payableOrderAmountCents, payableOrderID, paymentPhase, recoveryPhase, selected, terminalPriceCents, terminalWinnerID]);
 
   const applyAcceptedBid = (payload: BidResponse) => {
     const acceptedPrice = payload.current_price_cents ?? currentPriceCents;
@@ -383,7 +442,34 @@ function App() {
     setConfirmToken('');
     setConfirmIdempotencyKey('');
     setConfirmAmountCents(0);
+    if (payload.result === 'ACCEPTED_SOLD') {
+      setTerminalPriceCents(acceptedPrice);
+      setTerminalWinnerID(payload.current_winner_id ?? '');
+      setSelected(payload.current_winner_id === currentUserID ? 'sold_winner' : 'sold_loser');
+      setBidPhase('idle');
+      void loadPayableOrderForAuction(payload.auction_id ?? activeAuctionIDRef.current);
+      return;
+    }
     setBidPhase(payload.current_winner_id === currentUserID ? 'accepted' : 'idle');
+  };
+
+  const loadPayableOrderForAuction = async (auctionID: string) => {
+    if (!auctionID) return null;
+    try {
+      const response = await fetch('/api/users/me/orders', { headers: mockUserHeaders });
+      const payload = await readJSON<{ items?: OrderRow[] }>(response);
+      if (!response.ok) return null;
+      const pendingOrder = (payload?.items ?? []).find((row) => (
+        String(row.order_status ?? '') === 'ORDER_PENDING' && String(row.auction_id ?? '') === auctionID
+      ));
+      setPayableOrderID(pendingOrder?.order_id ? String(pendingOrder.order_id) : '');
+      setPayableOrderAmountCents(Number(pendingOrder?.amount_cents ?? 0));
+      return pendingOrder ?? null;
+    } catch {
+      setPayableOrderID('');
+      setPayableOrderAmountCents(0);
+      return null;
+    }
   };
 
   const applySnapshot = (snapshot: SnapshotResponse) => {
@@ -398,6 +484,21 @@ function App() {
     setLeaderMasked(snapshot.payload?.leader_user_masked ?? leaderMasked);
     setBidFeedback(`snapshot ${snapshot.source ?? 'db'} seq ${snapshot.seq}`);
     setBidPhase('idle');
+    const status = snapshot.payload?.status ?? snapshot.status;
+    const winnerID = snapshot.payload?.current_winner_id ?? snapshot.current_winner_id;
+    if (status === 'SOLD') {
+      setTerminalPriceCents(price);
+      setTerminalWinnerID(winnerID ?? '');
+      setSelected(winnerID === currentUserID ? 'sold_winner' : 'sold_loser');
+      if (winnerID === currentUserID) {
+        void loadPayableOrderForAuction(snapshotAuctionID ?? activeAuctionIDRef.current);
+      }
+    } else if (status === 'ENDED') {
+      setSelected('ended');
+    } else if (status === 'CANCELLED') {
+      setSelected('cancelled');
+      setBidFeedback(snapshot.payload?.reason ?? '主播已取消');
+    }
   };
 
   const recoverFromSnapshot = async () => {
@@ -429,14 +530,34 @@ function App() {
       return;
     }
     if (detail.seq == null || detail.seq <= currentSeq) return;
-    const price = detail.payload?.current_price_cents ?? currentPriceRef.current;
+    const price = detail.payload?.current_price_cents ?? detail.payload?.amount_cents ?? currentPriceRef.current;
     const increment = activeIncrementCentsRef.current;
     setCurrentPriceCents(price);
     setNextBidCents(price + increment);
     setLastSeq(detail.seq);
     setLeaderMasked(detail.payload?.leader_user_masked ?? leaderMaskedRef.current);
     setBidFeedback(`event seq ${detail.seq}`);
-    if (detail.payload?.user_id && detail.payload.user_id !== currentUserID) {
+    if (detail.event_type === 'auction_sold') {
+      const winnerID = detail.payload?.current_winner_id ?? detail.payload?.user_id ?? '';
+      setTerminalPriceCents(price);
+      setTerminalWinnerID(winnerID);
+      if (detail.payload?.order_id && winnerID === currentUserID) {
+        setPayableOrderID(detail.payload.order_id);
+        setPayableOrderAmountCents(price);
+      }
+      setSelected(winnerID === currentUserID ? 'sold_winner' : 'sold_loser');
+      setBidPhase('idle');
+      if (winnerID === currentUserID) {
+        void loadPayableOrderForAuction(detail.auction_id);
+      }
+    } else if (detail.event_type === 'auction_ended') {
+      setSelected('ended');
+      setBidPhase('idle');
+    } else if (detail.event_type === 'auction_cancelled') {
+      setSelected('cancelled');
+      setBidFeedback(detail.payload?.reason ?? '主播已取消');
+      setBidPhase('idle');
+    } else if (detail.payload?.user_id && detail.payload.user_id !== currentUserID) {
       setBidPhase('idle');
       setConfirmToken('');
       setConfirmIdempotencyKey('');
@@ -477,23 +598,34 @@ function App() {
     let cancelled = false;
     const loadPayableOrder = async () => {
       if (!activeAuctionID) return;
-      try {
-        const response = await fetch('/api/users/me/orders', { headers: mockUserHeaders });
-        const payload = await readJSON<{ items?: HistoryRow[] }>(response);
-        if (!response.ok || cancelled) return;
-        const pendingOrder = (payload?.items ?? []).find((row) => (
-          String(row.order_status ?? '') === 'ORDER_PENDING' && String(row.auction_id ?? '') === activeAuctionID
-        ));
-        setPayableOrderID(pendingOrder?.order_id ? String(pendingOrder.order_id) : '');
-      } catch {
-        setPayableOrderID('');
-      }
+      const order = await loadPayableOrderForAuction(activeAuctionID);
+      if (cancelled || order) return;
     };
     void loadPayableOrder();
     return () => {
       cancelled = true;
     };
   }, [activeAuctionID]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadChat = async () => {
+      try {
+        const response = await fetch(`/api/rooms/${roomID}/chat?limit=30`, { headers: mockUserHeaders });
+        const payload = await readJSON<{ items?: ChatMessage[] }>(response);
+        if (!response.ok || cancelled) return;
+        setChatMessages((payload?.items ?? []).slice().reverse());
+      } catch {
+        setChatMessages([]);
+      }
+    };
+    void loadChat();
+    const timer = window.setInterval(loadChat, 5_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   useEffect(() => {
     const onAuctionEvent = (event: Event) => {
@@ -716,11 +848,38 @@ function App() {
       ));
       if (pendingOrder?.order_id) {
         setPayableOrderID(String(pendingOrder.order_id));
+        setPayableOrderAmountCents(Number(pendingOrder.amount_cents ?? 0));
       }
     } catch {
       setHistoryError('历史读取失败');
     } finally {
       setHistoryLoading(false);
+    }
+  };
+
+  const sendChat = async () => {
+    const body = chatDraft.trim();
+    if (!body || chatSending) return;
+    setChatSending(true);
+    try {
+      const response = await fetch(`/api/rooms/${roomID}/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...mockUserHeaders
+        },
+        body: JSON.stringify({
+          client_msg_id: createClientBidID(),
+          body
+        })
+      });
+      const payload = await readJSON<ChatMessage>(response);
+      if (response.ok && payload) {
+        setChatMessages((current) => [...current.slice(-29), payload]);
+        setChatDraft('');
+      }
+    } finally {
+      setChatSending(false);
     }
   };
 
@@ -764,18 +923,20 @@ function App() {
         </button>
       </section>
 
-      <nav className="state-tabs" aria-label="state-matrix">
-        {scenarios.map((item) => (
-          <button
-            key={item.key}
-            className={item.key === selected ? 'active' : ''}
-            type="button"
-            onClick={() => setSelected(item.key)}
-          >
-            {item.title}
-          </button>
-        ))}
-      </nav>
+      {showStateMatrix && (
+        <nav className="state-tabs" aria-label="state-matrix">
+          {scenarios.map((item) => (
+            <button
+              key={item.key}
+              className={item.key === selected ? 'active' : ''}
+              type="button"
+              onClick={() => setSelected(item.key)}
+            >
+              {item.title}
+            </button>
+          ))}
+        </nav>
+      )}
 
       <section className="history-panel" data-testid="history-panel">
         <div className="history-title">
@@ -801,6 +962,34 @@ function App() {
             getPrimary={(row) => String(row.order_id ?? row.auction_id ?? '-')}
             getSecondary={(row) => `${formatCents(Number(row.amount_cents ?? 0))} · ${String(row.order_status ?? '-')}`}
           />
+        </div>
+      </section>
+
+      <section className="chat-panel" data-testid="chat-panel">
+        <div className="history-title">
+          <h2><MessageCircle size={16} /> 弹幕</h2>
+        </div>
+        <div className="chat-list">
+          {chatMessages.length === 0 ? <p>暂无弹幕</p> : chatMessages.map((message) => (
+            <div className="chat-row" key={message.id}>
+              <strong>{message.user_id === currentUserID ? '我' : `${message.user_id.slice(0, 2)}**`}</strong>
+              <span>{message.body}</span>
+            </div>
+          ))}
+        </div>
+        <div className="chat-input-row">
+          <input
+            aria-label="chat-input"
+            maxLength={80}
+            value={chatDraft}
+            onChange={(event) => setChatDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') void sendChat();
+            }}
+          />
+          <button type="button" aria-label="send-chat" disabled={!chatDraft.trim() || chatSending} onClick={sendChat}>
+            <Send size={15} />
+          </button>
         </div>
       </section>
     </main>

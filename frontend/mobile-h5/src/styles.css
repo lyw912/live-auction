@@ -219,7 +219,8 @@ button {
   font-weight: 800;
 }
 
-.history-panel {
+.history-panel,
+.chat-panel {
   padding: 0 12px 18px;
 }
 
@@ -320,4 +321,77 @@ button {
   align-items: center;
   padding: 0 10px;
   font-weight: 700;
+}
+
+.chat-list {
+  min-height: 96px;
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid #d7e0dd;
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px;
+}
+
+.chat-list p {
+  margin: 0;
+  min-height: 72px;
+  display: flex;
+  align-items: center;
+  color: #71827c;
+}
+
+.chat-row {
+  min-height: 32px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 0;
+  border-top: 1px solid #edf2f0;
+}
+
+.chat-row:first-child {
+  border-top: 0;
+}
+
+.chat-row strong {
+  flex: 0 0 auto;
+  color: #126b50;
+  font-size: 12px;
+}
+
+.chat-row span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #34433e;
+  font-size: 13px;
+}
+
+.chat-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.chat-input-row input {
+  min-height: 40px;
+  border: 1px solid #cbd9d5;
+  border-radius: 8px;
+  padding: 0 10px;
+  color: #17211c;
+}
+
+.chat-input-row button {
+  min-height: 40px;
+  border: 0;
+  border-radius: 8px;
+  background: #126b50;
+  color: #fff;
+  display: grid;
+  place-items: center;
+}
+
+.chat-input-row button:disabled {
+  background: #aeb9b5;
 }
