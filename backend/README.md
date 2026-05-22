@@ -5,7 +5,7 @@ Go modular monolith for auction truth, order lifecycle, realtime recovery and di
 ## Module Boundaries
 
 - `cmd/server/`: process entrypoint.
-- `internal/gateway/`: auth, ACL, schema validation, idempotency probe and rate limits.
+- `internal/gateway/`: auth, ACL, schema validation and idempotency probe.
 - `internal/auction/`: rules, bid transaction, state machine and auction events.
 - `internal/order/`: order, mock payment and deposit lifecycle.
 - `internal/realtime/`: WebSocket tickets, room hub, recovery and backpressure.

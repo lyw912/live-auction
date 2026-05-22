@@ -42,7 +42,7 @@ PASS for documentation honesty. This file does not complete the remaining gaps; 
 | Scheduler | end auction, winner/no-winner close, order expiry, retry/lease behavior | `p0-12-scheduler-end-order-expire.md`, `p0-17-clock-step-backward.md` |
 | Concurrency | final-second bid, cancel/cap race, narrate race, active race | `p0-13-concurrency-and-narration.md` |
 | Diagnostics | real monitor diagnostic producers and host ACL | `p0-14-monitor-diagnostics-apis.md` |
-| Degradation | DB lock timeout, idempotency timeout, clock rollback guard | `p0-16-degradation-db-idempotency.md`, `p0-17-clock-step-backward.md` |
+| Degradation | DB lock timeout, idempotency timeout, clock rollback guard, Redis-down reconnect degradation, bid-rate-limit scope adjustment | `p0-16-degradation-db-idempotency.md`, `p0-17-clock-step-backward.md`, `p0-31-redis-down-reconnect-evidence.md`, `p0-32-bid-rate-limit-scope-adjustment.md` |
 | H5 UI | state matrix, pending/rejected bid, recovering CTA disable, SOLD winner/loser, payment double-click, fat-finger confirm UI contract, bid/order history, live backend REST smoke, room auction selection and current-auction payment target | `p0-18-frontend-state-surfaces.md`, `p0-20-h5-bid-protocol.md`, `p0-21-h5-payment-double-click.md`, `p0-22-h5-snapshot-recovery.md`, `p0-24-h5-fat-finger-confirm.md`, `p0-25-h5-history-ui.md`, `p0-30-h5-live-backend-rest-smoke.md` |
 | PC UI | rule cap validation, backend save error, full P0 rule fields, diagnostics tabs | `p0-19-pc-rule-validation.md`, `p0-23-pc-rule-save.md`, `p0-26-pc-full-rule-fields.md` |
 
@@ -61,7 +61,6 @@ Those remain separate integration slices.
 
 | Gate | Current status | Required next evidence |
 |---|---|---|
-| Redis down bid limit | Not applicable yet; no bid rate-limit implementation exists | Either implement bid rate-limit degradation or explicitly record P0 scope adjustment |
 | PC full rule cross-field validation | UI validates cap reachability and field ranges; backend remains authoritative | Add focused UI cases for duration/extension/deposit invalid combinations if desired, without trusting frontend as final authority |
 | Animation longtask | No heavy animation is implemented and no performance claim is made | Add browser longtask measurement before claiming animation performance |
 | Load gates | Not claimed | Run baseline scripts and store raw outputs before any P99/QPS/fanout claim |
@@ -79,4 +78,4 @@ The remaining gaps are not money-correctness blockers for the backend path alrea
 
 ## Next Action
 
-Document the bid-rate-limit scope adjustment or add focused PC rule cross-field UI cases.
+Add focused PC rule cross-field UI cases or animation longtask evidence.
