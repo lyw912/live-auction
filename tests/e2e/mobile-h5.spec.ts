@@ -33,3 +33,68 @@ test('H5 recovering and disconnected states show stale marker', async ({ page })
   await expect(page.getByLabel('auction-state').locator('.leader-row strong')).toHaveText('重连中');
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
 });
+
+test('H5 bid stays pending until authoritative accepted response', async ({ page }) => {
+  let releaseBid: (value?: unknown) => void = () => undefined;
+  const bidArrived = new Promise<{ idempotencyKey: string | null; body: Record<string, unknown> }>((resolve) => {
+    void page.route('/api/auctions/auc_live/bids', async (route, request) => {
+      resolve({
+        idempotencyKey: request.headers()['idempotency-key'] ?? null,
+        body: request.postDataJSON() as Record<string, unknown>
+      });
+      await new Promise((release) => {
+        releaseBid = release;
+      });
+      await route.fulfill({
+        json: {
+          result: 'ACCEPTED',
+          bid_id: 'bid_1',
+          auction_id: 'auc_live',
+          seq: 42,
+          current_price_cents: 40000,
+          current_winner_id: 'user_1',
+          reject_reason: null
+        }
+      });
+    });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '竞价中' }).click();
+  await page.getByTestId('bid-cta').click();
+  const bidRequest = await bidArrived;
+
+  await expect(page.getByText('等待服务端确认')).toBeVisible();
+  await expect(page.getByText('¥350.00')).toBeVisible();
+  await expect(page.getByTestId('bid-cta')).toBeDisabled();
+  expect(bidRequest.idempotencyKey).toBe(bidRequest.body.client_bid_id);
+  expect(bidRequest.body.amount_cents).toBe(40000);
+  expect(bidRequest.body.client_seen_seq).toBe(41);
+
+  releaseBid();
+  await expect(page.getByText('服务端确认 seq 42')).toBeVisible();
+  await expect(page.getByText('¥400.00')).toBeVisible();
+  await expect(page.getByTestId('bid-cta')).toBeDisabled();
+});
+
+test('H5 rejected bid shows business copy and re-enables CTA', async ({ page }) => {
+  await page.route('/api/auctions/auc_live/bids', async (route) => {
+    await route.fulfill({
+      status: 400,
+      json: {
+        code: 'BID_INCREMENT_MISMATCH',
+        message: 'bid amount does not match increment grid',
+        trace_id: 'tr_test',
+        details: {}
+      }
+    });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '竞价中' }).click();
+  await page.getByTestId('bid-cta').click();
+
+  await expect(page.getByText('请按加价幅度出价')).toBeVisible();
+  await expect(page.getByText('¥350.00')).toBeVisible();
+  await expect(page.getByTestId('bid-cta')).toBeEnabled();
+});

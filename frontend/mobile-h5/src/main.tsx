@@ -34,6 +34,20 @@ type Scenario = {
   sold?: boolean;
 };
 
+type BidPhase = 'idle' | 'pending' | 'accepted' | 'rejected';
+
+type BidResponse = {
+  result?: string;
+  seq?: number;
+  current_price_cents?: number;
+  current_winner_id?: string;
+  reject_reason?: string | null;
+  code?: string;
+};
+
+const auctionID = 'auc_live';
+const currentUserID = 'user_1';
+
 const scenarios: Scenario[] = [
   { key: 'scheduled', title: '即将开拍', status: 'SCHEDULED', price: '¥100.00', leader: '暂无领先', feedback: '19:58 开始', cta: '等待开拍', ctaDisabled: true },
   { key: 'active_empty', title: '首拍', status: 'ACTIVE', price: '¥100.00', leader: '暂无领先', feedback: '最低 ¥150.00', cta: '出价 ¥150.00', ctaDisabled: false },
@@ -50,9 +64,135 @@ const scenarios: Scenario[] = [
   { key: 'cancelled', title: '已取消', status: 'CANCELLED', price: '¥350.00', leader: '取消前价格', feedback: '主播已取消', cta: '已取消', ctaDisabled: true }
 ];
 
+function formatCents(cents: number) {
+  return `¥${(cents / 100).toFixed(2)}`;
+}
+
+function createClientBidID() {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
+  }
+  return `bid_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function rejectCopy(code?: string | null) {
+  switch (code) {
+    case 'BID_TOO_LOW':
+      return '出价低于最低可出价';
+    case 'BID_INCREMENT_MISMATCH':
+      return '请按加价幅度出价';
+    case 'REJECTED_SELF_LEADING':
+      return '你已领先，无需重复出价';
+    case 'BID_AUCTION_TOO_HOT':
+      return '竞价激烈，请稍候';
+    case 'PROCESSING_RETRY_LATER':
+      return '正在确认上一笔出价';
+    case 'IDEMPOTENCY_TIMEOUT':
+      return '操作未确认，请重新出价';
+    case 'AUCTION_ENDED':
+      return '竞拍已结束，正在同步结果';
+    case 'FORBIDDEN_ROOM':
+      return '无法进入该直播间';
+    default:
+      return '出价未通过，请重试';
+  }
+}
+
 function App() {
   const [selected, setSelected] = useState<AuctionState>('active_bids');
-  const scenario = useMemo(() => scenarios.find((item) => item.key === selected) ?? scenarios[0], [selected]);
+  const [bidPhase, setBidPhase] = useState<BidPhase>('idle');
+  const [currentPriceCents, setCurrentPriceCents] = useState(35_000);
+  const [nextBidCents, setNextBidCents] = useState(40_000);
+  const [lastSeq, setLastSeq] = useState(41);
+  const [bidFeedback, setBidFeedback] = useState('下一口 ¥400.00');
+
+  const scenario = useMemo<Scenario>(() => {
+    if (selected !== 'active_bids') {
+      return scenarios.find((item) => item.key === selected) ?? scenarios[0];
+    }
+    if (bidPhase === 'pending') {
+      return {
+        key: 'pending' as AuctionState,
+        title: '提交中',
+        status: 'ACTIVE',
+        price: formatCents(currentPriceCents),
+        leader: '张** 领先',
+        feedback: '等待服务端确认',
+        cta: '确认中',
+        ctaDisabled: true,
+        pending: true
+      };
+    }
+    if (bidPhase === 'accepted') {
+      return {
+        key: 'self_leading' as AuctionState,
+        title: '领先中',
+        status: 'ACTIVE',
+        price: formatCents(currentPriceCents),
+        leader: '你已领先',
+        feedback: `服务端确认 seq ${lastSeq}`,
+        cta: '已领先',
+        ctaDisabled: true
+      };
+    }
+    if (bidPhase === 'rejected') {
+      return {
+        key: 'rejected' as AuctionState,
+        title: '被拒绝',
+        status: 'ACTIVE',
+        price: formatCents(currentPriceCents),
+        leader: '张** 领先',
+        feedback: bidFeedback,
+        cta: `出价 ${formatCents(nextBidCents)}`,
+        ctaDisabled: false,
+        rejected: true
+      };
+    }
+    return {
+      key: 'active_bids' as AuctionState,
+      title: '竞价中',
+      status: 'ACTIVE',
+      price: formatCents(currentPriceCents),
+      leader: '张** 领先',
+      feedback: bidFeedback,
+      cta: `出价 ${formatCents(nextBidCents)}`,
+      ctaDisabled: false
+    };
+  }, [bidFeedback, bidPhase, currentPriceCents, lastSeq, nextBidCents, selected]);
+
+  const submitBid = async () => {
+    if (selected !== 'active_bids' || scenario.ctaDisabled) return;
+    const clientBidID = createClientBidID();
+    setBidPhase('pending');
+    try {
+      const response = await fetch(`/api/auctions/${auctionID}/bids`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': clientBidID
+        },
+        body: JSON.stringify({
+          client_bid_id: clientBidID,
+          amount_cents: nextBidCents,
+          client_seen_seq: lastSeq
+        })
+      });
+      const payload = await response.json() as BidResponse;
+      if (!response.ok || payload.reject_reason || payload.code) {
+        setBidFeedback(rejectCopy(payload.reject_reason ?? payload.code));
+        setBidPhase('rejected');
+        return;
+      }
+      const acceptedPrice = payload.current_price_cents ?? currentPriceCents;
+      setCurrentPriceCents(acceptedPrice);
+      setNextBidCents(acceptedPrice + 5_000);
+      setLastSeq(payload.seq ?? lastSeq);
+      setBidPhase(payload.current_winner_id === currentUserID ? 'accepted' : 'idle');
+    } catch {
+      setBidFeedback('网络异常，请重试');
+      setBidPhase('rejected');
+    }
+  };
 
   return (
     <main className="app-shell">
@@ -85,10 +225,10 @@ function App() {
         </div>
         <div className="bid-stepper">
           <button type="button" aria-label="decrease">-</button>
-          <span>{scenario.sold ? 'ORDER' : '¥450.00'}</span>
+          <span>{scenario.sold ? 'ORDER' : formatCents(nextBidCents)}</span>
           <button type="button" aria-label="increase"><ChevronUp size={18} /></button>
         </div>
-        <button className="primary-cta" data-testid="bid-cta" disabled={scenario.ctaDisabled}>
+        <button className="primary-cta" data-testid="bid-cta" disabled={scenario.ctaDisabled} onClick={submitBid}>
           {scenario.winner ? <CreditCard size={18} /> : scenario.rejected ? <AlertTriangle size={18} /> : <CheckCircle2 size={18} />}
           {scenario.cta}
         </button>
