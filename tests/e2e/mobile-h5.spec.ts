@@ -98,3 +98,47 @@ test('H5 rejected bid shows business copy and re-enables CTA', async ({ page }) 
   await expect(page.getByText('¥350.00')).toBeVisible();
   await expect(page.getByTestId('bid-cta')).toBeEnabled();
 });
+
+test('H5 payment double click sends one mock payment and reaches paid UI', async ({ page }) => {
+  let payCount = 0;
+  let releasePayment: (value?: unknown) => void = () => undefined;
+  const paymentArrived = new Promise<{ idempotencyKey: string | null; body: Record<string, unknown> }>((resolve) => {
+    void page.route('/api/orders/ord_pending/pay-mock', async (route, request) => {
+      payCount += 1;
+      resolve({
+        idempotencyKey: request.headers()['idempotency-key'] ?? null,
+        body: request.postDataJSON() as Record<string, unknown>
+      });
+      await new Promise((release) => {
+        releasePayment = release;
+      });
+      await route.fulfill({
+        json: {
+          order_id: 'ord_pending',
+          order_status: 'PAID',
+          paid_at: '2026-05-22T13:10:00Z',
+          deposit_status: 'REFUNDED'
+        }
+      });
+    });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '成交', exact: true }).click();
+  const payButton = page.getByTestId('bid-cta');
+  await payButton.dblclick();
+  const paymentRequest = await paymentArrived;
+
+  await expect(page.getByText('等待服务端确认支付')).toBeVisible();
+  await expect(payButton).toBeDisabled();
+  expect(paymentRequest.idempotencyKey).toBeTruthy();
+  expect(paymentRequest.body.confirm).toBe(true);
+  expect(payCount).toBe(1);
+
+  releasePayment();
+  await expect(page.getByLabel('auction-state').locator('.eyebrow')).toHaveText('已支付');
+  await expect(page.getByText('保证金已处理')).toBeVisible();
+  await expect(payButton).toHaveText(/已支付/);
+  await expect(payButton).toBeDisabled();
+  expect(payCount).toBe(1);
+});

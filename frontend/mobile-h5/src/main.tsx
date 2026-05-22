@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AlertTriangle, CheckCircle2, ChevronUp, CreditCard, Radio, Wifi, WifiOff } from 'lucide-react';
 import './styles.css';
@@ -35,6 +35,7 @@ type Scenario = {
 };
 
 type BidPhase = 'idle' | 'pending' | 'accepted' | 'rejected';
+type PaymentPhase = 'idle' | 'pending' | 'paid' | 'failed';
 
 type BidResponse = {
   result?: string;
@@ -46,6 +47,7 @@ type BidResponse = {
 };
 
 const auctionID = 'auc_live';
+const orderID = 'ord_pending';
 const currentUserID = 'user_1';
 
 const scenarios: Scenario[] = [
@@ -101,12 +103,58 @@ function rejectCopy(code?: string | null) {
 function App() {
   const [selected, setSelected] = useState<AuctionState>('active_bids');
   const [bidPhase, setBidPhase] = useState<BidPhase>('idle');
+  const [paymentPhase, setPaymentPhase] = useState<PaymentPhase>('idle');
   const [currentPriceCents, setCurrentPriceCents] = useState(35_000);
   const [nextBidCents, setNextBidCents] = useState(40_000);
   const [lastSeq, setLastSeq] = useState(41);
   const [bidFeedback, setBidFeedback] = useState('下一口 ¥400.00');
+  const paymentInFlight = useRef(false);
 
   const scenario = useMemo<Scenario>(() => {
+    if (selected === 'sold_winner') {
+      if (paymentPhase === 'pending') {
+        return {
+          key: 'sold_winner',
+          title: '支付中',
+          status: 'SOLD',
+          price: '¥600.00',
+          leader: '你已拍中',
+          feedback: '等待服务端确认支付',
+          cta: '支付中',
+          ctaDisabled: true,
+          winner: true,
+          sold: true
+        };
+      }
+      if (paymentPhase === 'paid') {
+        return {
+          key: 'sold_winner',
+          title: '已支付',
+          status: 'PAID',
+          price: '¥600.00',
+          leader: '订单已支付',
+          feedback: '保证金已处理',
+          cta: '已支付',
+          ctaDisabled: true,
+          winner: true,
+          sold: true
+        };
+      }
+      if (paymentPhase === 'failed') {
+        return {
+          key: 'sold_winner',
+          title: '支付失败',
+          status: 'SOLD',
+          price: '¥600.00',
+          leader: '你已拍中',
+          feedback: '支付未确认，请重试',
+          cta: '重新支付',
+          ctaDisabled: false,
+          winner: true,
+          sold: true
+        };
+      }
+    }
     if (selected !== 'active_bids') {
       return scenarios.find((item) => item.key === selected) ?? scenarios[0];
     }
@@ -158,7 +206,7 @@ function App() {
       cta: `出价 ${formatCents(nextBidCents)}`,
       ctaDisabled: false
     };
-  }, [bidFeedback, bidPhase, currentPriceCents, lastSeq, nextBidCents, selected]);
+  }, [bidFeedback, bidPhase, currentPriceCents, lastSeq, nextBidCents, paymentPhase, selected]);
 
   const submitBid = async () => {
     if (selected !== 'active_bids' || scenario.ctaDisabled) return;
@@ -192,6 +240,41 @@ function App() {
       setBidFeedback('网络异常，请重试');
       setBidPhase('rejected');
     }
+  };
+
+  const payOrder = async () => {
+    if (selected !== 'sold_winner' || scenario.ctaDisabled || paymentInFlight.current) return;
+    const idempotencyKey = createClientBidID();
+    paymentInFlight.current = true;
+    setPaymentPhase('pending');
+    try {
+      const response = await fetch(`/api/orders/${orderID}/pay-mock`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': idempotencyKey
+        },
+        body: JSON.stringify({ confirm: true })
+      });
+      if (!response.ok) {
+        setPaymentPhase('failed');
+        return;
+      }
+      const payload = await response.json() as { order_status?: string };
+      setPaymentPhase(payload.order_status === 'PAID' ? 'paid' : 'failed');
+    } catch {
+      setPaymentPhase('failed');
+    } finally {
+      paymentInFlight.current = false;
+    }
+  };
+
+  const handlePrimaryAction = () => {
+    if (selected === 'sold_winner') {
+      void payOrder();
+      return;
+    }
+    void submitBid();
   };
 
   return (
@@ -228,7 +311,7 @@ function App() {
           <span>{scenario.sold ? 'ORDER' : formatCents(nextBidCents)}</span>
           <button type="button" aria-label="increase"><ChevronUp size={18} /></button>
         </div>
-        <button className="primary-cta" data-testid="bid-cta" disabled={scenario.ctaDisabled} onClick={submitBid}>
+        <button className="primary-cta" data-testid="bid-cta" disabled={scenario.ctaDisabled} onClick={handlePrimaryAction}>
           {scenario.winner ? <CreditCard size={18} /> : scenario.rejected ? <AlertTriangle size={18} /> : <CheckCircle2 size={18} />}
           {scenario.cta}
         </button>
