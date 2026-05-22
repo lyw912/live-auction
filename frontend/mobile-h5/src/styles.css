@@ -218,3 +218,106 @@ button {
   color: #0d503d;
   font-weight: 800;
 }
+
+.history-panel {
+  padding: 0 12px 18px;
+}
+
+.history-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.history-title h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 16px;
+}
+
+.history-title button {
+  min-height: 34px;
+  border: 1px solid #c8d7d2;
+  border-radius: 8px;
+  background: #fff;
+  color: #164b3a;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  font-weight: 700;
+}
+
+.history-title button:disabled {
+  color: #71827c;
+  background: #eef3f1;
+}
+
+.history-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.history-list {
+  min-width: 0;
+  border: 1px solid #d7e0dd;
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px;
+}
+
+.history-list h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.history-list p {
+  margin: 0;
+  min-height: 34px;
+  color: #71827c;
+  display: flex;
+  align-items: center;
+}
+
+.history-row {
+  min-height: 42px;
+  display: grid;
+  gap: 3px;
+  padding: 7px 0;
+  border-top: 1px solid #edf2f0;
+}
+
+.history-row:first-of-type {
+  border-top: 0;
+}
+
+.history-row strong,
+.history-row span {
+  overflow-wrap: anywhere;
+}
+
+.history-row strong {
+  font-size: 12px;
+}
+
+.history-row span {
+  color: #5b6d66;
+  font-size: 12px;
+}
+
+.history-error {
+  min-height: 34px;
+  margin-bottom: 10px;
+  border-radius: 8px;
+  background: #fff1ee;
+  color: #9f2d1d;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  font-weight: 700;
+}

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { AlertTriangle, CheckCircle2, ChevronUp, CreditCard, Radio, Wifi, WifiOff } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronUp, CreditCard, History, Radio, RefreshCw, Wifi, WifiOff } from 'lucide-react';
 import './styles.css';
 
 type AuctionState =
@@ -72,6 +72,8 @@ type SnapshotResponse = {
   };
 };
 
+type HistoryRow = Record<string, unknown>;
+
 const auctionID = 'auc_live';
 const orderID = 'ord_pending';
 const currentUserID = 'user_1';
@@ -139,6 +141,10 @@ function App() {
   const [confirmToken, setConfirmToken] = useState('');
   const [confirmIdempotencyKey, setConfirmIdempotencyKey] = useState('');
   const [confirmAmountCents, setConfirmAmountCents] = useState(0);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState('');
+  const [bidHistory, setBidHistory] = useState<HistoryRow[]>([]);
+  const [orderHistory, setOrderHistory] = useState<HistoryRow[]>([]);
   const paymentInFlight = useRef(false);
 
   const scenario = useMemo<Scenario>(() => {
@@ -440,6 +446,23 @@ function App() {
     void submitBid();
   };
 
+  const loadHistory = async () => {
+    setHistoryLoading(true);
+    setHistoryError('');
+    try {
+      const [bids, orders] = await Promise.all([
+        fetch('/api/users/me/bids').then((response) => response.json()),
+        fetch('/api/users/me/orders').then((response) => response.json())
+      ]);
+      setBidHistory(Array.isArray(bids.items) ? bids.items : []);
+      setOrderHistory(Array.isArray(orders.items) ? orders.items : []);
+    } catch {
+      setHistoryError('历史读取失败');
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
   return (
     <main className="app-shell">
       <section className="video-stage" aria-label="live-stage">
@@ -492,7 +515,62 @@ function App() {
           </button>
         ))}
       </nav>
+
+      <section className="history-panel" data-testid="history-panel">
+        <div className="history-title">
+          <h2><History size={16} /> 我的历史</h2>
+          <button type="button" onClick={loadHistory} disabled={historyLoading}>
+            <RefreshCw size={14} />
+            {historyLoading ? '刷新中' : '刷新'}
+          </button>
+        </div>
+        {historyError && <div className="history-error" role="alert">{historyError}</div>}
+        <div className="history-grid">
+          <HistoryList
+            title="出价"
+            empty="暂无出价"
+            rows={bidHistory}
+            getPrimary={(row) => String(row.auction_id ?? row.bid_id ?? '-')}
+            getSecondary={(row) => `${formatCents(Number(row.amount_cents ?? 0))} · ${String(row.result ?? row.status ?? '-')}`}
+          />
+          <HistoryList
+            title="订单"
+            empty="暂无订单"
+            rows={orderHistory}
+            getPrimary={(row) => String(row.order_id ?? row.auction_id ?? '-')}
+            getSecondary={(row) => `${formatCents(Number(row.amount_cents ?? 0))} · ${String(row.order_status ?? '-')}`}
+          />
+        </div>
+      </section>
     </main>
+  );
+}
+
+function HistoryList({
+  title,
+  empty,
+  rows,
+  getPrimary,
+  getSecondary
+}: {
+  title: string;
+  empty: string;
+  rows: HistoryRow[];
+  getPrimary: (row: HistoryRow) => string;
+  getSecondary: (row: HistoryRow) => string;
+}) {
+  return (
+    <div className="history-list">
+      <h3>{title}</h3>
+      {rows.length === 0 ? (
+        <p>{empty}</p>
+      ) : rows.map((row, index) => (
+        <div className="history-row" key={`${title}-${index}`}>
+          <strong>{getPrimary(row)}</strong>
+          <span>{getSecondary(row)}</span>
+        </div>
+      ))}
+    </div>
   );
 }
 

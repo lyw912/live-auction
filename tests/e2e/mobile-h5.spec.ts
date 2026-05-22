@@ -289,3 +289,33 @@ test('H5 stale snapshot keeps recovering CTA disabled', async ({ page }) => {
   await expect(page.getByText('正在同步权威状态')).toBeVisible();
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
 });
+
+test('H5 renders bid and order history from user APIs', async ({ page }) => {
+  await page.route('/api/users/me/bids', async (route) => {
+    await route.fulfill({
+      json: {
+        items: [
+          { bid_id: 'bid_hist_1', auction_id: 'auc_live', amount_cents: 45000, result: 'ACCEPTED' },
+          { bid_id: 'bid_hist_2', auction_id: 'auc_live', amount_cents: 40000, result: 'OUTBID' }
+        ]
+      }
+    });
+  });
+  await page.route('/api/users/me/orders', async (route) => {
+    await route.fulfill({
+      json: {
+        items: [
+          { order_id: 'ord_hist_1', auction_id: 'auc_live', amount_cents: 60000, order_status: 'PAID' }
+        ]
+      }
+    });
+  });
+
+  await page.goto('/');
+  await page.getByTestId('history-panel').getByRole('button', { name: /刷新/ }).click();
+  await expect(page.getByTestId('history-panel').getByText('auc_live')).toHaveCount(2);
+  await expect(page.getByText('¥450.00 · ACCEPTED')).toBeVisible();
+  await expect(page.getByText('¥400.00 · OUTBID')).toBeVisible();
+  await expect(page.getByText('ord_hist_1')).toBeVisible();
+  await expect(page.getByText('¥600.00 · PAID')).toBeVisible();
+});
