@@ -142,3 +142,89 @@ test('H5 payment double click sends one mock payment and reaches paid UI', async
   await expect(payButton).toBeDisabled();
   expect(payCount).toBe(1);
 });
+
+test('H5 seq gap enters recovering and resumes from fresh snapshot', async ({ page }) => {
+  let releaseSnapshot: (value?: unknown) => void = () => undefined;
+  const snapshotArrived = new Promise((resolve) => {
+    void page.route('/api/auctions/auc_live', async (route) => {
+      resolve(undefined);
+      await new Promise((release) => {
+        releaseSnapshot = release;
+      });
+      await route.fulfill({
+        json: {
+          event_type: 'snapshot',
+          auction_id: 'auc_live',
+          seq: 44,
+          source: 'db',
+          stale: false,
+          payload: {
+            current_price_cents: 45000,
+            leader_user_masked: '王**'
+          }
+        }
+      });
+    });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '竞价中' }).click();
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('auction:event', {
+      detail: {
+        auction_id: 'auc_live',
+        event_type: 'bid_accepted',
+        seq: 44,
+        payload: {
+          current_price_cents: 45000,
+          leader_user_masked: '王**'
+        }
+      }
+    }));
+  });
+  await snapshotArrived;
+
+  await expect(page.getByText('状态可能已过期')).toBeVisible();
+  await expect(page.getByText('正在同步权威状态')).toBeVisible();
+  await expect(page.getByTestId('bid-cta')).toBeDisabled();
+
+  releaseSnapshot();
+  await expect(page.getByText('snapshot db seq 44')).toBeVisible();
+  await expect(page.getByText('¥450.00')).toBeVisible();
+  await expect(page.getByText('王** 领先')).toBeVisible();
+  await expect(page.getByTestId('bid-cta')).toBeEnabled();
+});
+
+test('H5 stale snapshot keeps recovering CTA disabled', async ({ page }) => {
+  await page.route('/api/auctions/auc_live', async (route) => {
+    await route.fulfill({
+      json: {
+        event_type: 'snapshot',
+        auction_id: 'auc_live',
+        seq: 42,
+        source: 'redis',
+        stale: true,
+        payload: {
+          current_price_cents: 40000,
+          leader_user_masked: '李**'
+        }
+      }
+    });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '竞价中' }).click();
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('auction:event', {
+      detail: {
+        auction_id: 'auc_live',
+        event_type: 'outbox_gap_notice',
+        seq: 44
+      }
+    }));
+  });
+
+  await expect(page.getByText('状态可能已过期')).toBeVisible();
+  await expect(page.getByText('正在同步权威状态')).toBeVisible();
+  await expect(page.getByTestId('bid-cta')).toBeDisabled();
+});

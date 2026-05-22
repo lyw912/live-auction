@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AlertTriangle, CheckCircle2, ChevronUp, CreditCard, Radio, Wifi, WifiOff } from 'lucide-react';
 import './styles.css';
@@ -36,6 +36,7 @@ type Scenario = {
 
 type BidPhase = 'idle' | 'pending' | 'accepted' | 'rejected';
 type PaymentPhase = 'idle' | 'pending' | 'paid' | 'failed';
+type RecoveryPhase = 'idle' | 'recovering';
 
 type BidResponse = {
   result?: string;
@@ -44,6 +45,28 @@ type BidResponse = {
   current_winner_id?: string;
   reject_reason?: string | null;
   code?: string;
+};
+
+type AuctionRealtimeEvent = {
+  auction_id: string;
+  event_type: string;
+  seq?: number;
+  payload?: {
+    current_price_cents?: number;
+    leader_user_masked?: string;
+  };
+};
+
+type SnapshotResponse = {
+  auction_id: string;
+  event_type?: string;
+  seq: number;
+  source?: string;
+  stale?: boolean;
+  payload?: {
+    current_price_cents?: number;
+    leader_user_masked?: string;
+  };
 };
 
 const auctionID = 'auc_live';
@@ -104,10 +127,12 @@ function App() {
   const [selected, setSelected] = useState<AuctionState>('active_bids');
   const [bidPhase, setBidPhase] = useState<BidPhase>('idle');
   const [paymentPhase, setPaymentPhase] = useState<PaymentPhase>('idle');
+  const [recoveryPhase, setRecoveryPhase] = useState<RecoveryPhase>('idle');
   const [currentPriceCents, setCurrentPriceCents] = useState(35_000);
   const [nextBidCents, setNextBidCents] = useState(40_000);
   const [lastSeq, setLastSeq] = useState(41);
   const [bidFeedback, setBidFeedback] = useState('下一口 ¥400.00');
+  const [leaderMasked, setLeaderMasked] = useState('张**');
   const paymentInFlight = useRef(false);
 
   const scenario = useMemo<Scenario>(() => {
@@ -158,13 +183,26 @@ function App() {
     if (selected !== 'active_bids') {
       return scenarios.find((item) => item.key === selected) ?? scenarios[0];
     }
+    if (recoveryPhase === 'recovering') {
+      return {
+        key: 'recovering',
+        title: '恢复中',
+        status: 'RECOVERING',
+        price: formatCents(currentPriceCents),
+        leader: '同步中',
+        feedback: '正在同步权威状态',
+        cta: '同步中',
+        ctaDisabled: true,
+        stale: true
+      };
+    }
     if (bidPhase === 'pending') {
       return {
         key: 'pending' as AuctionState,
         title: '提交中',
         status: 'ACTIVE',
         price: formatCents(currentPriceCents),
-        leader: '张** 领先',
+        leader: `${leaderMasked} 领先`,
         feedback: '等待服务端确认',
         cta: '确认中',
         ctaDisabled: true,
@@ -189,7 +227,7 @@ function App() {
         title: '被拒绝',
         status: 'ACTIVE',
         price: formatCents(currentPriceCents),
-        leader: '张** 领先',
+        leader: `${leaderMasked} 领先`,
         feedback: bidFeedback,
         cta: `出价 ${formatCents(nextBidCents)}`,
         ctaDisabled: false,
@@ -201,12 +239,59 @@ function App() {
       title: '竞价中',
       status: 'ACTIVE',
       price: formatCents(currentPriceCents),
-      leader: '张** 领先',
+      leader: `${leaderMasked} 领先`,
       feedback: bidFeedback,
       cta: `出价 ${formatCents(nextBidCents)}`,
       ctaDisabled: false
     };
-  }, [bidFeedback, bidPhase, currentPriceCents, lastSeq, nextBidCents, paymentPhase, selected]);
+  }, [bidFeedback, bidPhase, currentPriceCents, lastSeq, leaderMasked, nextBidCents, paymentPhase, recoveryPhase, selected]);
+
+  const applySnapshot = (snapshot: SnapshotResponse) => {
+    const price = snapshot.payload?.current_price_cents ?? currentPriceCents;
+    setCurrentPriceCents(price);
+    setNextBidCents(price + 5_000);
+    setLastSeq(snapshot.seq);
+    setLeaderMasked(snapshot.payload?.leader_user_masked ?? leaderMasked);
+    setBidFeedback(`snapshot ${snapshot.source ?? 'db'} seq ${snapshot.seq}`);
+    setBidPhase('idle');
+  };
+
+  const recoverFromSnapshot = async () => {
+    setSelected('active_bids');
+    setRecoveryPhase('recovering');
+    try {
+      const response = await fetch(`/api/auctions/${auctionID}`);
+      const snapshot = await response.json() as SnapshotResponse;
+      if (!response.ok || snapshot.stale) {
+        setBidFeedback('snapshot stale，继续同步');
+        return;
+      }
+      applySnapshot(snapshot);
+      setRecoveryPhase('idle');
+    } catch {
+      setBidFeedback('snapshot unavailable，继续同步');
+    }
+  };
+
+  useEffect(() => {
+    const onAuctionEvent = (event: Event) => {
+      const detail = (event as CustomEvent<AuctionRealtimeEvent>).detail;
+      if (!detail || detail.auction_id !== auctionID) return;
+      if (detail.event_type === 'outbox_gap_notice' || (detail.seq != null && detail.seq > lastSeq + 1)) {
+        void recoverFromSnapshot();
+        return;
+      }
+      if (detail.seq == null || detail.seq <= lastSeq) return;
+      const price = detail.payload?.current_price_cents ?? currentPriceCents;
+      setCurrentPriceCents(price);
+      setNextBidCents(price + 5_000);
+      setLastSeq(detail.seq);
+      setLeaderMasked(detail.payload?.leader_user_masked ?? leaderMasked);
+      setBidFeedback(`event seq ${detail.seq}`);
+    };
+    window.addEventListener('auction:event', onAuctionEvent);
+    return () => window.removeEventListener('auction:event', onAuctionEvent);
+  }, [currentPriceCents, lastSeq, leaderMasked]);
 
   const submitBid = async () => {
     if (selected !== 'active_bids' || scenario.ctaDisabled) return;
