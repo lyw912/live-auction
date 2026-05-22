@@ -58,6 +58,7 @@ type AuctionRealtimeEvent = {
   payload?: {
     current_price_cents?: number;
     leader_user_masked?: string;
+    user_id?: string;
   };
 };
 
@@ -378,6 +379,12 @@ function App() {
     setLastSeq(detail.seq);
     setLeaderMasked(detail.payload?.leader_user_masked ?? leaderMaskedRef.current);
     setBidFeedback(`event seq ${detail.seq}`);
+    if (detail.payload?.user_id && detail.payload.user_id !== currentUserID) {
+      setBidPhase('idle');
+      setConfirmToken('');
+      setConfirmIdempotencyKey('');
+      setConfirmAmountCents(0);
+    }
     setConnectionPhase('connected');
   };
 
@@ -572,6 +579,14 @@ function App() {
     void submitBid();
   };
 
+  const decreaseBidAmount = () => {
+    setNextBidCents((amount) => Math.max(currentPriceCents + 5_000, amount - 5_000));
+  };
+
+  const increaseBidAmount = () => {
+    setNextBidCents((amount) => amount + 5_000);
+  };
+
   const loadHistory = async () => {
     setHistoryLoading(true);
     setHistoryError('');
@@ -619,9 +634,9 @@ function App() {
           <span>{scenario.stale ? '状态可能已过期' : connectionPhase === 'connected' ? 'WebSocket 已连接 · 状态来自服务端事件' : 'WebSocket 连接中 · 状态来自服务端事件'}</span>
         </div>
         <div className="bid-stepper">
-          <button type="button" aria-label="decrease">-</button>
+          <button type="button" aria-label="decrease" onClick={decreaseBidAmount}>-</button>
           <span>{scenario.sold ? 'ORDER' : formatCents(nextBidCents)}</span>
-          <button type="button" aria-label="increase"><ChevronUp size={18} /></button>
+          <button type="button" aria-label="increase" onClick={increaseBidAmount}><ChevronUp size={18} /></button>
         </div>
         <button className="primary-cta" data-testid="bid-cta" disabled={scenario.ctaDisabled} onClick={handlePrimaryAction}>
           {scenario.winner ? <CreditCard size={18} /> : scenario.rejected ? <AlertTriangle size={18} /> : <CheckCircle2 size={18} />}

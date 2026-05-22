@@ -70,6 +70,51 @@ func TestPlaceBidExecutableRejectIsStoredAndIdempotent(t *testing.T) {
 	assertBidTruthRows(t, db, auction.ID, 1, 0, 1, 1)
 }
 
+func TestFatFingerConfirmTokenThenConfirmBid(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	repo := NewRepository(db)
+	threshold := int64(20_000)
+	auction := createActiveAuctionWithRule(t, repo, db, nil, func(rule Rule) Rule {
+		rule.FatFingerThresholdCents = &threshold
+		return rule
+	})
+
+	input := BidInput{ClientBidID: "bid-fat-finger-1", AmountCents: 50_000}
+	pending, err := repo.PlaceBid(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_fat")
+	if err != nil {
+		t.Fatalf("PlaceBid fat finger: %v", err)
+	}
+	if pending.Result != string(apierrors.CodeFatFingerConfirmRequired) || pending.ConfirmToken == "" || pending.AmountCents != input.AmountCents {
+		t.Fatalf("unexpected pending confirm response: %#v", pending)
+	}
+	assertBidTruthRows(t, db, auction.ID, 0, 0, 0, 1)
+
+	confirmed, err := repo.ConfirmBid(ctx, auction.ID, "user_1", input.ClientBidID, ConfirmBidInput{
+		ConfirmToken:   pending.ConfirmToken,
+		IdempotencyKey: input.ClientBidID,
+	}, "tr_fat_confirm")
+	if err != nil {
+		t.Fatalf("ConfirmBid: %v", err)
+	}
+	if confirmed.Result != BidResultAccepted || confirmed.CurrentPriceCents != input.AmountCents || confirmed.Seq <= pending.Seq {
+		t.Fatalf("unexpected confirm response: %#v", confirmed)
+	}
+	assertBidTruthRows(t, db, auction.ID, 1, 1, 1, 1)
+
+	replay, err := repo.ConfirmBid(ctx, auction.ID, "user_1", input.ClientBidID, ConfirmBidInput{
+		ConfirmToken:   pending.ConfirmToken,
+		IdempotencyKey: input.ClientBidID,
+	}, "tr_fat_confirm_reuse")
+	if err != nil {
+		t.Fatalf("ConfirmBid replay: %v", err)
+	}
+	if replay.BidID != confirmed.BidID || replay.Seq != confirmed.Seq || replay.CurrentPriceCents != confirmed.CurrentPriceCents {
+		t.Fatalf("confirm replay mismatch: got %#v want %#v", replay, confirmed)
+	}
+	assertBidTruthRows(t, db, auction.ID, 1, 1, 1, 1)
+}
+
 func TestPlaceBidCapSoldCreatesOrderAndPaymentIsIdempotent(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
@@ -169,6 +214,10 @@ func TestCancelActiveThenLaterBidRejects(t *testing.T) {
 }
 
 func createActiveAuction(t *testing.T, repo *Repository, db *pgxpool.Pool, capPrice *int64) Auction {
+	return createActiveAuctionWithRule(t, repo, db, capPrice, func(rule Rule) Rule { return rule })
+}
+
+func createActiveAuctionWithRule(t *testing.T, repo *Repository, db *pgxpool.Pool, capPrice *int64, mutateRule func(Rule) Rule) Auction {
 	t.Helper()
 	roomID := createTestRoom(t, db)
 	item, err := repo.CreateItem(context.Background(), CreateItemInput{Title: "Bid Item"})
@@ -181,7 +230,7 @@ func createActiveAuction(t *testing.T, repo *Repository, db *pgxpool.Pool, capPr
 		StartPriceCents: 10_000,
 		IncrementCents:  5_000,
 		CapPriceCents:   capPrice,
-		Rule:            validRule(),
+		Rule:            mutateRule(validRule()),
 	}, "tr_lifecycle")
 	if err != nil {
 		t.Fatalf("CreateAuction: %v", err)

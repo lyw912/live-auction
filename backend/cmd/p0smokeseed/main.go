@@ -110,7 +110,7 @@ func seed(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client) error {
 		VALUES (
 		  'auc_live', 1, 600,
 		  10, 10, 3,
-		  100000, 1000,
+		  10000, 1000,
 		  5000, 50000, now()
 		);
 

@@ -149,6 +149,21 @@ func (h AuctionHandler) PlaceBid(w http.ResponseWriter, r *http.Request) {
 	writeResult(w, r, http.StatusOK, result, err)
 }
 
+func (h AuctionHandler) ConfirmBid(w http.ResponseWriter, r *http.Request) {
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	var req auction.ConfirmBidInput
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "invalid json body", 400))
+		return
+	}
+	result, err := h.Repo.ConfirmBid(r.Context(), chi.URLParam(r, "id"), user.ID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context()))
+	writeResult(w, r, http.StatusOK, result, err)
+}
+
 func (h AuctionHandler) PayMock(w http.ResponseWriter, r *http.Request) {
 	user, ok := currentUser(r)
 	if !ok {

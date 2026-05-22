@@ -36,7 +36,7 @@ PASS for documentation honesty. This file does not complete the remaining gaps; 
 | Foundation | repo setup, env, migrations, minimal backend tests | `p0-foundation-backend-tests.md`, `p0-02-db-migrations.md` |
 | Auth/ACL | host-only mutation and monitor APIs; user denial | `p0-03-auth-role-acl.md` |
 | Auction rules/lifecycle | rule validation, cap reachability, create/schedule/start, PATCH vs START race | `p0-05-auction-rule-lifecycle.md`, `p0-19-pc-rule-validation.md`, `p0-23-pc-rule-save.md`, `p0-26-pc-full-rule-fields.md` |
-| Bid truth path | accepted bid, rejected bid, cap SOLD order, payment double click, idempotency, H5 live REST bid/payment/history smoke | `p0-06-p0-07-bid-truth-path.md`, `p0-21-h5-payment-double-click.md`, `p0-24-h5-fat-finger-confirm.md`, `p0-30-h5-live-backend-rest-smoke.md` |
+| Bid truth path | accepted bid, rejected bid, cap SOLD order, payment double click, idempotency, backend fat-finger confirm, H5 live REST bid/confirm/payment/history smoke | `p0-06-p0-07-bid-truth-path.md`, `p0-21-h5-payment-double-click.md`, `p0-24-h5-fat-finger-confirm.md`, `p0-30-h5-live-backend-rest-smoke.md` |
 | Outbox/projection | tx-to-outbox, Redis projection, relay ordering | `p0-08-p0-09-outbox-redis-projection.md`, `p0-11-websocket-completion.md` |
 | WebSocket/recovery | ticket foundation, browser ticket/subprotocol connect contract, live backend H5 WS smoke, replay/snapshot recovery, bounded reconnect rebuild, slow consumer/backpressure | `p0-10-websocket-ticket-recovery.md`, `p0-11-websocket-completion.md`, `p0-15-reconnect-storm-snapshot-bounding.md`, `p0-28-h5-websocket-ticket-connect.md`, `p0-29-h5-live-backend-ws-smoke.md` |
 | Scheduler | end auction, winner/no-winner close, order expiry, retry/lease behavior | `p0-12-scheduler-end-order-expire.md`, `p0-17-clock-step-backward.md` |
@@ -61,7 +61,6 @@ Those remain separate integration slices.
 
 | Gate | Current status | Required next evidence |
 |---|---|---|
-| H5 live backend fat-finger confirm | H5 confirm UI contract is mocked; backend confirm-token route is not implemented | Implement backend confirm token persistence and `/api/auctions/{id}/bids/confirm`, then add live confirm smoke |
 | Redis down bid limit | Not applicable yet; no bid rate-limit implementation exists | Either implement bid rate-limit degradation or explicitly record P0 scope adjustment |
 | Redis down reconnect | Snapshot unavailable behavior is partly guarded; ticket issue/consume still depends on Redis | Add backend tests/evidence for Redis-down ticket/snapshot/reconnect behavior and anomaly output |
 | PC full rule cross-field validation | UI validates cap reachability and field ranges; backend remains authoritative | Add focused UI cases for duration/extension/deposit invalid combinations if desired, without trusting frontend as final authority |
@@ -80,4 +79,4 @@ The remaining gaps are not money-correctness blockers for the backend path alrea
 
 ## Next Action
 
-Prioritize backend fat-finger confirm token persistence and live confirm smoke, then replace scaffold H5 IDs with room auction selection from `/api/rooms/{room_id}/auctions`.
+Prioritize replacing scaffold H5 IDs with room auction selection from `/api/rooms/{room_id}/auctions`, then add Redis-down reconnect evidence.

@@ -49,6 +49,15 @@ type BidResponse struct {
 	EndAt             *time.Time `json:"end_at,omitempty"`
 	ServerTimeMS      int64      `json:"server_time_ms"`
 	RejectReason      *string    `json:"reject_reason"`
+	ConfirmToken      string     `json:"confirm_token,omitempty"`
+	ExpiresInMS       int64      `json:"expires_in_ms,omitempty"`
+	AmountCents       int64      `json:"amount_cents,omitempty"`
+	ConfirmExpiresAt  *time.Time `json:"confirm_expires_at,omitempty"`
+}
+
+type ConfirmBidInput struct {
+	ConfirmToken   string `json:"confirm_token"`
+	IdempotencyKey string `json:"idempotency_key"`
 }
 
 type Order struct {
@@ -113,7 +122,7 @@ func (r *Repository) PlaceBid(ctx context.Context, auctionID string, userID stri
 	if err != nil {
 		return BidResponse{}, mapPGError(err)
 	}
-	response, bidStatus, rejectCode, err := r.evaluateAndApplyBid(ctx, tx, locked, userID, input, traceID, requestHash)
+	response, bidStatus, rejectCode, err := r.evaluateAndApplyBid(ctx, tx, locked, userID, input, traceID, false)
 	if err != nil {
 		return BidResponse{}, err
 	}
@@ -124,7 +133,86 @@ func (r *Repository) PlaceBid(ctx context.Context, auctionID string, userID stri
 	if err := completeIdempotency(ctx, tx, "bid", auctionID, userID, idempotencyKey, requestHash, http.StatusOK, response.Result, responseJSON); err != nil {
 		return BidResponse{}, err
 	}
-	if err := insertBidRow(ctx, tx, response.BidID, auctionID, userID, input, response.Seq, bidStatus, rejectCode, requestHash, responseJSON, traceID); err != nil {
+	if response.Result != string(apierrors.CodeFatFingerConfirmRequired) {
+		if err := insertBidRow(ctx, tx, response.BidID, auctionID, userID, input, response.Seq, bidStatus, rejectCode, requestHash, responseJSON, traceID); err != nil {
+			return BidResponse{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return BidResponse{}, err
+	}
+	return response, nil
+}
+
+func (r *Repository) ConfirmBid(ctx context.Context, auctionID string, userID string, idempotencyKey string, input ConfirmBidInput, traceID string) (BidResponse, error) {
+	if input.ConfirmToken == "" || input.IdempotencyKey == "" || idempotencyKey == "" || idempotencyKey != input.IdempotencyKey {
+		return BidResponse{}, apierrors.New(apierrors.CodeInvalidArgument, "confirm_token and matching Idempotency-Key are required", http.StatusBadRequest)
+	}
+	tx, err := r.beginTx(ctx)
+	if err != nil {
+		return BidResponse{}, err
+	}
+	defer rollback(ctx, tx)
+
+	var storedHash string
+	var status string
+	var resultCode *string
+	var pendingJSON []byte
+	if err := tx.QueryRow(ctx, `
+		SELECT request_hash, status, result_code, response_json
+		FROM idempotency_records
+		WHERE scope_type = 'bid' AND scope_id = $1 AND user_id = $2 AND idempotency_key = $3
+		FOR UPDATE
+	`, auctionID, userID, idempotencyKey).Scan(&storedHash, &status, &resultCode, &pendingJSON); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return BidResponse{}, apierrors.New(apierrors.CodeInvalidArgument, "confirm token not found", http.StatusNotFound)
+		}
+		return BidResponse{}, err
+	}
+	if status == IdempotencyStatusCompleted && resultCode != nil && *resultCode != string(apierrors.CodeFatFingerConfirmRequired) {
+		var completed BidResponse
+		if err := json.Unmarshal(pendingJSON, &completed); err != nil {
+			return BidResponse{}, err
+		}
+		return completed, nil
+	}
+	if status != IdempotencyStatusCompleted || resultCode == nil || *resultCode != string(apierrors.CodeFatFingerConfirmRequired) {
+		return BidResponse{}, apierrors.New(apierrors.CodeConfirmUsed, "confirm token already used", http.StatusConflict)
+	}
+	var pending BidResponse
+	if err := json.Unmarshal(pendingJSON, &pending); err != nil {
+		return BidResponse{}, err
+	}
+	if pending.ConfirmToken != input.ConfirmToken {
+		return BidResponse{}, apierrors.New(apierrors.CodeConfirmUsed, "confirm token mismatch", http.StatusConflict)
+	}
+	if pending.ConfirmExpiresAt != nil && time.Now().UTC().After(*pending.ConfirmExpiresAt) {
+		return BidResponse{}, apierrors.New(apierrors.CodeConfirmUsed, "confirm token expired", http.StatusConflict)
+	}
+	bidInput := BidInput{
+		ClientBidID:   idempotencyKey,
+		AmountCents:   pending.AmountCents,
+		ClientSeenSeq: pending.Seq,
+	}
+	if storedHash != bidRequestHash(auctionID, userID, bidInput.ClientBidID, bidInput.AmountCents) {
+		return BidResponse{}, apierrors.New(apierrors.CodeIdempotencyKeyReusedWithDifferentRequest, "confirm request hash mismatch", http.StatusConflict)
+	}
+	locked, err := lockAuctionForBid(ctx, tx, auctionID)
+	if err != nil {
+		return BidResponse{}, mapPGError(err)
+	}
+	response, bidStatus, rejectCode, err := r.evaluateAndApplyBid(ctx, tx, locked, userID, bidInput, traceID, true)
+	if err != nil {
+		return BidResponse{}, err
+	}
+	responseJSON, err := json.Marshal(response)
+	if err != nil {
+		return BidResponse{}, err
+	}
+	if err := completeIdempotency(ctx, tx, "bid", auctionID, userID, idempotencyKey, storedHash, http.StatusOK, response.Result, responseJSON); err != nil {
+		return BidResponse{}, err
+	}
+	if err := insertBidRow(ctx, tx, response.BidID, auctionID, userID, bidInput, response.Seq, bidStatus, rejectCode, storedHash, responseJSON, traceID); err != nil {
 		return BidResponse{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -209,6 +297,7 @@ type lockedAuction struct {
 	DepositBPS          int16
 	DepositFloorCents   int64
 	DepositCapCents     int64
+	FatFingerThreshold  *int64
 }
 
 func lockAuctionForBid(ctx context.Context, tx pgx.Tx, auctionID string) (lockedAuction, error) {
@@ -219,7 +308,7 @@ func lockAuctionForBid(ctx context.Context, tx pgx.Tx, auctionID string) (locked
 			a.start_price_cents, a.increment_cents, a.cap_price_cents,
 			a.end_at, a.accepted_bid_count, a.extend_count,
 			ar.duration_seconds, ar.extend_window_seconds, ar.extend_by_seconds,
-			ar.max_extend_count, COALESCE(ar.deposit_bps, $2),
+			ar.max_extend_count, ar.fat_finger_threshold_cents, COALESCE(ar.deposit_bps, $2),
 			COALESCE(ar.deposit_floor_cents, $3), COALESCE(ar.deposit_cap_cents, $4)
 		FROM auctions a
 		JOIN auction_rules ar ON ar.auction_id = a.id AND ar.rule_version = a.rule_version
@@ -230,7 +319,7 @@ func lockAuctionForBid(ctx context.Context, tx pgx.Tx, auctionID string) (locked
 		&a.StartPriceCents, &a.IncrementCents, &a.CapPriceCents,
 		&a.EndAt, &a.AcceptedBidCount, &a.ExtendCount,
 		&a.DurationSeconds, &a.ExtendWindowSeconds, &a.ExtendBySeconds,
-		&a.MaxExtendCount, &a.DepositBPS, &a.DepositFloorCents, &a.DepositCapCents,
+		&a.MaxExtendCount, &a.FatFingerThreshold, &a.DepositBPS, &a.DepositFloorCents, &a.DepositCapCents,
 	)
 	if err != nil {
 		return lockedAuction{}, mapPGError(mapNotFound(err))
@@ -238,7 +327,7 @@ func lockAuctionForBid(ctx context.Context, tx pgx.Tx, auctionID string) (locked
 	return a, nil
 }
 
-func (r *Repository) evaluateAndApplyBid(ctx context.Context, tx pgx.Tx, a lockedAuction, userID string, input BidInput, traceID string, requestHash string) (BidResponse, string, *string, error) {
+func (r *Repository) evaluateAndApplyBid(ctx context.Context, tx pgx.Tx, a lockedAuction, userID string, input BidInput, traceID string, skipFatFinger bool) (BidResponse, string, *string, error) {
 	bidID := "bid_" + uuid.NewString()
 	now := time.Now().UTC()
 	serverTimeMS := now.UnixMilli()
@@ -293,6 +382,33 @@ func (r *Repository) evaluateAndApplyBid(ctx context.Context, tx pgx.Tx, a locke
 	case BidClassAboveCap:
 		resp, status, reason, err := reject(apierrors.CodeBidAboveCap)
 		return resp, status, reason, err
+	}
+	if !skipFatFinger && a.FatFingerThreshold != nil && *a.FatFingerThreshold > 0 {
+		basis := a.CurrentPriceCents
+		if a.AcceptedBidCount == 0 {
+			basis = a.StartPriceCents
+		}
+		if input.AmountCents-basis >= *a.FatFingerThreshold {
+			var seq int64
+			if err := tx.QueryRow(ctx, `SELECT seq FROM auctions WHERE id = $1`, a.ID).Scan(&seq); err != nil {
+				return BidResponse{}, "", nil, err
+			}
+			expiresAt := now.Add(30 * time.Second)
+			return BidResponse{
+				Result:            string(apierrors.CodeFatFingerConfirmRequired),
+				AuctionID:         a.ID,
+				Seq:               seq,
+				CurrentPriceCents: a.CurrentPriceCents,
+				CurrentWinnerID:   a.CurrentWinnerID,
+				EndAt:             &a.EndAt,
+				ServerTimeMS:      serverTimeMS,
+				RejectReason:      nil,
+				ConfirmToken:      "ft_" + uuid.NewString(),
+				ExpiresInMS:       30_000,
+				AmountCents:       input.AmountCents,
+				ConfirmExpiresAt:  &expiresAt,
+			}, "", nil, nil
+		}
 	}
 
 	result := BidResultAccepted
