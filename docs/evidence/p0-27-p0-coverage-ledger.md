@@ -66,7 +66,7 @@ Those remain separate integration slices.
 
 ## Failure Interpretation
 
-The remaining gaps are not money-correctness blockers for the backend path already covered by automated tests. They are integration and evidence gaps that affect demo honesty and final P0 completeness claims, especially WebSocket end-to-end frontend behavior.
+The remaining gap is not a money-correctness or demo blocker while no performance number is claimed. It blocks only final materials that publish QPS, P99/P999, fanout capacity, or online-user capacity.
 
 ## Known Limits
 
@@ -74,6 +74,7 @@ The remaining gaps are not money-correctness blockers for the backend path alrea
 - The `Commit` field will be finalized by the commit containing this file.
 - Frontend E2E evidence remains mock-backed unless a specific evidence file says live backend was used.
 - H5 still enters the deterministic local room `room_main`; auction and payment order IDs are now selected from live API responses.
+- Demo flow and known limits are recorded under `docs/demo/`.
 
 ## Next Action
 

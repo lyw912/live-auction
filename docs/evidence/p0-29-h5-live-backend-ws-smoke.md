@@ -16,7 +16,7 @@ Raw Output Path: terminal output in development session
 
 The smoke runner seeds deterministic local data for `room_main` and `auc_live`, starts the Go backend on `127.0.0.1:18080`, starts the H5 Vite app on `127.0.0.1:5175`, and proxies `/api` plus `/ws` from Vite to the backend.
 
-The browser opens the real H5 app. H5 requests `/api/auth/ws-ticket` from the Go backend and opens `/ws?room_id=room_main&auction_id=auc_live&last_seq=41` using browser subprotocols `auction.v1` and `ticket.<token>`.
+The browser opens the real H5 app. H5 loads the active auction from `GET /api/rooms/room_main/auctions`, requests `/api/auth/ws-ticket` from the Go backend for that selected auction, and opens `/ws?room_id=room_main&auction_id=auc_live&last_seq=41` using browser subprotocols `auction.v1` and `ticket.<token>`.
 
 The test then sends a real HTTP bid through the backend. The backend writes bid/event/outbox rows, the server outbox relay publishes the event, and the already-connected H5 WebSocket receives and applies the authoritative event.
 
@@ -47,7 +47,7 @@ If this test fails before the bid request, the browser ticket or WebSocket conne
 ## Known Limits
 
 - This smoke uses deterministic local seed data and one browser client; it is not a reconnect storm, slow consumer, or multi-client jitter test.
-- The H5 app still uses scaffold constants for `room_main` and `auc_live`; full room auction selection remains a separate P0/P1 integration slice.
+- The H5 app still enters deterministic local room `room_main`; the active auction ID is selected from backend API responses. A full room selector remains outside this P0 demo slice.
 - The Vite proxy is only a local development path. Production deployment should serve API/WS routing explicitly.
 
 ## Next Action

@@ -31,8 +31,8 @@ PASS.
 
 ## Observed Data
 
-- New Playwright coverage asserts the ticket body is `{room_id: "room_main", auction_id: "auc_live"}`.
-- New Playwright coverage asserts the socket URL is `ws://127.0.0.1:5173/ws?room_id=room_main&auction_id=auc_live&last_seq=41`.
+- Playwright coverage asserts the ticket body uses the current room and the active auction selected from `GET /api/rooms/{room_id}/auctions`.
+- Playwright coverage asserts the socket URL uses the selected room, selected auction, and last known sequence.
 - New Playwright coverage asserts subprotocols are `auction.v1` and `ticket.ticket_live`.
 - Injected WS `bid_accepted` seq 42 updates price, leader, and event feedback from the authoritative message.
 - Existing snapshot gap tests continue to prove CTA disable and snapshot recovery behavior.
@@ -44,7 +44,7 @@ If ticket issuance fails or the socket closes, H5 marks the connection as discon
 ## Known Limits
 
 - This is browser contract coverage with a WebSocket mock. It does not run the Vite H5 app against the Go backend in one process.
-- The current room and auction IDs are still scaffold constants (`room_main`, `auc_live`) until the H5 room list/detail flow is fully wired.
+- The current room is still the deterministic local demo room `room_main`; the auction ID is selected from API responses.
 - Reconnect backoff is a fixed 2 seconds in the scaffold, not the full jittered production policy from `06-realtime-and-recovery.md`.
 - Live backend smoke coverage for H5 REST and WS remains a separate slice.
 

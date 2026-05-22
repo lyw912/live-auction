@@ -1,6 +1,6 @@
 # Setup Guide
 
-本文档记录开工前需要安装、配置和申请的内容。当前仓库已经创建基础目录、`.env.example` 和本地 `infra/docker-compose.yml`；业务代码尚未初始化。
+本文档记录本地启动、工具安装和环境检查内容。当前仓库已经包含 P0 后端、前端、迁移、测试命令、证据记录、`.env.example` 和本地 `infra/docker-compose.yml`。
 
 ## 1. 已在仓库内准备好的内容
 
@@ -9,7 +9,7 @@
 - `.env.example`：本地开发环境变量样例。
 - `infra/docker-compose.yml`：本地 PostgreSQL、Redis、MinIO。
 - `backend/`、`frontend/`、`tests/`、`docs/evidence/`、`docs/perf/`、`docs/demo/`、`docs/adr/`：开工目录骨架。
-- `.github/workflows/ci.yml`：最小 CI 占位，后续补 Go/前端测试命令。
+- `.github/workflows/ci.yml`：最小 CI，运行迁移和后端 Go 测试。
 
 ## 2. 需要你本机安装的工具
 
@@ -24,13 +24,13 @@
 | Docker Desktop | 本地 PostgreSQL、Redis、MinIO | Windows 推荐 WSL 2 backend |
 | goose | SQL migration 工具 | `go install github.com/pressly/goose/v3/cmd/goose@latest` |
 
-### 后续里程碑需要
+### 可选或后续里程碑需要
 
 | 工具 | 用途 | 何时需要 |
 |---|---|---|
 | Playwright browsers | E2E 测试 | 前端 P0 开始前 |
-| k6 | HTTP/WS 压测 | P1 性能证据阶段，或提前写脚本 |
-| Toxiproxy | Redis/DB/网络故障注入 | chaos gate 开始前 |
+| k6 | HTTP/WS 压测 | 发布 QPS/P99/fanout 等性能数字前 |
+| Toxiproxy | Redis/DB/网络故障注入 | 正式 chaos baseline 前 |
 | PostgreSQL client / DBeaver / DataGrip | 本地查库 | 可选，但调试方便 |
 | MinIO Client `mc` | 创建 bucket、查对象 | 可选；也可用 MinIO Console |
 
@@ -156,7 +156,7 @@ http://localhost:9001
 live-auction-items
 ```
 
-后续可以把 bucket 初始化放进 seed/migration 辅助命令；当前阶段先手动创建即可。
+当前 P0 本地演示只要求 bucket 存在；如需自动化，可后续把 bucket 初始化放进 seed/migration 辅助命令。
 
 停止本地服务：
 
@@ -198,14 +198,14 @@ $env:DATABASE_URL="postgres://live_auction:live_auction@localhost:5432/live_auct
 goose -dir backend\migrations postgres $env:DATABASE_URL status
 ```
 
-后续实现要求：
+实现要求：
 
 - money 字段全部使用 integer cents。
 - enum-like 字段在应用层有常量和测试。
 - partial unique index 必须有命名和错误码映射。
 - 不用 DB trigger 做隐藏业务状态变更。
 
-## 7. 前端初始化约定
+## 7. 前端启动约定
 
 PC 控制台：
 
@@ -219,23 +219,22 @@ Mobile H5：
 frontend/mobile-h5/
 ```
 
-后续初始化时使用 Vite React TypeScript，并用 pnpm workspace 管理：
+当前前端已经使用 Vite React TypeScript 和 pnpm workspace 管理。PC UI 库为 Arco Design；H5 使用自定义移动端竞拍 UI，不套 admin 组件。
+
+启动：
 
 ```powershell
-pnpm create vite frontend/pc-console --template react-ts
-pnpm create vite frontend/mobile-h5 --template react-ts
+pnpm dev:h5
+pnpm dev:pc
 ```
 
-PC UI 库选 Arco Design；H5 使用自定义移动端竞拍 UI，不套 admin 组件。
-
-Playwright 后续安装：
+Playwright 浏览器安装：
 
 ```powershell
-pnpm create playwright
-pnpm exec playwright install
+pnpm exec playwright install chromium
 ```
 
-## 8. 后端初始化约定
+## 8. 后端启动约定
 
 后端保持 Go modular monolith：
 
@@ -259,13 +258,19 @@ backend/internal/storage/
 - MinIO/S3：S3-compatible SDK
 - logger：结构化日志，所有请求带 `trace_id`
 
-第一批后端代码应先做：
+本地启动：
 
-1. config/env loader
-2. health endpoint
-3. PostgreSQL/Redis/MinIO client 初始化
-4. migration runner 或迁移命令约定
-5. seed users/room/items
+```powershell
+cd backend
+go run ./cmd/p0smokeseed
+go run ./cmd/server
+```
+
+健康检查：
+
+```text
+http://localhost:8080/readyz
+```
 
 ## 9. 外部资源与 API 申请
 
@@ -307,7 +312,7 @@ docker compose -f infra\docker-compose.yml ps
 - PostgreSQL、Redis、MinIO 都是 healthy 或可连接。
 - MinIO bucket `live-auction-items` 已创建。
 - `docs/design-v2-industrial/12-engineering-rules.md` 已读。
-- 写 bid/cancel/end/realtime 前，先补 migration、错误码、规则测试和 idempotency 常量。
+- P0 bid/cancel/end/realtime 已有实现和证据；新增修改仍需先看 `docs/design-v2-industrial/12-engineering-rules.md` 和对应 gate。
 
 ## 11. 参考来源
 
