@@ -115,6 +115,35 @@ func TestPlaceBidCapSoldCreatesOrderAndPaymentIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestListBidAndOrderHistoryRows(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	repo := NewRepository(db)
+	capPrice := int64(20_000)
+	auction := createActiveAuction(t, repo, db, &capPrice)
+
+	input := BidInput{ClientBidID: "bid-history-1", AmountCents: 20_000}
+	if _, err := repo.PlaceBid(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_history"); err != nil {
+		t.Fatalf("PlaceBid: %v", err)
+	}
+	bids, err := repo.ListBidHistory(ctx, "user_1")
+	if err != nil {
+		t.Fatalf("ListBidHistory: %v", err)
+	}
+	if len(bids) == 0 || bids[0].AuctionID != auction.ID || bids[0].AmountCents != 20_000 || bids[0].Result != BidResultAcceptedSold {
+		t.Fatalf("unexpected bid history: %#v", bids)
+	}
+
+	orders, err := repo.ListOrders(ctx, "user_1", "user")
+	if err != nil {
+		t.Fatalf("ListOrders: %v", err)
+	}
+	history := ToOrderHistoryRows(orders)
+	if len(history) == 0 || history[0].AuctionID != auction.ID || history[0].AmountCents != 20_000 || history[0].OrderStatus != OrderStatusPending {
+		t.Fatalf("unexpected order history: %#v", history)
+	}
+}
+
 func TestCancelActiveThenLaterBidRejects(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()

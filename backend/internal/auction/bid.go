@@ -71,6 +71,22 @@ type PaymentResponse struct {
 	DepositStatus string    `json:"deposit_status"`
 }
 
+type BidHistoryRow struct {
+	BidID       string    `json:"bid_id"`
+	AuctionID   string    `json:"auction_id"`
+	AmountCents int64     `json:"amount_cents"`
+	Result      string    `json:"result"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+type OrderHistoryRow struct {
+	OrderID     string    `json:"order_id"`
+	AuctionID   string    `json:"auction_id"`
+	AmountCents int64     `json:"amount_cents"`
+	OrderStatus string    `json:"order_status"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
 func (r *Repository) PlaceBid(ctx context.Context, auctionID string, userID string, idempotencyKey string, input BidInput, traceID string) (BidResponse, error) {
 	if input.ClientBidID == "" || input.AmountCents <= 0 {
 		return BidResponse{}, apierrors.New(apierrors.CodeInvalidArgument, "client_bid_id and positive amount_cents are required", http.StatusBadRequest)
@@ -529,7 +545,7 @@ func (r *Repository) ListOrders(ctx context.Context, userID string, role string)
 		return nil, err
 	}
 	defer rows.Close()
-	var orders []Order
+	orders := []Order{}
 	for rows.Next() {
 		var order Order
 		if err := rows.Scan(&order.ID, &order.AuctionID, &order.WinnerID, &order.AmountCents, &order.Status, &order.DepositCents, &order.DepositStatus, &order.ExpireAt, &order.PaidAt, &order.CreatedAt); err != nil {
@@ -538,4 +554,40 @@ func (r *Repository) ListOrders(ctx context.Context, userID string, role string)
 		orders = append(orders, order)
 	}
 	return orders, rows.Err()
+}
+
+func (r *Repository) ListBidHistory(ctx context.Context, userID string) ([]BidHistoryRow, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT id, auction_id, amount_cents, COALESCE(response_json->>'result', status), created_at
+		FROM bids
+		WHERE user_id = $1
+		ORDER BY created_at DESC
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	bids := []BidHistoryRow{}
+	for rows.Next() {
+		var bid BidHistoryRow
+		if err := rows.Scan(&bid.BidID, &bid.AuctionID, &bid.AmountCents, &bid.Result, &bid.CreatedAt); err != nil {
+			return nil, err
+		}
+		bids = append(bids, bid)
+	}
+	return bids, rows.Err()
+}
+
+func ToOrderHistoryRows(orders []Order) []OrderHistoryRow {
+	rows := make([]OrderHistoryRow, 0, len(orders))
+	for _, order := range orders {
+		rows = append(rows, OrderHistoryRow{
+			OrderID:     order.ID,
+			AuctionID:   order.AuctionID,
+			AmountCents: order.AmountCents,
+			OrderStatus: order.Status,
+			CreatedAt:   order.CreatedAt,
+		})
+	}
+	return rows
 }

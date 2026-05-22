@@ -52,4 +52,4 @@ If this test fails before the bid request, the browser ticket or WebSocket conne
 
 ## Next Action
 
-Add live backend REST smoke coverage for H5 bid confirm, payment, snapshot, history, and order paths, or document which are already covered by backend-only integration tests.
+Continue with live backend REST smoke for H5 paths not covered by this WS slice.

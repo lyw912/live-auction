@@ -169,6 +169,30 @@ func (h AuctionHandler) ListOrders(w http.ResponseWriter, r *http.Request) {
 	writeResult(w, r, http.StatusOK, result, err)
 }
 
+func (h AuctionHandler) ListUserOrders(w http.ResponseWriter, r *http.Request) {
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	result, err := h.Repo.ListOrders(r.Context(), user.ID, user.Role)
+	if err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": auction.ToOrderHistoryRows(result)})
+}
+
+func (h AuctionHandler) ListBidHistory(w http.ResponseWriter, r *http.Request) {
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	result, err := h.Repo.ListBidHistory(r.Context(), user.ID)
+	writeResult(w, r, http.StatusOK, map[string]any{"items": result}, err)
+}
+
 func (h AuctionHandler) CreateWSTicket(w http.ResponseWriter, r *http.Request) {
 	user, ok := currentUser(r)
 	if !ok {

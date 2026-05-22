@@ -113,6 +113,15 @@ func seed(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client) error {
 		  100000, 1000,
 		  5000, 50000, now()
 		);
+
+		INSERT INTO orders (
+		  id, auction_id, winner_id, amount_cents, status,
+		  deposit_cents, deposit_status, expire_at
+		)
+		VALUES (
+		  'ord_pending', 'auc_live', 'user_1', 60000, 'ORDER_PENDING',
+		  6000, 'HELD', now() + interval '15 minutes'
+		);
 	`)
 	if err != nil {
 		return err

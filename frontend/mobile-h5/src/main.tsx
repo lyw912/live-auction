@@ -83,6 +83,10 @@ const roomID = 'room_main';
 const auctionID = 'auc_live';
 const orderID = 'ord_pending';
 const currentUserID = 'user_1';
+const mockUserHeaders = {
+  'X-Mock-Role': 'user',
+  'X-Mock-User-Id': currentUserID
+};
 
 const scenarios: Scenario[] = [
   { key: 'scheduled', title: '即将开拍', status: 'SCHEDULED', price: '¥100.00', leader: '暂无领先', feedback: '19:58 开始', cta: '等待开拍', ctaDisabled: true },
@@ -469,7 +473,8 @@ function App() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Idempotency-Key': clientBidID
+          'Idempotency-Key': clientBidID,
+          ...mockUserHeaders
         },
         body: JSON.stringify({
           client_bid_id: clientBidID,
@@ -506,7 +511,8 @@ function App() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Idempotency-Key': confirmIdempotencyKey
+          'Idempotency-Key': confirmIdempotencyKey,
+          ...mockUserHeaders
         },
         body: JSON.stringify({
           confirm_token: confirmToken,
@@ -536,7 +542,8 @@ function App() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Idempotency-Key': idempotencyKey
+          'Idempotency-Key': idempotencyKey,
+          ...mockUserHeaders
         },
         body: JSON.stringify({ confirm: true })
       });
@@ -570,8 +577,8 @@ function App() {
     setHistoryError('');
     try {
       const [bids, orders] = await Promise.all([
-        fetch('/api/users/me/bids').then((response) => response.json()),
-        fetch('/api/users/me/orders').then((response) => response.json())
+        fetch('/api/users/me/bids', { headers: mockUserHeaders }).then((response) => response.json()),
+        fetch('/api/users/me/orders', { headers: mockUserHeaders }).then((response) => response.json())
       ]);
       setBidHistory(Array.isArray(bids.items) ? bids.items : []);
       setOrderHistory(Array.isArray(orders.items) ? orders.items : []);
