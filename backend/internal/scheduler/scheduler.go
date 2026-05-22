@@ -12,6 +12,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"live-auction/backend/internal/observability"
 )
 
 const (
@@ -134,6 +136,7 @@ func (r *Runner) claimOne(ctx context.Context) (Job, bool, error) {
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	var job Job
+	claimStart := time.Now()
 	err = tx.QueryRow(ctx, `
 		SELECT id, job_type, target_type, target_id, attempts, max_attempts, run_at
 		FROM scheduler_jobs
@@ -145,6 +148,7 @@ func (r *Runner) claimOne(ctx context.Context) (Job, bool, error) {
 		LIMIT 1
 		FOR UPDATE SKIP LOCKED
 	`).Scan(&job.ID, &job.JobType, &job.TargetType, &job.TargetID, &job.Attempts, &job.MaxAttempts, &job.RunAt)
+	observability.Observe("db_query_latency_seconds", time.Since(claimStart).Seconds(), map[string]string{"query": "scheduler_claim_one"}, observability.DefaultLatencyBuckets)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Job{}, false, nil
 	}
@@ -168,6 +172,7 @@ func (r *Runner) claimOne(ctx context.Context) (Job, bool, error) {
 }
 
 func (r *Runner) processClaimed(ctx context.Context, job Job) error {
+	observability.Observe("auction_scheduler_drift_seconds", r.now().Sub(job.RunAt).Seconds(), map[string]string{"job_type": job.JobType}, observability.DefaultLatencyBuckets)
 	switch job.JobType {
 	case JobTypeEndAuction:
 		return r.processEndAuction(ctx, job)

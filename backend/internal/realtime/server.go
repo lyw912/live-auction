@@ -15,6 +15,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"nhooyr.io/websocket"
 
+	"live-auction/backend/internal/observability"
 	apierrors "live-auction/backend/internal/platform/errors"
 )
 
@@ -100,12 +101,16 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 	var closeSlow sync.Once
 	sub := s.hub.Subscribe(auctionID, func() { closeSlow.Do(func() { close(slow) }) })
 	defer s.hub.Unsubscribe(auctionID, sub)
+	observability.AddGauge("auction_ws_connections", 1, map[string]string{"room": roomID})
+	defer observability.AddGauge("auction_ws_connections", -1, map[string]string{"room": roomID})
 
 	writeCtx, cancelWrite := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancelWrite()
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	messages, recoverySource := s.recoveryMessages(ctx, auctionID, lastSeq)
+	observability.Inc("auction_ws_recover_total", map[string]string{"result": metricRecoveryResult(recoverySource)})
+	observability.Inc("auction_snapshot_source_total", map[string]string{"source": recoverySource})
 	_ = s.recordWSActivity(ctx, roomID, auctionID, ticket.UserID, "ws_reconnect", map[string]any{
 		"last_seq": lastSeq,
 	})
@@ -114,6 +119,7 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 	})
 	for _, message := range messages {
 		if err := conn.Write(writeCtx, websocket.MessageText, message); err != nil {
+			observability.Inc("auction_ws_slow_consumer_disconnect_total", nil)
 			_ = s.recordWSActivity(ctx, roomID, auctionID, ticket.UserID, "ws_slow_consumer_closed", map[string]any{
 				"phase": "recovery",
 			})
@@ -126,6 +132,7 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 		select {
 		case message, ok := <-sub.Messages():
 			if !ok {
+				observability.Inc("auction_ws_slow_consumer_disconnect_total", nil)
 				_ = s.recordWSActivity(r.Context(), roomID, auctionID, ticket.UserID, "ws_slow_consumer_closed", map[string]any{
 					"phase": "queue_closed",
 				})
@@ -136,6 +143,7 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 			err := conn.Write(ctx, websocket.MessageText, message)
 			cancel()
 			if err != nil {
+				observability.Inc("auction_ws_slow_consumer_disconnect_total", nil)
 				_ = s.recordWSActivity(r.Context(), roomID, auctionID, ticket.UserID, "ws_slow_consumer_closed", map[string]any{
 					"phase": "write",
 				})
@@ -143,6 +151,7 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case <-slow:
+			observability.Inc("auction_ws_slow_consumer_disconnect_total", nil)
 			_ = s.recordWSActivity(r.Context(), roomID, auctionID, ticket.UserID, "ws_slow_consumer_closed", map[string]any{
 				"phase": "backpressure",
 			})
@@ -159,7 +168,9 @@ func (s *Server) PublishAuctionEvent(ctx context.Context, auctionID string, payl
 }
 
 func (s *Server) recoveryMessages(ctx context.Context, auctionID string, lastSeq int64) ([][]byte, string) {
+	redisStart := time.Now()
 	values, err := s.redis.LRange(ctx, "auction:"+auctionID+":events", 0, -1).Result()
+	observability.Observe("redis_command_latency_seconds", time.Since(redisStart).Seconds(), map[string]string{"command": "lrange_recovery_events"}, observability.DefaultLatencyBuckets)
 	if err == nil {
 		var out [][]byte
 		next := lastSeq + 1
@@ -182,7 +193,9 @@ func (s *Server) recoveryMessages(ctx context.Context, auctionID string, lastSeq
 }
 
 func (s *Server) snapshotMessage(ctx context.Context, auctionID string) ([][]byte, string) {
+	redisStart := time.Now()
 	payload, err := s.redis.Get(ctx, "auction:"+auctionID+":snapshot").Bytes()
+	observability.Observe("redis_command_latency_seconds", time.Since(redisStart).Seconds(), map[string]string{"command": "get_snapshot"}, observability.DefaultLatencyBuckets)
 	if err == nil && len(payload) > 0 {
 		return [][]byte{payload}, snapshotSource(payload, "redis")
 	}
@@ -317,6 +330,17 @@ func snapshotSource(payload []byte, fallback string) string {
 		return event.Source
 	}
 	return fallback
+}
+
+func metricRecoveryResult(source string) string {
+	switch source {
+	case "history", "snapshot_unavailable":
+		return source
+	case "":
+		return "unknown"
+	default:
+		return "snapshot_" + source
+	}
 }
 
 func (s *Server) recordWSActivity(ctx context.Context, roomID string, auctionID string, userID string, eventType string, payload map[string]any) error {

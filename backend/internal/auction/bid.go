@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"live-auction/backend/internal/observability"
 	apierrors "live-auction/backend/internal/platform/errors"
 )
 
@@ -101,14 +102,33 @@ type OrderHistoryRow struct {
 }
 
 func (r *Repository) PlaceBid(ctx context.Context, auctionID string, userID string, idempotencyKey string, input BidInput, traceID string) (BidResponse, error) {
+	start := time.Now()
+	resultLabel := "error"
+	reasonLabel := ""
+	defer func() {
+		observability.Inc("auction_bid_request_total", map[string]string{"result": resultLabel, "reason": reasonLabel})
+		observability.Observe("auction_bid_latency_seconds", time.Since(start).Seconds(), nil, observability.DefaultLatencyBuckets)
+	}()
 	if input.ClientBidID == "" || input.AmountCents <= 0 {
+		resultLabel = "invalid"
+		reasonLabel = string(apierrors.CodeInvalidArgument)
 		return BidResponse{}, apierrors.New(apierrors.CodeInvalidArgument, "client_bid_id and positive amount_cents are required", http.StatusBadRequest)
 	}
 	if idempotencyKey == "" || idempotencyKey != input.ClientBidID {
+		resultLabel = "invalid"
+		reasonLabel = string(apierrors.CodeInvalidArgument)
 		return BidResponse{}, apierrors.New(apierrors.CodeInvalidArgument, "Idempotency-Key must equal client_bid_id", http.StatusBadRequest)
 	}
 	requestHash := bidRequestHash(auctionID, userID, input.ClientBidID, input.AmountCents)
 	if replay, ok, err := r.completedIdempotency(ctx, "bid", auctionID, userID, idempotencyKey, requestHash); err != nil || ok {
+		if ok {
+			resultLabel = replay.Result
+			if replay.RejectReason != nil {
+				reasonLabel = *replay.RejectReason
+			} else {
+				reasonLabel = "idempotent_replay"
+			}
+		}
 		return replay, err
 	}
 
@@ -129,6 +149,10 @@ func (r *Repository) PlaceBid(ctx context.Context, auctionID string, userID stri
 	response, bidStatus, rejectCode, err := r.evaluateAndApplyBid(ctx, tx, locked, userID, input, traceID, false)
 	if err != nil {
 		return BidResponse{}, err
+	}
+	resultLabel = response.Result
+	if rejectCode != nil {
+		reasonLabel = *rejectCode
 	}
 	responseJSON, err := json.Marshal(response)
 	if err != nil {
@@ -321,6 +345,7 @@ type lockedAuction struct {
 
 func lockAuctionForBid(ctx context.Context, tx pgx.Tx, auctionID string) (lockedAuction, error) {
 	var a lockedAuction
+	start := time.Now()
 	err := tx.QueryRow(ctx, `
 		SELECT
 			a.id, a.status, a.current_price_cents, a.current_winner_id,
@@ -340,6 +365,8 @@ func lockAuctionForBid(ctx context.Context, tx pgx.Tx, auctionID string) (locked
 		&a.DurationSeconds, &a.ExtendWindowSeconds, &a.ExtendBySeconds,
 		&a.MaxExtendCount, &a.FatFingerThreshold, &a.DepositBPS, &a.DepositFloorCents, &a.DepositCapCents,
 	)
+	observability.Observe("auction_bid_lock_wait_seconds", time.Since(start).Seconds(), nil, observability.DefaultLatencyBuckets)
+	observability.Observe("db_query_latency_seconds", time.Since(start).Seconds(), map[string]string{"query": "lock_auction_for_bid"}, observability.DefaultLatencyBuckets)
 	if err != nil {
 		return lockedAuction{}, mapPGError(mapNotFound(err))
 	}

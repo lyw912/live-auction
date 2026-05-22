@@ -11,6 +11,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
+
+	"live-auction/backend/internal/observability"
 )
 
 const (
@@ -86,6 +88,7 @@ func (r *Relay) WithPublisher(publisher func(context.Context, string, []byte)) *
 }
 
 func (r *Relay) ProcessOne(ctx context.Context) (bool, error) {
+	start := time.Now()
 	event, ok, err := r.claimOne(ctx)
 	if err != nil || !ok {
 		return ok, err
@@ -99,6 +102,8 @@ func (r *Relay) ProcessOne(ctx context.Context) (bool, error) {
 	if err := r.markPublished(ctx, event.OutboxID); err != nil {
 		return true, err
 	}
+	observability.Observe("auction_outbox_lag_seconds", time.Since(event.CreatedAt).Seconds(), nil, observability.DefaultLatencyBuckets)
+	observability.Observe("auction_fanout_latency_seconds", time.Since(start).Seconds(), nil, observability.DefaultLatencyBuckets)
 	return true, nil
 }
 
@@ -169,9 +174,11 @@ func (r *Relay) publish(ctx context.Context, event Event) error {
 	pipe.LTrim(ctx, eventsKey, -r.historyLimit, -1)
 	pipe.Expire(ctx, eventsKey, r.historyTTL)
 	pipe.Set(ctx, snapshotKey, data, r.historyTTL)
+	redisStart := time.Now()
 	if _, err = pipe.Exec(ctx); err != nil {
 		return err
 	}
+	observability.Observe("redis_command_latency_seconds", time.Since(redisStart).Seconds(), map[string]string{"command": "outbox_publish_pipeline"}, observability.DefaultLatencyBuckets)
 	if r.publisher != nil {
 		r.publisher(ctx, event.AuctionID, data)
 	}
@@ -229,6 +236,7 @@ func (r *Relay) markFailure(ctx context.Context, event Event, publishErr error) 
 		return err
 	}
 	if attempts >= maxAttempts {
+		observability.Inc("auction_outbox_dead_total", nil)
 		r.publishGapNotice(ctx, event)
 	}
 	return nil

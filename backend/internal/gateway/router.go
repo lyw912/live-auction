@@ -3,12 +3,15 @@ package gateway
 import (
 	"log/slog"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
 	"live-auction/backend/internal/auction"
 	"live-auction/backend/internal/config"
+	"live-auction/backend/internal/observability"
 	"live-auction/backend/internal/realtime"
 	"live-auction/backend/internal/storage"
 )
@@ -27,6 +30,7 @@ func NewRouterWithRealtime(cfg config.Config, deps *storage.Dependencies, log *s
 	r.Get("/healthz", health.Liveness)
 	r.Get("/readyz", health.Readiness)
 	r.Get("/api/health", health.Readiness)
+	r.Get("/metrics", observability.Handler(deps.Postgres).ServeHTTP)
 
 	auctionHandler := AuctionHandler{
 		Config: cfg,
@@ -74,11 +78,31 @@ func NewRouterWithRealtime(cfg config.Config, deps *storage.Dependencies, log *s
 func requestLogMiddleware(log *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			next.ServeHTTP(w, r)
+			start := time.Now()
+			rec := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+			next.ServeHTTP(rec, r)
+			status := rec.Status()
+			if status == 0 {
+				status = http.StatusOK
+			}
+			route := chi.RouteContext(r.Context()).RoutePattern()
+			if route == "" {
+				route = r.URL.Path
+			}
+			observability.Inc("http_request_total", map[string]string{
+				"method": r.Method,
+				"path":   route,
+				"status": strconv.Itoa(status),
+			})
+			observability.Observe("http_request_latency_seconds", time.Since(start).Seconds(), map[string]string{
+				"method": r.Method,
+				"path":   route,
+			}, observability.DefaultLatencyBuckets)
 			log.Info("http_request",
 				slog.String("trace_id", traceID(r.Context())),
 				slog.String("method", r.Method),
 				slog.String("path", r.URL.Path),
+				slog.Int("status", status),
 				slog.String("remote_addr", r.RemoteAddr),
 			)
 		})
