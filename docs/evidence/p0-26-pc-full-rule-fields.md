@@ -34,6 +34,7 @@ Result:
   - deposit cap cents
 - `PATCH /api/auctions/auc_next/rules` body now includes those backend field names.
 - E2E validates the submitted backend contract body.
+- E2E also blocks invalid cross-field UI combinations for extension seconds, fat-finger threshold vs increment, and deposit floor vs cap before save.
 - Backend still remains final authority for rule acceptance.
 
 Raw output:
@@ -47,8 +48,8 @@ warning: PC chunk exceeds 500 kB after minification due Arco bundle; no performa
 
 ```text
 pnpm test:e2e
-Running 12 tests using 1 worker
-12 passed (8.2s)
+Running 14 tests using 1 worker
+14 passed (8.3s)
 ```
 
 ```text
@@ -58,8 +59,8 @@ passed
 
 Known limits:
 - E2E uses mocked save responses; live backend integration remains future work.
-- Cross-field frontend validation for extension/deposit bounds is minimal; backend remains authoritative.
+- Frontend cross-field validation is still a guardrail, not final authority; backend remains authoritative.
 - Rule inputs are compact operational controls, not a final polished console layout.
 
 Next action:
-- Wire H5 to real WebSocket ticket/connect flow or add live backend smoke tests for frontend API paths.
+- Add animation longtask evidence before claiming animation performance, or leave load/perf gates unclaimed.

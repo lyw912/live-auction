@@ -54,12 +54,31 @@ function nearestLegalCaps(rule: RuleDraft) {
 
 function validateRule(rule: RuleDraft) {
   if (rule.incrementCents <= 0) {
-    return { valid: false, message: '加价幅度必须大于 0', suggestions: [] };
+    return { valid: false, field: 'increment', message: '加价幅度必须大于 0', suggestions: [] };
+  }
+  if (rule.durationSeconds < 30 || rule.durationSeconds > 86400) {
+    return { valid: false, field: 'duration', message: '竞拍时长必须在 30 秒到 86400 秒之间', suggestions: [] };
+  }
+  if (rule.extendWindowSeconds < 10 || rule.extendWindowSeconds > 30 || rule.extendBySeconds < 10 || rule.extendBySeconds > 30) {
+    return { valid: false, field: 'extension', message: '延时窗口和每次延时必须在 10 秒到 30 秒之间', suggestions: [] };
+  }
+  if (rule.maxExtendCount < 1 || rule.maxExtendCount > 10) {
+    return { valid: false, field: 'extension', message: '最多延时次数必须在 1 到 10 之间', suggestions: [] };
+  }
+  if (rule.fatFingerThresholdCents <= rule.incrementCents) {
+    return { valid: false, field: 'fatFinger', message: '高额确认阈值必须大于加价幅度', suggestions: [] };
+  }
+  if (rule.depositBPS < 0 || rule.depositBPS > 10000 || rule.depositFloorCents < 0 || rule.depositCapCents < 0) {
+    return { valid: false, field: 'deposit', message: '保证金字段不能为负，比例不能超过 10000 bps', suggestions: [] };
+  }
+  if (rule.depositFloorCents > rule.depositCapCents) {
+    return { valid: false, field: 'deposit', message: '保证金下限不能高于上限', suggestions: [] };
   }
   const minCap = rule.startPriceCents + rule.incrementCents;
   if (rule.capPriceCents < minCap) {
     return {
       valid: false,
+      field: 'cap',
       message: `封顶价至少为 ${formatCents(minCap)}`,
       suggestions: nearestLegalCaps(rule)
     };
@@ -67,11 +86,12 @@ function validateRule(rule: RuleDraft) {
   if ((rule.capPriceCents - rule.startPriceCents) % rule.incrementCents !== 0) {
     return {
       valid: false,
+      field: 'cap',
       message: '封顶价必须落在起拍价 + N * 加价幅度',
       suggestions: nearestLegalCaps(rule)
     };
   }
-  return { valid: true, message: `封顶价可达，预计 ${Math.floor((rule.capPriceCents - rule.startPriceCents) / rule.incrementCents)} 口到顶`, suggestions: [] };
+  return { valid: true, field: 'cap', message: `封顶价可达，预计 ${Math.floor((rule.capPriceCents - rule.startPriceCents) / rule.incrementCents)} 口到顶`, suggestions: [] };
 }
 
 function App() {
@@ -240,6 +260,7 @@ function App() {
               </Form.Item>
               {backendRuleError && <div className="backend-rule-error" role="alert">{backendRuleError}</div>}
               {ruleSaveState === 'saved' && <div className="rule-save-ok" role="status">规则已保存</div>}
+              {!ruleValidation.valid && ruleValidation.field !== 'cap' && <div className="backend-rule-error" role="alert">{ruleValidation.message}</div>}
               {shownSuggestions.length > 0 && (
                 <div className="cap-suggestions" data-testid="cap-suggestions">
                   {shownSuggestions.map((cap) => (

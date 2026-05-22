@@ -46,6 +46,27 @@ test('PC rule form blocks unreachable cap and offers legal caps', async ({ page 
   await expect(page.getByRole('button', { name: '保存规则' })).toBeEnabled();
 });
 
+test('PC rule form blocks invalid extension, fat-finger, and deposit combinations', async ({ page }) => {
+  await page.goto('/');
+
+  await page.getByLabel('extend-window-seconds').fill('31');
+  await expect(page.getByRole('alert')).toHaveText('延时窗口和每次延时必须在 10 秒到 30 秒之间');
+  await expect(page.getByRole('button', { name: '保存规则' })).toBeDisabled();
+  await page.getByLabel('extend-window-seconds').fill('10');
+
+  await page.getByLabel('increment-cents').fill('100000');
+  await expect(page.getByRole('alert')).toHaveText('高额确认阈值必须大于加价幅度');
+  await expect(page.getByRole('button', { name: '保存规则' })).toBeDisabled();
+  await page.getByLabel('increment-cents').fill('5000');
+
+  await page.getByLabel('deposit-floor-cents').fill('60000');
+  await expect(page.getByRole('alert')).toHaveText('保证金下限不能高于上限');
+  await expect(page.getByRole('button', { name: '保存规则' })).toBeDisabled();
+  await page.getByLabel('deposit-floor-cents').fill('5000');
+
+  await expect(page.getByRole('button', { name: '保存规则' })).toBeEnabled();
+});
+
 test('PC rule save sends backend contract and surfaces backend suggestions', async ({ page }) => {
   let saveCount = 0;
   await page.route('/api/auctions/auc_next/rules', async (route, request) => {
