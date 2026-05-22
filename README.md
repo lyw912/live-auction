@@ -26,7 +26,7 @@
 - PC console: Arco Design.
 - Mobile H5: custom auction UI.
 - Local infra: Docker Compose with PostgreSQL, Redis and MinIO.
-- Testing: Go tests, Playwright E2E, k6 load tests, Toxiproxy chaos tests.
+- Testing: Go tests, Playwright E2E, local P0 load smoke; k6/Toxiproxy are reserved for formal performance/chaos baselines.
 
 ## Repository Layout
 
