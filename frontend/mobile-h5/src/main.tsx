@@ -34,7 +34,7 @@ type Scenario = {
   sold?: boolean;
 };
 
-type BidPhase = 'idle' | 'pending' | 'accepted' | 'rejected';
+type BidPhase = 'idle' | 'pending' | 'accepted' | 'rejected' | 'confirm_required' | 'confirming';
 type PaymentPhase = 'idle' | 'pending' | 'paid' | 'failed';
 type RecoveryPhase = 'idle' | 'recovering';
 
@@ -45,6 +45,9 @@ type BidResponse = {
   current_winner_id?: string;
   reject_reason?: string | null;
   code?: string;
+  confirm_token?: string;
+  expires_in_ms?: number;
+  amount_cents?: number;
 };
 
 type AuctionRealtimeEvent = {
@@ -133,6 +136,9 @@ function App() {
   const [lastSeq, setLastSeq] = useState(41);
   const [bidFeedback, setBidFeedback] = useState('下一口 ¥400.00');
   const [leaderMasked, setLeaderMasked] = useState('张**');
+  const [confirmToken, setConfirmToken] = useState('');
+  const [confirmIdempotencyKey, setConfirmIdempotencyKey] = useState('');
+  const [confirmAmountCents, setConfirmAmountCents] = useState(0);
   const paymentInFlight = useRef(false);
 
   const scenario = useMemo<Scenario>(() => {
@@ -209,6 +215,31 @@ function App() {
         pending: true
       };
     }
+    if (bidPhase === 'confirming') {
+      return {
+        key: 'pending' as AuctionState,
+        title: '确认中',
+        status: 'ACTIVE',
+        price: formatCents(currentPriceCents),
+        leader: `${leaderMasked} 领先`,
+        feedback: '等待服务端确认高额出价',
+        cta: '确认中',
+        ctaDisabled: true,
+        pending: true
+      };
+    }
+    if (bidPhase === 'confirm_required') {
+      return {
+        key: 'active_bids' as AuctionState,
+        title: '高额确认',
+        status: 'ACTIVE',
+        price: formatCents(currentPriceCents),
+        leader: `${leaderMasked} 领先`,
+        feedback: `确认 ${formatCents(confirmAmountCents)} 出价`,
+        cta: '确认高额出价',
+        ctaDisabled: false
+      };
+    }
     if (bidPhase === 'accepted') {
       return {
         key: 'self_leading' as AuctionState,
@@ -244,7 +275,18 @@ function App() {
       cta: `出价 ${formatCents(nextBidCents)}`,
       ctaDisabled: false
     };
-  }, [bidFeedback, bidPhase, currentPriceCents, lastSeq, leaderMasked, nextBidCents, paymentPhase, recoveryPhase, selected]);
+  }, [bidFeedback, bidPhase, confirmAmountCents, currentPriceCents, lastSeq, leaderMasked, nextBidCents, paymentPhase, recoveryPhase, selected]);
+
+  const applyAcceptedBid = (payload: BidResponse) => {
+    const acceptedPrice = payload.current_price_cents ?? currentPriceCents;
+    setCurrentPriceCents(acceptedPrice);
+    setNextBidCents(acceptedPrice + 5_000);
+    setLastSeq(payload.seq ?? lastSeq);
+    setConfirmToken('');
+    setConfirmIdempotencyKey('');
+    setConfirmAmountCents(0);
+    setBidPhase(payload.current_winner_id === currentUserID ? 'accepted' : 'idle');
+  };
 
   const applySnapshot = (snapshot: SnapshotResponse) => {
     const price = snapshot.payload?.current_price_cents ?? currentPriceCents;
@@ -311,16 +353,48 @@ function App() {
         })
       });
       const payload = await response.json() as BidResponse;
+      if (payload.result === 'FAT_FINGER_CONFIRM_REQUIRED' && payload.confirm_token) {
+        setConfirmToken(payload.confirm_token);
+        setConfirmIdempotencyKey(clientBidID);
+        setConfirmAmountCents(payload.amount_cents ?? nextBidCents);
+        setBidFeedback('高额出价需要二次确认');
+        setBidPhase('confirm_required');
+        return;
+      }
       if (!response.ok || payload.reject_reason || payload.code) {
         setBidFeedback(rejectCopy(payload.reject_reason ?? payload.code));
         setBidPhase('rejected');
         return;
       }
-      const acceptedPrice = payload.current_price_cents ?? currentPriceCents;
-      setCurrentPriceCents(acceptedPrice);
-      setNextBidCents(acceptedPrice + 5_000);
-      setLastSeq(payload.seq ?? lastSeq);
-      setBidPhase(payload.current_winner_id === currentUserID ? 'accepted' : 'idle');
+      applyAcceptedBid(payload);
+    } catch {
+      setBidFeedback('网络异常，请重试');
+      setBidPhase('rejected');
+    }
+  };
+
+  const confirmBid = async () => {
+    if (!confirmToken || !confirmIdempotencyKey || scenario.ctaDisabled) return;
+    setBidPhase('confirming');
+    try {
+      const response = await fetch(`/api/auctions/${auctionID}/bids/confirm`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': confirmIdempotencyKey
+        },
+        body: JSON.stringify({
+          confirm_token: confirmToken,
+          idempotency_key: confirmIdempotencyKey
+        })
+      });
+      const payload = await response.json() as BidResponse;
+      if (!response.ok || payload.reject_reason || payload.code) {
+        setBidFeedback(rejectCopy(payload.reject_reason ?? payload.code));
+        setBidPhase('rejected');
+        return;
+      }
+      applyAcceptedBid(payload);
     } catch {
       setBidFeedback('网络异常，请重试');
       setBidPhase('rejected');
@@ -357,6 +431,10 @@ function App() {
   const handlePrimaryAction = () => {
     if (selected === 'sold_winner') {
       void payOrder();
+      return;
+    }
+    if (bidPhase === 'confirm_required') {
+      void confirmBid();
       return;
     }
     void submitBid();

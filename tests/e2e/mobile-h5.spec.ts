@@ -99,6 +99,67 @@ test('H5 rejected bid shows business copy and re-enables CTA', async ({ page }) 
   await expect(page.getByTestId('bid-cta')).toBeEnabled();
 });
 
+test('H5 fat-finger confirm waits for confirm API before accepted UI', async ({ page }) => {
+  let firstBidKey = '';
+  await page.route('/api/auctions/auc_live/bids', async (route, request) => {
+    firstBidKey = request.headers()['idempotency-key'] ?? '';
+    await route.fulfill({
+      json: {
+        result: 'FAT_FINGER_CONFIRM_REQUIRED',
+        confirm_token: 'ft_test',
+        expires_in_ms: 30000,
+        current_price_cents: 35000,
+        amount_cents: 90000
+      }
+    });
+  });
+
+  let releaseConfirm: (value?: unknown) => void = () => undefined;
+  const confirmArrived = new Promise<{ idempotencyKey: string | null; body: Record<string, unknown> }>((resolve) => {
+    void page.route('/api/auctions/auc_live/bids/confirm', async (route, request) => {
+      resolve({
+        idempotencyKey: request.headers()['idempotency-key'] ?? null,
+        body: request.postDataJSON() as Record<string, unknown>
+      });
+      await new Promise((release) => {
+        releaseConfirm = release;
+      });
+      await route.fulfill({
+        json: {
+          result: 'ACCEPTED',
+          bid_id: 'bid_confirmed',
+          auction_id: 'auc_live',
+          seq: 42,
+          current_price_cents: 90000,
+          current_winner_id: 'user_1',
+          reject_reason: null
+        }
+      });
+    });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '竞价中' }).click();
+  await page.getByTestId('bid-cta').click();
+  await expect(page.getByText('确认 ¥900.00 出价')).toBeVisible();
+  await expect(page.getByText('¥350.00')).toBeVisible();
+  await expect(page.getByTestId('bid-cta')).toHaveText(/确认高额出价/);
+
+  await page.getByTestId('bid-cta').click();
+  const confirmRequest = await confirmArrived;
+  await expect(page.getByText('等待服务端确认高额出价')).toBeVisible();
+  await expect(page.getByText('¥350.00')).toBeVisible();
+  await expect(page.getByTestId('bid-cta')).toBeDisabled();
+  expect(confirmRequest.idempotencyKey).toBe(firstBidKey);
+  expect(confirmRequest.body.confirm_token).toBe('ft_test');
+  expect(confirmRequest.body.idempotency_key).toBe(firstBidKey);
+
+  releaseConfirm();
+  await expect(page.getByText('服务端确认 seq 42')).toBeVisible();
+  await expect(page.getByText('¥900.00')).toBeVisible();
+  await expect(page.getByTestId('bid-cta')).toBeDisabled();
+});
+
 test('H5 payment double click sends one mock payment and reaches paid UI', async ({ page }) => {
   let payCount = 0;
   let releasePayment: (value?: unknown) => void = () => undefined;
