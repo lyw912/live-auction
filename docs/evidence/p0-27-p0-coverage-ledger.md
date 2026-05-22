@@ -43,7 +43,7 @@ PASS for documentation honesty. This file does not complete the remaining gaps; 
 | Concurrency | final-second bid, cancel/cap race, narrate race, active race | `p0-13-concurrency-and-narration.md` |
 | Diagnostics | real monitor diagnostic producers and host ACL | `p0-14-monitor-diagnostics-apis.md` |
 | Degradation | DB lock timeout, idempotency timeout, clock rollback guard | `p0-16-degradation-db-idempotency.md`, `p0-17-clock-step-backward.md` |
-| H5 UI | state matrix, pending/rejected bid, recovering CTA disable, SOLD winner/loser, payment double-click, fat-finger confirm UI contract, bid/order history, live backend REST smoke | `p0-18-frontend-state-surfaces.md`, `p0-20-h5-bid-protocol.md`, `p0-21-h5-payment-double-click.md`, `p0-22-h5-snapshot-recovery.md`, `p0-24-h5-fat-finger-confirm.md`, `p0-25-h5-history-ui.md`, `p0-30-h5-live-backend-rest-smoke.md` |
+| H5 UI | state matrix, pending/rejected bid, recovering CTA disable, SOLD winner/loser, payment double-click, fat-finger confirm UI contract, bid/order history, live backend REST smoke, room auction selection and current-auction payment target | `p0-18-frontend-state-surfaces.md`, `p0-20-h5-bid-protocol.md`, `p0-21-h5-payment-double-click.md`, `p0-22-h5-snapshot-recovery.md`, `p0-24-h5-fat-finger-confirm.md`, `p0-25-h5-history-ui.md`, `p0-30-h5-live-backend-rest-smoke.md` |
 | PC UI | rule cap validation, backend save error, full P0 rule fields, diagnostics tabs | `p0-19-pc-rule-validation.md`, `p0-23-pc-rule-save.md`, `p0-26-pc-full-rule-fields.md` |
 
 ## Mocked vs Live Coverage
@@ -76,7 +76,8 @@ The remaining gaps are not money-correctness blockers for the backend path alrea
 - This file is a coverage ledger, not a new executable test.
 - The `Commit` field will be finalized by the commit containing this file.
 - Frontend E2E evidence remains mock-backed unless a specific evidence file says live backend was used.
+- H5 still enters the deterministic local room `room_main`; auction and payment order IDs are now selected from live API responses.
 
 ## Next Action
 
-Prioritize replacing scaffold H5 IDs with room auction selection from `/api/rooms/{room_id}/auctions`, then add Redis-down reconnect evidence.
+Add Redis-down reconnect evidence, including ticket/snapshot behavior and anomaly output.

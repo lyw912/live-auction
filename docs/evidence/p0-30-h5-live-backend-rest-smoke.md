@@ -17,6 +17,7 @@ Raw Output Path: terminal output in development session
 The existing live H5 smoke runner seeds deterministic `room_main`, `auc_live`, and `ord_pending`, starts the Go backend on `127.0.0.1:18080`, starts H5 Vite on `127.0.0.1:5175`, and proxies `/api` plus `/ws` to the backend.
 
 This slice extends the live smoke beyond WebSocket connect/fanout. The browser and Playwright API client call real backend REST endpoints for room auctions, snapshot, bid, fat-finger confirm, bid history, order history, and mock payment.
+The H5 browser selects the active auction from `GET /api/rooms/room_main/auctions`; bid, confirm, WebSocket ticket/connect, snapshot recovery, and payment use the selected auction/order IDs instead of fixed auction/order constants.
 
 ## Expected Invariant
 
@@ -28,6 +29,7 @@ This slice extends the live smoke beyond WebSocket connect/fanout. The browser a
 - `GET /api/users/me/bids` returns the accepted bid for the current user.
 - `GET /api/users/me/orders` returns `ord_pending` before payment and `PAID` after payment.
 - `POST /api/orders/ord_pending/pay-mock` lets the winner pay once and H5 moves to paid UI only after the backend response.
+- If other historical pending orders exist for the same user, H5 pays only the order whose `auction_id` matches the selected active auction.
 
 ## Result
 
@@ -46,6 +48,7 @@ PASS for the implemented live REST paths.
 - Browser rendered bid history row `¥500.00 · ACCEPTED`.
 - Browser rendered order history row `ord_pending` and `¥600.00 · ORDER_PENDING`.
 - Browser payment UI reached `已支付` and order history returned `order_status: "PAID"`.
+- Live smoke initially exposed a wrong-order risk when several historical pending orders existed; H5 now filters payable order selection by the active auction ID.
 
 ## Failure Interpretation
 
@@ -54,8 +57,8 @@ If this smoke fails before payment, the H5 live REST integration is not demo-rea
 ## Known Limits
 
 - This smoke uses one deterministic local auction and one browser client, not multi-client jitter or pagination.
-- H5 still uses scaffold constants for `room_main`, `auc_live`, and `ord_pending`.
+- H5 still enters the deterministic local room `room_main`; auction and payment order IDs are selected from API responses.
 
 ## Next Action
 
-Replace scaffold H5 IDs with room auction selection from `/api/rooms/{room_id}/auctions`, then add Redis-down reconnect evidence.
+Add Redis-down reconnect evidence, including ticket/snapshot behavior and anomaly output.

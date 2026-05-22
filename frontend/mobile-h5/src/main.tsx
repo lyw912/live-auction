@@ -64,6 +64,11 @@ type AuctionRealtimeEvent = {
 
 type SnapshotResponse = {
   auction_id: string;
+  id?: string;
+  status?: string;
+  current_price_cents?: number;
+  current_winner_id?: string;
+  increment_cents?: number;
   event_type?: string;
   seq: number;
   source?: string;
@@ -75,14 +80,24 @@ type SnapshotResponse = {
 };
 
 type HistoryRow = Record<string, unknown>;
+type AuctionSummary = {
+  id: string;
+  room_id?: string;
+  status?: string;
+  current_price_cents?: number;
+  current_winner_id?: string;
+  increment_cents?: number;
+  seq?: number;
+  item?: {
+    title?: string;
+  };
+};
 type WSTicketResponse = {
   ticket?: string;
   expires_in_ms?: number;
 };
 
 const roomID = 'room_main';
-const auctionID = 'auc_live';
-const orderID = 'ord_pending';
 const currentUserID = 'user_1';
 const mockUserHeaders = {
   'X-Mock-Role': 'user',
@@ -114,6 +129,14 @@ function createClientBidID() {
     return globalThis.crypto.randomUUID();
   }
   return `bid_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+async function readJSON<T>(response: Response): Promise<T | null> {
+  try {
+    return await response.json() as T;
+  } catch {
+    return null;
+  }
 }
 
 function rejectCopy(code?: string | null) {
@@ -157,12 +180,18 @@ function App() {
   const [bidHistory, setBidHistory] = useState<HistoryRow[]>([]);
   const [orderHistory, setOrderHistory] = useState<HistoryRow[]>([]);
   const [connectionPhase, setConnectionPhase] = useState<ConnectionPhase>('connecting');
+  const [activeAuctionID, setActiveAuctionID] = useState('');
+  const [activeIncrementCents, setActiveIncrementCents] = useState(5_000);
+  const [payableOrderID, setPayableOrderID] = useState('');
+  const [lotTitle, setLotTitle] = useState('青瓷手作茶盏');
   const paymentInFlight = useRef(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const lastSeqRef = useRef(lastSeq);
   const currentPriceRef = useRef(currentPriceCents);
   const leaderMaskedRef = useRef(leaderMasked);
+  const activeAuctionIDRef = useRef(activeAuctionID);
+  const activeIncrementCentsRef = useRef(activeIncrementCents);
 
   useEffect(() => {
     lastSeqRef.current = lastSeq;
@@ -175,6 +204,14 @@ function App() {
   useEffect(() => {
     leaderMaskedRef.current = leaderMasked;
   }, [leaderMasked]);
+
+  useEffect(() => {
+    activeAuctionIDRef.current = activeAuctionID;
+  }, [activeAuctionID]);
+
+  useEffect(() => {
+    activeIncrementCentsRef.current = activeIncrementCents;
+  }, [activeIncrementCents]);
 
   const scenario = useMemo<Scenario>(() => {
     if (selected === 'sold_winner') {
@@ -223,6 +260,19 @@ function App() {
     }
     if (selected !== 'active_bids') {
       return scenarios.find((item) => item.key === selected) ?? scenarios[0];
+    }
+    if (!activeAuctionID) {
+      return {
+        key: 'recovering',
+        title: '同步中',
+        status: 'RECOVERING',
+        price: formatCents(currentPriceCents),
+        leader: '同步中',
+        feedback: '正在读取当前拍卖',
+        cta: '同步中',
+        ctaDisabled: true,
+        stale: true
+      };
     }
     if (connectionPhase === 'disconnected') {
       return {
@@ -323,12 +373,12 @@ function App() {
       cta: `出价 ${formatCents(nextBidCents)}`,
       ctaDisabled: false
     };
-  }, [bidFeedback, bidPhase, confirmAmountCents, connectionPhase, currentPriceCents, lastSeq, leaderMasked, nextBidCents, paymentPhase, recoveryPhase, selected]);
+  }, [activeAuctionID, bidFeedback, bidPhase, confirmAmountCents, connectionPhase, currentPriceCents, lastSeq, leaderMasked, nextBidCents, paymentPhase, recoveryPhase, selected]);
 
   const applyAcceptedBid = (payload: BidResponse) => {
     const acceptedPrice = payload.current_price_cents ?? currentPriceCents;
     setCurrentPriceCents(acceptedPrice);
-    setNextBidCents(acceptedPrice + 5_000);
+    setNextBidCents(acceptedPrice + activeIncrementCents);
     setLastSeq(payload.seq ?? lastSeq);
     setConfirmToken('');
     setConfirmIdempotencyKey('');
@@ -337,9 +387,13 @@ function App() {
   };
 
   const applySnapshot = (snapshot: SnapshotResponse) => {
-    const price = snapshot.payload?.current_price_cents ?? currentPriceCents;
+    const price = snapshot.payload?.current_price_cents ?? snapshot.current_price_cents ?? currentPriceCents;
+    const increment = snapshot.increment_cents ?? activeIncrementCents;
+    const snapshotAuctionID = snapshot.auction_id ?? snapshot.id;
+    if (snapshotAuctionID) setActiveAuctionID(snapshotAuctionID);
+    if (snapshot.increment_cents != null) setActiveIncrementCents(increment);
     setCurrentPriceCents(price);
-    setNextBidCents(price + 5_000);
+    setNextBidCents(price + increment);
     setLastSeq(snapshot.seq);
     setLeaderMasked(snapshot.payload?.leader_user_masked ?? leaderMasked);
     setBidFeedback(`snapshot ${snapshot.source ?? 'db'} seq ${snapshot.seq}`);
@@ -347,13 +401,15 @@ function App() {
   };
 
   const recoverFromSnapshot = async () => {
+    const auctionID = activeAuctionIDRef.current;
+    if (!auctionID) return;
     setSelected('active_bids');
     setRecoveryPhase('recovering');
     setConnectionPhase((phase) => phase === 'disconnected' ? phase : 'recovering');
     try {
       const response = await fetch(`/api/auctions/${auctionID}`);
-      const snapshot = await response.json() as SnapshotResponse;
-      if (!response.ok || snapshot.stale) {
+      const snapshot = await readJSON<SnapshotResponse>(response);
+      if (!response.ok || !snapshot || snapshot.stale) {
         setBidFeedback('snapshot stale，继续同步');
         return;
       }
@@ -366,7 +422,7 @@ function App() {
   };
 
   const handleRealtimeEvent = (detail: AuctionRealtimeEvent) => {
-    if (!detail || detail.auction_id !== auctionID) return;
+    if (!detail || detail.auction_id !== activeAuctionIDRef.current) return;
     const currentSeq = lastSeqRef.current;
     if (detail.event_type === 'outbox_gap_notice' || (detail.seq != null && detail.seq > currentSeq + 1)) {
       void recoverFromSnapshot();
@@ -374,8 +430,9 @@ function App() {
     }
     if (detail.seq == null || detail.seq <= currentSeq) return;
     const price = detail.payload?.current_price_cents ?? currentPriceRef.current;
+    const increment = activeIncrementCentsRef.current;
     setCurrentPriceCents(price);
-    setNextBidCents(price + 5_000);
+    setNextBidCents(price + increment);
     setLastSeq(detail.seq);
     setLeaderMasked(detail.payload?.leader_user_masked ?? leaderMaskedRef.current);
     setBidFeedback(`event seq ${detail.seq}`);
@@ -387,6 +444,56 @@ function App() {
     }
     setConnectionPhase('connected');
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadActiveAuction = async () => {
+      try {
+        const response = await fetch(`/api/rooms/${roomID}/auctions`, { headers: mockUserHeaders });
+        const payload = await readJSON<AuctionSummary[] | { items?: AuctionSummary[] }>(response);
+        const auctions = Array.isArray(payload) ? payload : payload?.items ?? [];
+        const selectedAuction = auctions.find((item) => item.status === 'ACTIVE') ?? auctions[0];
+        if (!response.ok || !selectedAuction || cancelled) return;
+        setActiveAuctionID(selectedAuction.id);
+        setLotTitle(selectedAuction.item?.title ?? selectedAuction.id);
+        const price = selectedAuction.current_price_cents ?? currentPriceRef.current;
+        const increment = selectedAuction.increment_cents ?? activeIncrementCents;
+        setActiveIncrementCents(increment);
+        setCurrentPriceCents(price);
+        setNextBidCents(price + increment);
+        setLastSeq(selectedAuction.seq ?? lastSeqRef.current);
+        setBidFeedback(`auction ${selectedAuction.id}`);
+      } catch {
+        setBidFeedback('auction list unavailable');
+      }
+    };
+    void loadActiveAuction();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadPayableOrder = async () => {
+      if (!activeAuctionID) return;
+      try {
+        const response = await fetch('/api/users/me/orders', { headers: mockUserHeaders });
+        const payload = await readJSON<{ items?: HistoryRow[] }>(response);
+        if (!response.ok || cancelled) return;
+        const pendingOrder = (payload?.items ?? []).find((row) => (
+          String(row.order_status ?? '') === 'ORDER_PENDING' && String(row.auction_id ?? '') === activeAuctionID
+        ));
+        setPayableOrderID(pendingOrder?.order_id ? String(pendingOrder.order_id) : '');
+      } catch {
+        setPayableOrderID('');
+      }
+    };
+    void loadPayableOrder();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeAuctionID]);
 
   useEffect(() => {
     const onAuctionEvent = (event: Event) => {
@@ -412,6 +519,7 @@ function App() {
       }, 2_000);
     };
     const connectWebSocket = async () => {
+      if (!activeAuctionID) return;
       setConnectionPhase((phase) => phase === 'recovering' ? phase : 'connecting');
       try {
         const ticketResponse = await fetch('/api/auth/ws-ticket', {
@@ -421,7 +529,7 @@ function App() {
             'X-Mock-Role': 'user',
             'X-Mock-User-Id': currentUserID
           },
-          body: JSON.stringify({ room_id: roomID, auction_id: auctionID })
+          body: JSON.stringify({ room_id: roomID, auction_id: activeAuctionID })
         });
         const ticketPayload = await ticketResponse.json() as WSTicketResponse;
         if (!ticketResponse.ok || !ticketPayload.ticket) {
@@ -429,7 +537,7 @@ function App() {
         }
         if (cancelled) return;
         const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
-        const wsURL = `${scheme}://${window.location.host}/ws?room_id=${encodeURIComponent(roomID)}&auction_id=${encodeURIComponent(auctionID)}&last_seq=${lastSeqRef.current}`;
+        const wsURL = `${scheme}://${window.location.host}/ws?room_id=${encodeURIComponent(roomID)}&auction_id=${encodeURIComponent(activeAuctionID)}&last_seq=${lastSeqRef.current}`;
         const socket = new WebSocket(wsURL, ['auction.v1', `ticket.${ticketPayload.ticket}`]);
         wsRef.current = socket;
         socket.onopen = () => {
@@ -462,17 +570,20 @@ function App() {
       }
     };
 
-    void connectWebSocket();
+    if (activeAuctionID) {
+      void connectWebSocket();
+    }
     return () => {
       cancelled = true;
       clearReconnect();
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, []);
+  }, [activeAuctionID]);
 
   const submitBid = async () => {
-    if (selected !== 'active_bids' || scenario.ctaDisabled) return;
+    const auctionID = activeAuctionIDRef.current;
+    if (selected !== 'active_bids' || scenario.ctaDisabled || !auctionID) return;
     const clientBidID = createClientBidID();
     setBidPhase('pending');
     try {
@@ -511,7 +622,8 @@ function App() {
   };
 
   const confirmBid = async () => {
-    if (!confirmToken || !confirmIdempotencyKey || scenario.ctaDisabled) return;
+    const auctionID = activeAuctionIDRef.current;
+    if (!confirmToken || !confirmIdempotencyKey || scenario.ctaDisabled || !auctionID) return;
     setBidPhase('confirming');
     try {
       const response = await fetch(`/api/auctions/${auctionID}/bids/confirm`, {
@@ -540,12 +652,12 @@ function App() {
   };
 
   const payOrder = async () => {
-    if (selected !== 'sold_winner' || scenario.ctaDisabled || paymentInFlight.current) return;
+    if (selected !== 'sold_winner' || scenario.ctaDisabled || paymentInFlight.current || !payableOrderID) return;
     const idempotencyKey = createClientBidID();
     paymentInFlight.current = true;
     setPaymentPhase('pending');
     try {
-      const response = await fetch(`/api/orders/${orderID}/pay-mock`, {
+      const response = await fetch(`/api/orders/${payableOrderID}/pay-mock`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -580,11 +692,11 @@ function App() {
   };
 
   const decreaseBidAmount = () => {
-    setNextBidCents((amount) => Math.max(currentPriceCents + 5_000, amount - 5_000));
+    setNextBidCents((amount) => Math.max(currentPriceCents + activeIncrementCents, amount - activeIncrementCents));
   };
 
   const increaseBidAmount = () => {
-    setNextBidCents((amount) => amount + 5_000);
+    setNextBidCents((amount) => amount + activeIncrementCents);
   };
 
   const loadHistory = async () => {
@@ -596,7 +708,15 @@ function App() {
         fetch('/api/users/me/orders', { headers: mockUserHeaders }).then((response) => response.json())
       ]);
       setBidHistory(Array.isArray(bids.items) ? bids.items : []);
-      setOrderHistory(Array.isArray(orders.items) ? orders.items : []);
+      const orderRows = Array.isArray(orders.items) ? orders.items : [];
+      setOrderHistory(orderRows);
+      const currentAuctionID = activeAuctionIDRef.current;
+      const pendingOrder = orderRows.find((row: HistoryRow) => (
+        String(row.order_status ?? '') === 'ORDER_PENDING' && String(row.auction_id ?? '') === currentAuctionID
+      ));
+      if (pendingOrder?.order_id) {
+        setPayableOrderID(String(pendingOrder.order_id));
+      }
     } catch {
       setHistoryError('历史读取失败');
     } finally {
@@ -612,7 +732,7 @@ function App() {
           <span className="viewer-count">12,486 watching</span>
         </div>
         <div className="focus-copy">
-          <h1>青瓷手作茶盏</h1>
+          <h1>{lotTitle}</h1>
           <p>Lot A-102 · 22:00 结束</p>
         </div>
       </section>

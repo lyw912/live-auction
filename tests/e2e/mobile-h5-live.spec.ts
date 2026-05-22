@@ -92,7 +92,8 @@ test('H5 covers live backend REST, fat-finger confirm, payment, and WebSocket ev
     }
   });
   expect(orders.ok()).toBeTruthy();
-  expect(await orders.json()).toEqual(expect.objectContaining({
+  const orderPayload = await orders.json();
+  expect(orderPayload).toEqual(expect.objectContaining({
     items: expect.arrayContaining([
       expect.objectContaining({
         order_id: 'ord_pending',

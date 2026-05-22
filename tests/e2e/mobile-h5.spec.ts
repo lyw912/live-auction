@@ -1,6 +1,32 @@
 import { expect, test } from '@playwright/test';
 
 test.beforeEach(async ({ page }) => {
+  await page.route('/api/rooms/room_main/auctions', async (route) => {
+    await route.fulfill({
+      json: [
+        {
+          id: 'auc_live',
+          room_id: 'room_main',
+          status: 'ACTIVE',
+          current_price_cents: 35000,
+          increment_cents: 5000,
+          seq: 41,
+          item: {
+            title: '青瓷手作茶盏'
+          }
+        }
+      ]
+    });
+  });
+  await page.route('/api/users/me/orders', async (route) => {
+    await route.fulfill({
+      json: {
+        items: [
+          { order_id: 'ord_pending', auction_id: 'auc_live', amount_cents: 60000, order_status: 'ORDER_PENDING' }
+        ]
+      }
+    });
+  });
   await page.route('/api/auth/ws-ticket', async (route, request) => {
     await route.fulfill({
       json: {
