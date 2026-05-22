@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: Live Auction
+    orgId: 1
+    folder: Live Auction
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards

@@ -7,7 +7,7 @@ Date: 2026-05-23 Asia/Shanghai
 | ID | Deliverable | Status | Evidence |
 |---|---|---|---|
 | P1-01 | Prometheus metrics | DONE | `docs/evidence/p1-01-prometheus-metrics.md` |
-| P1-02 | Grafana dashboards | TODO | pending |
+| P1-02 | Grafana dashboards | DONE | `docs/evidence/p1-02-grafana-dashboards.md` |
 | P1-03 | k6 baseline suite | TODO | pending |
 | P1-04 | Toxiproxy weak-network tests | TODO | pending |
 | P1-05 | Redis/DB reconciliation checker | TODO | pending |
