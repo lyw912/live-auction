@@ -461,3 +461,34 @@ test('H5 renders bid and order history from user APIs', async ({ page }) => {
   await expect(page.getByText('ord_hist_1')).toBeVisible();
   await expect(page.getByText('¥600.00 · PAID')).toBeVisible();
 });
+
+test('H5 interaction surface has no unacceptable animation longtask', async ({ page }) => {
+  await page.addInitScript(() => {
+    const target = window as typeof window & { __longTasks?: number[] };
+    target.__longTasks = [];
+    if ('PerformanceObserver' in window) {
+      try {
+        const observer = new PerformanceObserver((list) => {
+          target.__longTasks = [
+            ...(target.__longTasks ?? []),
+            ...list.getEntries().map((entry) => entry.duration)
+          ];
+        });
+        observer.observe({ type: 'longtask', buffered: true });
+      } catch {
+        target.__longTasks = [];
+      }
+    }
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '竞价中' }).click();
+  await page.getByRole('button', { name: 'increase' }).click();
+  await page.getByRole('button', { name: 'decrease' }).click();
+  await page.getByRole('button', { name: '恢复中' }).click();
+  await page.getByRole('button', { name: '竞价中' }).click();
+  await page.waitForTimeout(250);
+
+  const maxLongTask = await page.evaluate(() => Math.max(0, ...((window as typeof window & { __longTasks?: number[] }).__longTasks ?? [])));
+  expect(maxLongTask).toBeLessThan(100);
+});
