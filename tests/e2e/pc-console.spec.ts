@@ -55,6 +55,14 @@ test('PC rule save sends backend contract and surfaces backend suggestions', asy
       expect(body.start_price_cents).toBe(10000);
       expect(body.increment_cents).toBe(5000);
       expect(body.cap_price_cents).toBe(60000);
+      expect(body.duration_seconds).toBe(600);
+      expect(body.extend_window_seconds).toBe(10);
+      expect(body.extend_by_seconds).toBe(10);
+      expect(body.max_extend_count).toBe(3);
+      expect(body.fat_finger_threshold_cents).toBe(100000);
+      expect(body.deposit_bps).toBe(1000);
+      expect(body.deposit_floor_cents).toBe(5000);
+      expect(body.deposit_cap_cents).toBe(50000);
       await route.fulfill({
         json: {
           auction_id: 'auc_next',

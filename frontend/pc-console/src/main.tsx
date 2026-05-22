@@ -13,6 +13,14 @@ type RuleDraft = {
   startPriceCents: number;
   incrementCents: number;
   capPriceCents: number;
+  durationSeconds: number;
+  extendWindowSeconds: number;
+  extendBySeconds: number;
+  maxExtendCount: number;
+  fatFingerThresholdCents: number;
+  depositBPS: number;
+  depositFloorCents: number;
+  depositCapCents: number;
 };
 
 type RuleAPIError = {
@@ -76,7 +84,15 @@ function App() {
   const [rule, setRule] = useState<RuleDraft>({
     startPriceCents: 10_000,
     incrementCents: 5_000,
-    capPriceCents: 60_000
+    capPriceCents: 60_000,
+    durationSeconds: 600,
+    extendWindowSeconds: 10,
+    extendBySeconds: 10,
+    maxExtendCount: 3,
+    fatFingerThresholdCents: 100_000,
+    depositBPS: 1000,
+    depositFloorCents: 5_000,
+    depositCapCents: 50_000
   });
   const ruleValidation = validateRule(rule);
   const shownSuggestions = ruleValidation.valid ? backendSuggestions : ruleValidation.suggestions;
@@ -124,7 +140,15 @@ function App() {
         body: JSON.stringify({
           start_price_cents: rule.startPriceCents,
           increment_cents: rule.incrementCents,
-          cap_price_cents: rule.capPriceCents
+          cap_price_cents: rule.capPriceCents,
+          duration_seconds: rule.durationSeconds,
+          extend_window_seconds: rule.extendWindowSeconds,
+          extend_by_seconds: rule.extendBySeconds,
+          max_extend_count: rule.maxExtendCount,
+          fat_finger_threshold_cents: rule.fatFingerThresholdCents,
+          deposit_bps: rule.depositBPS,
+          deposit_floor_cents: rule.depositFloorCents,
+          deposit_cap_cents: rule.depositCapCents
         })
       });
       if (!response.ok) {
@@ -225,6 +249,82 @@ function App() {
                   ))}
                 </div>
               )}
+              <div className="rule-subgrid">
+                <Form.Item label="时长">
+                  <InputNumber
+                    aria-label="duration-seconds"
+                    value={rule.durationSeconds}
+                    min={30}
+                    max={86400}
+                    suffix="秒"
+                    onChange={(value) => updateRule({ durationSeconds: Number(value) || 30 })}
+                  />
+                </Form.Item>
+                <Form.Item label="延时窗口">
+                  <InputNumber
+                    aria-label="extend-window-seconds"
+                    value={rule.extendWindowSeconds}
+                    min={0}
+                    suffix="秒"
+                    onChange={(value) => updateRule({ extendWindowSeconds: Number(value) || 0 })}
+                  />
+                </Form.Item>
+                <Form.Item label="每次延时">
+                  <InputNumber
+                    aria-label="extend-by-seconds"
+                    value={rule.extendBySeconds}
+                    min={0}
+                    suffix="秒"
+                    onChange={(value) => updateRule({ extendBySeconds: Number(value) || 0 })}
+                  />
+                </Form.Item>
+                <Form.Item label="最多延时">
+                  <InputNumber
+                    aria-label="max-extend-count"
+                    value={rule.maxExtendCount}
+                    min={0}
+                    suffix="次"
+                    onChange={(value) => updateRule({ maxExtendCount: Number(value) || 0 })}
+                  />
+                </Form.Item>
+                <Form.Item label="高额确认">
+                  <InputNumber
+                    aria-label="fat-finger-threshold-cents"
+                    value={rule.fatFingerThresholdCents}
+                    min={rule.incrementCents + 1}
+                    suffix="分"
+                    onChange={(value) => updateRule({ fatFingerThresholdCents: Number(value) || 0 })}
+                  />
+                </Form.Item>
+                <Form.Item label="保证金比例">
+                  <InputNumber
+                    aria-label="deposit-bps"
+                    value={rule.depositBPS}
+                    min={0}
+                    max={10000}
+                    suffix="bps"
+                    onChange={(value) => updateRule({ depositBPS: Number(value) || 0 })}
+                  />
+                </Form.Item>
+                <Form.Item label="保证金下限">
+                  <InputNumber
+                    aria-label="deposit-floor-cents"
+                    value={rule.depositFloorCents}
+                    min={0}
+                    suffix="分"
+                    onChange={(value) => updateRule({ depositFloorCents: Number(value) || 0 })}
+                  />
+                </Form.Item>
+                <Form.Item label="保证金上限">
+                  <InputNumber
+                    aria-label="deposit-cap-cents"
+                    value={rule.depositCapCents}
+                    min={0}
+                    suffix="分"
+                    onChange={(value) => updateRule({ depositCapCents: Number(value) || 0 })}
+                  />
+                </Form.Item>
+              </div>
               <Space>
                 <Button type="primary" disabled={!ruleValidation.valid} loading={savingRule} onClick={saveRule}>保存规则</Button>
                 <Button>排期开拍</Button>
