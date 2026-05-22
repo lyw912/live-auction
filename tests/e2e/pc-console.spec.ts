@@ -45,3 +45,44 @@ test('PC rule form blocks unreachable cap and offers legal caps', async ({ page 
   await expect(page.getByText('封顶价可达，预计 10 口到顶')).toBeVisible();
   await expect(page.getByRole('button', { name: '保存规则' })).toBeEnabled();
 });
+
+test('PC rule save sends backend contract and surfaces backend suggestions', async ({ page }) => {
+  let saveCount = 0;
+  await page.route('/api/auctions/auc_next/rules', async (route, request) => {
+    saveCount += 1;
+    const body = request.postDataJSON() as Record<string, unknown>;
+    if (saveCount === 1) {
+      expect(body.start_price_cents).toBe(10000);
+      expect(body.increment_cents).toBe(5000);
+      expect(body.cap_price_cents).toBe(60000);
+      await route.fulfill({
+        json: {
+          auction_id: 'auc_next',
+          rule_version: 2
+        }
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 400,
+      json: {
+        code: 'INVALID_AUCTION_RULE_CAP_UNREACHABLE',
+        message: 'cap price is unreachable',
+        details: {
+          suggested_caps: [65000, 70000]
+        }
+      }
+    });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '保存规则' }).click();
+  await expect(page.getByText('规则已保存')).toBeVisible();
+
+  await page.getByLabel('cap-price-cents').fill('65000');
+  await expect(page.getByRole('button', { name: '保存规则' })).toBeEnabled();
+  await page.getByRole('button', { name: '保存规则' }).click();
+  await expect(page.getByRole('alert')).toHaveText('后端拒绝：封顶价不可达');
+  await expect(page.getByTestId('cap-suggestions').getByRole('button', { name: '¥650.00' })).toBeVisible();
+  await expect(page.getByTestId('cap-suggestions').getByRole('button', { name: '¥700.00' })).toBeVisible();
+});

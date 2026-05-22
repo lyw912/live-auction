@@ -15,6 +15,14 @@ type RuleDraft = {
   capPriceCents: number;
 };
 
+type RuleAPIError = {
+  code?: string;
+  message?: string;
+  details?: {
+    suggested_caps?: number[];
+  };
+};
+
 const auctionRows = [
   { id: 'auc_live', item: '青瓷手作茶盏', status: 'ACTIVE', narrating: true, price: '¥450.00', winner: '王**', end: '22:00:10', bids: 18 },
   { id: 'auc_next', item: '紫砂壶', status: 'SCHEDULED', narrating: false, price: '¥800.00', winner: '-', end: '22:12:00', bids: 0 },
@@ -61,12 +69,17 @@ function validateRule(rule: RuleDraft) {
 function App() {
   const [monitor, setMonitor] = useState<Record<string, MonitorPayload>>({});
   const [loading, setLoading] = useState(false);
+  const [savingRule, setSavingRule] = useState(false);
+  const [ruleSaveState, setRuleSaveState] = useState<'idle' | 'saved' | 'error'>('idle');
+  const [backendRuleError, setBackendRuleError] = useState('');
+  const [backendSuggestions, setBackendSuggestions] = useState<number[]>([]);
   const [rule, setRule] = useState<RuleDraft>({
     startPriceCents: 10_000,
     incrementCents: 5_000,
     capPriceCents: 60_000
   });
   const ruleValidation = validateRule(rule);
+  const shownSuggestions = ruleValidation.valid ? backendSuggestions : ruleValidation.suggestions;
 
   const loadMonitor = async () => {
     setLoading(true);
@@ -88,6 +101,47 @@ function App() {
   useEffect(() => {
     void loadMonitor();
   }, []);
+
+  const updateRule = (patch: Partial<RuleDraft>) => {
+    setRule((current) => ({ ...current, ...patch }));
+    setRuleSaveState('idle');
+    setBackendRuleError('');
+    setBackendSuggestions([]);
+  };
+
+  const saveRule = async () => {
+    if (!ruleValidation.valid) return;
+    setSavingRule(true);
+    setRuleSaveState('idle');
+    setBackendRuleError('');
+    setBackendSuggestions([]);
+    try {
+      const response = await fetch('/api/auctions/auc_next/rules', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          start_price_cents: rule.startPriceCents,
+          increment_cents: rule.incrementCents,
+          cap_price_cents: rule.capPriceCents
+        })
+      });
+      if (!response.ok) {
+        const payload = await response.json() as RuleAPIError;
+        setRuleSaveState('error');
+        setBackendRuleError(payload.code === 'INVALID_AUCTION_RULE_CAP_UNREACHABLE' ? '后端拒绝：封顶价不可达' : payload.message ?? '规则保存失败');
+        setBackendSuggestions(payload.details?.suggested_caps ?? []);
+        return;
+      }
+      setRuleSaveState('saved');
+    } catch {
+      setRuleSaveState('error');
+      setBackendRuleError('规则保存失败');
+    } finally {
+      setSavingRule(false);
+    }
+  };
 
   return (
     <Layout className="console-shell">
@@ -135,7 +189,7 @@ function App() {
                   value={rule.startPriceCents}
                   min={0}
                   suffix="分"
-                  onChange={(value) => setRule((current) => ({ ...current, startPriceCents: Number(value) || 0 }))}
+                  onChange={(value) => updateRule({ startPriceCents: Number(value) || 0 })}
                 />
               </Form.Item>
               <Form.Item label="加价幅度">
@@ -144,7 +198,7 @@ function App() {
                   value={rule.incrementCents}
                   min={1}
                   suffix="分"
-                  onChange={(value) => setRule((current) => ({ ...current, incrementCents: Number(value) || 0 }))}
+                  onChange={(value) => updateRule({ incrementCents: Number(value) || 0 })}
                 />
               </Form.Item>
               <Form.Item
@@ -157,20 +211,22 @@ function App() {
                   value={rule.capPriceCents}
                   min={0}
                   suffix="分"
-                  onChange={(value) => setRule((current) => ({ ...current, capPriceCents: Number(value) || 0 }))}
+                  onChange={(value) => updateRule({ capPriceCents: Number(value) || 0 })}
                 />
               </Form.Item>
-              {!ruleValidation.valid && ruleValidation.suggestions.length > 0 && (
+              {backendRuleError && <div className="backend-rule-error" role="alert">{backendRuleError}</div>}
+              {ruleSaveState === 'saved' && <div className="rule-save-ok" role="status">规则已保存</div>}
+              {shownSuggestions.length > 0 && (
                 <div className="cap-suggestions" data-testid="cap-suggestions">
-                  {ruleValidation.suggestions.map((cap) => (
-                    <button key={cap} type="button" onClick={() => setRule((current) => ({ ...current, capPriceCents: cap }))}>
+                  {shownSuggestions.map((cap) => (
+                    <button key={cap} type="button" onClick={() => updateRule({ capPriceCents: cap })}>
                       {formatCents(cap)}
                     </button>
                   ))}
                 </div>
               )}
               <Space>
-                <Button type="primary" disabled={!ruleValidation.valid}>保存规则</Button>
+                <Button type="primary" disabled={!ruleValidation.valid} loading={savingRule} onClick={saveRule}>保存规则</Button>
                 <Button>排期开拍</Button>
               </Space>
             </Form>

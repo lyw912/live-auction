@@ -106,6 +106,27 @@ body {
   font-weight: 700;
 }
 
+.backend-rule-error,
+.rule-save-ok {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  margin: -4px 0 14px;
+  padding: 0 10px;
+  border-radius: 8px;
+  font-weight: 700;
+}
+
+.backend-rule-error {
+  background: #fff1ee;
+  color: #9f2d1d;
+}
+
+.rule-save-ok {
+  background: #e9f6ef;
+  color: #17613f;
+}
+
 .order-line {
   min-height: 44px;
   border-bottom: 1px solid #edf1ef;
