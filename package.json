@@ -7,7 +7,8 @@
     "build": "pnpm --filter mobile-h5 build && pnpm --filter pc-console build",
     "test:e2e": "node tests/e2e/run-playwright.mjs",
     "test:e2e:h5-live": "node tests/e2e/run-h5-live-backend-smoke.mjs",
-    "test:load:p0": "cd backend && go run ./cmd/p0loadsmoke"
+    "test:load:p0": "cd backend && go run ./cmd/p0loadsmoke",
+    "test:load:p1:validate": "node tests/load/validate-k6-suite.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.45.0",
