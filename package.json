@@ -6,7 +6,8 @@
     "dev:pc": "pnpm --filter pc-console dev --host 127.0.0.1 --port 5174",
     "build": "pnpm --filter mobile-h5 build && pnpm --filter pc-console build",
     "test:e2e": "node tests/e2e/run-playwright.mjs",
-    "test:e2e:h5-live": "node tests/e2e/run-h5-live-backend-smoke.mjs"
+    "test:e2e:h5-live": "node tests/e2e/run-h5-live-backend-smoke.mjs",
+    "test:load:p0": "cd backend && go run ./cmd/p0loadsmoke"
   },
   "devDependencies": {
     "@playwright/test": "^1.45.0",

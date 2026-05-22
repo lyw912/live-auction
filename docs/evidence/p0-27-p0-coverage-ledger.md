@@ -18,7 +18,7 @@ This ledger maps `docs/design-v2-industrial/10-test-gates.md` P0 gates to commit
 
 - Backend correctness gates are only marked covered when backed by backend automated tests or committed evidence.
 - Frontend gates backed by Playwright route mocks are marked as UI contract coverage, not live backend/WebSocket integration.
-- Load gates are not claimed because no performance numbers are claimed.
+- Load gates have local smoke evidence only; no production performance numbers are claimed.
 - Missing or partially scoped gates stay visible instead of being implied by adjacent work.
 
 ## Expected Invariant
@@ -45,6 +45,7 @@ PASS for documentation honesty. This file does not complete the remaining gaps; 
 | Degradation | DB lock timeout, idempotency timeout, clock rollback guard, Redis-down reconnect degradation, bid-rate-limit scope adjustment | `p0-16-degradation-db-idempotency.md`, `p0-17-clock-step-backward.md`, `p0-31-redis-down-reconnect-evidence.md`, `p0-32-bid-rate-limit-scope-adjustment.md` |
 | H5 UI | state matrix, pending/rejected bid, recovering CTA disable, SOLD winner/loser, payment double-click, fat-finger confirm UI contract, bid/order history, live backend REST smoke, room auction selection and current-auction payment target, animation longtask smoke | `p0-18-frontend-state-surfaces.md`, `p0-20-h5-bid-protocol.md`, `p0-21-h5-payment-double-click.md`, `p0-22-h5-snapshot-recovery.md`, `p0-24-h5-fat-finger-confirm.md`, `p0-25-h5-history-ui.md`, `p0-30-h5-live-backend-rest-smoke.md`, `p0-33-animation-longtask.md` |
 | PC UI | rule cap validation, backend save error, full P0 rule fields, focused cross-field rule guardrails, diagnostics tabs | `p0-19-pc-rule-validation.md`, `p0-23-pc-rule-save.md`, `p0-26-pc-full-rule-fields.md` |
+| Load smoke | final-second bid burst smoke, outbox drain smoke, watcher fanout/slow-consumer smoke, reconnect-storm singleflight evidence | `docs/perf/p0-load-smoke-2026-05-22.md`, `p0-15-reconnect-storm-snapshot-bounding.md` |
 
 ## Mocked vs Live Coverage
 
@@ -61,7 +62,7 @@ Those remain separate integration slices.
 
 | Gate | Current status | Required next evidence |
 |---|---|---|
-| Load gates | Not claimed | Run baseline scripts and store raw outputs before any P99/QPS/fanout claim |
+| Final performance baseline | Local smoke exists, but no production number is claimed | Run k6 HTTP/WS scripts for 3 raw runs on a documented native environment before any P99/QPS/fanout claim |
 
 ## Failure Interpretation
 
@@ -76,4 +77,4 @@ The remaining gaps are not money-correctness blockers for the backend path alrea
 
 ## Next Action
 
-Leave load/perf gates unclaimed until raw benchmark scripts and environment baselines are produced.
+Treat P0 correctness/demo gates as covered. Only run final performance baselines if the project wants to publish P99/QPS/fanout numbers.
