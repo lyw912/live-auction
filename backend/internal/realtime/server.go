@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -170,6 +171,9 @@ func (s *Server) snapshotMessage(ctx context.Context, auctionID string) [][]byte
 		return s.rebuildSnapshotBounded(ctx, auctionID)
 	})
 	if err != nil {
+		if errors.Is(err, errSnapshotRebuildSaturated) {
+			_ = s.recordSnapshotSaturated(ctx, auctionID)
+		}
 		if stale := s.staleSnapshot(ctx, auctionID); len(stale) > 0 {
 			return [][]byte{stale}
 		}
@@ -232,6 +236,21 @@ func (s *Server) staleSnapshot(ctx context.Context, auctionID string) []byte {
 		return payload
 	}
 	return data
+}
+
+func (s *Server) recordSnapshotSaturated(ctx context.Context, auctionID string) error {
+	payload, err := json.Marshal(map[string]any{
+		"auction_id":     auctionID,
+		"retry_after_ms": 1000,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(ctx, `
+		INSERT INTO system_anomaly_events (severity, type, auction_id, message, payload_json)
+		VALUES ('MED', 'SNAPSHOT_REBUILD_SATURATED', $1, $2, $3)
+	`, auctionID, fmt.Sprintf("snapshot rebuild saturated for auction %s", auctionID), payload)
+	return err
 }
 
 func ticketFromProtocols(protocols []string) string {

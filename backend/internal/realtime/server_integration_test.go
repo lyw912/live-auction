@@ -209,6 +209,16 @@ func TestSnapshotRebuildSaturationFallsBackToStaleOrUnavailable(t *testing.T) {
 	if len(messages) != 1 || !strings.Contains(string(messages[0]), "snapshot_unavailable") {
 		t.Fatalf("unavailable message = %q", messages)
 	}
+	var anomalies int
+	if err := db.QueryRow(context.Background(), `
+		SELECT count(*) FROM system_anomaly_events
+		WHERE auction_id = $1 AND type = 'SNAPSHOT_REBUILD_SATURATED'
+	`, auctionRow.ID).Scan(&anomalies); err != nil {
+		t.Fatalf("count saturated anomalies: %v", err)
+	}
+	if anomalies == 0 {
+		t.Fatalf("expected SNAPSHOT_REBUILD_SATURATED anomaly")
+	}
 
 	stale := `{"event_type":"snapshot","auction_id":"` + auctionRow.ID + `","seq":1,"source":"redis","stale":false,"payload":{}}`
 	if err := rdb.Set(context.Background(), "auction:"+auctionRow.ID+":snapshot", stale, time.Minute).Err(); err != nil {

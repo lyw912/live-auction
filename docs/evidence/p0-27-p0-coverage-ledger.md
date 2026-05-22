@@ -38,7 +38,7 @@ PASS for documentation honesty. This file does not complete the remaining gaps; 
 | Auction rules/lifecycle | rule validation, cap reachability, create/schedule/start, PATCH vs START race | `p0-05-auction-rule-lifecycle.md`, `p0-19-pc-rule-validation.md`, `p0-23-pc-rule-save.md`, `p0-26-pc-full-rule-fields.md` |
 | Bid truth path | accepted bid, rejected bid, cap SOLD order, payment double click, idempotency, backend fat-finger confirm, H5 live REST bid/confirm/payment/history smoke | `p0-06-p0-07-bid-truth-path.md`, `p0-21-h5-payment-double-click.md`, `p0-24-h5-fat-finger-confirm.md`, `p0-30-h5-live-backend-rest-smoke.md` |
 | Outbox/projection | tx-to-outbox, Redis projection, relay ordering | `p0-08-p0-09-outbox-redis-projection.md`, `p0-11-websocket-completion.md` |
-| WebSocket/recovery | ticket foundation, browser ticket/subprotocol connect contract, live backend H5 WS smoke, replay/snapshot recovery, bounded reconnect rebuild, slow consumer/backpressure | `p0-10-websocket-ticket-recovery.md`, `p0-11-websocket-completion.md`, `p0-15-reconnect-storm-snapshot-bounding.md`, `p0-28-h5-websocket-ticket-connect.md`, `p0-29-h5-live-backend-ws-smoke.md` |
+| WebSocket/recovery | ticket foundation, browser ticket/subprotocol connect contract, live backend H5 WS smoke, replay/snapshot recovery, bounded reconnect rebuild, Redis-down reconnect degradation, slow consumer/backpressure | `p0-10-websocket-ticket-recovery.md`, `p0-11-websocket-completion.md`, `p0-15-reconnect-storm-snapshot-bounding.md`, `p0-28-h5-websocket-ticket-connect.md`, `p0-29-h5-live-backend-ws-smoke.md`, `p0-31-redis-down-reconnect-evidence.md` |
 | Scheduler | end auction, winner/no-winner close, order expiry, retry/lease behavior | `p0-12-scheduler-end-order-expire.md`, `p0-17-clock-step-backward.md` |
 | Concurrency | final-second bid, cancel/cap race, narrate race, active race | `p0-13-concurrency-and-narration.md` |
 | Diagnostics | real monitor diagnostic producers and host ACL | `p0-14-monitor-diagnostics-apis.md` |
@@ -62,7 +62,6 @@ Those remain separate integration slices.
 | Gate | Current status | Required next evidence |
 |---|---|---|
 | Redis down bid limit | Not applicable yet; no bid rate-limit implementation exists | Either implement bid rate-limit degradation or explicitly record P0 scope adjustment |
-| Redis down reconnect | Snapshot unavailable behavior is partly guarded; ticket issue/consume still depends on Redis | Add backend tests/evidence for Redis-down ticket/snapshot/reconnect behavior and anomaly output |
 | PC full rule cross-field validation | UI validates cap reachability and field ranges; backend remains authoritative | Add focused UI cases for duration/extension/deposit invalid combinations if desired, without trusting frontend as final authority |
 | Animation longtask | No heavy animation is implemented and no performance claim is made | Add browser longtask measurement before claiming animation performance |
 | Load gates | Not claimed | Run baseline scripts and store raw outputs before any P99/QPS/fanout claim |
@@ -80,4 +79,4 @@ The remaining gaps are not money-correctness blockers for the backend path alrea
 
 ## Next Action
 
-Add Redis-down reconnect evidence, including ticket/snapshot behavior and anomaly output.
+Document the bid-rate-limit scope adjustment or add focused PC rule cross-field UI cases.

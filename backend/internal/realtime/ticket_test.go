@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -37,6 +38,27 @@ func TestTicketFromProtocolsParsesHeaderList(t *testing.T) {
 	got := ticketFromProtocols([]string{"auction.v1, ticket.abc123"})
 	if got != "abc123" {
 		t.Fatalf("ticket = %q, want abc123", got)
+	}
+}
+
+func TestTicketStoreRedisDownFailsClosed(t *testing.T) {
+	store := NewTicketStore(redis.NewClient(&redis.Options{
+		Addr:            "127.0.0.1:1",
+		MaxRetries:      0,
+		DialTimeout:     50 * time.Millisecond,
+		ReadTimeout:     50 * time.Millisecond,
+		WriteTimeout:    50 * time.Millisecond,
+		MinRetryBackoff: 50 * time.Millisecond,
+		MaxRetryBackoff: 50 * time.Millisecond,
+	}))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	if _, err := store.Issue(ctx, Ticket{UserID: "user_1", RoomID: "room_1", AuctionID: "auction_1"}); err == nil {
+		t.Fatalf("Issue succeeded while Redis is unavailable")
+	}
+	if _, err := store.Consume(ctx, "missing"); err == nil || IsInvalidTicket(err) {
+		t.Fatalf("Consume err = %v, want Redis availability error", err)
 	}
 }
 
