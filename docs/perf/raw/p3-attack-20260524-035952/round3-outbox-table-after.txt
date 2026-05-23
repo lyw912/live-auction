@@ -1,0 +1,5 @@
+ n_live_tup | n_dead_tup | outbox_delivery_size 
+------------+------------+----------------------
+      13964 |          4 | 2904 kB
+(1 row)
+

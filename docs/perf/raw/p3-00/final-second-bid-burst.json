@@ -1,0 +1,179 @@
+{
+    "root_group": {
+        "groups": {},
+        "checks": {
+                "snapshot status 200": {
+                    "id": "48a40e4bad6b833da6818cc7a8a770e6",
+                    "passes": 166,
+                    "fails": 0,
+                    "name": "snapshot status 200",
+                    "path": "::snapshot status 200"
+                },
+                "bid endpoint returned business response": {
+                    "name": "bid endpoint returned business response",
+                    "path": "::bid endpoint returned business response",
+                    "id": "5c4ca9471e04b98045d3430b637f0286",
+                    "passes": 166,
+                    "fails": 0
+                }
+            },
+        "name": "",
+        "path": "",
+        "id": "d41d8cd98f00b204e9800998ecf8427e"
+    },
+    "metrics": {
+        "http_req_receiving": {
+            "min": 0,
+            "med": 0,
+            "max": 1.0215,
+            "p(90)": 0,
+            "p(95)": 0.5416299999999998,
+            "p(99)": 0.748022,
+            "p(99.9)": 0.9411332000000097,
+            "avg": 0.05318704819277108
+        },
+        "http_req_duration{expected_response:true}": {
+            "max": 26.1248,
+            "p(90)": 12.74284,
+            "p(95)": 14.804479999999996,
+            "p(99)": 20.93604799999998,
+            "p(99.9)": 25.08647040000005,
+            "avg": 5.6391199999999975,
+            "min": 1.4129,
+            "med": 3.019
+        },
+        "data_received": {
+            "count": 229397,
+            "rate": 45361.4583326124
+        },
+        "vus_max": {
+            "value": 2,
+            "min": 2,
+            "max": 2
+        },
+        "checks": {
+            "passes": 332,
+            "fails": 0,
+            "thresholds": {
+                "rate>0.95": false
+            },
+            "value": 1
+        },
+        "http_req_waiting": {
+            "p(99)": 19.233304,
+            "p(99.9)": 24.590482600000183,
+            "avg": 5.059368373493975,
+            "min": 1.4129,
+            "med": 3.4024,
+            "max": 26.1248,
+            "p(90)": 11.93748,
+            "p(95)": 13.276724999999995
+        },
+        "auction_k6_bid_limited_total": {
+            "count": 107,
+            "rate": 21.15841114569731
+        },
+        "http_req_connecting": {
+            "p(99)": 0,
+            "p(99.9)": 1.1721,
+            "avg": 0.007060843373493975,
+            "min": 0,
+            "med": 0,
+            "max": 1.1721,
+            "p(90)": 0,
+            "p(95)": 0
+        },
+        "iterations": {
+            "count": 166,
+            "rate": 32.82519859986686
+        },
+        "http_req_blocked": {
+            "min": 0,
+            "med": 0,
+            "max": 1.7552,
+            "p(90)": 0,
+            "p(95)": 0,
+            "p(99)": 0.3717719999999987,
+            "p(99.9)": 1.7552,
+            "avg": 0.01393042168674699
+        },
+        "auction_k6_bid_accepted_total": {
+            "count": 52,
+            "rate": 10.282592332488413
+        },
+        "iteration_duration": {
+            "p(99.9)": 82.369764,
+            "avg": 60.87392891566263,
+            "min": 54.7675,
+            "med": 58.3094,
+            "max": 82.4883,
+            "p(90)": 67.64385,
+            "p(95)": 70.0033,
+            "p(99)": 79.10561499999999
+        },
+        "data_sent": {
+            "rate": 17512.04571086873,
+            "count": 88560
+        },
+        "http_req_duration": {
+            "max": 26.1248,
+            "p(90)": 11.984990000000002,
+            "p(95)": 13.325124999999998,
+            "p(99)": 19.233304,
+            "p(99.9)": 24.590482600000183,
+            "avg": 5.116041867469879,
+            "min": 1.4129,
+            "med": 3.4766
+        },
+        "http_req_tls_handshaking": {
+            "p(90)": 0,
+            "p(95)": 0,
+            "p(99)": 0,
+            "p(99.9)": 0,
+            "avg": 0,
+            "min": 0,
+            "med": 0,
+            "max": 0
+        },
+        "vus": {
+            "value": 2,
+            "min": 2,
+            "max": 2
+        },
+        "bid_http_errors": {
+            "count": 0,
+            "rate": 0,
+            "thresholds": {
+                "count==0": false
+            }
+        },
+        "http_reqs": {
+            "count": 332,
+            "rate": 65.65039719973372
+        },
+        "auction_k6_bid_accepted_rate": {
+            "passes": 52,
+            "fails": 114,
+            "value": 0.3132530120481928
+        },
+        "auction_k6_bid_rejected_total": {
+            "rate": 1.3841951216811326,
+            "count": 7
+        },
+        "http_req_failed": {
+            "passes": 107,
+            "fails": 225,
+            "value": 0.32228915662650603
+        },
+        "http_req_sending": {
+            "max": 0.6365,
+            "p(90)": 0,
+            "p(95)": 0,
+            "p(99)": 0,
+            "p(99.9)": 0.5982695000000046,
+            "avg": 0.00348644578313253,
+            "min": 0,
+            "med": 0
+        }
+    }
+}

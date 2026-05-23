@@ -1,0 +1,11 @@
+ wait_event_type |     wait_event      | state  | count 
+-----------------+---------------------+--------+-------
+ Client          | ClientRead          | idle   |     4
+                 |                     | active |     1
+ Activity        | LogicalLauncherMain |        |     1
+ Activity        | BgWriterMain        |        |     1
+ Activity        | AutoVacuumMain      |        |     1
+ Activity        | WalWriterMain       |        |     1
+ Activity        | CheckpointerMain    |        |     1
+(7 rows)
+

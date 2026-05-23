@@ -1,0 +1,8 @@
+﻿ state  | wait_event_type | count 
+--------+-----------------+-------
+        | Activity        |     4
+ idle   | Client          |     4
+ active |                 |     1
+        | Timeout         |     1
+(4 rows)
+

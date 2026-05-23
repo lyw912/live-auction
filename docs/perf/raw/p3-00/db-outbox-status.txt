@@ -1,0 +1,5 @@
+﻿  status   | count 
+-----------+-------
+ PUBLISHED |  5740
+(1 row)
+

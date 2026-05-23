@@ -1,0 +1,14 @@
+{
+  "platform": "win32",
+  "arch": "x64",
+  "cpu": "12th Gen Intel(R) Core(TM) i9-12900H",
+  "cpu_count": 20,
+  "ram_bytes": 16890978304,
+  "os_release": "10.0.26200",
+  "go": "go version go1.26.3 windows/amd64",
+  "k6": "k6.exe v2.0.0 (commit/8c3be52cc1, go1.26.3, windows/amd64)",
+  "git_sha": "c5aee15adff08fda3da3d510e9dc66b4c549a7ef",
+  "mode": "p3-local-smoke",
+  "duration": "5s",
+  "vus": "2"
+}

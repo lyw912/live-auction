@@ -1,0 +1,189 @@
+{
+    "metrics": {
+        "checks": {
+            "fails": 0,
+            "passes": 400,
+            "value": 1
+        },
+        "http_req_duration": {
+            "max": 198.5631,
+            "p(90)": 21.58214,
+            "p(95)": 36.7235,
+            "p(99)": 137.08357999999973,
+            "p(99.9)": 190.44598320000017,
+            "avg": 16.346930147783215,
+            "min": 7.5136,
+            "med": 11.7054
+        },
+        "http_req_sending": {
+            "min": 0,
+            "med": 0,
+            "max": 12.372,
+            "p(90)": 0,
+            "p(95)": 0,
+            "p(99)": 0.5069,
+            "p(99.9)": 3.0365656000003085,
+            "avg": 0.018053924466338273
+        },
+        "http_req_waiting": {
+            "avg": 16.29075852216745,
+            "min": 7.5136,
+            "med": 11.6594,
+            "max": 197.9924,
+            "p(90)": 21.436739999999997,
+            "p(95)": 36.72266,
+            "p(99)": 136.96508399999976,
+            "p(99.9)": 190.11711200000016
+        },
+        "iteration_duration": {
+            "avg": 63.28387817223195,
+            "min": 57.9636,
+            "med": 61.9515,
+            "max": 247.2266,
+            "p(90)": 67.36524,
+            "p(95)": 70.87839999999998,
+            "p(99)": 77.77105999999999,
+            "p(99.9)": 164.446101600005
+        },
+        "auction_k6_ws_pressure_errors_total": {
+            "count": 0,
+            "rate": 0,
+            "thresholds": {
+                "count==0": false
+            }
+        },
+        "vus": {
+            "value": 200,
+            "min": 200,
+            "max": 204
+        },
+        "http_reqs": {
+            "count": 3045,
+            "rate": 55.34245590015955
+        },
+        "http_req_blocked": {
+            "min": 0,
+            "med": 0,
+            "max": 15.1696,
+            "p(90)": 0,
+            "p(95)": 1.104119999999991,
+            "p(99)": 5.6886,
+            "p(99.9)": 13.599038400000097,
+            "avg": 0.2233144170771756
+        },
+        "auction_k6_ws_pressure_bid_responses_total": {
+            "count": 2845,
+            "rate": 51.707483427242664
+        },
+        "http_req_duration{expected_response:true}": {
+            "min": 7.5136,
+            "med": 11.7054,
+            "max": 198.5631,
+            "p(90)": 21.58214,
+            "p(95)": 36.7235,
+            "p(99)": 137.08357999999973,
+            "p(99.9)": 190.44598320000017,
+            "avg": 16.346930147783215
+        },
+        "http_req_connecting": {
+            "p(90)": 0,
+            "p(95)": 0.8774,
+            "p(99)": 5.1388,
+            "p(99.9)": 12.3742,
+            "avg": 0.1911416091954023,
+            "min": 0,
+            "med": 0,
+            "max": 13.6321
+        },
+        "data_received": {
+            "count": 34756838,
+            "rate": 631700.7468781575
+        },
+        "ws_msgs_received": {
+            "count": 138600,
+            "rate": 2519.0359237314
+        },
+        "http_req_failed": {
+            "passes": 0,
+            "fails": 3045,
+            "value": 0
+        },
+        "ws_connecting": {
+            "avg": 55.178457000000016,
+            "min": 2.6591,
+            "med": 46.339299999999994,
+            "max": 174.324,
+            "p(90)": 122.70153999999998,
+            "p(95)": 140.24925999999985,
+            "p(99)": 158.7325489999999,
+            "p(99.9)": 173.35982510000008
+        },
+        "auction_k6_ws_pressure_messages_total": {
+            "count": 138600,
+            "rate": 2519.0359237314
+        },
+        "http_req_receiving": {
+            "med": 0,
+            "max": 2.1762,
+            "p(90)": 0,
+            "p(95)": 0.5038,
+            "p(99)": 0.7211719999999998,
+            "p(99.9)": 1.1204304000000043,
+            "avg": 0.03811770114942526,
+            "min": 0
+        },
+        "data_sent": {
+            "count": 1171853,
+            "rate": 21298.26698652534
+        },
+        "http_req_tls_handshaking": {
+            "avg": 0,
+            "min": 0,
+            "med": 0,
+            "max": 0,
+            "p(90)": 0,
+            "p(95)": 0,
+            "p(99)": 0,
+            "p(99.9)": 0
+        },
+        "auction_k6_ws_pressure_opened_total": {
+            "count": 200,
+            "rate": 3.6349724729168833
+        },
+        "iterations": {
+            "count": 2845,
+            "rate": 51.707483427242664
+        },
+        "ws_sessions": {
+            "rate": 3.6349724729168833,
+            "count": 200
+        },
+        "vus_max": {
+            "value": 204,
+            "min": 204,
+            "max": 204
+        }
+    },
+    "root_group": {
+        "path": "",
+        "id": "d41d8cd98f00b204e9800998ecf8427e",
+        "groups": {},
+        "checks": {
+                "ticket status 200": {
+                    "name": "ticket status 200",
+                    "path": "::ticket status 200",
+                    "id": "efc18ee14434a3ed2f0e28c4da4a6b82",
+                    "passes": 200,
+                    "fails": 0
+                },
+                "pressure watcher opened": {
+                    "id": "beabd8a18ea05555a356d3c0a8d1d9aa",
+                    "passes": 200,
+                    "fails": 0,
+                    "name": "pressure watcher opened",
+                    "path": "::pressure watcher opened"
+                }
+            },
+        "name": ""
+    }
+}
