@@ -19,6 +19,7 @@ const workloads = [
   { name: 'reconnect-storm', script: 'tests/load/reconnect-storm.js', env: { VUS: vus, DURATION: duration } },
   { name: 'slow-consumer', script: 'tests/load/slow-consumer.js', env: { VUS: vus, DURATION: duration } },
   { name: 'outbox-burst', script: 'tests/load/outbox-burst.js', env: { VUS: vus, DURATION: duration } },
+  { name: 'bid-abuse', script: 'tests/load/bid-abuse.js', env: { VUS: vus, DURATION: duration } },
   {
     name: 'multi-room-isolation',
     script: 'tests/load/multi-room-isolation.js',

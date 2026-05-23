@@ -17,14 +17,20 @@ export const options = {
 };
 
 const businessResponses = new Counter('auction_k6_outbox_business_responses_total');
+const admissionResponses = new Counter('auction_k6_outbox_admission_responses_total');
+const httpErrors = new Counter('auction_k6_outbox_http_errors_total');
 
 export default function () {
   const amount = __VU % 2 === 0 ? 1000 : 60000;
-  const res = placeBid(amount, `k6_outbox_${__VU}_${__ITER % 5}`, 'k6-outbox-burst');
+  const res = placeBid(amount, `k6_bidder_${__VU}_${__ITER % 7}`, 'k6-outbox-burst');
   const ok = check(res, {
-    'outbox burst bid got response': (r) => r.status === 200,
+    'outbox burst bid got business response': (r) => r.status === 200 || r.status === 429,
   });
-  if (ok) {
+  if (!ok) {
+    httpErrors.add(1);
+  } else if (res.status === 429) {
+    admissionResponses.add(1);
+  } else {
     businessResponses.add(1);
   }
   sleep(Number(__ENV.SLEEP_SECONDS || 0.02));

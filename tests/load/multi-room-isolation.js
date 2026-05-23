@@ -13,12 +13,14 @@ export const options = {
       executor: 'constant-vus',
       vus: Number(__ENV.HOT_BID_VUS || 8),
       duration: __ENV.DURATION || '20s',
+      gracefulStop: __ENV.GRACEFUL_STOP || '5s',
       exec: 'hotRoomBidder',
     },
     cold_room_watchers: {
       executor: 'constant-vus',
       vus: Number(__ENV.COLD_WS_VUS || 4),
       duration: __ENV.DURATION || '20s',
+      gracefulStop: __ENV.GRACEFUL_STOP || '5s',
       exec: 'coldRoomWatcher',
     },
   },
@@ -31,6 +33,8 @@ export const options = {
 };
 
 const hotBidResponses = new Counter('auction_k6_multi_room_hot_bid_responses_total');
+const hotBidLimited = new Counter('auction_k6_multi_room_hot_bid_limited_total');
+const hotBidHTTPError = new Counter('auction_k6_multi_room_hot_bid_http_errors_total');
 const coldMessages = new Counter('auction_k6_multi_room_cold_messages_total');
 const coldErrors = new Counter('auction_k6_multi_room_cold_ws_errors_total');
 const crossLeakRate = new Rate('auction_k6_multi_room_cross_leak_rate');
@@ -39,9 +43,17 @@ export function hotRoomBidder() {
   const amount = 15000 + ((__ITER % 10) * 5000);
   const res = placeBidFor(HOT_AUCTION_ID, amount, `k6_bidder_${__VU}_${__ITER % 7}`, 'k6-multi-hot');
   const ok = check(res, {
-    'hot room bid got business response': (r) => r.status === 200,
+    'hot room bid got business response': (r) => r.status === 200 || r.status === 429,
   });
-  if (ok) hotBidResponses.add(1);
+  if (!ok) {
+    hotBidHTTPError.add(1);
+  } else {
+    hotBidResponses.add(1);
+    const code = String(res.json('code') || '');
+    if (code === 'RATE_LIMITED' || code === 'BID_AUCTION_TOO_HOT') {
+      hotBidLimited.add(1);
+    }
+  }
   sleep(Number(__ENV.HOT_SLEEP_SECONDS || 0.05));
 }
 
@@ -61,7 +73,7 @@ export function coldRoomWatcher() {
       coldErrors.add(1);
     },
   });
-  sleep(Number(__ENV.COLD_SESSION_SECONDS || 4));
+  sleep(Number(__ENV.COLD_SESSION_SECONDS || 1.2));
   if (ws.readyState === 1) {
     ws.close();
   }

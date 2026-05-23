@@ -1,0 +1,20 @@
+{
+  "platform": "win32",
+  "arch": "x64",
+  "cpu": "12th Gen Intel(R) Core(TM) i9-12900H",
+  "cpu_count": 20,
+  "ram_bytes": 16890978304,
+  "os_release": "10.0.26200",
+  "kernel": "Windows_NT lyw 10.0 26200 x86_64 MS/Windows",
+  "go": "go version go1.26.3 windows/amd64",
+  "k6": "k6.exe v2.0.0 (commit/8c3be52cc1, go1.26.3, windows/amd64)",
+  "postgres": "'psql' is not recognized as an internal or external command,\r\noperable program or batch file.",
+  "redis": "Redis server v=3.2.100 sha=00000000:0 malloc=jemalloc-3.6.0 bits=64 build=dd26f1f93c5130ee",
+  "ulimit_n": "not-linux",
+  "somaxconn": "not-linux",
+  "ephemeral_port_range": "not-linux",
+  "git_sha": "c5aee15adff08fda3da3d510e9dc66b4c549a7ef",
+  "mode": "local-smoke",
+  "duration": "5s",
+  "vus": "2"
+}

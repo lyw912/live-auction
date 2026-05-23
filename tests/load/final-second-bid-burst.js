@@ -19,6 +19,8 @@ export const options = {
 
 const accepted = new Counter('auction_k6_bid_accepted_total');
 const rejected = new Counter('auction_k6_bid_rejected_total');
+const limited = new Counter('auction_k6_bid_limited_total');
+const tooHot = new Counter('auction_k6_bid_too_hot_total');
 const retryLater = new Counter('auction_k6_bid_retry_later_total');
 const bidHTTPError = new Counter('bid_http_errors');
 const acceptedRate = new Rate('auction_k6_bid_accepted_rate');
@@ -35,7 +37,7 @@ export default function () {
   const userID = `k6_bidder_${__VU}_${__ITER % 7}`;
   const res = placeBid(amount, userID, 'k6-final-second');
   const ok = check(res, {
-    'bid endpoint returned business response': (r) => r.status === 200,
+    'bid endpoint returned business response': (r) => r.status === 200 || r.status === 429,
   });
   if (!ok) {
     bidHTTPError.add(1);
@@ -43,10 +45,17 @@ export default function () {
     return;
   }
   const result = String(res.json('result') || '');
+  const code = String(res.json('code') || '');
   const reason = String(res.json('reject_reason') || '');
   if (result === 'ACCEPTED' || result === 'ACCEPTED_EXTENDED' || result === 'ACCEPTED_SOLD') {
     accepted.add(1);
     acceptedRate.add(true);
+  } else if (code === 'RATE_LIMITED' || result === 'RATE_LIMITED') {
+    limited.add(1);
+    acceptedRate.add(false);
+  } else if (code === 'BID_AUCTION_TOO_HOT' || result === 'BID_AUCTION_TOO_HOT') {
+    tooHot.add(1);
+    acceptedRate.add(false);
   } else {
     rejected.add(1);
     acceptedRate.add(false);

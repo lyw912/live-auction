@@ -85,7 +85,11 @@ export function openAuctionSocket(ticket, lastSeq = 0, handlers = {}) {
 
 export function openAuctionSocketFor(roomID, auctionID, ticket, lastSeq = 0, handlers = {}) {
   const url = `${WS_URL}/ws?room_id=${roomID}&auction_id=${auctionID}&last_seq=${lastSeq}`;
-  const ws = new WebSocket(url, ['auction.v1', `ticket.${ticket}`]);
+  const ws = new WebSocket(url, undefined, {
+    headers: {
+      'X-Auction-WS-Ticket': ticket,
+    },
+  });
   ws.addEventListener('open', () => {
     if (handlers.open) handlers.open(ws);
   });
