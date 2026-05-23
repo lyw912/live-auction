@@ -20,7 +20,8 @@
 13. `12-engineering-rules.md`：开发铁律、禁止项、审查清单。
 14. `13-risk-register.md`：盲区、陷阱、反驳与兜底。
 15. `14-evidence-and-references.md`：外部证据、论据、可追问口径。
-16. `templates/`：正式开发时需要持续填写的模板。
+16. `16-industrial-p2-p3-roadmap.md`：P1 完成后的工业级 P2/P3+ 后续路线图、调研依据、取舍和门禁。
+17. `templates/`：正式开发时需要持续填写的模板。
 
 ## 一句话方案
 
@@ -33,6 +34,7 @@
 - 所有性能数字必须先有 baseline 报告，不能写猜测值。
 - Chat、保证金、讲解中、用户加入广播是完整度功能，不是技术亮点。
 - 竞拍正确性、可恢复实时、异常可诊断、实测纪律才是最终亮点。
+- P1 完成后，后续工业化工作以 `16-industrial-p2-p3-roadmap.md` 为准：先补 auth/ACL/room/rate-limit/payment hardening，再做 multi-instance realtime 和最终 baseline。
 
 ## 复制到新仓库后
 

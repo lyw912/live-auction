@@ -54,6 +54,8 @@ P1/P2 不得抢占 P0 正确性。任何“亮点”如果没有测试或诊断�
 
 ## P2
 
+P1 完成后，正式后续路线图见 `16-industrial-p2-p3-roadmap.md`。本节原始 P2 表保留为性能/架构候选优化清单，但不再代表完整的 P2 工业化范围。新的 P2 必须先覆盖 real session、room membership ACL、room selection、bid admission control、payment provider boundary、security diagnostics 和 Linux baseline round 1。
+
 | Candidate | Keep Only If |
 |---|---|
 | Redis Lua reservation | PG baseline proves row lock path is bottleneck and reconciliation is designed |
