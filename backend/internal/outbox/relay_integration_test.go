@@ -36,6 +36,7 @@ func TestRelayPublishesPendingOutboxToRedisInOrder(t *testing.T) {
 	prioritizeOutboxForAuction(t, db, auctionRow.ID)
 
 	relay := NewRelay(db, rdb, "test-worker")
+	ownAuctionShard(t, db, auctionRow.ID, relay.workerID)
 	for i := 0; i < 20; i++ {
 		ok, err := relay.ProcessOne(ctx)
 		if err != nil {
@@ -118,6 +119,7 @@ func TestRelayPoisonMarksDeadAndWritesAnomaly(t *testing.T) {
 		publishedAuctionID = auctionID
 		publishedPayload = append([]byte(nil), payload...)
 	})
+	ownAuctionShard(t, db, auctionRow.ID, relay.workerID)
 	ok, err := relay.ProcessOne(ctx)
 	if !ok {
 		t.Fatalf("expected claimed event")
@@ -181,7 +183,9 @@ func TestRelayReclaimsExpiredPublishingLease(t *testing.T) {
 	}
 	prioritizeOutboxForAuction(t, db, auctionRow.ID)
 
-	ok, err := NewRelay(db, rdb, "lease-reclaimer").ProcessOne(ctx)
+	relay := NewRelay(db, rdb, "lease-reclaimer")
+	ownAuctionShard(t, db, auctionRow.ID, relay.workerID)
+	ok, err := relay.ProcessOne(ctx)
 	if err != nil {
 		t.Fatalf("ProcessOne: %v", err)
 	}
@@ -245,7 +249,9 @@ func TestRelayDoesNotSkipBlockedAuctionHead(t *testing.T) {
 		t.Fatalf("block first bid event: %v", err)
 	}
 
-	ok, err := NewRelay(db, rdb, "blocked-head-worker").ProcessOne(ctx)
+	relay := NewRelay(db, rdb, "blocked-head-worker")
+	ownAuctionShard(t, db, auctionRow.ID, relay.workerID)
+	ok, err := relay.ProcessOne(ctx)
 	if err != nil {
 		t.Fatalf("ProcessOne: %v", err)
 	}
@@ -297,7 +303,9 @@ func TestRelayClaimPlanScalesWithPendingBacklog(t *testing.T) {
 	}
 
 	start := time.Now()
-	ok, err := NewRelay(db, openRedis(t), "claim-plan-worker").ProcessOne(ctx)
+	relay := NewRelay(db, openRedis(t), "claim-plan-worker")
+	ownAuctionShard(t, db, auctionID, relay.workerID)
+	ok, err := relay.ProcessOne(ctx)
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("ProcessOne: %v", err)
@@ -341,7 +349,9 @@ func TestRelayProcessBatchDrainsMultipleEvents(t *testing.T) {
 	}
 	prioritizeOutboxForAuction(t, db, auctionRow.ID)
 
-	processed, err := NewRelay(db, rdb, "batch-worker").ProcessBatch(ctx, 4)
+	relay := NewRelay(db, rdb, "batch-worker")
+	ownAuctionShard(t, db, auctionRow.ID, relay.workerID)
+	processed, err := relay.ProcessBatch(ctx, 4)
 	if err != nil {
 		t.Fatalf("ProcessBatch: %v", err)
 	}
@@ -359,6 +369,63 @@ func TestRelayProcessBatchDrainsMultipleEvents(t *testing.T) {
 	}
 	if published != 4 {
 		t.Fatalf("published = %d, want 4", published)
+	}
+}
+
+func TestRelayShardLeasePreventsDuplicateOwnersAndAllowsFailover(t *testing.T) {
+	db := openDB(t)
+	rdb := openRedis(t)
+	ctx := context.Background()
+	repo := auction.NewRepository(db)
+	auctionRow := createActiveAuctionForRelay(t, repo, db)
+	quiesceOutboxExcept(t, db, auctionRow.ID)
+	bid := auction.BidInput{ClientBidID: "shard-lease-bid-1", AmountCents: 15_000}
+	if _, err := repo.PlaceBid(ctx, auctionRow.ID, "user_1", bid.ClientBidID, bid, "tr_shard_lease"); err != nil {
+		t.Fatalf("PlaceBid: %v", err)
+	}
+	prioritizeOutboxForAuction(t, db, auctionRow.ID)
+
+	owner := NewRelay(db, rdb, "owner-worker")
+	ownAuctionShard(t, db, auctionRow.ID, owner.workerID)
+	contender := NewRelay(db, rdb, "contender-worker")
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), `DELETE FROM outbox_relay_shard_leases WHERE owner_id IN ('owner-worker','contender-worker')`)
+	})
+	if err := contender.renewShardLeases(ctx); err != nil {
+		t.Fatalf("contender renew leases: %v", err)
+	}
+	var contenderOwned int
+	if err := db.QueryRow(ctx, `
+		SELECT count(*)
+		FROM outbox_relay_shard_leases l
+		JOIN outbox_delivery d ON d.shard_id = l.shard_id
+		WHERE d.auction_id = $1 AND l.owner_id = 'contender-worker'
+	`, auctionRow.ID).Scan(&contenderOwned); err != nil {
+		t.Fatalf("count contender leases: %v", err)
+	}
+	if contenderOwned != 0 {
+		t.Fatalf("contender took %d live leases from owner", contenderOwned)
+	}
+	ok, err := contender.ProcessOne(ctx)
+	if err != nil {
+		t.Fatalf("contender ProcessOne: %v", err)
+	}
+	if ok {
+		t.Fatalf("contender processed event without owning a shard")
+	}
+
+	if _, err := db.Exec(ctx, `UPDATE outbox_relay_shard_leases SET lease_until = now() - interval '1 second' WHERE owner_id = 'owner-worker'`); err != nil {
+		t.Fatalf("expire owner leases: %v", err)
+	}
+	if err := contender.renewShardLeases(ctx); err != nil {
+		t.Fatalf("contender renew leases after failover: %v", err)
+	}
+	ok, err = contender.ProcessOne(ctx)
+	if err != nil {
+		t.Fatalf("contender ProcessOne after failover: %v", err)
+	}
+	if !ok {
+		t.Fatalf("contender did not process after owner lease expired")
 	}
 }
 
@@ -485,5 +552,35 @@ func quiesceOutboxExcept(t *testing.T, db *pgxpool.Pool, auctionID string) {
 		  AND d.status NOT IN ('PUBLISHED','DEAD')
 	`, auctionID); err != nil {
 		t.Fatalf("quiesce outbox: %v", err)
+	}
+}
+
+func renewRelayLeases(t *testing.T, relay *Relay) {
+	t.Helper()
+	t.Cleanup(func() {
+		_, _ = relay.db.Exec(context.Background(), `DELETE FROM outbox_relay_shard_leases WHERE owner_id = $1`, relay.workerID)
+	})
+	if err := relay.renewShardLeases(context.Background()); err != nil {
+		t.Fatalf("renew relay leases: %v", err)
+	}
+}
+
+func ownAuctionShard(t *testing.T, db *pgxpool.Pool, auctionID string, ownerID string) {
+	t.Helper()
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), `DELETE FROM outbox_relay_shard_leases WHERE owner_id = $1`, ownerID)
+	})
+	_, err := db.Exec(context.Background(), `
+		INSERT INTO outbox_relay_shard_leases (shard_id, owner_id, lease_until)
+		SELECT DISTINCT shard_id, $2, now() + interval '5 seconds'
+		FROM outbox_delivery
+		WHERE auction_id = $1
+		ON CONFLICT (shard_id) DO UPDATE
+		SET owner_id = EXCLUDED.owner_id,
+		    lease_until = EXCLUDED.lease_until,
+		    renewed_at = now()
+	`, auctionID, ownerID)
+	if err != nil {
+		t.Fatalf("own auction shard: %v", err)
 	}
 }

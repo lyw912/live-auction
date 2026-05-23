@@ -48,6 +48,9 @@ type monitorOutboxRow struct {
 	EventType     string     `json:"event_type"`
 	Status        string     `json:"status"`
 	Attempts      int        `json:"attempts"`
+	ShardID       *int       `json:"shard_id,omitempty"`
+	LeaseOwner    *string    `json:"lease_owner,omitempty"`
+	LeaseUntil    *time.Time `json:"lease_until,omitempty"`
 	NextAttemptAt time.Time  `json:"next_attempt_at"`
 	LagMs         int64      `json:"lag_ms"`
 	LastError     *string    `json:"last_error,omitempty"`
@@ -180,11 +183,12 @@ func anomalyFilterQuery(r *http.Request) (string, []any) {
 func (h MonitorHandler) Outbox(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.Deps.Postgres.Query(r.Context(), `
 		SELECT e.id, e.aggregate_type, e.aggregate_id, e.auction_id, e.seq,
-		       e.event_type, d.status, d.attempts, d.next_attempt_at,
+		       e.event_type, d.status, d.attempts, d.shard_id, l.owner_id, l.lease_until, d.next_attempt_at,
 		       (extract(epoch from (now() - e.created_at)) * 1000)::bigint AS lag_ms,
 		       d.last_error, e.created_at, d.published_at
 		FROM outbox_events e
 		JOIN outbox_delivery d ON d.outbox_id = e.id
+		LEFT JOIN outbox_relay_shard_leases l ON l.shard_id = d.shard_id
 		ORDER BY e.created_at DESC, e.id DESC
 		LIMIT $1
 	`, monitorLimit(r))
@@ -197,7 +201,7 @@ func (h MonitorHandler) Outbox(w http.ResponseWriter, r *http.Request) {
 	result := []monitorOutboxRow{}
 	for rows.Next() {
 		var row monitorOutboxRow
-		if err := rows.Scan(&row.OutboxID, &row.AggregateType, &row.AggregateID, &row.AuctionID, &row.Seq, &row.EventType, &row.Status, &row.Attempts, &row.NextAttemptAt, &row.LagMs, &row.LastError, &row.CreatedAt, &row.PublishedAt); err != nil {
+		if err := rows.Scan(&row.OutboxID, &row.AggregateType, &row.AggregateID, &row.AuctionID, &row.Seq, &row.EventType, &row.Status, &row.Attempts, &row.ShardID, &row.LeaseOwner, &row.LeaseUntil, &row.NextAttemptAt, &row.LagMs, &row.LastError, &row.CreatedAt, &row.PublishedAt); err != nil {
 			writeError(w, r, internalMonitorError(err))
 			return
 		}

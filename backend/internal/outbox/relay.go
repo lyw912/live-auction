@@ -25,6 +25,7 @@ const (
 	DefaultHistoryLimit = 4096
 	DefaultHistoryTTL   = 30 * time.Minute
 	DefaultDrainBatch   = 64
+	DefaultLeaseTTL     = 5 * time.Second
 )
 
 type Relay struct {
@@ -34,6 +35,7 @@ type Relay struct {
 	historyLimit int64
 	historyTTL   time.Duration
 	drainBatch   int
+	leaseTTL     time.Duration
 	publisher    func(context.Context, string, []byte)
 }
 
@@ -48,6 +50,9 @@ func (r *Relay) Run(ctx context.Context, log *slog.Logger, interval time.Duratio
 		case <-ctx.Done():
 			return
 		default:
+		}
+		if err := r.renewShardLeases(ctx); err != nil {
+			log.Warn("outbox_lease_renew_failed", slog.String("error", err.Error()))
 		}
 		processed, err := r.ProcessBatch(ctx, r.drainBatch)
 		if err != nil {
@@ -82,6 +87,7 @@ func NewRelay(db *pgxpool.Pool, redisClient *redis.Client, workerID string) *Rel
 		historyLimit: DefaultHistoryLimit,
 		historyTTL:   DefaultHistoryTTL,
 		drainBatch:   DefaultDrainBatch,
+		leaseTTL:     DefaultLeaseTTL,
 	}
 }
 
@@ -92,6 +98,9 @@ func (r *Relay) WithPublisher(publisher func(context.Context, string, []byte)) *
 
 func (r *Relay) ProcessOne(ctx context.Context) (bool, error) {
 	start := time.Now()
+	if err := r.ensureShardLease(ctx); err != nil {
+		return false, err
+	}
 	event, ok, err := r.claimOne(ctx)
 	if err != nil || !ok {
 		return ok, err
@@ -140,8 +149,11 @@ func (r *Relay) claimOne(ctx context.Context) (Event, bool, error) {
 		SELECT e.id, e.aggregate_type, e.aggregate_id, e.auction_id, e.seq, e.event_type, e.payload_json, e.created_at
 		FROM outbox_delivery d
 		JOIN outbox_events e ON e.id = d.outbox_id
+		JOIN outbox_relay_shard_leases l ON l.shard_id = d.shard_id
 		WHERE d.auction_id IS NOT NULL
 		  AND d.auction_seq IS NOT NULL
+		  AND l.owner_id = $1
+		  AND l.lease_until > now()
 		  AND (
 		    (d.status IN ('PENDING','FAILED') AND d.next_attempt_at <= now())
 		    OR (d.status = 'PUBLISHING' AND d.locked_until < now())
@@ -150,13 +162,14 @@ func (r *Relay) claimOne(ctx context.Context) (Event, bool, error) {
 		    SELECT 1
 		    FROM outbox_delivery prior
 		    WHERE prior.auction_id = d.auction_id
+		      AND prior.shard_id = d.shard_id
 		      AND prior.auction_seq < d.auction_seq
 		      AND prior.status IN ('PENDING','FAILED','PUBLISHING')
 		  )
 		ORDER BY d.event_created_at, d.outbox_id
 		LIMIT 1
 		FOR UPDATE OF d SKIP LOCKED
-	`).Scan(&event.OutboxID, &event.AggregateType, &event.AggregateID, &event.AuctionID, &event.Seq, &event.EventType, &event.Payload, &event.CreatedAt)
+	`, r.workerID).Scan(&event.OutboxID, &event.AggregateType, &event.AggregateID, &event.AuctionID, &event.Seq, &event.EventType, &event.Payload, &event.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Event{}, false, nil
 	}
@@ -175,6 +188,42 @@ func (r *Relay) claimOne(ctx context.Context) (Event, bool, error) {
 		return Event{}, false, err
 	}
 	return event, true, nil
+}
+
+func (r *Relay) renewShardLeases(ctx context.Context) error {
+	leaseTTL := r.leaseTTL
+	if leaseTTL <= 0 {
+		leaseTTL = DefaultLeaseTTL
+	}
+	_, err := r.db.Exec(ctx, `
+		INSERT INTO outbox_relay_shard_leases (shard_id, owner_id, lease_until)
+		SELECT DISTINCT d.shard_id, $1, now() + ($2::double precision * interval '1 second')
+		FROM outbox_delivery d
+		WHERE d.status IN ('PENDING','FAILED','PUBLISHING')
+		  AND d.shard_id IS NOT NULL
+		ON CONFLICT (shard_id) DO UPDATE
+		SET owner_id = EXCLUDED.owner_id,
+		    lease_until = EXCLUDED.lease_until,
+		    renewed_at = now()
+		WHERE outbox_relay_shard_leases.owner_id = EXCLUDED.owner_id
+		   OR outbox_relay_shard_leases.lease_until <= now()
+	`, r.workerID, leaseTTL.Seconds())
+	return err
+}
+
+func (r *Relay) ensureShardLease(ctx context.Context) error {
+	var owned int
+	if err := r.db.QueryRow(ctx, `
+		SELECT count(*)
+		FROM outbox_relay_shard_leases
+		WHERE owner_id = $1 AND lease_until > now()
+	`, r.workerID).Scan(&owned); err != nil {
+		return err
+	}
+	if owned > 0 {
+		return nil
+	}
+	return r.renewShardLeases(ctx)
 }
 
 func (r *Relay) publish(ctx context.Context, event Event) error {
