@@ -383,7 +383,25 @@ func (h AuctionHandler) PayMock(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "invalid json body", 400))
 		return
 	}
-	result, err := h.Repo.PayMock(r.Context(), chi.URLParam(r, "id"), user.ID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context()))
+	secret := h.Config.FakePaymentWebhookSecret
+	if secret == "" {
+		secret = auction.DefaultFakePaymentWebhookSecret
+	}
+	result, err := h.Repo.PayMockWithSecret(r.Context(), chi.URLParam(r, "id"), user.ID, r.Header.Get("Idempotency-Key"), req, secret, traceID(r.Context()))
+	writeResult(w, r, http.StatusOK, result, err)
+}
+
+func (h AuctionHandler) FakePaymentWebhook(w http.ResponseWriter, r *http.Request) {
+	var req auction.ProviderPaymentWebhook
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "invalid json body", 400))
+		return
+	}
+	secret := h.Config.FakePaymentWebhookSecret
+	if secret == "" {
+		secret = auction.DefaultFakePaymentWebhookSecret
+	}
+	result, err := h.Repo.HandleProviderWebhook(r.Context(), req, secret, traceID(r.Context()))
 	writeResult(w, r, http.StatusOK, result, err)
 }
 

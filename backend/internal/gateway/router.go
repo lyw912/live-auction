@@ -45,6 +45,7 @@ func NewRouterWithRealtime(cfg config.Config, deps *storage.Dependencies, log *s
 	r.Route("/api", func(r chi.Router) {
 		r.Post("/auth/login", authHandler.Login)
 		r.Post("/auth/logout", authHandler.Logout)
+		r.Post("/payments/fake-provider/webhook", auctionHandler.FakePaymentWebhook)
 		r.Group(func(r chi.Router) {
 			r.Use(authMiddleware(cfg, deps.Postgres))
 			r.Get("/auth/me", authHandler.Me)

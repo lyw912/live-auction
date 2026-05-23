@@ -2,6 +2,7 @@ package auction
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -18,6 +19,8 @@ import (
 )
 
 const (
+	DefaultFakePaymentWebhookSecret = "local_fake_payment_secret"
+
 	BidResultAccepted         = "ACCEPTED"
 	BidResultAcceptedExtended = "ACCEPTED_EXTENDED"
 	BidResultAcceptedSold     = "ACCEPTED_SOLD"
@@ -27,6 +30,8 @@ const (
 	IdempotencyStatusCompleted  = "COMPLETED"
 
 	OrderStatusPending    = "ORDER_PENDING"
+	OrderStatusInitiated  = "PAYMENT_INITIATED"
+	OrderStatusSucceeded  = "PAYMENT_SUCCEEDED"
 	OrderStatusPaid       = "PAID"
 	OrderStatusExpired    = "ORDER_EXPIRED"
 	DepositStatusHeld     = "HELD"
@@ -65,6 +70,14 @@ type PaymentInput struct {
 	Confirm bool `json:"confirm"`
 }
 
+type ProviderPaymentWebhook struct {
+	ProviderEventID   string `json:"provider_event_id"`
+	ProviderPaymentID string `json:"provider_payment_id"`
+	OrderID           string `json:"order_id"`
+	EventType         string `json:"event_type"`
+	Signature         string `json:"signature"`
+}
+
 type Order struct {
 	ID            string     `json:"id"`
 	AuctionID     string     `json:"auction_id"`
@@ -75,14 +88,22 @@ type Order struct {
 	DepositStatus string     `json:"deposit_status"`
 	ExpireAt      time.Time  `json:"expire_at"`
 	PaidAt        *time.Time `json:"paid_at,omitempty"`
+	ProviderID    *string    `json:"provider_payment_id,omitempty"`
 	CreatedAt     time.Time  `json:"created_at"`
 }
 
 type PaymentResponse struct {
-	OrderID       string    `json:"order_id"`
-	OrderStatus   string    `json:"order_status"`
-	PaidAt        time.Time `json:"paid_at"`
-	DepositStatus string    `json:"deposit_status"`
+	OrderID           string    `json:"order_id"`
+	OrderStatus       string    `json:"order_status"`
+	PaidAt            time.Time `json:"paid_at"`
+	DepositStatus     string    `json:"deposit_status"`
+	ProviderPaymentID string    `json:"provider_payment_id,omitempty"`
+}
+
+type PaymentReconcileReport struct {
+	Checked  int `json:"checked"`
+	Repaired int `json:"repaired"`
+	Anomaly  int `json:"anomaly"`
 }
 
 type BidHistoryRow struct {
@@ -250,6 +271,13 @@ func (r *Repository) ConfirmBid(ctx context.Context, auctionID string, userID st
 }
 
 func (r *Repository) PayMock(ctx context.Context, orderID string, userID string, idempotencyKey string, input PaymentInput, traceID string) (PaymentResponse, error) {
+	return r.PayMockWithSecret(ctx, orderID, userID, idempotencyKey, input, DefaultFakePaymentWebhookSecret, traceID)
+}
+
+func (r *Repository) PayMockWithSecret(ctx context.Context, orderID string, userID string, idempotencyKey string, input PaymentInput, secret string, traceID string) (PaymentResponse, error) {
+	if secret == "" {
+		secret = DefaultFakePaymentWebhookSecret
+	}
 	if idempotencyKey == "" {
 		return PaymentResponse{}, apierrors.New(apierrors.CodeInvalidArgument, "Idempotency-Key is required", http.StatusBadRequest)
 	}
@@ -274,7 +302,13 @@ func (r *Repository) PayMock(ctx context.Context, orderID string, userID string,
 	var auctionID string
 	var status string
 	var paidAt *time.Time
-	if err := tx.QueryRow(ctx, `SELECT auction_id, winner_id, status, paid_at FROM orders WHERE id = $1 FOR UPDATE`, orderID).Scan(&auctionID, &winnerID, &status, &paidAt); err != nil {
+	var providerPaymentID *string
+	if err := tx.QueryRow(ctx, `
+		SELECT auction_id, winner_id, status, paid_at, provider_payment_id
+		FROM orders
+		WHERE id = $1
+		FOR UPDATE
+	`, orderID).Scan(&auctionID, &winnerID, &status, &paidAt, &providerPaymentID); err != nil {
 		return PaymentResponse{}, mapOrderNotFound(err)
 	}
 	if winnerID != userID {
@@ -284,35 +318,53 @@ func (r *Repository) PayMock(ctx context.Context, orderID string, userID string,
 		return PaymentResponse{}, apierrors.New(apierrors.CodeOrderAlreadyExpired, "order already expired", http.StatusConflict)
 	}
 	now := time.Now().UTC()
+	if providerPaymentID == nil {
+		generated := "pay_" + uuid.NewString()
+		providerPaymentID = &generated
+	}
 	if status != OrderStatusPaid {
 		if err := tx.QueryRow(ctx, `
 			UPDATE orders
-			SET status = 'PAID', deposit_status = 'REFUNDED', paid_at = $2
+			SET status = 'PAYMENT_INITIATED',
+			    provider_payment_id = $2,
+			    payment_initiated_at = COALESCE(payment_initiated_at, $3)
 			WHERE id = $1
-			RETURNING paid_at
-		`, orderID, now).Scan(&paidAt); err != nil {
+			RETURNING provider_payment_id
+		`, orderID, *providerPaymentID, now).Scan(&providerPaymentID); err != nil {
 			return PaymentResponse{}, err
 		}
 	}
-	if paidAt == nil {
-		paidAt = &now
+	if err := insertPaymentEvent(ctx, tx, "evt_init_"+idempotencyKey, *providerPaymentID, orderID, "payment_initiated", true, traceID, map[string]any{
+		"source":          "pay_mock",
+		"idempotency_key": idempotencyKey,
+		"user_id":         userID,
+	}); err != nil {
+		return PaymentResponse{}, err
 	}
-	resp := PaymentResponse{OrderID: orderID, OrderStatus: OrderStatusPaid, PaidAt: *paidAt, DepositStatus: DepositStatusRefunded}
-	if status != OrderStatusPaid {
-		if err := appendAuctionEvent(ctx, tx, auctionID, "order_paid", traceID, map[string]any{
-			"order_id":       orderID,
-			"user_id":        userID,
-			"order_status":   OrderStatusPaid,
-			"deposit_status": DepositStatusRefunded,
-			"paid_at":        *paidAt,
-		}); err != nil {
-			return PaymentResponse{}, err
-		}
+	if err := tx.Commit(ctx); err != nil {
+		return PaymentResponse{}, err
+	}
+
+	webhook := ProviderPaymentWebhook{
+		ProviderEventID:   "evt_success_" + idempotencyKey,
+		ProviderPaymentID: *providerPaymentID,
+		OrderID:           orderID,
+		EventType:         "payment_succeeded",
+	}
+	webhook.Signature = SignProviderWebhook(webhook, secret)
+	resp, err := r.HandleProviderWebhook(ctx, webhook, secret, traceID)
+	if err != nil {
+		return PaymentResponse{}, err
 	}
 	responseJSON, err := json.Marshal(resp)
 	if err != nil {
 		return PaymentResponse{}, err
 	}
+	tx, err = r.beginTx(ctx)
+	if err != nil {
+		return PaymentResponse{}, err
+	}
+	defer rollback(ctx, tx)
 	if err := completeIdempotency(ctx, tx, "payment", orderID, userID, idempotencyKey, requestHash, http.StatusOK, OrderStatusPaid, responseJSON); err != nil {
 		return PaymentResponse{}, err
 	}
@@ -320,6 +372,256 @@ func (r *Repository) PayMock(ctx context.Context, orderID string, userID string,
 		return PaymentResponse{}, err
 	}
 	return resp, nil
+}
+
+func (r *Repository) HandleProviderWebhook(ctx context.Context, input ProviderPaymentWebhook, secret string, traceID string) (PaymentResponse, error) {
+	if input.ProviderEventID == "" || input.ProviderPaymentID == "" || input.OrderID == "" || input.EventType == "" {
+		return PaymentResponse{}, apierrors.New(apierrors.CodeInvalidArgument, "provider_event_id, provider_payment_id, order_id, and event_type are required", http.StatusBadRequest)
+	}
+	signatureValid := VerifyProviderWebhook(input, secret)
+	tx, err := r.beginTx(ctx)
+	if err != nil {
+		return PaymentResponse{}, err
+	}
+	defer rollback(ctx, tx)
+
+	payload, err := json.Marshal(map[string]any{
+		"provider_event_id":   input.ProviderEventID,
+		"provider_payment_id": input.ProviderPaymentID,
+		"order_id":            input.OrderID,
+		"event_type":          input.EventType,
+	})
+	if err != nil {
+		return PaymentResponse{}, err
+	}
+	inserted := false
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO payment_events (provider, provider_event_id, provider_payment_id, order_id, event_type, signature_valid, processed_at, payload_json, trace_id)
+		VALUES ('local_fake', $1, $2, $3, $4, $5, CASE WHEN $5 THEN now() ELSE NULL END, $6, $7)
+		ON CONFLICT (provider, provider_event_id) DO NOTHING
+		RETURNING true
+	`, input.ProviderEventID, input.ProviderPaymentID, input.OrderID, input.EventType, signatureValid, payload, traceID).Scan(&inserted); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return PaymentResponse{}, err
+	}
+	if !signatureValid {
+		if err := recordPaymentAnomaly(ctx, tx, input.OrderID, "PAYMENT_WEBHOOK_INVALID_SIGNATURE", "invalid fake provider webhook signature", map[string]any{
+			"provider_event_id":   input.ProviderEventID,
+			"provider_payment_id": input.ProviderPaymentID,
+			"trace_id":            traceID,
+		}); err != nil {
+			return PaymentResponse{}, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return PaymentResponse{}, err
+		}
+		return PaymentResponse{}, apierrors.New(apierrors.CodeInvalidArgument, "invalid provider signature", http.StatusUnauthorized)
+	}
+
+	var auctionID string
+	var winnerID string
+	var amountCents int64
+	var status string
+	var depositStatus string
+	var paidAt *time.Time
+	var existingProviderID *string
+	if err := tx.QueryRow(ctx, `
+		SELECT auction_id, winner_id, amount_cents, status, deposit_status, paid_at, provider_payment_id
+		FROM orders
+		WHERE id = $1
+		FOR UPDATE
+	`, input.OrderID).Scan(&auctionID, &winnerID, &amountCents, &status, &depositStatus, &paidAt, &existingProviderID); err != nil {
+		return PaymentResponse{}, mapOrderNotFound(err)
+	}
+	if existingProviderID != nil && *existingProviderID != input.ProviderPaymentID {
+		return PaymentResponse{}, apierrors.New(apierrors.CodeInvalidArgument, "provider payment id does not match order", http.StatusConflict)
+	}
+	if status == OrderStatusExpired {
+		if err := recordPaymentAnomaly(ctx, tx, input.OrderID, "PAYMENT_RECONCILE_MISMATCH", "late provider success for expired order", map[string]any{
+			"provider_event_id": input.ProviderEventID,
+			"status":            status,
+			"trace_id":          traceID,
+		}); err != nil {
+			return PaymentResponse{}, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return PaymentResponse{}, err
+		}
+		return PaymentResponse{}, apierrors.New(apierrors.CodeOrderAlreadyExpired, "order already expired", http.StatusConflict)
+	}
+	now := time.Now().UTC()
+	if status != OrderStatusPaid {
+		if err := tx.QueryRow(ctx, `
+			UPDATE orders
+			SET status = 'PAID',
+			    deposit_status = 'REFUNDED',
+			    paid_at = COALESCE(paid_at, $2),
+			    payment_succeeded_at = COALESCE(payment_succeeded_at, $2),
+			    provider_payment_id = COALESCE(provider_payment_id, $3)
+			WHERE id = $1
+			RETURNING paid_at, deposit_status
+		`, input.OrderID, now, input.ProviderPaymentID).Scan(&paidAt, &depositStatus); err != nil {
+			return PaymentResponse{}, err
+		}
+		if err := appendAuctionEvent(ctx, tx, auctionID, "order_paid", traceID, map[string]any{
+			"order_id":            input.OrderID,
+			"user_id":             winnerID,
+			"amount_cents":        amountCents,
+			"order_status":        OrderStatusPaid,
+			"deposit_status":      DepositStatusRefunded,
+			"provider_payment_id": input.ProviderPaymentID,
+			"paid_at":             *paidAt,
+		}); err != nil {
+			return PaymentResponse{}, err
+		}
+	}
+	if paidAt == nil {
+		paidAt = &now
+	}
+	resp := PaymentResponse{OrderID: input.OrderID, OrderStatus: OrderStatusPaid, PaidAt: *paidAt, DepositStatus: DepositStatusRefunded, ProviderPaymentID: input.ProviderPaymentID}
+	if err := tx.Commit(ctx); err != nil {
+		return PaymentResponse{}, err
+	}
+	return resp, nil
+}
+
+func (r *Repository) ReconcileProviderPayments(ctx context.Context, limit int, grace time.Duration, traceID string) (PaymentReconcileReport, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if grace <= 0 {
+		grace = time.Minute
+	}
+	rows, err := r.db.Query(ctx, `
+		SELECT id, auction_id, winner_id, provider_payment_id, payment_initiated_at
+		FROM orders
+		WHERE status = 'PAYMENT_INITIATED'
+		  AND provider_payment_id IS NOT NULL
+		ORDER BY payment_initiated_at NULLS FIRST, created_at
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return PaymentReconcileReport{}, err
+	}
+	defer rows.Close()
+
+	report := PaymentReconcileReport{}
+	now := time.Now().UTC()
+	for rows.Next() {
+		report.Checked++
+		var orderID string
+		var auctionID string
+		var winnerID string
+		var providerPaymentID string
+		var initiatedAt *time.Time
+		if err := rows.Scan(&orderID, &auctionID, &winnerID, &providerPaymentID, &initiatedAt); err != nil {
+			return report, err
+		}
+		var providerEventID string
+		err := r.db.QueryRow(ctx, `
+			SELECT provider_event_id
+			FROM payment_events
+			WHERE order_id = $1
+			  AND provider_payment_id = $2
+			  AND event_type = 'payment_succeeded'
+			  AND signature_valid = true
+			ORDER BY created_at DESC
+			LIMIT 1
+		`, orderID, providerPaymentID).Scan(&providerEventID)
+		if err == nil {
+			webhook := ProviderPaymentWebhook{
+				ProviderEventID:   providerEventID + "_reconcile",
+				ProviderPaymentID: providerPaymentID,
+				OrderID:           orderID,
+				EventType:         "payment_succeeded",
+			}
+			webhook.Signature = SignProviderWebhook(webhook, DefaultFakePaymentWebhookSecret)
+			if _, err := r.HandleProviderWebhook(ctx, webhook, DefaultFakePaymentWebhookSecret, traceID); err != nil {
+				return report, err
+			}
+			report.Repaired++
+			continue
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return report, err
+		}
+		if initiatedAt == nil || now.Sub(*initiatedAt) < grace {
+			continue
+		}
+		tx, err := r.beginTx(ctx)
+		if err != nil {
+			return report, err
+		}
+		if err := recordPaymentAnomaly(ctx, tx, orderID, "PAYMENT_RECONCILE_MISMATCH", "payment initiated without provider success event", map[string]any{
+			"order_id":            orderID,
+			"auction_id":          auctionID,
+			"user_id":             winnerID,
+			"provider_payment_id": providerPaymentID,
+			"trace_id":            traceID,
+		}); err != nil {
+			_ = tx.Rollback(ctx)
+			return report, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return report, err
+		}
+		report.Anomaly++
+	}
+	return report, rows.Err()
+}
+
+func SignProviderWebhook(input ProviderPaymentWebhook, secret string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(providerWebhookSigningPayload(input)))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func VerifyProviderWebhook(input ProviderPaymentWebhook, secret string) bool {
+	expected := SignProviderWebhook(ProviderPaymentWebhook{
+		ProviderEventID:   input.ProviderEventID,
+		ProviderPaymentID: input.ProviderPaymentID,
+		OrderID:           input.OrderID,
+		EventType:         input.EventType,
+	}, secret)
+	provided, err := hex.DecodeString(input.Signature)
+	if err != nil {
+		return false
+	}
+	expectedBytes, err := hex.DecodeString(expected)
+	if err != nil {
+		return false
+	}
+	return hmac.Equal(provided, expectedBytes)
+}
+
+func providerWebhookSigningPayload(input ProviderPaymentWebhook) string {
+	return fmt.Sprintf("%s|%s|%s|%s", input.ProviderEventID, input.ProviderPaymentID, input.OrderID, input.EventType)
+}
+
+func insertPaymentEvent(ctx context.Context, tx pgx.Tx, providerEventID string, providerPaymentID string, orderID string, eventType string, signatureValid bool, traceID string, payload map[string]any) error {
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `
+		INSERT INTO payment_events (provider, provider_event_id, provider_payment_id, order_id, event_type, signature_valid, processed_at, payload_json, trace_id)
+		VALUES ('local_fake', $1, $2, $3, $4, $5, CASE WHEN $5 THEN now() ELSE NULL END, $6, $7)
+		ON CONFLICT (provider, provider_event_id) DO NOTHING
+	`, providerEventID, providerPaymentID, orderID, eventType, signatureValid, payloadJSON, traceID)
+	return err
+}
+
+func recordPaymentAnomaly(ctx context.Context, tx pgx.Tx, orderID string, anomalyType string, message string, payload map[string]any) error {
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	var auctionID *string
+	_ = tx.QueryRow(ctx, `SELECT auction_id FROM orders WHERE id = $1`, orderID).Scan(&auctionID)
+	_, err = tx.Exec(ctx, `
+		INSERT INTO system_anomaly_events (severity, type, auction_id, message, payload_json)
+		VALUES ('MED', $1, $2, $3, $4)
+	`, anomalyType, auctionID, message, payloadJSON)
+	return err
 }
 
 type lockedAuction struct {
@@ -699,7 +1001,7 @@ func mapOrderNotFound(err error) error {
 
 func (r *Repository) ListOrders(ctx context.Context, userID string, role string) ([]Order, error) {
 	query := `
-		SELECT id, auction_id, winner_id, amount_cents, status, deposit_cents, deposit_status, expire_at, paid_at, created_at
+		SELECT id, auction_id, winner_id, amount_cents, status, deposit_cents, deposit_status, expire_at, paid_at, provider_payment_id, created_at
 		FROM orders
 	`
 	args := []any{}
@@ -716,7 +1018,7 @@ func (r *Repository) ListOrders(ctx context.Context, userID string, role string)
 	orders := []Order{}
 	for rows.Next() {
 		var order Order
-		if err := rows.Scan(&order.ID, &order.AuctionID, &order.WinnerID, &order.AmountCents, &order.Status, &order.DepositCents, &order.DepositStatus, &order.ExpireAt, &order.PaidAt, &order.CreatedAt); err != nil {
+		if err := rows.Scan(&order.ID, &order.AuctionID, &order.WinnerID, &order.AmountCents, &order.Status, &order.DepositCents, &order.DepositStatus, &order.ExpireAt, &order.PaidAt, &order.ProviderID, &order.CreatedAt); err != nil {
 			return nil, err
 		}
 		orders = append(orders, order)

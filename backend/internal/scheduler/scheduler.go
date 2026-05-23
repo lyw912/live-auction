@@ -283,7 +283,7 @@ func (r *Runner) processExpireOrder(ctx context.Context, job Job) error {
 	`, job.TargetID).Scan(&status, &expireAt, &auctionID, &winnerID); err != nil {
 		return err
 	}
-	if status != "ORDER_PENDING" {
+	if status != "ORDER_PENDING" && status != "PAYMENT_INITIATED" {
 		return r.markSucceededTx(ctx, tx, job.ID)
 	}
 	if now.Before(expireAt) {

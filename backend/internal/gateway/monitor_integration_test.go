@@ -166,9 +166,9 @@ func forceMonitorSchedulerJob(t *testing.T, db *pgxpool.Pool, auctionID string) 
 	t.Helper()
 	if _, err := db.Exec(context.Background(), `
 		UPDATE scheduler_jobs
-		SET status = 'FAILED', attempts = 1, last_error = 'monitor test', next_attempt_at = $2, updated_at = now()
+		SET status = 'FAILED', attempts = 1, last_error = 'monitor test', run_at = $2, next_attempt_at = $2, updated_at = now()
 		WHERE job_type = 'END_AUCTION' AND target_id = $1
-	`, auctionID, time.Now().UTC().Add(time.Minute)); err != nil {
+	`, auctionID, time.Now().UTC().Add(24*time.Hour)); err != nil {
 		t.Fatalf("update scheduler job: %v", err)
 	}
 }

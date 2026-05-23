@@ -31,6 +31,7 @@ type Config struct {
 	BidAuctionMaxInFlight    int
 	BidLimitWindow           time.Duration
 	BidLimitRedisTimeout     time.Duration
+	FakePaymentWebhookSecret string
 
 	DBPingTimeout    time.Duration
 	RedisPingTimeout time.Duration
@@ -62,6 +63,7 @@ func Load() Config {
 		BidAuctionMaxInFlight:    getEnvInt("BID_AUCTION_MAX_IN_FLIGHT", 64),
 		BidLimitWindow:           getEnvDuration("BID_LIMIT_WINDOW", time.Second),
 		BidLimitRedisTimeout:     getEnvDuration("BID_LIMIT_REDIS_TIMEOUT", 50*time.Millisecond),
+		FakePaymentWebhookSecret: getEnv("FAKE_PAYMENT_WEBHOOK_SECRET", "local_fake_payment_secret"),
 
 		DBPingTimeout:    getEnvDuration("DB_PING_TIMEOUT", 2*time.Second),
 		RedisPingTimeout: getEnvDuration("REDIS_PING_TIMEOUT", 2*time.Second),

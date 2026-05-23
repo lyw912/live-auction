@@ -3,6 +3,7 @@ package auction
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -239,8 +240,161 @@ func TestCancelActiveThenLaterBidRejects(t *testing.T) {
 	}
 }
 
+func TestProviderWebhookDuplicateCreatesOnePaidTransition(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	repo := NewRepository(db)
+	orderID, auctionID := createPendingOrder(t, repo, db)
+	suffix := uuid.NewString()
+	webhook := ProviderPaymentWebhook{
+		ProviderEventID:   "evt_provider_dup_" + suffix,
+		ProviderPaymentID: "pay_provider_dup_" + suffix,
+		OrderID:           orderID,
+		EventType:         "payment_succeeded",
+	}
+	webhook.Signature = SignProviderWebhook(webhook, DefaultFakePaymentWebhookSecret)
+	first, err := repo.HandleProviderWebhook(ctx, webhook, DefaultFakePaymentWebhookSecret, "tr_provider")
+	if err != nil {
+		t.Fatalf("HandleProviderWebhook first: %v", err)
+	}
+	second, err := repo.HandleProviderWebhook(ctx, webhook, DefaultFakePaymentWebhookSecret, "tr_provider_replay")
+	if err != nil {
+		t.Fatalf("HandleProviderWebhook replay: %v", err)
+	}
+	if first.OrderStatus != OrderStatusPaid || second.OrderStatus != OrderStatusPaid || !second.PaidAt.Equal(first.PaidAt) {
+		t.Fatalf("unexpected webhook responses: %#v %#v", first, second)
+	}
+	assertOrderPaidEventCount(t, db, auctionID, 1)
+	assertPaymentEventCount(t, db, orderID, 1)
+}
+
+func TestProviderWebhookInvalidSignatureAuditedAndIgnored(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	repo := NewRepository(db)
+	orderID, auctionID := createPendingOrder(t, repo, db)
+	suffix := uuid.NewString()
+	webhook := ProviderPaymentWebhook{
+		ProviderEventID:   "evt_bad_sig_" + suffix,
+		ProviderPaymentID: "pay_bad_sig_" + suffix,
+		OrderID:           orderID,
+		EventType:         "payment_succeeded",
+		Signature:         "bad",
+	}
+	if _, err := repo.HandleProviderWebhook(ctx, webhook, DefaultFakePaymentWebhookSecret, "tr_bad_sig"); !hasCode(err, apierrors.CodeInvalidArgument) {
+		t.Fatalf("invalid signature err = %v, want INVALID_ARGUMENT", err)
+	}
+	var status string
+	if err := db.QueryRow(ctx, `SELECT status FROM orders WHERE id = $1`, orderID).Scan(&status); err != nil {
+		t.Fatalf("read order status: %v", err)
+	}
+	if status != OrderStatusPending {
+		t.Fatalf("status = %s, want ORDER_PENDING", status)
+	}
+	assertPaymentAnomalyCount(t, db, auctionID, "PAYMENT_WEBHOOK_INVALID_SIGNATURE", 1)
+}
+
+func TestProviderWebhookLateSuccessForExpiredOrderAudited(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	repo := NewRepository(db)
+	orderID, auctionID := createPendingOrder(t, repo, db)
+	suffix := uuid.NewString()
+	if _, err := db.Exec(ctx, `UPDATE orders SET status = 'ORDER_EXPIRED', deposit_status = 'FORFEITED' WHERE id = $1`, orderID); err != nil {
+		t.Fatalf("expire order: %v", err)
+	}
+	webhook := ProviderPaymentWebhook{
+		ProviderEventID:   "evt_late_success_" + suffix,
+		ProviderPaymentID: "pay_late_success_" + suffix,
+		OrderID:           orderID,
+		EventType:         "payment_succeeded",
+	}
+	webhook.Signature = SignProviderWebhook(webhook, DefaultFakePaymentWebhookSecret)
+	if _, err := repo.HandleProviderWebhook(ctx, webhook, DefaultFakePaymentWebhookSecret, "tr_late_success"); !hasCode(err, apierrors.CodeOrderAlreadyExpired) {
+		t.Fatalf("late webhook err = %v, want ORDER_ALREADY_EXPIRED", err)
+	}
+	assertPaymentAnomalyCount(t, db, auctionID, "PAYMENT_RECONCILE_MISMATCH", 1)
+	assertOrderPaidEventCount(t, db, auctionID, 0)
+}
+
+func TestProviderPaymentReconcileRepairsInitiatedOrderWithSuccessEvent(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	repo := NewRepository(db)
+	orderID, auctionID := createPendingOrder(t, repo, db)
+	suffix := uuid.NewString()
+	providerPaymentID := "pay_reconcile_success_" + suffix
+	if _, err := db.Exec(ctx, `
+		UPDATE orders
+		SET status = 'PAYMENT_INITIATED', provider_payment_id = $2, payment_initiated_at = now() - interval '2 minutes'
+		WHERE id = $1
+	`, orderID, providerPaymentID); err != nil {
+		t.Fatalf("mark initiated: %v", err)
+	}
+	if _, err := db.Exec(ctx, `
+		INSERT INTO payment_events (provider, provider_event_id, provider_payment_id, order_id, event_type, signature_valid, processed_at, payload_json, trace_id)
+		VALUES ('local_fake', $1, $2, $3, 'payment_succeeded', true, now(), '{}', 'tr_reconcile')
+	`, "evt_reconcile_success_"+suffix, providerPaymentID, orderID); err != nil {
+		t.Fatalf("insert provider event: %v", err)
+	}
+	report, err := repo.ReconcileProviderPayments(ctx, 10, time.Second, "tr_reconcile")
+	if err != nil {
+		t.Fatalf("ReconcileProviderPayments: %v", err)
+	}
+	if report.Repaired < 1 {
+		t.Fatalf("unexpected report: %#v", report)
+	}
+	var status string
+	if err := db.QueryRow(ctx, `SELECT status FROM orders WHERE id = $1`, orderID).Scan(&status); err != nil {
+		t.Fatalf("read order: %v", err)
+	}
+	if status != OrderStatusPaid {
+		t.Fatalf("status = %s, want PAID", status)
+	}
+	assertOrderPaidEventCount(t, db, auctionID, 1)
+}
+
+func TestProviderPaymentReconcileWritesMismatchForStaleInitiatedOrder(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	repo := NewRepository(db)
+	orderID, auctionID := createPendingOrder(t, repo, db)
+	providerPaymentID := "pay_reconcile_missing_" + uuid.NewString()
+	if _, err := db.Exec(ctx, `
+		UPDATE orders
+		SET status = 'PAYMENT_INITIATED', provider_payment_id = $2, payment_initiated_at = now() - interval '2 minutes'
+		WHERE id = $1
+	`, orderID, providerPaymentID); err != nil {
+		t.Fatalf("mark initiated: %v", err)
+	}
+	report, err := repo.ReconcileProviderPayments(ctx, 10, time.Second, "tr_reconcile_missing")
+	if err != nil {
+		t.Fatalf("ReconcileProviderPayments: %v", err)
+	}
+	if report.Anomaly < 1 {
+		t.Fatalf("unexpected report: %#v", report)
+	}
+	assertPaymentAnomalyCount(t, db, auctionID, "PAYMENT_RECONCILE_MISMATCH", 1)
+}
+
 func createActiveAuction(t *testing.T, repo *Repository, db *pgxpool.Pool, capPrice *int64) Auction {
 	return createActiveAuctionWithRule(t, repo, db, capPrice, func(rule Rule) Rule { return rule })
+}
+
+func createPendingOrder(t *testing.T, repo *Repository, db *pgxpool.Pool) (string, string) {
+	t.Helper()
+	ctx := context.Background()
+	capPrice := int64(20_000)
+	auction := createActiveAuction(t, repo, db, &capPrice)
+	input := BidInput{ClientBidID: "bid-order-" + uuid.NewString(), AmountCents: 20_000}
+	if _, err := repo.PlaceBid(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_order"); err != nil {
+		t.Fatalf("PlaceBid cap: %v", err)
+	}
+	var orderID string
+	if err := db.QueryRow(ctx, `SELECT id FROM orders WHERE auction_id = $1`, auction.ID).Scan(&orderID); err != nil {
+		t.Fatalf("select order: %v", err)
+	}
+	return orderID, auction.ID
 }
 
 func createActiveAuctionWithRule(t *testing.T, repo *Repository, db *pgxpool.Pool, capPrice *int64, mutateRule func(Rule) Rule) Auction {
@@ -311,5 +465,38 @@ func assertBidTruthRows(t *testing.T, db *pgxpool.Pool, auctionID string, bidCou
 	}
 	if idem != idemCount {
 		t.Fatalf("idempotency records = %d, want %d", idem, idemCount)
+	}
+}
+
+func assertOrderPaidEventCount(t *testing.T, db *pgxpool.Pool, auctionID string, want int) {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(context.Background(), `SELECT count(*) FROM auction_events WHERE auction_id = $1 AND event_type = 'order_paid'`, auctionID).Scan(&count); err != nil {
+		t.Fatalf("count order_paid: %v", err)
+	}
+	if count != want {
+		t.Fatalf("order_paid events = %d, want %d", count, want)
+	}
+}
+
+func assertPaymentEventCount(t *testing.T, db *pgxpool.Pool, orderID string, want int) {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(context.Background(), `SELECT count(*) FROM payment_events WHERE order_id = $1`, orderID).Scan(&count); err != nil {
+		t.Fatalf("count payment_events: %v", err)
+	}
+	if count != want {
+		t.Fatalf("payment_events = %d, want %d", count, want)
+	}
+}
+
+func assertPaymentAnomalyCount(t *testing.T, db *pgxpool.Pool, auctionID string, anomalyType string, want int) {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(context.Background(), `SELECT count(*) FROM system_anomaly_events WHERE auction_id = $1 AND type = $2`, auctionID, anomalyType).Scan(&count); err != nil {
+		t.Fatalf("count payment anomaly: %v", err)
+	}
+	if count != want {
+		t.Fatalf("%s anomalies = %d, want %d", anomalyType, count, want)
 	}
 }

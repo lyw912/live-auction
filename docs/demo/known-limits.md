@@ -12,8 +12,8 @@ Commit: included in current P2 hardening changes; see git history for exact mile
 - PC console supports the P0 host workflow for local demo: item creation, auction creation, selected-auction rule save, schedule/start/cancel/narrate controls, order list, and diagnostics. It is not a complete merchant CMS.
 - P2 local auth now uses `POST /api/auth/login` and an HttpOnly `la_session` cookie backed by `auth_sessions`. Mock headers are disabled in normal runtime unless `ALLOW_MOCK_AUTH=true` or `APP_ENV=test`.
 - There is still no OAuth, SMS, password policy, or account binding. P2 room membership and host ownership ACL now exist for local users and rooms.
-- Payment is mock payment; no external payment provider is integrated.
-- Payment success and order expiry are now emitted through the auction event/outbox stream for realtime H5 recovery, but payment provider callbacks, refunds, disputes, and settlement reconciliation are outside P0.
+- Payment uses a local fake-provider boundary with provider IDs, signed webhook handling, provider event idempotency, and reconciliation checks. No external payment provider is integrated.
+- Payment success and order expiry are emitted through the auction event/outbox stream for realtime H5 recovery. Refunds, disputes, chargebacks, and settlement ledger accounting remain outside current scope.
 
 ## Correctness Scope
 
