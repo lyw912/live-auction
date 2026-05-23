@@ -4,6 +4,8 @@ Date: 2026-05-24 Asia/Shanghai
 
 Status: Accepted working policy for the long Windows development phase.
 
+Detailed P3 cadence and drilldown rules: `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan.md`.
+
 ## Rule
 
 Windows local testing is required and valuable. It is not final capacity evidence.
@@ -69,6 +71,17 @@ When designing or reviewing local workloads, use the `live-auction-v2-tiktok-tes
 - diagnostics visibility.
 
 Route-mocked Playwright tests are UI contract checks. They do not prove backend behavior under attack or load.
+
+## Recurring Stress Rule
+
+Short smoke checks are necessary but not sufficient. At least weekly during active P3 work, and before each P3 milestone, run the local stress loop defined in `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan.md`.
+
+The expected outcome is not always a bigger number. The expected outcome is a defensible verdict:
+
+- `NO_REGRESSION`;
+- `BOTTLENECK_FOUND`;
+- `HARNESS_GAP`;
+- `ENV_LIMIT`.
 
 ## Final Claim Boundary
 

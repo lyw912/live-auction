@@ -40,6 +40,8 @@ Do not use Windows local runs for:
 
 The detailed local policy lives in `docs/perf/windows-local-strategy.md`.
 
+P3 local stress cadence, mock boundaries, open/closed load-model rules, and bottleneck drilldown bundles live in `17-local-stress-and-p3-execution-plan.md`.
+
 ## Baseline Environment
 
 Final capacity baseline must run on Linux native or clearly documented equivalent. WSL2 is development-only. This is a release/final-claim gate, not a blocker for P2/P3 implementation progress.
@@ -84,6 +86,12 @@ Refuse final baseline if:
 | UI | longtask count, input blocked, frame stability |
 
 ## Workloads
+
+Each workload has three levels:
+
+- PR smoke: short Windows-local run to catch script, seed, and functional drift.
+- local stress: recurring Windows-local run that escalates load until bottleneck direction, harness weakness, or environment limit is visible.
+- final capacity: P5 Linux native 3-run evidence before any published capacity number.
 
 ### Final-Second Bid Burst
 

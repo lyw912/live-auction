@@ -254,7 +254,13 @@ For final competition baseline, prefer a quieter 16 vCPU / 32 GB Linux instance 
 
 P3 goal: prove the architecture can move beyond one process and one hot room without weakening correctness.
 
+Execution details for local stress cadence, mock boundaries, workload levels, and bottleneck drilldown live in `17-local-stress-and-p3-execution-plan.md`. P3 work must use that document as the operating plan, not just this roadmap summary.
+
+In plain terms, P3 is the phase where the project stops asking "can the demo flow pass?" and starts asking "which subsystem bends first when the real backend is pushed, and what is the smallest correctness-preserving change that fixes it?"
+
 ### P3-01 Realtime Transport Decision
+
+Before choosing a transport, run watcher fanout, slow consumer, reconnect storm, and runtime profiling locally. The decision must cite measured self-hub behavior, not only feature comparison.
 
 Decision options:
 
@@ -285,6 +291,8 @@ The app still owns:
 
 ### P3-02 Relay Shard Ownership
 
+Before implementing shard ownership, run outbox burst with relay active and capture backlog, delivery lag, retry/DEAD counts, and claim/update behavior. The design must explain whether the bottleneck is ownership/failover, hot table updates, Redis publish latency, or WebSocket publish blocking.
+
 When multiple backend instances run:
 
 - outbox relay workers use DB leases per shard.
@@ -314,6 +322,7 @@ Acceptance gates:
 - one hot room does not leak events to another room.
 - cold room bid p99 and fanout lag remain explainable under hot-room load.
 - overload in one room returns room-scoped throttles, not whole-service collapse.
+- local stress evidence records whether failure is room admission, snapshot rebuild, fanout queue, DB pool, or laptop environment limit.
 
 ### P3-04 Data Path Evolution
 
@@ -325,6 +334,8 @@ Do not jump directly to CDC. Use measurements:
 | outbox claim/update hot table dominates | outbox burst explain/analyze, table bloat, delivery lag | partition outbox table or Debezium CDC outbox. |
 | snapshot rebuild DB pressure | reconnect storm metrics show semaphore saturation | precomputed snapshot versioning and room-level fair queue. |
 | fanout CPU/memory dominates | WS pprof and fanout lag | Centrifugo or serialization-once-per-event optimization. |
+
+No P3 data-path change is accepted because a bottleneck is merely suspected. It needs the local stress or drilldown bundle defined in `17-local-stress-and-p3-execution-plan.md`.
 
 Redis Lua reservation remains design-only unless an ADR proves:
 

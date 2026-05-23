@@ -21,7 +21,8 @@
 14. `13-risk-register.md`：盲区、陷阱、反驳与兜底。
 15. `14-evidence-and-references.md`：外部证据、论据、可追问口径。
 16. `16-industrial-p2-p3-roadmap.md`：P1 完成后的工业级 P2/P3+ 后续路线图、调研依据、取舍和门禁。
-17. `templates/`：正式开发时需要持续填写的模板。
+17. `17-local-stress-and-p3-execution-plan.md`：Windows-first 压测、mock 边界、周期性瓶颈发现和 P3 执行细则。
+18. `templates/`：正式开发时需要持续填写的模板。
 
 ## 一句话方案
 

@@ -53,6 +53,7 @@ P2 bid abuse smoke:
 Formal baseline rules:
 
 - Windows local smoke and relative comparisons are required during development; see `docs/perf/windows-local-strategy.md`.
+- P3 local stress cadence and bottleneck drilldown rules are defined in `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan.md`.
 - Run final capacity baseline on Linux native or a clearly documented equivalent.
 - Record 3 raw Linux runs per workload before publishing any QPS/P99/fanout/online-user claim.
 - Use `docs/design-v2-industrial/templates/perf-baseline.md`.

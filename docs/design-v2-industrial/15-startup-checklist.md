@@ -87,6 +87,8 @@
 - [ ] no local number copied into final capacity claims
 - [ ] attack scenarios checked with `live-auction-v2-tiktok-test-attacker` for bid/outbox/realtime/recovery changes
 - [ ] PG hot-row, outbox lag, WS fanout, reconnect, slow-consumer, or multi-room risks considered when touched
+- [ ] if a week or P3 milestone boundary is reached, run the local stress loop from `17-local-stress-and-p3-execution-plan.md`
+- [ ] route-mocked UI tests are labeled as UI contract coverage and paired with backend/live evidence for final claims
 
 ## Red Flags
 
