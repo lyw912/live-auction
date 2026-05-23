@@ -10,7 +10,7 @@ Date: 2026-05-23 Asia/Shanghai
 | P1-02 | Grafana dashboards | DONE | `docs/evidence/p1-02-grafana-dashboards.md` |
 | P1-03 | k6 baseline suite | DONE | `docs/evidence/p1-03-k6-baseline-suite.md` |
 | P1-04 | Toxiproxy weak-network tests | DONE | `docs/evidence/p1-04-toxiproxy-weak-network.md` |
-| P1-05 | Redis/DB reconciliation checker | TODO | pending |
+| P1-05 | Redis/DB reconciliation checker | DONE | `docs/evidence/p1-05-redis-db-reconciliation-checker.md` |
 | P1-06 | UI performance trace | TODO | pending |
 | P1-07 | alert rules | TODO | pending |
 

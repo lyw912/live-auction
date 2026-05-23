@@ -9,7 +9,8 @@
     "test:e2e:h5-live": "node tests/e2e/run-h5-live-backend-smoke.mjs",
     "test:load:p0": "cd backend && go run ./cmd/p0loadsmoke",
     "test:load:p1:validate": "node tests/load/validate-k6-suite.mjs",
-    "test:chaos:p1:validate": "node tests/chaos/validate-toxiproxy-config.mjs"
+    "test:chaos:p1:validate": "node tests/chaos/validate-toxiproxy-config.mjs",
+    "test:reconcile:p1": "cd backend && go run ./cmd/reconcile --limit 20"
   },
   "devDependencies": {
     "@playwright/test": "^1.45.0",
