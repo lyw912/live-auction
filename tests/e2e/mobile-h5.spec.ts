@@ -1,6 +1,12 @@
 import { expect, test } from '@playwright/test';
 
 test.beforeEach(async ({ page }) => {
+  await page.route('/api/auth/me', async (route) => {
+    await route.fulfill({ json: { user: { ID: 'user_1', Role: 'user' } } });
+  });
+  await page.route('/api/auth/login', async (route) => {
+    await route.fulfill({ json: { user: { ID: 'user_1', Role: 'user' }, expires_in_ms: 43200000 } });
+  });
   await page.route('/api/rooms/room_main/auctions', async (route) => {
     await route.fulfill({
       json: [

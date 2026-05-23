@@ -5,6 +5,13 @@ import '@arco-design/web-react/dist/css/arco.css';
 import { Activity, AlertTriangle, ClipboardList, Database, Play, RadioTower, RefreshCw, Square, Upload } from 'lucide-react';
 import './styles.css';
 
+type Room = {
+  id: string;
+  host_id: string;
+  status: string;
+  role: string;
+};
+
 type Item = {
   id: string;
   title: string;
@@ -83,7 +90,7 @@ type AuthUser = {
   Role: string;
 };
 
-const roomID = 'room_main';
+const defaultRoomID = 'room_main';
 
 function formatCents(cents?: number) {
   return `¥${((cents ?? 0) / 100).toFixed(2)}`;
@@ -163,6 +170,8 @@ async function ensureDemoSession(account: 'host' | 'user') {
 
 function App() {
   const [items, setItems] = useState<Item[]>([]);
+  const [rooms, setRooms] = useState<Room[]>([]);
+  const [roomID, setRoomID] = useState(defaultRoomID);
   const [auctions, setAuctions] = useState<Auction[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [selectedAuctionID, setSelectedAuctionID] = useState('');
@@ -187,8 +196,11 @@ function App() {
     if (!sessionReady) return;
     setLoading(true);
     try {
+      const roomPayload = await fetch('/api/rooms').then((r) => readJSON<{ items?: Room[] }>(r));
+      const roomRows = roomPayload.items ?? [];
+      const nextRoomID = roomRows.find((room) => room.id === roomID)?.id ?? roomRows[0]?.id ?? roomID;
       const [auctionRows, orderRows, auctionsDiag, anomalies, outbox, scheduler, rejects, recovery] = await Promise.all([
-        fetch(`/api/auctions?room_id=${roomID}`).then((r) => readJSON<Auction[]>(r)),
+        fetch(`/api/auctions?room_id=${nextRoomID}`).then((r) => readJSON<Auction[]>(r)),
         fetch('/api/orders').then((r) => readJSON<Order[]>(r)),
         fetch('/api/monitor/auctions').then((r) => readJSON<MonitorPayload>(r)),
         fetch('/api/monitor/anomalies').then((r) => readJSON<MonitorPayload>(r)),
@@ -197,6 +209,8 @@ function App() {
         fetch('/api/monitor/rejects').then((r) => readJSON<MonitorPayload>(r)),
         fetch('/api/monitor/recovery').then((r) => readJSON<MonitorPayload>(r))
       ]);
+      setRooms(roomRows);
+      if (nextRoomID !== roomID) setRoomID(nextRoomID);
       setAuctions(auctionRows);
       setOrders(orderRows);
       setMonitor({ auctions: auctionsDiag, anomalies, outbox, scheduler, rejects, recovery });
@@ -226,7 +240,7 @@ function App() {
 
   useEffect(() => {
     if (sessionReady) void loadAll();
-  }, [sessionReady]);
+  }, [sessionReady, roomID]);
 
   useEffect(() => {
     if (selectedAuction) {
@@ -375,7 +389,22 @@ function App() {
             <h1>主控台</h1>
             <p>{roomID} · host_1</p>
           </div>
-          <Button type="primary" icon={<RefreshCw size={16} />} loading={loading} onClick={loadAll}>刷新</Button>
+          <Space>
+            <select
+              aria-label="room-selector"
+              className="native-input"
+              value={roomID}
+              onChange={(event) => {
+                setSelectedAuctionID('');
+                setRoomID(event.currentTarget.value);
+              }}
+            >
+              {rooms.length === 0 ? <option value={roomID}>{roomID}</option> : rooms.map((room) => (
+                <option key={room.id} value={room.id}>{room.id}</option>
+              ))}
+            </select>
+            <Button type="primary" icon={<RefreshCw size={16} />} loading={loading} onClick={loadAll}>刷新</Button>
+          </Space>
         </section>
 
         <section className="band two-column">

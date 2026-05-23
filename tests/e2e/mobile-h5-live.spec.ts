@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 test('H5 covers live backend REST, fat-finger confirm, cap SOLD order, payment, and WebSocket event paths', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/rooms/room_main');
   const login = await page.request.post('/api/auth/login', {
     data: { account: 'user' }
   });
@@ -72,4 +72,24 @@ test('H5 covers live backend REST, fat-finger confirm, cap SOLD order, payment, 
       })
     ])
   }));
+});
+
+test('H5 route isolates two room contexts', async ({ page }) => {
+  await page.goto('/rooms/room_side');
+  const login = await page.request.post('/api/auth/login', {
+    data: { account: 'user' }
+  });
+  expect(login.ok()).toBeTruthy();
+  const sideAuctions = await page.request.get('/api/rooms/room_side/auctions');
+  expect(sideAuctions.ok()).toBeTruthy();
+  const sidePayload = await sideAuctions.json();
+  expect(sidePayload).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      id: 'auc_side',
+      room_id: 'room_side'
+    })
+  ]));
+  await expect(page.getByText('auc_live')).not.toBeVisible();
+  await expect(page.getByText('Side Room Smoke Item')).toBeVisible();
+  await expect(page.getByTestId('chat-panel').getByText('侧房间独立弹幕')).toBeVisible();
 });

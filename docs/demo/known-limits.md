@@ -2,12 +2,13 @@
 
 Date: 2026-05-23
 
-Commit: pending
+Commit: included in current P2 hardening changes; see git history for exact milestone commits
 
 ## Demo Scope
 
-- The P0 demo uses deterministic local room `room_main`; H5 does not yet provide a full room selector.
-- The H5 app selects active auction and payable order IDs from backend API responses, and the live smoke proves a cap SOLD bid generates the payable order before mock payment. The entry room is still fixed for local smoke and demo repeatability.
+- The local seed keeps `room_main` as the root fallback sample room and adds `room_side` for multi-room checks.
+- The H5 app supports `/rooms/{room_id}` and selects active auction/payable order IDs from backend API responses. The live smoke proves `room_main` and `room_side` do not share auction/chat state.
+- PC console can select host rooms before creating or managing auctions. It is still not a complete room management CMS.
 - PC console supports the P0 host workflow for local demo: item creation, auction creation, selected-auction rule save, schedule/start/cancel/narrate controls, order list, and diagnostics. It is not a complete merchant CMS.
 - P2 local auth now uses `POST /api/auth/login` and an HttpOnly `la_session` cookie backed by `auth_sessions`. Mock headers are disabled in normal runtime unless `ALLOW_MOCK_AUTH=true` or `APP_ENV=test`.
 - There is still no OAuth, SMS, password policy, or account binding. P2 room membership and host ownership ACL now exist for local users and rooms.

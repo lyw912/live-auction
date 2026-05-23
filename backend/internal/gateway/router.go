@@ -47,6 +47,7 @@ func NewRouterWithRealtime(cfg config.Config, deps *storage.Dependencies, log *s
 		r.Group(func(r chi.Router) {
 			r.Use(authMiddleware(cfg, deps.Postgres))
 			r.Get("/auth/me", authHandler.Me)
+			r.Get("/rooms", auctionHandler.ListRooms)
 			r.With(requireHost).Post("/items/upload-url", auctionHandler.CreateUploadURL)
 			r.With(requireHost).Post("/items", auctionHandler.CreateItem)
 			r.With(requireHost).Post("/auctions", auctionHandler.CreateAuction)

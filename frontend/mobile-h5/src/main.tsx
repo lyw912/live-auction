@@ -125,7 +125,6 @@ type AuthUser = {
   Role: string;
 };
 
-const roomID = 'room_main';
 const demoUserID = 'user_1';
 
 const scenarios: Scenario[] = [
@@ -211,8 +210,14 @@ function isTestMatrixEnabled() {
   return new URLSearchParams(window.location.search).get('stateMatrix') === '1';
 }
 
+function roomIDFromPath() {
+  const match = window.location.pathname.match(/^\/rooms\/([^/?#]+)/);
+  return match ? decodeURIComponent(match[1]) : 'room_main';
+}
+
 function App() {
   const showStateMatrix = useMemo(isTestMatrixEnabled, []);
+  const roomID = useMemo(roomIDFromPath, []);
   const [selected, setSelected] = useState<AuctionState>('active_bids');
   const [bidPhase, setBidPhase] = useState<BidPhase>('idle');
   const [paymentPhase, setPaymentPhase] = useState<PaymentPhase>('idle');
@@ -957,6 +962,7 @@ function App() {
       <section className="video-stage" aria-label="live-stage">
         <div className="video-topbar">
           <span className="live-pill"><Radio size={14} /> LIVE</span>
+          <span className="viewer-count">{roomID}</span>
           <span className="viewer-count">12,486 watching</span>
         </div>
         <div className="focus-copy">

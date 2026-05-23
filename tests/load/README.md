@@ -22,7 +22,16 @@ k6 run --summary-export docs\perf\raw\slow-consumer-smoke.json tests\load\slow-c
 k6 run --summary-export docs\perf\raw\outbox-burst-smoke.json tests\load\outbox-burst.js
 ```
 
-`p1loadseed` keeps `auc_live` ACTIVE with a high cap so burst scripts measure bid contention instead of immediately turning the auction SOLD. Set `ALLOW_SOLD=true` only when intentionally testing cap hammer behavior.
+`p1loadseed` keeps `auc_live` ACTIVE with a high cap so burst scripts measure bid contention instead of immediately turning the auction SOLD. It also creates active `room_main` memberships for seeded demo users and k6 users so P2 room ACL is exercised instead of bypassed. Set `ALLOW_SOLD=true` only when intentionally testing cap hammer behavior.
+
+Room and auction defaults:
+
+```powershell
+$env:ROOM_ID='room_main'
+$env:AUCTION_ID='auc_live'
+```
+
+Future P2/P7 multi-room runs should seed additional rooms and pass their IDs explicitly rather than assuming a single fixed room.
 
 Formal baseline rules:
 

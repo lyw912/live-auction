@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/minio/minio-go/v7"
 
 	"live-auction/backend/internal/auction"
@@ -29,6 +30,61 @@ type AuctionHandler struct {
 type uploadURLRequest struct {
 	ObjectName  string `json:"object_name"`
 	ContentType string `json:"content_type"`
+}
+
+type roomSummary struct {
+	ID     string `json:"id"`
+	HostID string `json:"host_id"`
+	Status string `json:"status"`
+	Role   string `json:"role"`
+}
+
+func (h AuctionHandler) ListRooms(w http.ResponseWriter, r *http.Request) {
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	var rows pgx.Rows
+	var err error
+	if user.Role == "host" {
+		rows, err = h.Deps.Postgres.Query(r.Context(), `
+			SELECT id, host_id, status, 'host' AS role
+			FROM rooms
+			WHERE host_id = $1 AND status = 'OPEN'
+			ORDER BY created_at DESC, id
+		`, user.ID)
+	} else {
+		rows, err = h.Deps.Postgres.Query(r.Context(), `
+			SELECT r.id, r.host_id, r.status, rm.role
+			FROM room_memberships rm
+			JOIN rooms r ON r.id = rm.room_id
+			WHERE rm.user_id = $1
+			  AND rm.status = 'ACTIVE'
+			  AND rm.role IN ('viewer','host')
+			  AND r.status = 'OPEN'
+			ORDER BY rm.joined_at DESC, r.id
+		`, user.ID)
+	}
+	if err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	defer rows.Close()
+	result := []roomSummary{}
+	for rows.Next() {
+		var room roomSummary
+		if err := rows.Scan(&room.ID, &room.HostID, &room.Status, &room.Role); err != nil {
+			writeResult(w, r, http.StatusOK, nil, err)
+			return
+		}
+		result = append(result, room)
+	}
+	if err := rows.Err(); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": result})
 }
 
 func (h AuctionHandler) CreateUploadURL(w http.ResponseWriter, r *http.Request) {

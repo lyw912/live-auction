@@ -45,6 +45,15 @@ const auctionDraft = {
 };
 
 test.beforeEach(async ({ page }) => {
+  await page.route('/api/auth/me', async (route) => {
+    await route.fulfill({ json: { user: { ID: 'host_1', Role: 'host' } } });
+  });
+  await page.route('/api/auth/login', async (route) => {
+    await route.fulfill({ json: { user: { ID: 'host_1', Role: 'host' }, expires_in_ms: 43200000 } });
+  });
+  await page.route('/api/rooms', async (route) => {
+    await route.fulfill({ json: { items: [{ id: 'room_main', host_id: 'host_1', status: 'OPEN', role: 'host' }] } });
+  });
   await page.route('/api/auctions?room_id=room_main', async (route) => route.fulfill({ json: [auctionLive, auctionDraft] }));
   await page.route('/api/orders', async (route) => route.fulfill({
     json: [{ id: 'ord_pending', auction_id: 'auc_live', winner_id: 'user_1', amount_cents: 60000, status: 'ORDER_PENDING', deposit_status: 'HELD' }]
