@@ -3,6 +3,7 @@ package gateway
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	apierrors "live-auction/backend/internal/platform/errors"
@@ -124,12 +125,14 @@ func (h MonitorHandler) Auctions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h MonitorHandler) Anomalies(w http.ResponseWriter, r *http.Request) {
+	query, args := anomalyFilterQuery(r)
 	rows, err := h.Deps.Postgres.Query(r.Context(), `
 		SELECT id, severity, type, auction_id, message, payload_json, created_at, resolved_at
 		FROM system_anomaly_events
+		`+query+`
 		ORDER BY created_at DESC, id DESC
-		LIMIT $1
-	`, monitorLimit(r))
+		LIMIT $`+strconv.Itoa(len(args)+1)+`
+	`, append(args, monitorLimit(r))...)
 	if err != nil {
 		writeError(w, r, internalMonitorError(err))
 		return
@@ -150,6 +153,28 @@ func (h MonitorHandler) Anomalies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": result})
+}
+
+func anomalyFilterQuery(r *http.Request) (string, []any) {
+	clauses := []string{}
+	args := []any{}
+	add := func(clause string, value string) {
+		if strings.TrimSpace(value) == "" {
+			return
+		}
+		args = append(args, strings.TrimSpace(value))
+		clauses = append(clauses, strings.ReplaceAll(clause, "?", "$"+strconv.Itoa(len(args))))
+	}
+	q := r.URL.Query()
+	add("type = ?", q.Get("type"))
+	add("auction_id = ?", q.Get("auction_id"))
+	add("payload_json->>'room_id' = ?", q.Get("room_id"))
+	add("payload_json->>'user_id' = ?", q.Get("user_id"))
+	add("payload_json->>'trace_id' = ?", q.Get("trace_id"))
+	if len(clauses) == 0 {
+		return "", args
+	}
+	return "WHERE " + strings.Join(clauses, " AND "), args
 }
 
 func (h MonitorHandler) Outbox(w http.ResponseWriter, r *http.Request) {

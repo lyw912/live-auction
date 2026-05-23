@@ -143,6 +143,16 @@ function validateRule(rule: RuleDraft) {
   return { valid: true, field: 'cap', message: `封顶价可达，预计 ${Math.floor((rule.capPriceCents - rule.startPriceCents) / rule.incrementCents)} 口到顶`, suggestions: [] };
 }
 
+function monitorQuery(roomID: string, filter: { type: string; auctionID: string; userID: string; traceID: string }) {
+  const params = new URLSearchParams();
+  params.set('room_id', roomID);
+  if (filter.type.trim()) params.set('type', filter.type.trim());
+  if (filter.auctionID.trim()) params.set('auction_id', filter.auctionID.trim());
+  if (filter.userID.trim()) params.set('user_id', filter.userID.trim());
+  if (filter.traceID.trim()) params.set('trace_id', filter.traceID.trim());
+  return params.toString();
+}
+
 async function readJSON<T>(response: Response): Promise<T> {
   return await response.json() as T;
 }
@@ -176,6 +186,7 @@ function App() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [selectedAuctionID, setSelectedAuctionID] = useState('');
   const [monitor, setMonitor] = useState<Record<string, MonitorPayload>>({});
+  const [monitorFilter, setMonitorFilter] = useState({ type: '', auctionID: '', userID: '', traceID: '' });
   const [loading, setLoading] = useState(false);
   const [savingRule, setSavingRule] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -203,7 +214,7 @@ function App() {
         fetch(`/api/auctions?room_id=${nextRoomID}`).then((r) => readJSON<Auction[]>(r)),
         fetch('/api/orders').then((r) => readJSON<Order[]>(r)),
         fetch('/api/monitor/auctions').then((r) => readJSON<MonitorPayload>(r)),
-        fetch('/api/monitor/anomalies').then((r) => readJSON<MonitorPayload>(r)),
+        fetch(`/api/monitor/anomalies?${monitorQuery(nextRoomID, monitorFilter)}`).then((r) => readJSON<MonitorPayload>(r)),
         fetch('/api/monitor/outbox').then((r) => readJSON<MonitorPayload>(r)),
         fetch('/api/monitor/scheduler').then((r) => readJSON<MonitorPayload>(r)),
         fetch('/api/monitor/rejects').then((r) => readJSON<MonitorPayload>(r)),
@@ -240,7 +251,7 @@ function App() {
 
   useEffect(() => {
     if (sessionReady) void loadAll();
-  }, [sessionReady, roomID]);
+  }, [sessionReady, roomID, monitorFilter.type, monitorFilter.auctionID, monitorFilter.userID, monitorFilter.traceID]);
 
   useEffect(() => {
     if (selectedAuction) {
@@ -531,6 +542,26 @@ function App() {
           <div className="section-title">
             <h2>诊断</h2>
             <span><Database size={16} /> API</span>
+          </div>
+          <div className="monitor-filter" aria-label="monitor-filter">
+            <select
+              aria-label="monitor-anomaly-type"
+              className="native-input"
+              value={monitorFilter.type}
+              onChange={(event) => setMonitorFilter((current) => ({ ...current, type: event.currentTarget.value }))}
+            >
+              <option value="">全部异常</option>
+              <option value="AUTH_SESSION_EXPIRED">AUTH_SESSION_EXPIRED</option>
+              <option value="ACL_FORBIDDEN">ACL_FORBIDDEN</option>
+              <option value="RATE_LIMIT_REDIS_DOWN">RATE_LIMIT_REDIS_DOWN</option>
+              <option value="BID_AUCTION_TOO_HOT">BID_AUCTION_TOO_HOT</option>
+              <option value="RATE_LIMITED">RATE_LIMITED</option>
+              <option value="PAYMENT_WEBHOOK_INVALID_SIGNATURE">PAYMENT_WEBHOOK_INVALID_SIGNATURE</option>
+              <option value="PAYMENT_RECONCILE_MISMATCH">PAYMENT_RECONCILE_MISMATCH</option>
+            </select>
+            <input aria-label="monitor-auction-id" data-testid="monitor-auction-id" className="native-input" placeholder="auction_id" value={monitorFilter.auctionID} onChange={(event) => setMonitorFilter((current) => ({ ...current, auctionID: event.currentTarget.value }))} />
+            <input aria-label="monitor-user-id" data-testid="monitor-user-id" className="native-input" placeholder="user_id" value={monitorFilter.userID} onChange={(event) => setMonitorFilter((current) => ({ ...current, userID: event.currentTarget.value }))} />
+            <input aria-label="monitor-trace-id" data-testid="monitor-trace-id" className="native-input" placeholder="trace_id" value={monitorFilter.traceID} onChange={(event) => setMonitorFilter((current) => ({ ...current, traceID: event.currentTarget.value }))} />
           </div>
           <Tabs defaultActiveTab="auctions">
             <Tabs.TabPane key="auctions" title="Auctions"><MonitorTable payload={monitor.auctions} empty="暂无竞拍诊断数据" sourceKey="auction_id" /></Tabs.TabPane>

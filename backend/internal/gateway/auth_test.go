@@ -133,6 +133,17 @@ func TestExpiredSessionRejects(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expired session status = %d, want 401", rec.Code)
 	}
+	var count int
+	if err := db.QueryRow(context.Background(), `
+		SELECT count(*)
+		FROM system_anomaly_events
+		WHERE type = 'AUTH_SESSION_EXPIRED'
+	`).Scan(&count); err != nil {
+		t.Fatalf("count auth anomaly: %v", err)
+	}
+	if count == 0 {
+		t.Fatalf("missing AUTH_SESSION_EXPIRED anomaly")
+	}
 }
 
 func findSessionCookie(t *testing.T, cookies []*http.Cookie) *http.Cookie {

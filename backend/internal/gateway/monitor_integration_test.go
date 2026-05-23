@@ -37,6 +37,40 @@ func TestMonitorRoutesReturnRealDBRowsAndRequireHost(t *testing.T) {
 	assertMonitorHasItems(t, router, "/api/monitor/recovery", "room_id", row.RoomID)
 }
 
+func TestMonitorAnomaliesFilterByTypeUserAuctionAndTrace(t *testing.T) {
+	db := openMonitorDB(t)
+	rdb := openMonitorRedis(t)
+	deps := &storage.Dependencies{Postgres: db, Redis: rdb}
+	auctionID := "auc_filter_" + uuid.NewString()
+	traceID := "tr_filter_" + uuid.NewString()
+	if _, err := db.Exec(context.Background(), `
+		INSERT INTO system_anomaly_events (severity, type, auction_id, message, payload_json)
+		VALUES
+		  ('MED', 'RATE_LIMITED', $1, 'filter target', jsonb_build_object('user_id','user_filter','room_id','room_filter','trace_id',$2::text)),
+		  ('MED', 'RATE_LIMITED', $1, 'other trace', jsonb_build_object('user_id','user_filter','room_id','room_filter','trace_id','tr_other')),
+		  ('MED', 'PAYMENT_RECONCILE_MISMATCH', $1, 'other type', jsonb_build_object('user_id','user_filter','room_id','room_filter','trace_id',$2::text))
+	`, auctionID, traceID); err != nil {
+		t.Fatalf("insert filter anomalies: %v", err)
+	}
+	router := NewRouter(testConfig(), deps, slog.Default())
+	req := httptest.NewRequest(http.MethodGet, "/api/monitor/anomalies?type=RATE_LIMITED&auction_id="+auctionID+"&user_id=user_filter&room_id=room_filter&trace_id="+traceID, nil)
+	req.Header.Set("X-Mock-Role", "host")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("filter anomalies status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode filter anomalies: %v", err)
+	}
+	if len(body.Items) != 1 || body.Items[0]["type"] != "RATE_LIMITED" {
+		t.Fatalf("unexpected filtered anomalies: %#v", body.Items)
+	}
+}
+
 func assertMonitorForbiddenForUser(t *testing.T, router http.Handler, path string) {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, path, nil)

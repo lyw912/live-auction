@@ -55,6 +55,8 @@ func seed(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client) error {
 		WHERE outbox_id IN (SELECT id FROM outbox_events WHERE auction_id IN ('auc_live', 'auc_side'));
 		DELETE FROM outbox_events WHERE auction_id IN ('auc_live', 'auc_side');
 		DELETE FROM auction_events WHERE auction_id IN ('auc_live', 'auc_side');
+		DELETE FROM payment_events
+		WHERE order_id IN (SELECT id FROM orders WHERE auction_id IN ('auc_live', 'auc_side'));
 		DELETE FROM orders WHERE auction_id IN ('auc_live', 'auc_side');
 		DELETE FROM auction_rules WHERE auction_id IN ('auc_live', 'auc_side');
 		DELETE FROM auctions WHERE id IN ('auc_live', 'auc_side');

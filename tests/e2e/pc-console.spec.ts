@@ -61,7 +61,7 @@ test.beforeEach(async ({ page }) => {
   await page.route('/api/monitor/auctions', async (route) => route.fulfill({
     json: { items: [{ auction_id: 'auc_live', room_id: 'room_main', status: 'ACTIVE', current_price_cents: 45000, seq: 42 }] }
   }));
-  await page.route('/api/monitor/anomalies', async (route) => route.fulfill({
+  await page.route(/\/api\/monitor\/anomalies(\?.*)?$/, async (route) => route.fulfill({
     json: { items: [{ id: 1, severity: 'HIGH', type: 'CLOCK_STEP_BACKWARD', message: 'scheduler detected clock step backward' }] }
   }));
   await page.route('/api/monitor/outbox', async (route) => route.fulfill({
@@ -84,6 +84,7 @@ test('PC console renders live API auctions, orders, and expanded diagnostic pane
   await expect(page.getByText('紫砂壶')).toBeVisible();
   await expect(page.getByText('ord_pending')).toBeVisible();
   await expect(page.getByTestId('diagnostics')).toBeVisible();
+  await expect(page.getByLabel('monitor-anomaly-type')).toBeVisible();
 
   await page.getByRole('tab', { name: 'Rejects' }).click();
   await expect(page.getByText('BID_TOO_LOW')).toBeVisible();

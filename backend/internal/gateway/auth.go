@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"net"
 	"net/http"
 	"strings"
@@ -56,12 +57,33 @@ func authMiddleware(cfg config.Config, db *pgxpool.Pool) func(http.Handler) http
 			}
 			user, err := lookupSession(r.Context(), db, token)
 			if err != nil {
+				_ = recordAuthSessionExpired(r.Context(), db, r, err)
 				writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "invalid or expired session", http.StatusUnauthorized))
 				return
 			}
 			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), authUserKey{}, user)))
 		})
 	}
+}
+
+func recordAuthSessionExpired(ctx context.Context, db *pgxpool.Pool, r *http.Request, cause error) error {
+	if db == nil {
+		return nil
+	}
+	payload, err := json.Marshal(map[string]any{
+		"trace_id":   traceID(r.Context()),
+		"remote_ip":  clientIP(r),
+		"user_agent": r.UserAgent(),
+		"reason":     cause.Error(),
+	})
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(ctx, `
+		INSERT INTO system_anomaly_events (severity, type, message, payload_json)
+		VALUES ('MED', 'AUTH_SESSION_EXPIRED', 'auth session missing, expired, revoked, or invalid', $1)
+	`, payload)
+	return err
 }
 
 func mockAuthMiddleware(cfg config.Config) func(http.Handler) http.Handler {

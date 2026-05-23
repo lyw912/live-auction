@@ -172,6 +172,13 @@ body {
   margin-bottom: 24px;
 }
 
+.monitor-filter {
+  display: grid;
+  grid-template-columns: minmax(180px, .9fr) repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
 .section-title {
   margin-bottom: 12px;
 }
@@ -194,6 +201,10 @@ body {
 
 @media (max-width: 900px) {
   .two-column {
+    grid-template-columns: 1fr;
+  }
+
+  .monitor-filter {
     grid-template-columns: 1fr;
   }
 }
