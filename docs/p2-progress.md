@@ -14,10 +14,10 @@ Authoritative roadmap: `docs/design-v2-industrial/16-industrial-p2-p3-roadmap.md
 | P2-04 | Bid admission control and abuse behavior | DONE | gateway bid admission, Redis user/IP/auction limiter, local hot-auction semaphore, idempotency-before-limit tests, Redis-down fail-open anomaly, `tests/load/bid-abuse.js`, `docs/evidence/p2-04-bid-admission-control.md` |
 | P2-05 | Payment provider boundary | DONE | provider payment columns, `payment_events`, signed fake-provider webhook, duplicate/invalid/late callback tests, reconciliation repair/mismatch tests, `docs/evidence/p2-05-payment-provider-boundary.md` |
 | P2-06 | Security and abuse diagnostics | DONE | `AUTH_SESSION_EXPIRED` producer, anomaly filters by room/user/auction/trace/type, PC monitor filters, real producers for ACL/rate/payment anomalies, `docs/evidence/p2-06-security-abuse-diagnostics.md` |
-| P2-07 | Linux baseline round 1 | READY_FOR_LINUX_RUN | k6 multi-room workload, Linux-only 3-run harness, raw output/report paths, environment guardrails, `docs/evidence/p2-07-release-baseline-harness.md`; final DONE still requires Linux raw outputs |
+| P2-07 | Local baseline and bottleneck harness | DONE | k6 multi-room workload, Windows/local strategy, final Linux guardrail runner, hot/cold baseline seed, `docs/perf/windows-local-strategy.md`, `docs/evidence/p2-07-release-baseline-harness.md`; final capacity proof deferred to P5 |
 
 ## Notes
 
 - P2 starts from product/security hardening, not multi-instance scaling.
 - Mock auth/payment may remain only as explicitly gated test/demo helpers.
-- No final capacity claim is allowed until P2-07 and later P5 baselines are complete.
+- Windows local smoke and relative optimization are required during development, but no final capacity claim is allowed until the P5 Linux baseline is complete.

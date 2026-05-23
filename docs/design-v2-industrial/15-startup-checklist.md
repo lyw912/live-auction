@@ -80,6 +80,14 @@
 - [ ] bottleneck explained
 - [ ] claim text references baseline file
 
+## During Windows Local Development
+
+- [ ] relevant smoke workload selected from `docs/perf/windows-local-strategy.md`
+- [ ] local result labeled as Windows smoke or relative comparison
+- [ ] no local number copied into final capacity claims
+- [ ] attack scenarios checked with `live-auction-v2-tiktok-test-attacker` for bid/outbox/realtime/recovery changes
+- [ ] PG hot-row, outbox lag, WS fanout, reconnect, slow-consumer, or multi-room risks considered when touched
+
 ## Red Flags
 
 Stop and write an ADR if someone proposes:

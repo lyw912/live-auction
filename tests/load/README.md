@@ -52,8 +52,9 @@ P2 bid abuse smoke:
 
 Formal baseline rules:
 
-- Run on Linux native or a clearly documented equivalent.
-- Record 3 raw runs per workload before publishing any QPS/P99/fanout/online-user claim.
+- Windows local smoke and relative comparisons are required during development; see `docs/perf/windows-local-strategy.md`.
+- Run final capacity baseline on Linux native or a clearly documented equivalent.
+- Record 3 raw Linux runs per workload before publishing any QPS/P99/fanout/online-user claim.
 - Use `docs/design-v2-industrial/templates/perf-baseline.md`.
 - Do not use local Windows smoke outputs as final capacity evidence.
 

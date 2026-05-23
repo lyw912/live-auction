@@ -55,4 +55,4 @@ PASS.
 
 ## Next Action
 
-Implement P2-07 release baseline round 1 or run available smoke evidence if Linux baseline hardware is unavailable.
+Use the P2-07 local baseline and bottleneck harness during Windows development; defer final Linux capacity calibration to P5.

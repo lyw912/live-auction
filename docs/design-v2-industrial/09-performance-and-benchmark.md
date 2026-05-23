@@ -19,9 +19,30 @@ Allowed before baseline:
 - metrics to collect;
 - known bottleneck hypotheses.
 
+## Windows Local Policy
+
+Windows local testing is mandatory during development and is valuable for finding correctness, degradation, and bottleneck-direction issues. It is not final capacity evidence.
+
+Use Windows local runs for:
+
+- concurrent correctness and attack scenarios;
+- Redis-down, reconnect-storm, slow-consumer, outbox poison, and rate-limit behavior;
+- relative before/after optimization under the same local setup;
+- validating k6 scripts, seed data, metrics, and invariant checks.
+
+Do not use Windows local runs for:
+
+- final connection-count limits;
+- stable p99/p999 capacity claims;
+- cloud CPU/disk/kernel capacity;
+- multi-machine load-generator/SUT conclusions;
+- "supports N users" statements.
+
+The detailed local policy lives in `docs/perf/windows-local-strategy.md`.
+
 ## Baseline Environment
 
-Final baseline must run on Linux native or clearly documented equivalent. WSL2 is development-only.
+Final capacity baseline must run on Linux native or clearly documented equivalent. WSL2 is development-only. This is a release/final-claim gate, not a blocker for P2/P3 implementation progress.
 
 Record:
 

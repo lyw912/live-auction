@@ -27,9 +27,9 @@ The target posture:
 
 ```text
 P2: remove demo shortcuts without changing the correctness core.
-P3: prove multi-room and multi-instance realtime scale with measured gates.
+P3: prove multi-room and multi-instance realtime behavior with measured local gates first.
 P4: add differentiating verification, replay, and risk-control tooling.
-P5: freeze reproducible release evidence and interview defense material.
+P5: freeze reproducible release evidence, including final Linux capacity calibration, and interview defense material.
 ```
 
 PostgreSQL remains the auction truth. Redis, Centrifugo/NATS, WebSocket, metrics, and replay tooling are secondary systems around that truth.
@@ -74,7 +74,7 @@ Do not cite exact GitHub star counts in final materials unless they are rechecke
 | 数据治理 | DB constraints, events, idempotency, trace_id, outbox exist. | "Can you replay or audit a full contested auction after load?" | P4-01 auction flight recorder and P4-02 invariant verifier. |
 | 毫秒级实时同步 | Self hub, history/snapshot, backpressure tests exist. | "Can two backend instances serve the same room without event loss or duplicate fanout?" | P3-01 Centrifugo adapter or shared fanout, P3-02 relay shard ownership. |
 | 系统可用性 | Restart/outbox/recovery gates exist. | "What happens when rate-limit Redis fails, payment callback repeats, or room ACL changes mid-session?" | P2-04, P2-05, P2-06 degradation tests. |
-| 性能 | P1 scripts and Windows local smoke exist. | "Where is Linux native 3-run evidence for all workloads?" | P2-07 release baseline round 1, P5 final baseline. |
+| 性能 | P1 scripts and Windows local smoke exist. | "Where is local bottleneck evidence, and where is final Linux capacity proof?" | P2-07 Windows/local bottleneck harness, P5 final Linux baseline. |
 | 独特思考 | Server-authoritative correctness + recoverable realtime is real. | "This is still a single-room mock-auth demo unless product/security scope is hardened." | P2 product/security hardening, P4 verifier/replay/risk tooling. |
 
 ## P2 · Product And Security Hardening
@@ -219,9 +219,9 @@ Acceptance gates:
 - PC monitor can filter by room/user/auction/trace_id.
 - no static security cards.
 
-### P2-07 Release Baseline Round 1
+### P2-07 Local Baseline And Bottleneck Harness
 
-Run Linux native 3-run evidence for all existing workloads before any capacity claim:
+Build and run local Windows-friendly evidence for all existing workloads before deeper scale work:
 
 - final-second bid burst.
 - watcher fanout.
@@ -230,9 +230,18 @@ Run Linux native 3-run evidence for all existing workloads before any capacity c
 - outbox burst.
 - multi-room isolation after P2-03.
 
-This is not the final marketing benchmark. It is a bottleneck discovery baseline.
+This is not the final marketing benchmark. It is a bottleneck discovery and correctness/attack baseline. Windows local numbers may be recorded honestly, but only as local smoke or relative comparisons.
 
-Minimum machine for credible first baseline:
+Acceptance gates:
+
+- scripts run locally or fail with actionable environment errors;
+- raw outputs or evidence summaries are recorded;
+- bid/outbox/realtime/recovery invariants are checked where applicable;
+- PG hot-row, outbox, WS fanout, reconnect, slow-consumer, and multi-room workloads have an execution path;
+- documentation points to `docs/perf/windows-local-strategy.md`;
+- no final QPS/p99/fanout/online-user capacity claim is made from Windows local evidence.
+
+Final Linux calibration is deferred to P5. Minimum machine for credible final capacity baseline:
 
 - Linux native, not WSL2.
 - 8 vCPU, 16 GB RAM, NVMe SSD.
@@ -312,7 +321,7 @@ Do not jump directly to CDC. Use measurements:
 
 | Symptom | Required Evidence | Next Design |
 |---|---|---|
-| PG row lock dominates hot auction latency | lock wait and tx duration histograms from Linux 3-run | consider Redis Lua reservation ADR, but only with reconciliation. |
+| PG row lock dominates hot auction latency | local lock/tx/pool metrics first; final Linux confirmation before capacity claim | consider Redis Lua reservation ADR, but only with reconciliation. |
 | outbox claim/update hot table dominates | outbox burst explain/analyze, table bloat, delivery lag | partition outbox table or Debezium CDC outbox. |
 | snapshot rebuild DB pressure | reconnect storm metrics show semaphore saturation | precomputed snapshot versioning and room-level fair queue. |
 | fanout CPU/memory dominates | WS pprof and fanout lag | Centrifugo or serialization-once-per-event optimization. |
@@ -462,7 +471,7 @@ That is the level at which senior experts have to argue with concrete tradeoffs 
 | 4 | P2-04 bid admission control | Protects the hot path and answers abuse questions. |
 | 5 | P2-05 payment provider boundary | Makes order/payment lifecycle reviewable. |
 | 6 | P2-06 diagnostics | Keeps new failure modes visible. |
-| 7 | P2-07 Linux baseline round 1 | Finds bottlenecks before scale work. |
+| 7 | P2-07 local baseline and bottleneck harness | Finds local correctness, script, and bottleneck-direction issues before scale work. |
 | 8 | P3-01/P3-02 realtime adapter + relay leases | Enables multi-instance claim. |
 | 9 | P3-03 multi-room isolation | Proves scale is not one hot-room benchmark. |
 | 10 | P4 verifier/flight recorder/risk simulator | Converts correctness into judge-facing evidence. |
@@ -494,7 +503,7 @@ Blockers before "industry-grade" claim:
 - [P2] Bid rate-limit codes exist but no limiter enforces them.
 - [P2] Payment is a direct mock endpoint, not callback/idempotent provider flow.
 - [P3] Realtime fanout is single-process.
-- [P5] Final Linux 3-run evidence is not complete.
+- [P5] Final Linux 3-run capacity evidence is not complete.
 
 Decision:
 

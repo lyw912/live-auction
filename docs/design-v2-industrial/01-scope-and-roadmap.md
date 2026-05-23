@@ -54,7 +54,7 @@ P1/P2 不得抢占 P0 正确性。任何“亮点”如果没有测试或诊断�
 
 ## P2
 
-P1 完成后，正式后续路线图见 `16-industrial-p2-p3-roadmap.md`。本节原始 P2 表保留为性能/架构候选优化清单，但不再代表完整的 P2 工业化范围。新的 P2 必须先覆盖 real session、room membership ACL、room selection、bid admission control、payment provider boundary、security diagnostics 和 Linux baseline round 1。
+P1 完成后，正式后续路线图见 `16-industrial-p2-p3-roadmap.md`。本节原始 P2 表保留为性能/架构候选优化清单，但不再代表完整的 P2 工业化范围。新的 P2 必须先覆盖 real session、room membership ACL、room selection、bid admission control、payment provider boundary、security diagnostics 和本地 baseline/bottleneck harness。最终 Linux 容量校准属于 P5 release gate。
 
 | Candidate | Keep Only If |
 |---|---|
@@ -95,6 +95,6 @@ Cut immediately if it delays P0 gates:
 | Decision | Deadline | Criteria |
 |---|---|---|
 | self WS hub vs Centrifugo | May 27, 2026 18:00 Asia/Shanghai | reconnect, slow-consumer, memory, kill-after-commit tests |
-| performance number inclusion | after first Linux native baseline | raw output + env + 3 runs |
+| performance number inclusion | after final Linux native baseline | raw output + env + 3 runs |
 | P1 start | after all P0 gates green | no blocker failures |
 | demo freeze | after P0 demo + diagnostics + evidence records | no untriaged P0 risk |
