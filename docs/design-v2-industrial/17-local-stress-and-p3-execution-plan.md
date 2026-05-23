@@ -7,6 +7,8 @@
 
 The current Windows test suite being mostly green means the correctness and smoke layers are healthy. It does not mean the system has no bottlenecks.
 
+Use the `live-auction-v2-stress-attacker` skill for this work. It is the adversarial execution role for pressure rounds, bottleneck attribution, multi-round retesting, and quantitative before/after analysis.
+
 That is not a contradiction. It means the previous gates were scoped to prevent functional regressions:
 
 - backend tests prove auction invariants, idempotency, ACL, payment callback behavior, diagnostics, and degradation cases;
@@ -23,7 +25,7 @@ P3 must fix that gap. P3 is not "add distributed systems because it sounds advan
 | Layer | Frequency | Environment | Purpose | Allowed Evidence | Not Allowed |
 |---|---|---|---|---|---|
 | PR smoke | every meaningful change | Windows local | catch correctness regressions, script drift, seed mistakes | Go tests, Playwright route-contract tests, live smoke, short k6 summaries | capacity claims |
-| Local stress loop | weekly, before each P3 milestone, and after bid/outbox/realtime changes | Windows local | force bottleneck direction and regression trends | raw k6 output, Prometheus snapshots, DB/Redis/runtime diagnostics, invariant checker output | final p99/p999 or user-count claims |
+| Local stress loop | on demand, before each P3 milestone, and after bid/outbox/realtime changes | Windows local | force bottleneck direction and regression trends | raw k6 output, Prometheus snapshots, DB/Redis/runtime diagnostics, invariant checker output | final p99/p999 or user-count claims |
 | Bottleneck drilldown | when local stress shows saturation or growth | Windows local, focused workload | prove root cause: PG lock, outbox, WS fanout, Redis, runtime, UI | pg lock snapshots, explain/analyze, pprof, heap/goroutine deltas, outbox lag, WS queue metrics | redesign without evidence |
 | Final capacity calibration | P5 only | Linux native or documented equivalent | publish capacity number if evidence supports it | 3 raw Linux runs per workload plus reviewed report | Windows-derived capacity number |
 
@@ -79,11 +81,11 @@ Minimum evidence:
 - known limits;
 - whether the run was smoke, relative comparison, or bottleneck drilldown.
 
-### Weekly Local Stress
+### Adversarial Local Stress
 
-Run the local stress loop even if no feature specifically asks for it. This is the recurring check that prevents "green smoke" from becoming false confidence.
+Run the local stress loop whenever performance confidence matters, before each P3 milestone, and after meaningful bid/outbox/realtime/recovery changes. Do not wait for a calendar boundary. This is the recurring check that prevents "green smoke" from becoming false confidence.
 
-Minimum weekly set:
+Minimum adversarial set when running the full loop:
 
 - final-second bid burst;
 - outbox burst;
@@ -93,7 +95,7 @@ Minimum weekly set:
 - multi-room isolation;
 - bid abuse.
 
-Each weekly run must end with one of:
+Each adversarial run must end with one of:
 
 - no meaningful regression under the same local setup;
 - bottleneck found and issue/ADR opened;
@@ -111,7 +113,7 @@ P3 work cannot start from a blank architecture preference. It must start from th
 
 ## Local Stress Workloads
 
-| Workload | PR Smoke | Weekly Stress | Drilldown Trigger | Required Diagnostics |
+| Workload | PR Smoke | Adversarial Stress | Drilldown Trigger | Required Diagnostics |
 |---|---:|---:|---|---|
 | final-second bid burst | 5-20s, low VU | 2-5 min, escalating VU or arrival rate | retry-later grows, p99 jumps, pool wait grows, accepted rate collapses | bid latency, lock wait, tx duration, pool wait, `pg_locks`/`pg_stat_activity`, invariant checker |
 | outbox burst | 5-20s, low VU | 2-5 min, relay active | backlog monotonic growth, delivery lag, DEAD or retry spike | outbox lag, backlog, retries, DEAD, dead/live tuples, claim query explain |

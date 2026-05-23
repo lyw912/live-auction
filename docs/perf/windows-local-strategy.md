@@ -4,7 +4,7 @@ Date: 2026-05-24 Asia/Shanghai
 
 Status: Accepted working policy for the long Windows development phase.
 
-Detailed P3 cadence and drilldown rules: `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan.md`.
+Detailed P3 cadence and drilldown rules: `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan.md`. Use the `live-auction-v2-stress-attacker` skill when the goal is to actively create pressure, expose bottlenecks, attribute them, and quantify before/after changes.
 
 ## Rule
 
@@ -74,7 +74,7 @@ Route-mocked Playwright tests are UI contract checks. They do not prove backend 
 
 ## Recurring Stress Rule
 
-Short smoke checks are necessary but not sufficient. At least weekly during active P3 work, and before each P3 milestone, run the local stress loop defined in `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan.md`.
+Short smoke checks are necessary but not sufficient. During active P3 work, before each P3 milestone, and whenever performance confidence matters, run the local stress loop defined in `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan.md`.
 
 The expected outcome is not always a bigger number. The expected outcome is a defensible verdict:
 
