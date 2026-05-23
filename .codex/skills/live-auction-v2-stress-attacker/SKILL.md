@@ -42,6 +42,12 @@ If current methods, tool behavior, or profiling techniques matter, browse the we
 - Separate SUT bottlenecks from load-generator, laptop, Docker, network, or script limits.
 - Do not publish or imply final capacity from Windows. Local results can prove bottleneck direction, regressions, and relative improvements.
 - Failed tests are valuable if they expose a real limit and preserve enough evidence to reproduce.
+- Always distinguish admission-on tests from downstream-pressure tests:
+  - Admission-on tests keep product rate/admission limits enabled and are only allowed to prove ACL/auth correctness, stable business `429`, abuse protection, and that protected downstream systems are not overloaded.
+  - Downstream-pressure tests must explicitly raise or otherwise document admission ceilings before claiming PG hot-row, outbox, fanout, reconnect, Redis, or runtime bottlenecks.
+  - If `RATE_LIMITED`, `BID_AUCTION_TOO_HOT`, or HTTP `429` dominate the run, the primary attribution is admission ceiling unless there is independent evidence of downstream saturation.
+  - Never call a run a PG/outbox/WS bottleneck when requests were stopped at ACL/admission. Treat that as P2 harness/config evidence, not P3 bottleneck evidence.
+  - Do not silently bypass admission. If a test disables or raises limits, label it as a pressure profile and do not compare it as a production-capacity result.
 
 ## Attack Loop
 
@@ -63,6 +69,7 @@ If current methods, tool behavior, or profiling techniques matter, browse the we
 
 5. Attribute.
    Capture the narrowest evidence that explains the result:
+   - admission: `RATE_LIMITED`, `BID_AUCTION_TOO_HOT`, HTTP `429`, retry-after, accepted/rejected distribution, admission in-flight/limit settings.
    - PG: lock wait, tx duration, pool wait, `pg_locks`, `pg_stat_activity`, slow/explain plan.
    - outbox: backlog, delivery lag, retry/DEAD counts, head-of-line state, table/index bloat, claim query plan.
    - WS: connection success, fanout lag, slow closes, queue depth, goroutines, heap/RSS, CPU profile.
@@ -85,6 +92,7 @@ You may write or modify test scripts when the existing harness cannot hit the ta
 - Use temporary scripts under `docs/perf/tmp/` or `tests/load/tmp-*` only if they are useful for the current investigation; clean or document them before finalizing.
 - Keep generated scripts honest: no hidden sleeps that reduce offered load, no route mocks, no bypass of auth/ACL unless explicitly labeled as load-generation setup.
 - Add custom k6 metrics for accepted/rejected/limited/retry-later, fanout messages, reconnect result, and business outcome whenever HTTP status alone hides the real result.
+- Name users by business role, not by the subsystem being observed. For example, an outbox pressure workload should use seeded bidders if bids are the legitimate way to create outbox events. A synthetic `k6_outbox_*` user is only valid if it is seeded with the required auth and room membership. Otherwise the run is measuring ACL failure, not outbox pressure.
 
 ## Quantitative Review
 
@@ -92,6 +100,7 @@ For each comparable run, compute at minimum:
 
 - offered load: VUs or arrival rate, duration, iterations, connection count;
 - success/error/business distribution;
+- admission distribution: accepted, rejected, `RATE_LIMITED`, `BID_AUCTION_TOO_HOT`, HTTP `429`, and whether the run was admission-on or downstream-pressure;
 - p95/p99/p99.9 where available, with local-only caveat;
 - bottleneck metric delta: lock wait, outbox lag, queue depth, heap/goroutine/RSS, Redis latency;
 - invariant status: one winner/order, seq continuity, no cross-room leak, no duplicate publish beyond tolerance.
