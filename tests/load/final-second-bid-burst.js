@@ -27,8 +27,11 @@ export default function () {
   const snapshot = getSnapshot();
   const current = Number(snapshot.current_price_cents || 0);
   const increment = Number(snapshot.increment_cents || 5000);
-  const cap = Number(snapshot.cap_price_cents || current + increment * 5);
-  const amount = Math.min(cap, current + increment * ((__VU % 3) + 1));
+  const rawCap = Number(snapshot.cap_price_cents || 0);
+  const cap = rawCap > 0 ? rawCap : current + increment * 1000;
+  const allowSold = String(__ENV.ALLOW_SOLD || '').toLowerCase() === 'true';
+  const desired = current + increment * ((__VU % 3) + 1);
+  const amount = allowSold ? Math.min(cap, desired) : Math.min(cap - increment, desired);
   const userID = `k6_bidder_${__VU}_${__ITER % 7}`;
   const res = placeBid(amount, userID, 'k6-final-second');
   const ok = check(res, {

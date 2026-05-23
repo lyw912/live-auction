@@ -1,0 +1,175 @@
+{
+    "root_group": {
+        "name": "",
+        "path": "",
+        "id": "d41d8cd98f00b204e9800998ecf8427e",
+        "groups": {},
+        "checks": {
+                "snapshot status 200": {
+                    "name": "snapshot status 200",
+                    "path": "::snapshot status 200",
+                    "id": "48a40e4bad6b833da6818cc7a8a770e6",
+                    "passes": 324,
+                    "fails": 0
+                },
+                "bid endpoint returned business response": {
+                    "id": "5c4ca9471e04b98045d3430b637f0286",
+                    "passes": 324,
+                    "fails": 0,
+                    "name": "bid endpoint returned business response",
+                    "path": "::bid endpoint returned business response"
+                }
+            }
+    },
+    "metrics": {
+        "http_req_duration{expected_response:true}": {
+            "p(95)": 13.051494999999996,
+            "p(99)": 19.162859999999995,
+            "p(99.9)": 28.669799600000644,
+            "avg": 5.788298302469137,
+            "min": 0.5031,
+            "med": 5.7804,
+            "max": 35.006,
+            "p(90)": 11.370640000000002
+        },
+        "http_req_blocked": {
+            "avg": 0.014395833333333333,
+            "min": 0,
+            "med": 0,
+            "max": 2.2064,
+            "p(90)": 0,
+            "p(95)": 0,
+            "p(99)": 0,
+            "p(99.9)": 2.2064
+        },
+        "iteration_duration": {
+            "med": 61.123099999999994,
+            "max": 90.5576,
+            "p(90)": 65.04901,
+            "p(95)": 69.00704999999999,
+            "p(99)": 74.02669699999997,
+            "p(99.9)": 87.78722900000017,
+            "avg": 62.16065185185183,
+            "min": 58.1816
+        },
+        "http_reqs": {
+            "count": 648,
+            "rate": 128.4361781405034
+        },
+        "auction_k6_bid_accepted_total": {
+            "count": 213,
+            "rate": 42.21744744433213
+        },
+        "http_req_tls_handshaking": {
+            "p(95)": 0,
+            "p(99)": 0,
+            "p(99.9)": 0,
+            "avg": 0,
+            "min": 0,
+            "med": 0,
+            "max": 0,
+            "p(90)": 0
+        },
+        "http_req_waiting": {
+            "p(95)": 13.051494999999996,
+            "p(99)": 19.162859999999995,
+            "p(99.9)": 28.463012200000605,
+            "avg": 5.747538117283951,
+            "min": 0.5031,
+            "med": 5.7804,
+            "max": 34.4202,
+            "p(90)": 11.347020000000002
+        },
+        "http_req_receiving": {
+            "p(99.9)": 0.7866297000000003,
+            "avg": 0.03490108024691358,
+            "min": 0,
+            "med": 0,
+            "max": 0.7898,
+            "p(90)": 0,
+            "p(95)": 0.50396,
+            "p(99)": 0.7152769999999994
+        },
+        "auction_k6_bid_accepted_rate": {
+            "passes": 213,
+            "fails": 111,
+            "value": 0.6574074074074074
+        },
+        "bid_http_errors": {
+            "count": 0,
+            "rate": 0,
+            "thresholds": {
+                "count==0": false
+            }
+        },
+        "http_req_duration": {
+            "p(99.9)": 28.669799600000644,
+            "avg": 5.788298302469137,
+            "min": 0.5031,
+            "med": 5.7804,
+            "max": 35.006,
+            "p(90)": 11.370640000000002,
+            "p(95)": 13.051494999999996,
+            "p(99)": 19.162859999999995
+        },
+        "http_req_sending": {
+            "p(95)": 0,
+            "p(99)": 0.2673319999999862,
+            "p(99.9)": 0.576353800000001,
+            "avg": 0.005859104938271605,
+            "min": 0,
+            "med": 0,
+            "max": 0.5858,
+            "p(90)": 0
+        },
+        "auction_k6_bid_rejected_total": {
+            "count": 111,
+            "rate": 22.00064162591956
+        },
+        "iterations": {
+            "count": 324,
+            "rate": 64.2180890702517
+        },
+        "http_req_connecting": {
+            "p(99.9)": 1.667,
+            "avg": 0.010290123456790123,
+            "min": 0,
+            "med": 0,
+            "max": 1.667,
+            "p(90)": 0,
+            "p(95)": 0,
+            "p(99)": 0
+        },
+        "vus": {
+            "value": 4,
+            "min": 4,
+            "max": 4
+        },
+        "vus_max": {
+            "value": 4,
+            "min": 4,
+            "max": 4
+        },
+        "data_received": {
+            "count": 482038,
+            "rate": 95541.84944211724
+        },
+        "checks": {
+            "passes": 648,
+            "fails": 0,
+            "thresholds": {
+                "rate>0.95": false
+            },
+            "value": 1
+        },
+        "http_req_failed": {
+            "passes": 0,
+            "fails": 648,
+            "value": 0
+        },
+        "data_sent": {
+            "count": 173026,
+            "rate": 34294.44160330052
+        }
+    }
+}
