@@ -1,0 +1,79 @@
+groups:
+  - name: live-auction-p1
+    rules:
+      - alert: LiveAuctionCriticalAnomaly
+        expr: sum by (type, severity) (auction_anomaly_total{severity=~"HIGH|CRITICAL"}) > 0
+        for: 1m
+        labels:
+          severity: critical
+          component: diagnostics
+        annotations:
+          summary: "Live auction anomaly recorded"
+          description: "Backend diagnostics recorded {{ $labels.severity }} anomaly {{ $labels.type }}."
+          runbook: "docs/runbooks/alerts.md#liveauctioncriticalanomaly"
+
+      - alert: LiveAuctionOutboxDeadLetter
+        expr: increase(auction_outbox_dead_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          component: outbox
+        annotations:
+          summary: "Outbox delivery reached dead-letter state"
+          description: "At least one outbox delivery exhausted retries in the last 5 minutes."
+          runbook: "docs/runbooks/alerts.md#liveauctionoutboxdeadletter"
+
+      - alert: LiveAuctionOutboxLagHigh
+        expr: histogram_quantile(0.95, sum by (le) (rate(auction_outbox_lag_seconds_bucket[5m]))) > 2
+        for: 2m
+        labels:
+          severity: warning
+          component: outbox
+        annotations:
+          summary: "Outbox delivery lag is elevated"
+          description: "P95 outbox delivery lag is above the local P1 guard threshold for 2 minutes."
+          runbook: "docs/runbooks/alerts.md#liveauctionoutboxlaghigh"
+
+      - alert: LiveAuctionSchedulerDriftHigh
+        expr: histogram_quantile(0.95, sum by (le, job_type) (rate(auction_scheduler_drift_seconds_bucket[5m]))) > 2
+        for: 2m
+        labels:
+          severity: warning
+          component: scheduler
+        annotations:
+          summary: "Scheduler drift is elevated"
+          description: "P95 scheduler drift for {{ $labels.job_type }} is above the local P1 guard threshold."
+          runbook: "docs/runbooks/alerts.md#liveauctionschedulerdrifthigh"
+
+      - alert: LiveAuctionReconnectSpike
+        expr: sum(increase(auction_ws_recover_total[5m])) > 50
+        for: 1m
+        labels:
+          severity: warning
+          component: websocket
+        annotations:
+          summary: "Reconnect activity spiked"
+          description: "WebSocket recovery attempts increased sharply in the last 5 minutes."
+          runbook: "docs/runbooks/alerts.md#liveauctionreconnectspike"
+
+      - alert: LiveAuctionSnapshotRebuildPressure
+        expr: sum(increase(auction_snapshot_source_total{source=~"db|snapshot_unavailable|stale_redis"}[5m])) > 20
+        for: 1m
+        labels:
+          severity: warning
+          component: recovery
+        annotations:
+          summary: "Snapshot recovery pressure is elevated"
+          description: "Clients are relying on DB/stale/unavailable snapshot recovery paths."
+          runbook: "docs/runbooks/alerts.md#liveauctionsnapshotrebuildpressure"
+
+      - alert: LiveAuctionSlowConsumerDisconnects
+        expr: increase(auction_ws_slow_consumer_disconnect_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+          component: websocket
+        annotations:
+          summary: "Slow WebSocket consumers are being disconnected"
+          description: "At least one slow consumer was closed in the last 5 minutes."
+          runbook: "docs/runbooks/alerts.md#liveauctionslowconsumerdisconnects"

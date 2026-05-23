@@ -12,7 +12,7 @@ Date: 2026-05-23 Asia/Shanghai
 | P1-04 | Toxiproxy weak-network tests | DONE | `docs/evidence/p1-04-toxiproxy-weak-network.md` |
 | P1-05 | Redis/DB reconciliation checker | DONE | `docs/evidence/p1-05-redis-db-reconciliation-checker.md` |
 | P1-06 | UI performance trace | DONE | `docs/evidence/p1-06-ui-performance-trace.md` |
-| P1-07 | alert rules | TODO | pending |
+| P1-07 | alert rules | DONE | `docs/evidence/p1-07-alert-rules.md` |
 
 ## Notes
 

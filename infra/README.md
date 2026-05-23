@@ -20,5 +20,7 @@ Services:
 Prometheus scrapes the backend at `host.docker.internal:8080/metrics`.
 Start the backend on the default `:8080` address before expecting Grafana panels to show live data.
 The dashboard is provisioned from `infra/grafana/dashboards/live-auction-overview.json` and only references metric families emitted by the backend `/metrics` endpoint.
+Prometheus alert rules are loaded from `infra/prometheus/rules/live-auction-alerts.yml`.
+Runbooks for those local P1 alerts are in `docs/runbooks/alerts.md`; no Alertmanager receiver is configured in this local stack.
 
 Data is stored in Docker named volumes. Use `docker compose -f infra\docker-compose.yml down -v` only when you intentionally want to delete local data.
