@@ -40,13 +40,17 @@ export function getSnapshot() {
 }
 
 export function placeBid(amountCents, userID, keyPrefix = 'k6-bid') {
+  return placeBidFor(AUCTION_ID, amountCents, userID, keyPrefix);
+}
+
+export function placeBidFor(auctionID, amountCents, userID, keyPrefix = 'k6-bid') {
   const clientBidID = `${keyPrefix}-${__VU}-${__ITER}-${Date.now()}-${randomIntBetween(1, 1000000)}`;
   const body = JSON.stringify({
     client_bid_id: clientBidID,
     amount_cents: amountCents,
     client_seen_seq: 0,
   });
-  return http.post(`${BASE_URL}/api/auctions/${AUCTION_ID}/bids`, body, {
+  return http.post(`${BASE_URL}/api/auctions/${auctionID}/bids`, body, {
     headers: {
       ...userHeaders(userID),
       'Idempotency-Key': clientBidID,
@@ -56,9 +60,13 @@ export function placeBid(amountCents, userID, keyPrefix = 'k6-bid') {
 }
 
 export function issueTicket(userID = `k6_ws_${__VU}`) {
+  return issueTicketFor(ROOM_ID, AUCTION_ID, userID);
+}
+
+export function issueTicketFor(roomID, auctionID, userID = `k6_ws_${__VU}`) {
   const res = http.post(
     `${BASE_URL}/api/auth/ws-ticket`,
-    JSON.stringify({ room_id: ROOM_ID, auction_id: AUCTION_ID }),
+    JSON.stringify({ room_id: roomID, auction_id: auctionID }),
     {
       headers: userHeaders(userID),
       tags: { name: 'issue_ws_ticket' },
@@ -72,7 +80,11 @@ export function issueTicket(userID = `k6_ws_${__VU}`) {
 }
 
 export function openAuctionSocket(ticket, lastSeq = 0, handlers = {}) {
-  const url = `${WS_URL}/ws?room_id=${ROOM_ID}&auction_id=${AUCTION_ID}&last_seq=${lastSeq}`;
+  return openAuctionSocketFor(ROOM_ID, AUCTION_ID, ticket, lastSeq, handlers);
+}
+
+export function openAuctionSocketFor(roomID, auctionID, ticket, lastSeq = 0, handlers = {}) {
+  const url = `${WS_URL}/ws?room_id=${roomID}&auction_id=${auctionID}&last_seq=${lastSeq}`;
   const ws = new WebSocket(url, ['auction.v1', `ticket.${ticket}`]);
   ws.addEventListener('open', () => {
     if (handlers.open) handlers.open(ws);

@@ -45,22 +45,22 @@ func seed(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client) error {
 
 	_, err = tx.Exec(ctx, `
 		DELETE FROM scheduler_jobs
-		WHERE target_id = 'auc_live'
-		   OR target_id IN (SELECT id FROM orders WHERE auction_id = 'auc_live');
+		WHERE target_id IN ('auc_live', 'auc_side')
+		   OR target_id IN (SELECT id FROM orders WHERE auction_id IN ('auc_live', 'auc_side'));
 		DELETE FROM idempotency_records
-		WHERE scope_id = 'auc_live'
-		   OR scope_id IN (SELECT id FROM orders WHERE auction_id = 'auc_live');
-		DELETE FROM bids WHERE auction_id = 'auc_live';
+		WHERE scope_id IN ('auc_live', 'auc_side')
+		   OR scope_id IN (SELECT id FROM orders WHERE auction_id IN ('auc_live', 'auc_side'));
+		DELETE FROM bids WHERE auction_id IN ('auc_live', 'auc_side');
 		DELETE FROM outbox_delivery
-		WHERE outbox_id IN (SELECT id FROM outbox_events WHERE auction_id = 'auc_live');
-		DELETE FROM outbox_events WHERE auction_id = 'auc_live';
-		DELETE FROM auction_events WHERE auction_id = 'auc_live';
+		WHERE outbox_id IN (SELECT id FROM outbox_events WHERE auction_id IN ('auc_live', 'auc_side'));
+		DELETE FROM outbox_events WHERE auction_id IN ('auc_live', 'auc_side');
+		DELETE FROM auction_events WHERE auction_id IN ('auc_live', 'auc_side');
 		DELETE FROM payment_events
-		WHERE order_id IN (SELECT id FROM orders WHERE auction_id = 'auc_live');
-		DELETE FROM orders WHERE auction_id = 'auc_live';
-		DELETE FROM auction_rules WHERE auction_id = 'auc_live';
-		DELETE FROM auctions WHERE id = 'auc_live';
-		DELETE FROM chat_messages WHERE room_id = 'room_main';
+		WHERE order_id IN (SELECT id FROM orders WHERE auction_id IN ('auc_live', 'auc_side'));
+		DELETE FROM orders WHERE auction_id IN ('auc_live', 'auc_side');
+		DELETE FROM auction_rules WHERE auction_id IN ('auc_live', 'auc_side');
+		DELETE FROM auctions WHERE id IN ('auc_live', 'auc_side');
+		DELETE FROM chat_messages WHERE room_id IN ('room_main', 'room_side');
 
 		INSERT INTO users (id, role, display_name, city)
 		VALUES
@@ -88,7 +88,9 @@ func seed(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client) error {
 		ON CONFLICT (id) DO NOTHING;
 
 		INSERT INTO rooms (id, host_id, status)
-		VALUES ('room_main', 'host_1', 'OPEN')
+		VALUES
+		  ('room_main', 'host_1', 'OPEN'),
+		  ('room_side', 'host_1', 'OPEN')
 		ON CONFLICT (id) DO UPDATE SET host_id = EXCLUDED.host_id, status = EXCLUDED.status;
 
 		INSERT INTO room_memberships (room_id, user_id, role, status)
@@ -96,13 +98,18 @@ func seed(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client) error {
 		  ('room_main', 'host_1', 'host', 'ACTIVE'),
 		  ('room_main', 'user_1', 'viewer', 'ACTIVE'),
 		  ('room_main', 'user_2', 'viewer', 'ACTIVE'),
-		  ('room_main', 'user_3', 'viewer', 'ACTIVE')
+		  ('room_main', 'user_3', 'viewer', 'ACTIVE'),
+		  ('room_side', 'host_1', 'host', 'ACTIVE'),
+		  ('room_side', 'user_1', 'viewer', 'ACTIVE'),
+		  ('room_side', 'user_2', 'viewer', 'ACTIVE'),
+		  ('room_side', 'user_3', 'viewer', 'ACTIVE')
 		ON CONFLICT (room_id, user_id)
 		DO UPDATE SET role = EXCLUDED.role, status = EXCLUDED.status, left_at = NULL;
 
 		INSERT INTO room_memberships (room_id, user_id, role, status)
-		SELECT 'room_main', id, 'viewer', 'ACTIVE'
+		SELECT room_id, id, 'viewer', 'ACTIVE'
 		FROM users
+		CROSS JOIN (VALUES ('room_main'), ('room_side')) AS rooms(room_id)
 		WHERE id LIKE 'k6_bidder_%' OR id LIKE 'k6_ws_%'
 		ON CONFLICT (room_id, user_id)
 		DO UPDATE SET role = EXCLUDED.role, status = EXCLUDED.status, left_at = NULL;
@@ -113,6 +120,13 @@ func seed(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client) error {
 		  'P1 Load Baseline Item',
 		  NULL,
 		  'P1 local and formal load baseline item.',
+		  'READY'
+		),
+		(
+		  'item_side',
+		  'P2 Multi-Room Baseline Item',
+		  NULL,
+		  'Cold-room baseline item for isolation workload.',
 		  'READY'
 		)
 		ON CONFLICT (id) DO UPDATE
@@ -137,6 +151,22 @@ func seed(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client) error {
 		  0, 1, now()
 		);
 
+		INSERT INTO auctions (
+		  id, room_id, item_id, status, is_narrating,
+		  current_price_cents, current_winner_id,
+		  start_price_cents, increment_cents, cap_price_cents,
+		  start_at, end_at, version, seq, accepted_bid_count,
+		  extend_count, rule_version, updated_at
+		)
+		VALUES (
+		  'auc_side', 'room_side', 'item_side', 'ACTIVE', true,
+		  20000, NULL,
+		  20000, 10000, 100000000,
+		  now() - interval '1 minute', now() + interval '30 minutes',
+		  1, 0, 0,
+		  0, 1, now()
+		);
+
 		INSERT INTO auction_rules (
 		  auction_id, rule_version, duration_seconds,
 		  extend_window_seconds, extend_by_seconds, max_extend_count,
@@ -150,10 +180,24 @@ func seed(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client) error {
 		  5000, 50000, now()
 		);
 
+		INSERT INTO auction_rules (
+		  auction_id, rule_version, duration_seconds,
+		  extend_window_seconds, extend_by_seconds, max_extend_count,
+		  fat_finger_threshold_cents, deposit_bps,
+		  deposit_floor_cents, deposit_cap_cents, frozen_at
+		)
+		VALUES (
+		  'auc_side', 1, 1800,
+		  10, 10, 3,
+		  NULL, 1000,
+		  5000, 50000, now()
+		);
+
 		INSERT INTO chat_messages (room_id, user_id, client_msg_id, body)
 		VALUES
 		  ('room_main', 'user_2', 'seed_chat_1', 'P1 load seed ready'),
-		  ('room_main', 'user_3', 'seed_chat_2', 'Baseline workload active')
+		  ('room_main', 'user_3', 'seed_chat_2', 'Baseline workload active'),
+		  ('room_side', 'user_2', 'seed_side_chat_1', 'Cold room baseline ready')
 		ON CONFLICT DO NOTHING;
 	`)
 	if err != nil {
@@ -166,7 +210,7 @@ func seed(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client) error {
 }
 
 func clearRedisKeys(ctx context.Context, rdb *redis.Client) error {
-	keys := []string{"auction:auc_live:events", "auction:auc_live:snapshot"}
+	keys := []string{"auction:auc_live:events", "auction:auc_live:snapshot", "auction:auc_side:events", "auction:auc_side:snapshot"}
 	var cursor uint64
 	for {
 		matched, next, err := rdb.Scan(ctx, cursor, "ws_ticket:*", 100).Result()

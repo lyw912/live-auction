@@ -14,7 +14,7 @@ Authoritative roadmap: `docs/design-v2-industrial/16-industrial-p2-p3-roadmap.md
 | P2-04 | Bid admission control and abuse behavior | DONE | gateway bid admission, Redis user/IP/auction limiter, local hot-auction semaphore, idempotency-before-limit tests, Redis-down fail-open anomaly, `tests/load/bid-abuse.js`, `docs/evidence/p2-04-bid-admission-control.md` |
 | P2-05 | Payment provider boundary | DONE | provider payment columns, `payment_events`, signed fake-provider webhook, duplicate/invalid/late callback tests, reconciliation repair/mismatch tests, `docs/evidence/p2-05-payment-provider-boundary.md` |
 | P2-06 | Security and abuse diagnostics | DONE | `AUTH_SESSION_EXPIRED` producer, anomaly filters by room/user/auction/trace/type, PC monitor filters, real producers for ACL/rate/payment anomalies, `docs/evidence/p2-06-security-abuse-diagnostics.md` |
-| P2-07 | Linux baseline round 1 | NOT_STARTED | 3-run raw outputs for required workloads, environment record, bottleneck report |
+| P2-07 | Linux baseline round 1 | READY_FOR_LINUX_RUN | k6 multi-room workload, Linux-only 3-run harness, raw output/report paths, environment guardrails, `docs/evidence/p2-07-release-baseline-harness.md`; final DONE still requires Linux raw outputs |
 
 ## Notes
 

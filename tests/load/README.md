@@ -20,6 +20,7 @@ k6 run --summary-export docs\perf\raw\watcher-fanout-smoke.json tests\load\watch
 k6 run --summary-export docs\perf\raw\reconnect-storm-smoke.json tests\load\reconnect-storm.js
 k6 run --summary-export docs\perf\raw\slow-consumer-smoke.json tests\load\slow-consumer.js
 k6 run --summary-export docs\perf\raw\outbox-burst-smoke.json tests\load\outbox-burst.js
+k6 run --summary-export docs\perf\raw\multi-room-isolation-smoke.json tests\load\multi-room-isolation.js
 k6 run --summary-export docs\perf\raw\bid-abuse-smoke.json tests\load\bid-abuse.js
 ```
 
@@ -34,6 +35,15 @@ $env:AUCTION_ID='auc_live'
 
 Future P2/P7 multi-room runs should seed additional rooms and pass their IDs explicitly rather than assuming a single fixed room.
 
+`p1loadseed` now creates `room_main/auc_live` as the hot baseline room and `room_side/auc_side` as the cold isolation room. The multi-room workload defaults to:
+
+```powershell
+$env:HOT_ROOM_ID='room_main'
+$env:HOT_AUCTION_ID='auc_live'
+$env:COLD_ROOM_ID='room_side'
+$env:COLD_AUCTION_ID='auc_side'
+```
+
 P2 bid abuse smoke:
 
 - Set low limits on the backend, for example `$env:BID_USER_LIMIT_PER_SECOND='1'` and `$env:BID_IP_LIMIT_PER_SECOND='2'`.
@@ -46,3 +56,19 @@ Formal baseline rules:
 - Record 3 raw runs per workload before publishing any QPS/P99/fanout/online-user claim.
 - Use `docs/design-v2-industrial/templates/perf-baseline.md`.
 - Do not use local Windows smoke outputs as final capacity evidence.
+
+P2-07 harness:
+
+```bash
+node tests/load/run-p2-linux-baseline.mjs --final
+```
+
+The final runner refuses non-Linux hosts and low `ulimit -n`. It writes `docs/perf/raw/p2-07/environment.json`, one raw k6 summary per workload/run, one log per workload/run, and `docs/perf/p2-07-linux-baseline-round-1.md`.
+
+For local script validation only:
+
+```powershell
+node tests\load\run-p2-linux-baseline.mjs --smoke
+```
+
+Smoke mode is not a capacity baseline and must not be used for performance claims.
