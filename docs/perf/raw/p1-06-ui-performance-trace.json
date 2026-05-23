@@ -1,0 +1,63 @@
+{
+  "gate": "P1-06 UI performance trace",
+  "generated_at": "2026-05-23T03:49:10.520Z",
+  "environment": {
+    "os": "win32",
+    "node": "v24.9.0",
+    "browser": "Playwright Chromium",
+    "viewport": "393x851",
+    "target": "http://127.0.0.1:5173/?stateMatrix=1"
+  },
+  "thresholds": {
+    "maxLongTaskMs": 100,
+    "maxFrameGapMs": 250,
+    "maxClickToPaintMs": 100,
+    "minSamples": 8
+  },
+  "trace_path": "docs/perf/raw/p1-06-ui-performance-trace.zip",
+  "summary_path": "docs/perf/raw/p1-06-ui-performance-trace.json",
+  "longtask_count": 1,
+  "max_longtask_ms": 72,
+  "max_frame_gap_ms": 92.2,
+  "click_to_paint_samples": 19,
+  "max_click_to_paint_ms": 32.9,
+  "raw": {
+    "longtasks_ms": [
+      72
+    ],
+    "largest_frame_gaps_ms": [
+      92.2,
+      66.6,
+      16.8,
+      16.8,
+      16.8,
+      16.8,
+      16.8,
+      16.8,
+      16.8,
+      16.8
+    ],
+    "click_to_paint_ms": [
+      21.2,
+      29.2,
+      28,
+      29.9,
+      24.1,
+      30.4,
+      23.1,
+      22,
+      26.2,
+      30.2,
+      32.9,
+      30.8,
+      29.7,
+      28.3,
+      27.2,
+      31.6,
+      19.3,
+      31,
+      19.9
+    ]
+  },
+  "verdict": "PASS"
+}

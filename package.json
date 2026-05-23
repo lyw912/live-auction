@@ -10,7 +10,8 @@
     "test:load:p0": "cd backend && go run ./cmd/p0loadsmoke",
     "test:load:p1:validate": "node tests/load/validate-k6-suite.mjs",
     "test:chaos:p1:validate": "node tests/chaos/validate-toxiproxy-config.mjs",
-    "test:reconcile:p1": "cd backend && go run ./cmd/reconcile --limit 20"
+    "test:reconcile:p1": "cd backend && go run ./cmd/reconcile --limit 20",
+    "test:perf:p1:ui": "node tests/perf/run-ui-performance-trace.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.45.0",
