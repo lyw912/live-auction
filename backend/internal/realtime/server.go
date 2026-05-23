@@ -65,12 +65,49 @@ func (s *Server) ValidateRoomAuction(ctx context.Context, roomID string, auction
 	return nil
 }
 
+func (s *Server) ValidateTicketRoomAccess(ctx context.Context, ticket Ticket) error {
+	var exists bool
+	var err error
+	if ticket.Role == "host" {
+		err = s.db.QueryRow(ctx, `
+			SELECT EXISTS(
+				SELECT 1
+				FROM rooms
+				WHERE id = $1
+				  AND host_id = $2
+				  AND status = 'OPEN'
+			)
+		`, ticket.RoomID, ticket.UserID).Scan(&exists)
+	} else {
+		err = s.db.QueryRow(ctx, `
+			SELECT EXISTS(
+				SELECT 1
+				FROM room_memberships
+				WHERE room_id = $1
+				  AND user_id = $2
+				  AND role IN ('viewer','host')
+				  AND status = 'ACTIVE'
+			)
+		`, ticket.RoomID, ticket.UserID).Scan(&exists)
+	}
+	if err != nil {
+		return err
+	}
+	if !exists {
+		_ = s.recordWSActivity(ctx, ticket.RoomID, ticket.AuctionID, ticket.UserID, "ws_ticket_access_revoked", map[string]any{
+			"role": ticket.Role,
+		})
+		return apierrors.New(apierrors.CodeForbiddenRoom, "active room access required", http.StatusForbidden)
+	}
+	return nil
+}
+
 func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 	roomID := r.URL.Query().Get("room_id")
 	auctionID := r.URL.Query().Get("auction_id")
 	lastSeq, _ := strconv.ParseInt(r.URL.Query().Get("last_seq"), 10, 64)
 
-	token := ticketFromProtocols(r.Header.Values("Sec-WebSocket-Protocol"))
+	token := ticketFromRequest(r)
 	if token == "" {
 		http.Error(w, "missing ticket", http.StatusUnauthorized)
 		return
@@ -88,6 +125,10 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden room", http.StatusForbidden)
 		return
 	}
+	if err := s.ValidateTicketRoomAccess(r.Context(), ticket); err != nil {
+		http.Error(w, "forbidden room", http.StatusForbidden)
+		return
+	}
 
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		Subprotocols: []string{"auction.v1"},
@@ -96,6 +137,16 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
+	connCtx, cancelConn := context.WithCancel(r.Context())
+	defer cancelConn()
+	go func() {
+		defer cancelConn()
+		for {
+			if _, _, err := conn.Read(connCtx); err != nil {
+				return
+			}
+		}
+	}()
 
 	slow := make(chan struct{})
 	var closeSlow sync.Once
@@ -104,9 +155,9 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 	observability.AddGauge("auction_ws_connections", 1, map[string]string{"room": roomID})
 	defer observability.AddGauge("auction_ws_connections", -1, map[string]string{"room": roomID})
 
-	writeCtx, cancelWrite := context.WithTimeout(r.Context(), 10*time.Second)
+	writeCtx, cancelWrite := context.WithTimeout(connCtx, 10*time.Second)
 	defer cancelWrite()
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(connCtx, 10*time.Second)
 	defer cancel()
 	messages, recoverySource := s.recoveryMessages(ctx, auctionID, lastSeq)
 	observability.Inc("auction_ws_recover_total", map[string]string{"result": metricRecoveryResult(recoverySource)})
@@ -133,18 +184,18 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 		case message, ok := <-sub.Messages():
 			if !ok {
 				observability.Inc("auction_ws_slow_consumer_disconnect_total", nil)
-				_ = s.recordWSActivity(r.Context(), roomID, auctionID, ticket.UserID, "ws_slow_consumer_closed", map[string]any{
+				_ = s.recordWSActivity(context.Background(), roomID, auctionID, ticket.UserID, "ws_slow_consumer_closed", map[string]any{
 					"phase": "queue_closed",
 				})
 				_ = conn.Close(websocket.StatusPolicyViolation, string(apierrors.CodeSlowConsumer))
 				return
 			}
-			ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(connCtx, 5*time.Second)
 			err := conn.Write(ctx, websocket.MessageText, message)
 			cancel()
 			if err != nil {
 				observability.Inc("auction_ws_slow_consumer_disconnect_total", nil)
-				_ = s.recordWSActivity(r.Context(), roomID, auctionID, ticket.UserID, "ws_slow_consumer_closed", map[string]any{
+				_ = s.recordWSActivity(context.Background(), roomID, auctionID, ticket.UserID, "ws_slow_consumer_closed", map[string]any{
 					"phase": "write",
 				})
 				_ = conn.Close(websocket.StatusPolicyViolation, string(apierrors.CodeSlowConsumer))
@@ -152,12 +203,12 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 			}
 		case <-slow:
 			observability.Inc("auction_ws_slow_consumer_disconnect_total", nil)
-			_ = s.recordWSActivity(r.Context(), roomID, auctionID, ticket.UserID, "ws_slow_consumer_closed", map[string]any{
+			_ = s.recordWSActivity(context.Background(), roomID, auctionID, ticket.UserID, "ws_slow_consumer_closed", map[string]any{
 				"phase": "backpressure",
 			})
 			_ = conn.Close(websocket.StatusPolicyViolation, string(apierrors.CodeSlowConsumer))
 			return
-		case <-r.Context().Done():
+		case <-connCtx.Done():
 			return
 		}
 	}
@@ -303,6 +354,13 @@ func ticketFromProtocols(protocols []string) string {
 		}
 	}
 	return ""
+}
+
+func ticketFromRequest(r *http.Request) string {
+	if token := strings.TrimSpace(r.Header.Get("X-Auction-WS-Ticket")); token != "" {
+		return token
+	}
+	return ticketFromProtocols(r.Header.Values("Sec-WebSocket-Protocol"))
 }
 
 func eventSeq(payload []byte) (int64, bool) {

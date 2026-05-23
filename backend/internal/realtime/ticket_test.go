@@ -2,6 +2,7 @@ package realtime
 
 import (
 	"context"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
@@ -38,6 +39,17 @@ func TestTicketFromProtocolsParsesHeaderList(t *testing.T) {
 	got := ticketFromProtocols([]string{"auction.v1, ticket.abc123"})
 	if got != "abc123" {
 		t.Fatalf("ticket = %q, want abc123", got)
+	}
+}
+
+func TestTicketFromRequestPrefersExplicitHeader(t *testing.T) {
+	req := httptest.NewRequest("GET", "/ws", nil)
+	req.Header.Set("X-Auction-WS-Ticket", "header-token")
+	req.Header.Set("Sec-WebSocket-Protocol", "auction.v1, ticket.protocol-token")
+
+	got := ticketFromRequest(req)
+	if got != "header-token" {
+		t.Fatalf("ticket = %q, want header-token", got)
 	}
 }
 

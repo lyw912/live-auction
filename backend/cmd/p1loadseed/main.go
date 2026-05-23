@@ -71,6 +71,14 @@ func seed(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client) error {
 		ON CONFLICT (id) DO NOTHING;
 
 		INSERT INTO users (id, role, display_name, city)
+		SELECT 'k6_user_' || vu::text,
+		       'user',
+		       'k6 user ' || vu::text,
+		       'load'
+		FROM generate_series(1, 512) AS vu
+		ON CONFLICT (id) DO NOTHING;
+
+		INSERT INTO users (id, role, display_name, city)
 		SELECT 'k6_bidder_' || vu::text || '_' || bucket::text,
 		       'user',
 		       'k6 bidder ' || vu::text || '-' || bucket::text,
@@ -110,7 +118,7 @@ func seed(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client) error {
 		SELECT room_id, id, 'viewer', 'ACTIVE'
 		FROM users
 		CROSS JOIN (VALUES ('room_main'), ('room_side')) AS rooms(room_id)
-		WHERE id LIKE 'k6_bidder_%' OR id LIKE 'k6_ws_%'
+		WHERE id LIKE 'k6_user_%' OR id LIKE 'k6_bidder_%' OR id LIKE 'k6_ws_%'
 		ON CONFLICT (room_id, user_id)
 		DO UPDATE SET role = EXCLUDED.role, status = EXCLUDED.status, left_at = NULL;
 

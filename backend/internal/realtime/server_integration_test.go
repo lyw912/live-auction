@@ -68,6 +68,50 @@ func TestServeWSRejectsTicketForForgedRoom(t *testing.T) {
 	}
 }
 
+func TestServeWSRejectsTicketAfterMembershipRevoked(t *testing.T) {
+	db := openDBForRealtime(t)
+	rdb := openRedisForRealtime(t)
+	repo := auction.NewRepository(db)
+	auctionRow := createActiveAuctionForRealtime(t, repo, db)
+	rt := NewServer(db, rdb)
+	server := httptest.NewServer(rtHandler(rt))
+	t.Cleanup(server.Close)
+
+	token := issueRealtimeTicket(t, rt, auctionRow.RoomID, auctionRow.ID)
+	if _, err := db.Exec(context.Background(), `
+		UPDATE room_memberships
+		SET status = 'BANNED'
+		WHERE room_id = $1 AND user_id = 'user_1'
+	`, auctionRow.RoomID); err != nil {
+		t.Fatalf("ban membership: %v", err)
+	}
+
+	_, response, err := websocket.Dial(context.Background(), wsURL(server.URL, auctionRow.RoomID, auctionRow.ID, 0), &websocket.DialOptions{
+		Subprotocols: []string{"auction.v1", "ticket." + token},
+	})
+	if err == nil {
+		t.Fatalf("revoked ticket dial unexpectedly succeeded")
+	}
+	if response == nil || response.StatusCode != http.StatusForbidden {
+		t.Fatalf("revoked ticket status = %v, want 403", responseStatus(response))
+	}
+
+	var count int
+	if err := db.QueryRow(context.Background(), `
+		SELECT count(*)
+		FROM user_activity_events
+		WHERE room_id = $1
+		  AND auction_id = $2
+		  AND user_id = 'user_1'
+		  AND event_type = 'ws_ticket_access_revoked'
+	`, auctionRow.RoomID, auctionRow.ID).Scan(&count); err != nil {
+		t.Fatalf("count ws revocation event: %v", err)
+	}
+	if count == 0 {
+		t.Fatalf("expected ws_ticket_access_revoked recovery event")
+	}
+}
+
 func TestServeWSHistoryRecoveryAndSnapshotFallback(t *testing.T) {
 	db := openDBForRealtime(t)
 	rdb := openRedisForRealtime(t)
@@ -322,6 +366,14 @@ func createActiveAuctionForRealtime(t *testing.T, repo *auction.Repository, db *
 	roomID := "room_ws_" + uuid.NewString()
 	if _, err := db.Exec(context.Background(), `INSERT INTO rooms (id, host_id, status) VALUES ($1, 'host_1', 'OPEN') ON CONFLICT DO NOTHING`, roomID); err != nil {
 		t.Fatalf("insert room: %v", err)
+	}
+	if _, err := db.Exec(context.Background(), `
+		INSERT INTO room_memberships (room_id, user_id, role, status)
+		VALUES ($1, 'user_1', 'viewer', 'ACTIVE')
+		ON CONFLICT (room_id, user_id) DO UPDATE
+		SET role = EXCLUDED.role, status = EXCLUDED.status
+	`, roomID); err != nil {
+		t.Fatalf("insert room membership: %v", err)
 	}
 	item, err := repo.CreateItem(context.Background(), auction.CreateItemInput{Title: "WS Item"})
 	if err != nil {
