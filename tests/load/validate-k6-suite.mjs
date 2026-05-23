@@ -18,6 +18,7 @@ const scripts = [
   'outbox-burst.js',
   'bid-abuse.js',
   'multi-room-isolation.js',
+  'p3-bid-pressure.js',
 ];
 
 for (const script of scripts) {
@@ -58,7 +59,7 @@ assert(runnerText.includes('bid-abuse'), 'P2-07 runner must include bid abuse wo
 
 const p3RunnerText = readFileSync(join(loadDir, 'run-p3-local-stress.mjs'), 'utf8');
 assert(p3RunnerText.includes('docs/perf/raw/p3-00'), 'P3 runner must store raw outputs under docs/perf/raw/p3-00');
-for (const script of scripts) {
+for (const script of scripts.filter((script) => !script.startsWith('p3-'))) {
   assert(p3RunnerText.includes(script), `P3 runner must include ${script}`);
 }
 

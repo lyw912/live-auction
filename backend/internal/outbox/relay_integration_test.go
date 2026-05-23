@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -19,6 +20,7 @@ func TestRelayPublishesPendingOutboxToRedisInOrder(t *testing.T) {
 	ctx := context.Background()
 	repo := auction.NewRepository(db)
 	auctionRow := createActiveAuctionForRelay(t, repo, db)
+	quiesceOutboxExcept(t, db, auctionRow.ID)
 
 	bid1 := auction.BidInput{ClientBidID: "relay-bid-1", AmountCents: 15_000}
 	if _, err := repo.PlaceBid(ctx, auctionRow.ID, "user_1", bid1.ClientBidID, bid1, "tr_relay"); err != nil {
@@ -84,6 +86,7 @@ func TestRelayPoisonMarksDeadAndWritesAnomaly(t *testing.T) {
 	ctx := context.Background()
 	repo := auction.NewRepository(db)
 	auctionRow := createActiveAuctionForRelay(t, repo, db)
+	quiesceOutboxExcept(t, db, auctionRow.ID)
 	bid := auction.BidInput{ClientBidID: "poison-bid-1", AmountCents: 15_000}
 	if _, err := repo.PlaceBid(ctx, auctionRow.ID, "user_1", bid.ClientBidID, bid, "tr_poison"); err != nil {
 		t.Fatalf("PlaceBid: %v", err)
@@ -164,6 +167,7 @@ func TestRelayReclaimsExpiredPublishingLease(t *testing.T) {
 	ctx := context.Background()
 	repo := auction.NewRepository(db)
 	auctionRow := createActiveAuctionForRelay(t, repo, db)
+	quiesceOutboxExcept(t, db, auctionRow.ID)
 	bid := auction.BidInput{ClientBidID: "lease-bid-1", AmountCents: 15_000}
 	if _, err := repo.PlaceBid(ctx, auctionRow.ID, "user_1", bid.ClientBidID, bid, "tr_lease"); err != nil {
 		t.Fatalf("PlaceBid: %v", err)
@@ -195,6 +199,166 @@ func TestRelayReclaimsExpiredPublishingLease(t *testing.T) {
 	}
 	if published == 0 {
 		t.Fatalf("expected at least one reclaimed event to publish")
+	}
+}
+
+func TestRelayDoesNotSkipBlockedAuctionHead(t *testing.T) {
+	db := openDB(t)
+	rdb := openRedis(t)
+	ctx := context.Background()
+	repo := auction.NewRepository(db)
+	auctionRow := createActiveAuctionForRelay(t, repo, db)
+	quiesceOutboxExcept(t, db, auctionRow.ID)
+	bid1 := auction.BidInput{ClientBidID: "blocked-head-bid-1", AmountCents: 15_000}
+	if _, err := repo.PlaceBid(ctx, auctionRow.ID, "user_1", bid1.ClientBidID, bid1, "tr_blocked_head"); err != nil {
+		t.Fatalf("PlaceBid 1: %v", err)
+	}
+	if _, err := db.Exec(ctx, `INSERT INTO users (id, role, display_name) VALUES ('user_blocked_head_2', 'user', 'Blocked Head 2') ON CONFLICT DO NOTHING`); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	bid2 := auction.BidInput{ClientBidID: "blocked-head-bid-2", AmountCents: 20_000}
+	if _, err := repo.PlaceBid(ctx, auctionRow.ID, "user_blocked_head_2", bid2.ClientBidID, bid2, "tr_blocked_head"); err != nil {
+		t.Fatalf("PlaceBid 2: %v", err)
+	}
+	prioritizeOutboxForAuction(t, db, auctionRow.ID)
+	if _, err := db.Exec(ctx, `
+		UPDATE outbox_delivery
+		SET status = 'PUBLISHED', published_at = COALESCE(published_at, now()), locked_by = NULL, locked_until = NULL
+		WHERE outbox_id IN (
+			SELECT id FROM outbox_events
+			WHERE auction_id = $1
+			  AND seq < (SELECT min(seq) FROM outbox_events WHERE auction_id = $1 AND event_type = 'bid_accepted')
+		)
+	`, auctionRow.ID); err != nil {
+		t.Fatalf("publish setup events: %v", err)
+	}
+	if _, err := db.Exec(ctx, `
+		UPDATE outbox_delivery
+		SET status = 'FAILED', next_attempt_at = now() + interval '1 hour'
+		WHERE outbox_id = (
+			SELECT id FROM outbox_events
+			WHERE auction_id = $1 AND event_type = 'bid_accepted'
+			ORDER BY seq
+			LIMIT 1
+		)
+	`, auctionRow.ID); err != nil {
+		t.Fatalf("block first bid event: %v", err)
+	}
+
+	ok, err := NewRelay(db, rdb, "blocked-head-worker").ProcessOne(ctx)
+	if err != nil {
+		t.Fatalf("ProcessOne: %v", err)
+	}
+	if ok {
+		t.Fatalf("relay skipped blocked auction head")
+	}
+	var publishedSecond int
+	if err := db.QueryRow(ctx, `
+		SELECT count(*)
+		FROM outbox_events e
+		JOIN outbox_delivery d ON d.outbox_id = e.id
+		WHERE e.auction_id = $1
+		  AND e.event_type = 'bid_accepted'
+		  AND e.seq > (SELECT min(seq) FROM outbox_events WHERE auction_id = $1 AND event_type = 'bid_accepted')
+		  AND d.status = 'PUBLISHED'
+	`, auctionRow.ID).Scan(&publishedSecond); err != nil {
+		t.Fatalf("count published second: %v", err)
+	}
+	if publishedSecond != 0 {
+		t.Fatalf("published later same-auction event while head was blocked")
+	}
+}
+
+func TestRelayClaimPlanScalesWithPendingBacklog(t *testing.T) {
+	db := openDB(t)
+	ctx := context.Background()
+	auctionID := "relay_plan_" + uuid.NewString()
+	quiesceOutboxExcept(t, db, auctionID)
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), `
+			DELETE FROM outbox_delivery
+			WHERE outbox_id IN (SELECT id FROM outbox_events WHERE auction_id = $1);
+			DELETE FROM outbox_events WHERE auction_id = $1;
+		`, auctionID)
+	})
+	const pendingRows = 5000
+	for i := 1; i <= pendingRows; i++ {
+		var outboxID int64
+		if err := db.QueryRow(ctx, `
+			INSERT INTO outbox_events (aggregate_type, aggregate_id, auction_id, seq, event_type, payload_json, created_at)
+			VALUES ('auction', $1, $1, $2, 'bid_accepted', '{}'::jsonb, now() + ($2::bigint * interval '1 millisecond'))
+			RETURNING id
+		`, auctionID, i).Scan(&outboxID); err != nil {
+			t.Fatalf("insert outbox event %d: %v", i, err)
+		}
+		if _, err := db.Exec(ctx, `INSERT INTO outbox_delivery (outbox_id, status) VALUES ($1, 'PENDING')`, outboxID); err != nil {
+			t.Fatalf("insert outbox delivery %d: %v", i, err)
+		}
+	}
+
+	start := time.Now()
+	ok, err := NewRelay(db, openRedis(t), "claim-plan-worker").ProcessOne(ctx)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("ProcessOne: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected one claimed event")
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("claim/process elapsed %s with %d pending rows; possible outbox claim regression", elapsed, pendingRows)
+	}
+	var firstStatus string
+	if err := db.QueryRow(ctx, `
+		SELECT d.status
+		FROM outbox_events e
+		JOIN outbox_delivery d ON d.outbox_id = e.id
+		WHERE e.auction_id = $1 AND e.seq = 1
+	`, auctionID).Scan(&firstStatus); err != nil {
+		t.Fatalf("select first status: %v", err)
+	}
+	if firstStatus != StatusPublished {
+		t.Fatalf("first status = %s, want %s", firstStatus, StatusPublished)
+	}
+}
+
+func TestRelayProcessBatchDrainsMultipleEvents(t *testing.T) {
+	db := openDB(t)
+	rdb := openRedis(t)
+	ctx := context.Background()
+	repo := auction.NewRepository(db)
+	auctionRow := createActiveAuctionForRelay(t, repo, db)
+	quiesceOutboxExcept(t, db, auctionRow.ID)
+	for i := 0; i < 8; i++ {
+		userID := "batch_user_" + uuid.NewString()
+		if _, err := db.Exec(ctx, `INSERT INTO users (id, role, display_name) VALUES ($1, 'user', 'Batch User')`, userID); err != nil {
+			t.Fatalf("insert user %d: %v", i, err)
+		}
+		bid := auction.BidInput{ClientBidID: "batch-bid-" + uuid.NewString(), AmountCents: 15_000 + int64(i)*5_000}
+		if _, err := repo.PlaceBid(ctx, auctionRow.ID, userID, bid.ClientBidID, bid, "tr_batch"); err != nil {
+			t.Fatalf("PlaceBid %d: %v", i, err)
+		}
+	}
+	prioritizeOutboxForAuction(t, db, auctionRow.ID)
+
+	processed, err := NewRelay(db, rdb, "batch-worker").ProcessBatch(ctx, 4)
+	if err != nil {
+		t.Fatalf("ProcessBatch: %v", err)
+	}
+	if processed != 4 {
+		t.Fatalf("processed = %d, want 4", processed)
+	}
+	var published int
+	if err := db.QueryRow(ctx, `
+		SELECT count(*)
+		FROM outbox_events e
+		JOIN outbox_delivery d ON d.outbox_id = e.id
+		WHERE e.auction_id = $1 AND d.status = 'PUBLISHED'
+	`, auctionRow.ID).Scan(&published); err != nil {
+		t.Fatalf("count published: %v", err)
+	}
+	if published != 4 {
+		t.Fatalf("published = %d, want 4", published)
 	}
 }
 
@@ -295,5 +459,31 @@ func prioritizeOutboxForAuction(t *testing.T, db *pgxpool.Pool, auctionID string
 		WHERE auction_id = $1
 	`, auctionID); err != nil {
 		t.Fatalf("prioritize outbox: %v", err)
+	}
+	if _, err := db.Exec(context.Background(), `
+		UPDATE outbox_delivery d
+		SET event_created_at = e.created_at
+		FROM outbox_events e
+		WHERE e.id = d.outbox_id
+		  AND e.auction_id = $1
+	`, auctionID); err != nil {
+		t.Fatalf("prioritize outbox delivery: %v", err)
+	}
+}
+
+func quiesceOutboxExcept(t *testing.T, db *pgxpool.Pool, auctionID string) {
+	t.Helper()
+	if _, err := db.Exec(context.Background(), `
+		UPDATE outbox_delivery d
+		SET status = 'PUBLISHED',
+		    published_at = COALESCE(published_at, now()),
+		    locked_by = NULL,
+		    locked_until = NULL
+		FROM outbox_events e
+		WHERE e.id = d.outbox_id
+		  AND (e.auction_id IS DISTINCT FROM $1)
+		  AND d.status NOT IN ('PUBLISHED','DEAD')
+	`, auctionID); err != nil {
+		t.Fatalf("quiesce outbox: %v", err)
 	}
 }

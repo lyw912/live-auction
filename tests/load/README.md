@@ -24,6 +24,18 @@ k6 run --summary-export docs\perf\raw\multi-room-isolation-smoke.json tests\load
 k6 run --summary-export docs\perf\raw\bid-abuse-smoke.json tests\load\bid-abuse.js
 ```
 
+P3 downstream-pressure bid run, only for local bottleneck attribution after explicitly raising admission ceilings:
+
+```powershell
+$env:RATE='300'
+$env:DURATION='45s'
+$env:PRE_ALLOCATED_VUS='320'
+$env:MAX_VUS='800'
+k6 run --summary-export docs\perf\raw\p3-bid-pressure.json tests\load\p3-bid-pressure.js
+```
+
+Label this as a downstream-pressure profile. It is not a production capacity profile and it is not comparable to admission-on abuse tests.
+
 `p1loadseed` keeps `auc_live` ACTIVE with a high cap so burst scripts measure bid contention instead of immediately turning the auction SOLD. It also creates active `room_main` memberships for seeded demo users and k6 users so P2 room ACL is exercised instead of bypassed. Set `ALLOW_SOLD=true` only when intentionally testing cap hammer behavior.
 
 Room and auction defaults:

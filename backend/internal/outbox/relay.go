@@ -24,6 +24,7 @@ const (
 
 	DefaultHistoryLimit = 4096
 	DefaultHistoryTTL   = 30 * time.Minute
+	DefaultDrainBatch   = 64
 )
 
 type Relay struct {
@@ -32,6 +33,7 @@ type Relay struct {
 	workerID     string
 	historyLimit int64
 	historyTTL   time.Duration
+	drainBatch   int
 	publisher    func(context.Context, string, []byte)
 }
 
@@ -47,11 +49,11 @@ func (r *Relay) Run(ctx context.Context, log *slog.Logger, interval time.Duratio
 			return
 		default:
 		}
-		processed, err := r.ProcessOne(ctx)
+		processed, err := r.ProcessBatch(ctx, r.drainBatch)
 		if err != nil {
 			log.Warn("outbox_process_failed", slog.String("error", err.Error()))
 		}
-		if !processed {
+		if processed == 0 {
 			select {
 			case <-ctx.Done():
 				return
@@ -79,6 +81,7 @@ func NewRelay(db *pgxpool.Pool, redisClient *redis.Client, workerID string) *Rel
 		workerID:     workerID,
 		historyLimit: DefaultHistoryLimit,
 		historyTTL:   DefaultHistoryTTL,
+		drainBatch:   DefaultDrainBatch,
 	}
 }
 
@@ -107,6 +110,24 @@ func (r *Relay) ProcessOne(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
+func (r *Relay) ProcessBatch(ctx context.Context, limit int) (int, error) {
+	if limit <= 0 {
+		limit = r.drainBatch
+	}
+	processed := 0
+	for processed < limit {
+		ok, err := r.ProcessOne(ctx)
+		if err != nil {
+			return processed, err
+		}
+		if !ok {
+			return processed, nil
+		}
+		processed++
+	}
+	return processed, nil
+}
+
 func (r *Relay) claimOne(ctx context.Context) (Event, bool, error) {
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -117,21 +138,22 @@ func (r *Relay) claimOne(ctx context.Context) (Event, bool, error) {
 	var event Event
 	err = tx.QueryRow(ctx, `
 		SELECT e.id, e.aggregate_type, e.aggregate_id, e.auction_id, e.seq, e.event_type, e.payload_json, e.created_at
-		FROM outbox_events e
-		JOIN outbox_delivery d ON d.outbox_id = e.id
-		WHERE (
+		FROM outbox_delivery d
+		JOIN outbox_events e ON e.id = d.outbox_id
+		WHERE d.auction_id IS NOT NULL
+		  AND d.auction_seq IS NOT NULL
+		  AND (
 		    (d.status IN ('PENDING','FAILED') AND d.next_attempt_at <= now())
 		    OR (d.status = 'PUBLISHING' AND d.locked_until < now())
 		  )
 		  AND NOT EXISTS (
 		    SELECT 1
-		    FROM outbox_events e2
-		    JOIN outbox_delivery d2 ON d2.outbox_id = e2.id
-		    WHERE e2.auction_id = e.auction_id
-		      AND e2.seq < e.seq
-		      AND d2.status NOT IN ('PUBLISHED','DEAD')
+		    FROM outbox_delivery prior
+		    WHERE prior.auction_id = d.auction_id
+		      AND prior.auction_seq < d.auction_seq
+		      AND prior.status IN ('PENDING','FAILED','PUBLISHING')
 		  )
-		ORDER BY e.created_at, e.id
+		ORDER BY d.event_created_at, d.outbox_id
 		LIMIT 1
 		FOR UPDATE OF d SKIP LOCKED
 	`).Scan(&event.OutboxID, &event.AggregateType, &event.AggregateID, &event.AuctionID, &event.Seq, &event.EventType, &event.Payload, &event.CreatedAt)
