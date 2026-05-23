@@ -8,7 +8,7 @@ Authoritative roadmap: `docs/design-v2-industrial/16-industrial-p2-p3-roadmap.md
 
 | ID | Deliverable | Status | Required Evidence |
 |---|---|---|---|
-| P2-01 | Real session boundary | NOT_STARTED | session table migration, login/logout APIs, disabled mock-auth runtime test, H5/PC e2e with real sessions |
+| P2-01 | Real session boundary | DONE | `backend/migrations/202605230001_auth_sessions.sql`, `/api/auth/login|logout|me`, disabled mock-auth runtime test, H5/PC session auto-login, `docs/evidence/p2-01-real-session-boundary.md` |
 | P2-02 | Room membership and host ownership ACL | NOT_STARTED | membership migration, REST/WS forged-room tests, banned/foreign-room tests, ACL diagnostics |
 | P2-03 | Remove fixed room path | NOT_STARTED | PC room selector, H5 room route, two-room e2e, multi-room seed/load env |
 | P2-04 | Bid admission control and abuse behavior | NOT_STARTED | Redis limiter tests, idempotency-before-limit test, Redis-down fail-open gate, k6 abuse output |

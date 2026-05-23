@@ -1,6 +1,6 @@
 # P0 Known Limits
 
-Date: 2026-05-22
+Date: 2026-05-23
 
 Commit: pending
 
@@ -9,7 +9,8 @@ Commit: pending
 - The P0 demo uses deterministic local room `room_main`; H5 does not yet provide a full room selector.
 - The H5 app selects active auction and payable order IDs from backend API responses, and the live smoke proves a cap SOLD bid generates the payable order before mock payment. The entry room is still fixed for local smoke and demo repeatability.
 - PC console supports the P0 host workflow for local demo: item creation, auction creation, selected-auction rule save, schedule/start/cancel/narrate controls, order list, and diagnostics. It is not a complete merchant CMS.
-- Mock auth uses `X-Mock-Role` and `X-Mock-User-Id`; there is no real login, SMS, account binding, or room membership system. Any mock user can enter a valid local demo room.
+- P2 local auth now uses `POST /api/auth/login` and an HttpOnly `la_session` cookie backed by `auth_sessions`. Mock headers are disabled in normal runtime unless `ALLOW_MOCK_AUTH=true` or `APP_ENV=test`.
+- There is still no OAuth, SMS, password policy, account binding, or room membership system. Room membership and host ownership ACL are P2-02.
 - Payment is mock payment; no external payment provider is integrated.
 - Payment success and order expiry are now emitted through the auction event/outbox stream for realtime H5 recovery, but payment provider callbacks, refunds, disputes, and settlement reconciliation are outside P0.
 

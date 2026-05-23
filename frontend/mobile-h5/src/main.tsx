@@ -120,13 +120,13 @@ type WSTicketResponse = {
   ticket?: string;
   expires_in_ms?: number;
 };
+type AuthUser = {
+  ID: string;
+  Role: string;
+};
 
 const roomID = 'room_main';
-const currentUserID = 'user_1';
-const mockUserHeaders = {
-  'X-Mock-Role': 'user',
-  'X-Mock-User-Id': currentUserID
-};
+const demoUserID = 'user_1';
 
 const scenarios: Scenario[] = [
   { key: 'scheduled', title: '即将开拍', status: 'SCHEDULED', price: '¥100.00', leader: '暂无领先', feedback: '19:58 开始', cta: '等待开拍', ctaDisabled: true },
@@ -161,6 +161,27 @@ async function readJSON<T>(response: Response): Promise<T | null> {
   } catch {
     return null;
   }
+}
+
+async function ensureDemoSession(account: 'host' | 'user') {
+  const me = await fetch('/api/auth/me');
+  if (me.ok) {
+    const payload = await readJSON<{ user?: AuthUser }>(me);
+    if (payload?.user) return payload.user;
+  }
+  const login = await fetch('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ account })
+  });
+  if (!login.ok) {
+    throw new Error(`login failed: ${login.status}`);
+  }
+  const payload = await readJSON<{ user?: AuthUser }>(login);
+  if (!payload?.user) {
+    throw new Error('login response missing user');
+  }
+  return payload.user;
 }
 
 function rejectCopy(code?: string | null) {
@@ -218,6 +239,8 @@ function App() {
   const [payableOrderAmountCents, setPayableOrderAmountCents] = useState(0);
   const [terminalPriceCents, setTerminalPriceCents] = useState(0);
   const [terminalWinnerID, setTerminalWinnerID] = useState('');
+  const [currentUserID, setCurrentUserID] = useState(demoUserID);
+  const [sessionReady, setSessionReady] = useState(false);
   const [lotTitle, setLotTitle] = useState('青瓷手作茶盏');
   const paymentInFlight = useRef(false);
   const wsRef = useRef<WebSocket | null>(null);
@@ -247,6 +270,26 @@ function App() {
   useEffect(() => {
     activeIncrementCentsRef.current = activeIncrementCents;
   }, [activeIncrementCents]);
+
+  useEffect(() => {
+    let cancelled = false;
+    ensureDemoSession('user')
+      .then((user) => {
+        if (!cancelled) {
+          setCurrentUserID(user.ID);
+          setSessionReady(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setConnectionPhase('disconnected');
+          setBidFeedback('登录失败，请刷新重试');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const scenario = useMemo<Scenario>(() => {
     if (selected === 'sold_winner') {
@@ -472,7 +515,7 @@ function App() {
   const loadPayableOrderForAuction = async (auctionID: string) => {
     if (!auctionID) return null;
     try {
-      const response = await fetch('/api/users/me/orders', { headers: mockUserHeaders });
+      const response = await fetch('/api/users/me/orders');
       const payload = await readJSON<{ items?: OrderRow[] }>(response);
       if (!response.ok) return null;
       const pendingOrder = (payload?.items ?? []).find((row) => (
@@ -599,8 +642,9 @@ function App() {
   useEffect(() => {
     let cancelled = false;
     const loadActiveAuction = async () => {
+      if (!sessionReady) return;
       try {
-        const response = await fetch(`/api/rooms/${roomID}/auctions`, { headers: mockUserHeaders });
+        const response = await fetch(`/api/rooms/${roomID}/auctions`);
         const payload = await readJSON<AuctionSummary[] | { items?: AuctionSummary[] }>(response);
         const auctions = Array.isArray(payload) ? payload : payload?.items ?? [];
         const selectedAuction = auctions.find((item) => item.status === 'ACTIVE') ?? auctions[0];
@@ -622,12 +666,12 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [sessionReady]);
 
   useEffect(() => {
     let cancelled = false;
     const loadPayableOrder = async () => {
-      if (!activeAuctionID) return;
+      if (!sessionReady || !activeAuctionID) return;
       const order = await loadPayableOrderForAuction(activeAuctionID);
       if (cancelled || order) return;
     };
@@ -635,13 +679,14 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeAuctionID]);
+  }, [activeAuctionID, sessionReady]);
 
   useEffect(() => {
     let cancelled = false;
     const loadChat = async () => {
+      if (!sessionReady) return;
       try {
-        const response = await fetch(`/api/rooms/${roomID}/chat?limit=30`, { headers: mockUserHeaders });
+        const response = await fetch(`/api/rooms/${roomID}/chat?limit=30`);
         const payload = await readJSON<{ items?: ChatMessage[] }>(response);
         if (!response.ok || cancelled) return;
         setChatMessages((payload?.items ?? []).slice().reverse());
@@ -655,7 +700,7 @@ function App() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [sessionReady]);
 
   useEffect(() => {
     const onAuctionEvent = (event: Event) => {
@@ -681,15 +726,13 @@ function App() {
       }, 2_000);
     };
     const connectWebSocket = async () => {
-      if (!activeAuctionID) return;
+      if (!sessionReady || !activeAuctionID) return;
       setConnectionPhase((phase) => phase === 'recovering' ? phase : 'connecting');
       try {
         const ticketResponse = await fetch('/api/auth/ws-ticket', {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/json',
-            'X-Mock-Role': 'user',
-            'X-Mock-User-Id': currentUserID
+            'Content-Type': 'application/json'
           },
           body: JSON.stringify({ room_id: roomID, auction_id: activeAuctionID })
         });
@@ -732,7 +775,7 @@ function App() {
       }
     };
 
-    if (activeAuctionID) {
+    if (sessionReady && activeAuctionID) {
       void connectWebSocket();
     }
     return () => {
@@ -741,7 +784,7 @@ function App() {
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [activeAuctionID]);
+  }, [activeAuctionID, sessionReady]);
 
   const submitBid = async () => {
     const auctionID = activeAuctionIDRef.current;
@@ -753,8 +796,7 @@ function App() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Idempotency-Key': clientBidID,
-          ...mockUserHeaders
+          'Idempotency-Key': clientBidID
         },
         body: JSON.stringify({
           client_bid_id: clientBidID,
@@ -792,8 +834,7 @@ function App() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Idempotency-Key': confirmIdempotencyKey,
-          ...mockUserHeaders
+          'Idempotency-Key': confirmIdempotencyKey
         },
         body: JSON.stringify({
           confirm_token: confirmToken,
@@ -823,8 +864,7 @@ function App() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Idempotency-Key': idempotencyKey,
-          ...mockUserHeaders
+          'Idempotency-Key': idempotencyKey
         },
         body: JSON.stringify({ confirm: true })
       });
@@ -866,8 +906,8 @@ function App() {
     setHistoryError('');
     try {
       const [bids, orders] = await Promise.all([
-        fetch('/api/users/me/bids', { headers: mockUserHeaders }).then((response) => response.json()),
-        fetch('/api/users/me/orders', { headers: mockUserHeaders }).then((response) => response.json())
+        fetch('/api/users/me/bids').then((response) => response.json()),
+        fetch('/api/users/me/orders').then((response) => response.json())
       ]);
       setBidHistory(Array.isArray(bids.items) ? bids.items : []);
       const orderRows = Array.isArray(orders.items) ? orders.items : [];
@@ -895,8 +935,7 @@ function App() {
       const response = await fetch(`/api/rooms/${roomID}/chat`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          ...mockUserHeaders
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           client_msg_id: createClientBidID(),

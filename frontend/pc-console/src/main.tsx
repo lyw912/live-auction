@@ -78,9 +78,12 @@ type RuleAPIError = {
     suggested_caps?: number[];
   };
 };
+type AuthUser = {
+  ID: string;
+  Role: string;
+};
 
 const roomID = 'room_main';
-const hostHeaders = { 'X-Mock-Role': 'host', 'X-Mock-User-Id': 'host_1' };
 
 function formatCents(cents?: number) {
   return `¥${((cents ?? 0) / 100).toFixed(2)}`;
@@ -137,6 +140,27 @@ async function readJSON<T>(response: Response): Promise<T> {
   return await response.json() as T;
 }
 
+async function ensureDemoSession(account: 'host' | 'user') {
+  const me = await fetch('/api/auth/me');
+  if (me.ok) {
+    const payload = await readJSON<{ user?: AuthUser }>(me);
+    if (payload.user) return payload.user;
+  }
+  const login = await fetch('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ account })
+  });
+  if (!login.ok) {
+    throw new Error(`login failed: ${login.status}`);
+  }
+  const payload = await readJSON<{ user?: AuthUser }>(login);
+  if (!payload.user) {
+    throw new Error('login response missing user');
+  }
+  return payload.user;
+}
+
 function App() {
   const [items, setItems] = useState<Item[]>([]);
   const [auctions, setAuctions] = useState<Auction[]>([]);
@@ -154,22 +178,24 @@ function App() {
   const [scheduleStartAt, setScheduleStartAt] = useState('');
   const [cancelReason, setCancelReason] = useState('主播异常取消');
   const [rule, setRule] = useState<RuleDraft>(createRuleDraft());
+  const [sessionReady, setSessionReady] = useState(false);
   const selectedAuction = useMemo(() => auctions.find((auction) => auction.id === selectedAuctionID) ?? auctions[0], [auctions, selectedAuctionID]);
   const ruleValidation = validateRule(rule);
   const shownSuggestions = ruleValidation.valid ? backendSuggestions : ruleValidation.suggestions;
 
   const loadAll = async () => {
+    if (!sessionReady) return;
     setLoading(true);
     try {
       const [auctionRows, orderRows, auctionsDiag, anomalies, outbox, scheduler, rejects, recovery] = await Promise.all([
-        fetch(`/api/auctions?room_id=${roomID}`, { headers: hostHeaders }).then((r) => readJSON<Auction[]>(r)),
-        fetch('/api/orders', { headers: hostHeaders }).then((r) => readJSON<Order[]>(r)),
-        fetch('/api/monitor/auctions', { headers: hostHeaders }).then((r) => readJSON<MonitorPayload>(r)),
-        fetch('/api/monitor/anomalies', { headers: hostHeaders }).then((r) => readJSON<MonitorPayload>(r)),
-        fetch('/api/monitor/outbox', { headers: hostHeaders }).then((r) => readJSON<MonitorPayload>(r)),
-        fetch('/api/monitor/scheduler', { headers: hostHeaders }).then((r) => readJSON<MonitorPayload>(r)),
-        fetch('/api/monitor/rejects', { headers: hostHeaders }).then((r) => readJSON<MonitorPayload>(r)),
-        fetch('/api/monitor/recovery', { headers: hostHeaders }).then((r) => readJSON<MonitorPayload>(r))
+        fetch(`/api/auctions?room_id=${roomID}`).then((r) => readJSON<Auction[]>(r)),
+        fetch('/api/orders').then((r) => readJSON<Order[]>(r)),
+        fetch('/api/monitor/auctions').then((r) => readJSON<MonitorPayload>(r)),
+        fetch('/api/monitor/anomalies').then((r) => readJSON<MonitorPayload>(r)),
+        fetch('/api/monitor/outbox').then((r) => readJSON<MonitorPayload>(r)),
+        fetch('/api/monitor/scheduler').then((r) => readJSON<MonitorPayload>(r)),
+        fetch('/api/monitor/rejects').then((r) => readJSON<MonitorPayload>(r)),
+        fetch('/api/monitor/recovery').then((r) => readJSON<MonitorPayload>(r))
       ]);
       setAuctions(auctionRows);
       setOrders(orderRows);
@@ -187,8 +213,20 @@ function App() {
   };
 
   useEffect(() => {
-    void loadAll();
+    let cancelled = false;
+    ensureDemoSession('host')
+      .then(() => {
+        if (!cancelled) setSessionReady(true);
+      })
+      .catch(() => Message.error('登录失败，请检查后端服务'));
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  useEffect(() => {
+    if (sessionReady) void loadAll();
+  }, [sessionReady]);
 
   useEffect(() => {
     if (selectedAuction) {
@@ -215,7 +253,7 @@ function App() {
         const objectName = `items/${Date.now()}-${safeName}`;
         const upload = await fetch('/api/items/upload-url', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...hostHeaders },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ object_name: objectName, content_type: itemImageFile.type || 'application/octet-stream' })
         });
         if (!upload.ok) throw new Error('create upload url failed');
@@ -231,14 +269,14 @@ function App() {
       }
       const itemResponse = await fetch('/api/items', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...hostHeaders },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: itemDraft.title, description: itemDraft.description, image_url: imageURL || null })
       });
       if (!itemResponse.ok) throw new Error('create item failed');
       const item = await itemResponse.json() as Item;
       const auctionResponse = await fetch('/api/auctions', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...hostHeaders },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           room_id: roomID,
           item_id: item.id,
@@ -270,7 +308,7 @@ function App() {
     try {
       const response = await fetch(`/api/auctions/${selectedAuction.id}/rules`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', ...hostHeaders },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           start_price_cents: rule.startPriceCents,
           increment_cents: rule.incrementCents,
@@ -302,7 +340,7 @@ function App() {
     try {
       const response = await fetch(`/api/auctions/${selectedAuction.id}/${action}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...hostHeaders },
+        headers: { 'Content-Type': 'application/json' },
         body: action === 'cancel'
           ? JSON.stringify({ reason: cancelReason.trim() || '主播异常取消' })
           : action === 'schedule'

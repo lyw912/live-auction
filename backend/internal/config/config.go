@@ -22,6 +22,8 @@ type Config struct {
 	S3UseSSL       bool
 	MockHostUserID string
 	MockUserID     string
+	AllowMockAuth  bool
+	SessionTTL     time.Duration
 
 	DBPingTimeout    time.Duration
 	RedisPingTimeout time.Duration
@@ -44,6 +46,8 @@ func Load() Config {
 		S3UseSSL:       getEnvBool("S3_USE_SSL", false),
 		MockHostUserID: getEnv("MOCK_HOST_USER_ID", "host_1"),
 		MockUserID:     getEnv("MOCK_USER_ID", "user_1"),
+		AllowMockAuth:  getEnvBool("ALLOW_MOCK_AUTH", false),
+		SessionTTL:     getEnvDuration("SESSION_TTL", 12*time.Hour),
 
 		DBPingTimeout:    getEnvDuration("DB_PING_TIMEOUT", 2*time.Second),
 		RedisPingTimeout: getEnvDuration("REDIS_PING_TIMEOUT", 2*time.Second),

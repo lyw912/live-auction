@@ -2,12 +2,11 @@ import { expect, test } from '@playwright/test';
 
 test('H5 covers live backend REST, fat-finger confirm, cap SOLD order, payment, and WebSocket event paths', async ({ page }) => {
   await page.goto('/');
-  const roomAuctions = await page.request.get('/api/rooms/room_main/auctions', {
-    headers: {
-      'X-Mock-Role': 'user',
-      'X-Mock-User-Id': 'user_1'
-    }
+  const login = await page.request.post('/api/auth/login', {
+    data: { account: 'user' }
   });
+  expect(login.ok()).toBeTruthy();
+  const roomAuctions = await page.request.get('/api/rooms/room_main/auctions');
   expect(roomAuctions.ok()).toBeTruthy();
   const roomPayload = await roomAuctions.json();
   expect(roomPayload).toEqual(expect.arrayContaining([
@@ -18,12 +17,7 @@ test('H5 covers live backend REST, fat-finger confirm, cap SOLD order, payment, 
     })
   ]));
 
-  const snapshot = await page.request.get('/api/auctions/auc_live', {
-    headers: {
-      'X-Mock-Role': 'user',
-      'X-Mock-User-Id': 'user_1'
-    }
-  });
+  const snapshot = await page.request.get('/api/auctions/auc_live');
   expect(snapshot.ok()).toBeTruthy();
   expect(await snapshot.json()).toEqual(expect.objectContaining({
     id: 'auc_live',
@@ -66,12 +60,7 @@ test('H5 covers live backend REST, fat-finger confirm, cap SOLD order, payment, 
   await expect(page.getByLabel('auction-state').locator('.eyebrow')).toHaveText('已支付');
   await expect(page.getByText('保证金已处理')).toBeVisible();
 
-  const orders = await page.request.get('/api/users/me/orders', {
-    headers: {
-      'X-Mock-Role': 'user',
-      'X-Mock-User-Id': 'user_1'
-    }
-  });
+  const orders = await page.request.get('/api/users/me/orders');
   expect(orders.ok()).toBeTruthy();
   const orderPayload = await orders.json();
   expect(orderPayload).toEqual(expect.objectContaining({
