@@ -20,6 +20,7 @@ k6 run --summary-export docs\perf\raw\watcher-fanout-smoke.json tests\load\watch
 k6 run --summary-export docs\perf\raw\reconnect-storm-smoke.json tests\load\reconnect-storm.js
 k6 run --summary-export docs\perf\raw\slow-consumer-smoke.json tests\load\slow-consumer.js
 k6 run --summary-export docs\perf\raw\outbox-burst-smoke.json tests\load\outbox-burst.js
+k6 run --summary-export docs\perf\raw\bid-abuse-smoke.json tests\load\bid-abuse.js
 ```
 
 `p1loadseed` keeps `auc_live` ACTIVE with a high cap so burst scripts measure bid contention instead of immediately turning the auction SOLD. It also creates active `room_main` memberships for seeded demo users and k6 users so P2 room ACL is exercised instead of bypassed. Set `ALLOW_SOLD=true` only when intentionally testing cap hammer behavior.
@@ -32,6 +33,12 @@ $env:AUCTION_ID='auc_live'
 ```
 
 Future P2/P7 multi-room runs should seed additional rooms and pass their IDs explicitly rather than assuming a single fixed room.
+
+P2 bid abuse smoke:
+
+- Set low limits on the backend, for example `$env:BID_USER_LIMIT_PER_SECOND='1'` and `$env:BID_IP_LIMIT_PER_SECOND='2'`.
+- Run the backend with `ALLOW_MOCK_AUTH=true` because the k6 harness uses local mock users for load generation.
+- `bid-abuse.js` records accepted, rejected, `RATE_LIMITED`, `BID_AUCTION_TOO_HOT`, and `Retry-After` distribution. Treat this as abuse behavior evidence, not capacity evidence.
 
 Formal baseline rules:
 

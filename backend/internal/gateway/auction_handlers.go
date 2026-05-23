@@ -25,6 +25,7 @@ type AuctionHandler struct {
 	Repo   *auction.Repository
 	RT     *realtime.Server
 	ACL    roomACL
+	Bids   *bidAdmission
 }
 
 type uploadURLRequest struct {
@@ -331,6 +332,14 @@ func (h AuctionHandler) PlaceBid(w http.ResponseWriter, r *http.Request) {
 		writeResult(w, r, http.StatusOK, nil, err)
 		return
 	}
+	if h.Bids != nil {
+		if replay, permit, ok, err := h.Bids.admit(r.Context(), r, user, auctionID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context())); err != nil || ok {
+			writeBidAdmissionResult(w, r, replay, err)
+			return
+		} else if permit != nil {
+			defer permit.Release()
+		}
+	}
 	result, err := h.Repo.PlaceBid(r.Context(), auctionID, user.ID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context()))
 	writeResult(w, r, http.StatusOK, result, err)
 }
@@ -350,6 +359,14 @@ func (h AuctionHandler) ConfirmBid(w http.ResponseWriter, r *http.Request) {
 	if _, err := h.ACL.requireActiveMembershipForAuction(r.Context(), user, auctionID, traceID(r.Context())); err != nil {
 		writeResult(w, r, http.StatusOK, nil, err)
 		return
+	}
+	if h.Bids != nil {
+		if replay, permit, ok, err := h.Bids.admitConfirm(r.Context(), r, user, auctionID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context())); err != nil || ok {
+			writeBidAdmissionResult(w, r, replay, err)
+			return
+		} else if permit != nil {
+			defer permit.Release()
+		}
 	}
 	result, err := h.Repo.ConfirmBid(r.Context(), auctionID, user.ID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context()))
 	writeResult(w, r, http.StatusOK, result, err)

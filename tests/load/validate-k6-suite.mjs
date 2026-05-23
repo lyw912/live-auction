@@ -15,6 +15,7 @@ const scripts = [
   'reconnect-storm.js',
   'slow-consumer.js',
   'outbox-burst.js',
+  'bid-abuse.js',
 ];
 
 for (const script of scripts) {
@@ -37,6 +38,7 @@ const coverage = {
   'reconnect storm': 'reconnect-storm.js',
   'slow consumer': 'slow-consumer.js',
   'outbox burst': 'outbox-burst.js',
+  'bid abuse': 'bid-abuse.js',
 };
 for (const [name, script] of Object.entries(coverage)) {
   assert(scripts.includes(script), `missing ${name} workload`);

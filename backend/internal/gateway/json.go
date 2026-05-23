@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	apierrors "live-auction/backend/internal/platform/errors"
@@ -16,4 +17,16 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 func writeError(w http.ResponseWriter, r *http.Request, err apierrors.APIError) {
 	err.TraceID = traceID(r.Context())
 	writeJSON(w, err.Status, err)
+}
+
+func writeBidAdmissionResult(w http.ResponseWriter, r *http.Request, result any, err error) {
+	if err == nil {
+		writeResult(w, r, http.StatusOK, result, nil)
+		return
+	}
+	var apiErr apierrors.APIError
+	if errors.As(err, &apiErr) && apiErr.Code == apierrors.CodeBidAuctionTooHot {
+		w.Header().Set("Retry-After", "1")
+	}
+	writeResult(w, r, http.StatusOK, result, err)
 }

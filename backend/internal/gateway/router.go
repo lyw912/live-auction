@@ -38,6 +38,7 @@ func NewRouterWithRealtime(cfg config.Config, deps *storage.Dependencies, log *s
 		Repo:   auction.NewRepository(deps.Postgres),
 		RT:     rt,
 		ACL:    newRoomACL(deps.Postgres),
+		Bids:   newBidAdmission(cfg, deps.Postgres, deps.Redis),
 	}
 	authHandler := AuthHandler{Config: cfg, DB: deps.Postgres}
 	monitorHandler := MonitorHandler{Deps: deps}

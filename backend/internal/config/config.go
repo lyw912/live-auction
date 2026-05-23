@@ -25,6 +25,13 @@ type Config struct {
 	AllowMockAuth  bool
 	SessionTTL     time.Duration
 
+	BidUserLimitPerSecond    int
+	BidIPLimitPerSecond      int
+	BidAuctionLimitPerSecond int
+	BidAuctionMaxInFlight    int
+	BidLimitWindow           time.Duration
+	BidLimitRedisTimeout     time.Duration
+
 	DBPingTimeout    time.Duration
 	RedisPingTimeout time.Duration
 }
@@ -48,6 +55,13 @@ func Load() Config {
 		MockUserID:     getEnv("MOCK_USER_ID", "user_1"),
 		AllowMockAuth:  getEnvBool("ALLOW_MOCK_AUTH", false),
 		SessionTTL:     getEnvDuration("SESSION_TTL", 12*time.Hour),
+
+		BidUserLimitPerSecond:    getEnvInt("BID_USER_LIMIT_PER_SECOND", 3),
+		BidIPLimitPerSecond:      getEnvInt("BID_IP_LIMIT_PER_SECOND", 10),
+		BidAuctionLimitPerSecond: getEnvInt("BID_AUCTION_LIMIT_PER_SECOND", 120),
+		BidAuctionMaxInFlight:    getEnvInt("BID_AUCTION_MAX_IN_FLIGHT", 64),
+		BidLimitWindow:           getEnvDuration("BID_LIMIT_WINDOW", time.Second),
+		BidLimitRedisTimeout:     getEnvDuration("BID_LIMIT_REDIS_TIMEOUT", 50*time.Millisecond),
 
 		DBPingTimeout:    getEnvDuration("DB_PING_TIMEOUT", 2*time.Second),
 		RedisPingTimeout: getEnvDuration("REDIS_PING_TIMEOUT", 2*time.Second),
