@@ -23,6 +23,7 @@ type AuctionHandler struct {
 	Deps   *storage.Dependencies
 	Repo   *auction.Repository
 	RT     *realtime.Server
+	ACL    roomACL
 }
 
 type uploadURLRequest struct {
@@ -65,9 +66,18 @@ func (h AuctionHandler) CreateItem(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h AuctionHandler) CreateAuction(w http.ResponseWriter, r *http.Request) {
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
 	var req auction.CreateAuctionInput
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "invalid json body", 400))
+		return
+	}
+	if err := h.ACL.requireHostOwnsRoom(r.Context(), user, req.RoomID, traceID(r.Context())); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
 		return
 	}
 	result, err := h.Repo.CreateAuction(r.Context(), req, traceID(r.Context()))
@@ -75,67 +85,177 @@ func (h AuctionHandler) CreateAuction(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h AuctionHandler) UpdateRules(w http.ResponseWriter, r *http.Request) {
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
 	var req auction.UpdateRulesInput
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "invalid json body", 400))
 		return
 	}
-	result, err := h.Repo.UpdateRules(r.Context(), chi.URLParam(r, "id"), req, traceID(r.Context()))
+	auctionID := chi.URLParam(r, "id")
+	if _, err := h.ACL.requireHostOwnsAuction(r.Context(), user, auctionID, traceID(r.Context())); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	result, err := h.Repo.UpdateRules(r.Context(), auctionID, req, traceID(r.Context()))
 	writeResult(w, r, http.StatusOK, result, err)
 }
 
 func (h AuctionHandler) Schedule(w http.ResponseWriter, r *http.Request) {
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
 	var req struct {
 		StartAt *time.Time `json:"start_at"`
 	}
 	if r.Body != http.NoBody {
 		_ = json.NewDecoder(r.Body).Decode(&req)
 	}
-	result, err := h.Repo.Schedule(r.Context(), chi.URLParam(r, "id"), req.StartAt, traceID(r.Context()))
+	auctionID := chi.URLParam(r, "id")
+	if _, err := h.ACL.requireHostOwnsAuction(r.Context(), user, auctionID, traceID(r.Context())); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	result, err := h.Repo.Schedule(r.Context(), auctionID, req.StartAt, traceID(r.Context()))
 	writeResult(w, r, http.StatusOK, result, err)
 }
 
 func (h AuctionHandler) Unschedule(w http.ResponseWriter, r *http.Request) {
-	result, err := h.Repo.Unschedule(r.Context(), chi.URLParam(r, "id"), traceID(r.Context()))
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	auctionID := chi.URLParam(r, "id")
+	if _, err := h.ACL.requireHostOwnsAuction(r.Context(), user, auctionID, traceID(r.Context())); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	result, err := h.Repo.Unschedule(r.Context(), auctionID, traceID(r.Context()))
 	writeResult(w, r, http.StatusOK, result, err)
 }
 
 func (h AuctionHandler) Start(w http.ResponseWriter, r *http.Request) {
-	result, err := h.Repo.Start(r.Context(), chi.URLParam(r, "id"), traceID(r.Context()))
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	auctionID := chi.URLParam(r, "id")
+	if _, err := h.ACL.requireHostOwnsAuction(r.Context(), user, auctionID, traceID(r.Context())); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	result, err := h.Repo.Start(r.Context(), auctionID, traceID(r.Context()))
 	writeResult(w, r, http.StatusOK, result, err)
 }
 
 func (h AuctionHandler) Cancel(w http.ResponseWriter, r *http.Request) {
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
 	var req auction.CancelInput
 	if r.Body != http.NoBody {
 		_ = json.NewDecoder(r.Body).Decode(&req)
 	}
-	result, err := h.Repo.Cancel(r.Context(), chi.URLParam(r, "id"), req, traceID(r.Context()))
+	auctionID := chi.URLParam(r, "id")
+	if _, err := h.ACL.requireHostOwnsAuction(r.Context(), user, auctionID, traceID(r.Context())); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	result, err := h.Repo.Cancel(r.Context(), auctionID, req, traceID(r.Context()))
 	writeResult(w, r, http.StatusOK, result, err)
 }
 
 func (h AuctionHandler) NarrateStart(w http.ResponseWriter, r *http.Request) {
-	result, err := h.Repo.NarrateStart(r.Context(), chi.URLParam(r, "id"), traceID(r.Context()))
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	auctionID := chi.URLParam(r, "id")
+	if _, err := h.ACL.requireHostOwnsAuction(r.Context(), user, auctionID, traceID(r.Context())); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	result, err := h.Repo.NarrateStart(r.Context(), auctionID, traceID(r.Context()))
 	writeResult(w, r, http.StatusOK, result, err)
 }
 
 func (h AuctionHandler) NarrateStop(w http.ResponseWriter, r *http.Request) {
-	result, err := h.Repo.NarrateStop(r.Context(), chi.URLParam(r, "id"), traceID(r.Context()))
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	auctionID := chi.URLParam(r, "id")
+	if _, err := h.ACL.requireHostOwnsAuction(r.Context(), user, auctionID, traceID(r.Context())); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	result, err := h.Repo.NarrateStop(r.Context(), auctionID, traceID(r.Context()))
 	writeResult(w, r, http.StatusOK, result, err)
 }
 
 func (h AuctionHandler) ListAuctions(w http.ResponseWriter, r *http.Request) {
-	result, err := h.Repo.ListAuctions(r.Context(), r.URL.Query().Get("room_id"))
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	roomID := r.URL.Query().Get("room_id")
+	if roomID != "" {
+		if err := h.requireRoomListAccess(r, user, roomID); err != nil {
+			writeResult(w, r, http.StatusOK, nil, err)
+			return
+		}
+		result, err := h.Repo.ListAuctions(r.Context(), roomID)
+		writeResult(w, r, http.StatusOK, result, err)
+		return
+	}
+	roomIDs, err := h.ACL.accessibleRoomIDs(r.Context(), user)
+	if err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	result, err := h.Repo.ListAuctionsForRooms(r.Context(), roomIDs)
 	writeResult(w, r, http.StatusOK, result, err)
 }
 
 func (h AuctionHandler) ListRoomAuctions(w http.ResponseWriter, r *http.Request) {
-	result, err := h.Repo.ListAuctions(r.Context(), chi.URLParam(r, "room_id"))
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	roomID := chi.URLParam(r, "room_id")
+	if err := h.requireRoomListAccess(r, user, roomID); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	result, err := h.Repo.ListAuctions(r.Context(), roomID)
 	writeResult(w, r, http.StatusOK, result, err)
 }
 
 func (h AuctionHandler) GetAuction(w http.ResponseWriter, r *http.Request) {
-	result, err := h.Repo.GetAuction(r.Context(), chi.URLParam(r, "id"))
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	auctionID := chi.URLParam(r, "id")
+	if _, err := h.ACL.requireActiveMembershipForAuction(r.Context(), user, auctionID, traceID(r.Context())); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	result, err := h.Repo.GetAuction(r.Context(), auctionID)
 	writeResult(w, r, http.StatusOK, result, err)
 }
 
@@ -150,7 +270,12 @@ func (h AuctionHandler) PlaceBid(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "invalid json body", 400))
 		return
 	}
-	result, err := h.Repo.PlaceBid(r.Context(), chi.URLParam(r, "id"), user.ID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context()))
+	auctionID := chi.URLParam(r, "id")
+	if _, err := h.ACL.requireActiveMembershipForAuction(r.Context(), user, auctionID, traceID(r.Context())); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	result, err := h.Repo.PlaceBid(r.Context(), auctionID, user.ID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context()))
 	writeResult(w, r, http.StatusOK, result, err)
 }
 
@@ -165,7 +290,12 @@ func (h AuctionHandler) ConfirmBid(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "invalid json body", 400))
 		return
 	}
-	result, err := h.Repo.ConfirmBid(r.Context(), chi.URLParam(r, "id"), user.ID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context()))
+	auctionID := chi.URLParam(r, "id")
+	if _, err := h.ACL.requireActiveMembershipForAuction(r.Context(), user, auctionID, traceID(r.Context())); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	result, err := h.Repo.ConfirmBid(r.Context(), auctionID, user.ID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context()))
 	writeResult(w, r, http.StatusOK, result, err)
 }
 
@@ -236,6 +366,10 @@ func (h AuctionHandler) CreateWSTicket(w http.ResponseWriter, r *http.Request) {
 		writeResult(w, r, http.StatusOK, nil, err)
 		return
 	}
+	if err := h.ACL.requireActiveMembership(r.Context(), user, req.RoomID, req.AuctionID, traceID(r.Context())); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
 	token, err := h.RT.TicketStore().Issue(r.Context(), realtime.Ticket{
 		UserID:    user.ID,
 		Role:      user.Role,
@@ -263,14 +397,36 @@ func (h AuctionHandler) CreateChatMessage(w http.ResponseWriter, r *http.Request
 		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "invalid json body", 400))
 		return
 	}
-	result, err := h.Repo.CreateChatMessage(r.Context(), chi.URLParam(r, "room_id"), user.ID, req, traceID(r.Context()))
+	roomID := chi.URLParam(r, "room_id")
+	if err := h.ACL.requireActiveMembership(r.Context(), user, roomID, "", traceID(r.Context())); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	result, err := h.Repo.CreateChatMessage(r.Context(), roomID, user.ID, req, traceID(r.Context()))
 	writeResult(w, r, http.StatusCreated, result, err)
 }
 
 func (h AuctionHandler) ListChatMessages(w http.ResponseWriter, r *http.Request) {
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	roomID := chi.URLParam(r, "room_id")
+	if err := h.ACL.requireActiveMembership(r.Context(), user, roomID, "", traceID(r.Context())); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	result, err := h.Repo.ListChatMessages(r.Context(), chi.URLParam(r, "room_id"), limit)
+	result, err := h.Repo.ListChatMessages(r.Context(), roomID, limit)
 	writeResult(w, r, http.StatusOK, map[string]any{"items": result}, err)
+}
+
+func (h AuctionHandler) requireRoomListAccess(r *http.Request, user AuthUser, roomID string) error {
+	if user.Role == "host" {
+		return h.ACL.requireHostOwnsRoom(r.Context(), user, roomID, traceID(r.Context()))
+	}
+	return h.ACL.requireActiveMembership(r.Context(), user, roomID, "", traceID(r.Context()))
 }
 
 func decodeJSON(r *http.Request, target any) error {

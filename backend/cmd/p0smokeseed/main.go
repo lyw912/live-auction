@@ -72,6 +72,15 @@ func seed(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client) error {
 		VALUES ('room_main', 'host_1', 'OPEN')
 		ON CONFLICT (id) DO UPDATE SET host_id = EXCLUDED.host_id, status = EXCLUDED.status;
 
+		INSERT INTO room_memberships (room_id, user_id, role, status)
+		VALUES
+		  ('room_main', 'host_1', 'host', 'ACTIVE'),
+		  ('room_main', 'user_1', 'viewer', 'ACTIVE'),
+		  ('room_main', 'user_2', 'viewer', 'ACTIVE'),
+		  ('room_main', 'user_3', 'viewer', 'ACTIVE')
+		ON CONFLICT (room_id, user_id)
+		DO UPDATE SET role = EXCLUDED.role, status = EXCLUDED.status, left_at = NULL;
+
 		INSERT INTO items (id, title, image_url, description, status)
 		VALUES (
 		  'item_live',

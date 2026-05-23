@@ -24,6 +24,13 @@ func TestChatRoutesPersistAndSeedRoomMessages(t *testing.T) {
 	if _, err := db.Exec(context.Background(), `INSERT INTO rooms (id, host_id, status) VALUES ($1, 'host_1', 'OPEN')`, roomID); err != nil {
 		t.Fatalf("insert room: %v", err)
 	}
+	if _, err := db.Exec(context.Background(), `
+		INSERT INTO room_memberships (room_id, user_id, role, status)
+		VALUES ($1, 'user_1', 'viewer', 'ACTIVE')
+		ON CONFLICT (room_id, user_id) DO UPDATE SET role = EXCLUDED.role, status = EXCLUDED.status, left_at = NULL
+	`, roomID); err != nil {
+		t.Fatalf("insert membership: %v", err)
+	}
 	router := NewRouter(testConfig(), &storage.Dependencies{Postgres: db, Redis: rdb}, slog.Default())
 
 	body := bytes.NewBufferString(`{"client_msg_id":"msg_1","body":"加一口看看"}`)

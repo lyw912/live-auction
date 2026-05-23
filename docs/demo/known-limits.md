@@ -10,7 +10,7 @@ Commit: pending
 - The H5 app selects active auction and payable order IDs from backend API responses, and the live smoke proves a cap SOLD bid generates the payable order before mock payment. The entry room is still fixed for local smoke and demo repeatability.
 - PC console supports the P0 host workflow for local demo: item creation, auction creation, selected-auction rule save, schedule/start/cancel/narrate controls, order list, and diagnostics. It is not a complete merchant CMS.
 - P2 local auth now uses `POST /api/auth/login` and an HttpOnly `la_session` cookie backed by `auth_sessions`. Mock headers are disabled in normal runtime unless `ALLOW_MOCK_AUTH=true` or `APP_ENV=test`.
-- There is still no OAuth, SMS, password policy, account binding, or room membership system. Room membership and host ownership ACL are P2-02.
+- There is still no OAuth, SMS, password policy, or account binding. P2 room membership and host ownership ACL now exist for local users and rooms.
 - Payment is mock payment; no external payment provider is integrated.
 - Payment success and order expiry are now emitted through the auction event/outbox stream for realtime H5 recovery, but payment provider callbacks, refunds, disputes, and settlement reconciliation are outside P0.
 
@@ -20,6 +20,7 @@ Commit: pending
 - Redis and WebSocket are projection and delivery layers only.
 - WebSocket browser auth uses Redis-backed one-time tickets. If Redis is unavailable, ticket issue/connect fails closed.
 - There is no bid rate limiter in P0. The Redis-down bid-limit gate is explicitly treated as a scope adjustment, not an implemented degradation feature.
+- Existing room ACL rejects are recorded as `ACL_FORBIDDEN` anomalies. Rich ACL drilldown/filtering is still P2-06.
 - Backend validation remains authoritative. PC rule validation is guardrail coverage for common illegal inputs.
 
 ## Evidence Scope

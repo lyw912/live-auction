@@ -346,12 +346,22 @@ func (r *Repository) NarrateStop(ctx context.Context, auctionID string, traceID 
 }
 
 func (r *Repository) ListAuctions(ctx context.Context, roomID string) ([]Auction, error) {
+	if roomID == "" {
+		return r.ListAuctionsForRooms(ctx, nil)
+	}
+	return r.ListAuctionsForRooms(ctx, []string{roomID})
+}
+
+func (r *Repository) ListAuctionsForRooms(ctx context.Context, roomIDs []string) ([]Auction, error) {
+	if len(roomIDs) == 0 {
+		return []Auction{}, nil
+	}
 	rows, err := r.db.Query(ctx, `
 		SELECT a.id
 		FROM auctions a
-		WHERE ($1 = '' OR a.room_id = $1)
+		WHERE a.room_id = ANY($1)
 		ORDER BY a.created_at DESC
-	`, roomID)
+	`, roomIDs)
 	if err != nil {
 		return nil, err
 	}
