@@ -33,7 +33,7 @@ Decision states:
 | P3-D12 | Debezium/CDC is blocked until polling outbox is again the first measured bottleneck. | EVIDENCE_GATED | `docs/evidence/p3-01-outbox-claim-fix-2026-05-24.md`, `docs/evidence/p3-02-relay-shard-ownership-2026-05-24.md`. | Do not run Debezium or any CDC process in the mainline and do not replace `backend/internal/outbox/relay.go` until P3-R5 proves claim/update/table pressure remains after current fixes. |
 | P3-D12A | Debezium may be cited only as selective design borrowing, not runtime integration. | ACCEPTED | `docs/reviews/p3-06-debezium-borrowing-review-2026-05-25.md`, `docs/adr/p3-02-debezium-borrowing-decision.md`, `docs/evidence/p3-06-debezium-borrowed-hardening-2026-05-25.md`. | Implemented claims: outbox envelope validation, offset/watermark diagnostics, snapshot lifecycle audit, control signals, and error-classification ideas. Forbidden claims: Debezium is integrated, Debezium improves current performance, or CDC replaces auction correctness. |
 | P3-D13 | NATS/JetStream remains out of scope unless internal service messaging becomes a measured bottleneck. Selective design borrowing is accepted. | EVIDENCE_GATED | `18-p3-p4-roadmap-reset.md`, `docs/evidence/p3-01-outbox-claim-fix-2026-05-24.md`, `docs/evidence/p3-02-relay-shard-ownership-2026-05-24.md`, `docs/reviews/p3-07-nats-jetstream-borrowing-review-2026-05-25.md`, `docs/evidence/p3-07-nats-jetstream-borrowed-hardening-2026-05-25.md`. | Do not add external brokers, browser realtime replacements, or direct bid-path publishers. Allowed claims: borrowed delivery-state, ack/redelivery, dedupe, slow-consumer, monitoring, and snapshot/catchup design logic. Forbidden claims: NATS is integrated, JetStream improves current performance, or broker sequence replaces auction seq. Reconsider runtime adoption only through an ADR-backed change after measured need. |
-| P3-D14 | Redis remains projection/cache/admission support; Lua reservation and Streams are evidence-gated. | EVIDENCE_GATED | `00-project-brief.md`, `04-data-and-storage.md`, `12-engineering-rules.md`, `18-p3-p4-roadmap-reset.md`. | Keep current Redis usage. Do not make Redis auction truth, do not implement Lua reservation until PG hot-row evidence and reconciliation ADR exist. |
+| P3-D14 | Redis remains projection/cache/admission support; Lua reservation and Streams are evidence-gated. Existing Redis Lua admission/ticket borrowing is accepted. | EVIDENCE_GATED | `00-project-brief.md`, `04-data-and-storage.md`, `12-engineering-rules.md`, `18-p3-p4-roadmap-reset.md`, `docs/reviews/p3-08-redis-lua-borrowing-review-2026-05-25.md`. | Allowed claims: borrowed Redis Lua for bounded GCRA admission and one-time WS ticket consume. Forbidden claims: Redis is auction truth, Lua decides winner/price/order, or Lua reservation improves performance before PG hot-row evidence and reconciliation ADR. |
 
 ## Go / No-Go Gates
 
@@ -78,6 +78,12 @@ No-go while:
 - the target problem is browser realtime, where the self-hub remains the scoped implementation.
 
 ### Redis Lua Reservation
+
+Current accepted position:
+
+- Redis Lua has been reviewed against local Redis source in `docs/reviews/p3-08-redis-lua-borrowing-review-2026-05-25.md`.
+- The project may cite selective implemented borrowing only: GCRA admission scripts for user/IP/auction request protection and one-time WebSocket ticket consume.
+- PostgreSQL remains the auction money truth. Redis Lua admission can fail open with anomaly; Redis ticket consume can fail closed. Neither path decides winner, price, cap, cancel, end, order, auction seq, or idempotency response.
 
 Go only if all are true:
 
