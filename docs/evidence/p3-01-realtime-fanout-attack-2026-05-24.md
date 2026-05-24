@@ -76,7 +76,7 @@ When `ADMISSION_ENABLED=true`, the ticket endpoint and `/ws` endpoint return HTT
 
 `HARNESS_GAP_FIXED` for `cmd/server` WebSocket admission wiring and durable connection-storm/healthy-vs-slow k6 probes. The follow-up harness policy now requires fully disabled admission for future downstream-pressure evidence.
 
-Do not introduce a realtime adapter yet based only on these Windows local rounds. The current evidence points to connection storm admission/backoff and slow-consumer isolation as the next work, not an immediate Centrifugo/NATS/Redis Pub/Sub replacement. A realtime adapter remains justified only if follow-up rounds show stable fanout/slow-client degradation that cannot be fixed inside the self hub without violating recovery semantics.
+Do not introduce a realtime adapter based only on these Windows local rounds. The current evidence points to connection storm admission/backoff and slow-consumer isolation as the next work, not an alternate realtime transport. The release path remains the self hub unless scope is explicitly reopened after a clean self-hub failure bundle.
 
 ## Required Action
 

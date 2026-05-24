@@ -14,7 +14,6 @@ External references prove semantics, constraints, or mature patterns. They do no
 | MDN WebSocket constructor | https://developer.mozilla.org/en-US/docs/Web/API/WebSocket/WebSocket | browser constructor takes URL and protocols | no custom Authorization header |
 | MDN protocol upgrade | https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Protocol_upgrade_mechanism | `Sec-WebSocket-Protocol` negotiates subprotocol | ticket via subprotocol |
 | Grafana k6 websockets | https://grafana.com/docs/k6/latest/javascript-api/k6-websockets/ | current module is `k6/websockets` | load scripts use new module |
-| Centrifugo recovery | https://centrifugal.dev/docs/server/history_and_recovery | history/recovery can fail and needs fallback | snapshot fallback remains |
 | Stripe idempotency | https://docs.stripe.com/api/idempotent_requests | repeated key returns first result and checks parameters | durable result + request_hash |
 | Redis scripting | https://redis.io/docs/latest/develop/programmability/eval-intro/ | Lua is atomic inside Redis | Lua not DB/WS consistency proof |
 | Debezium outbox router | https://debezium.io/documentation/reference/stable/transformations/outbox-event-router.html | outbox event id/aggregate/payload pattern | event schema and dedupe |
@@ -38,7 +37,7 @@ External references prove semantics, constraints, or mature patterns. They do no
 
 | Area | Alternative | Why Not P0 |
 |---|---|---|
-| WS fanout | Centrifugo | contingency; self hub first if tests pass |
+| WS fanout | self hub pressure gates | bounded queues, slow close, reconnect, and snapshot fallback must be proven locally |
 | Outbox | CDC/WAL/Debezium/pg_logical_emit_message | more moving parts; keep as future if polling fails |
 | Scheduler | Asynq/Temporal | DB lease sufficient and auditable |
 | Pub/Sub | NATS/Kafka | overkill for P0 single process |

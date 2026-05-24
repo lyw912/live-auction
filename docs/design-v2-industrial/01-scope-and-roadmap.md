@@ -59,7 +59,6 @@ P1 完成后，正式后续路线图见 `16-industrial-p2-p3-roadmap.md`。本�
 | Candidate | Keep Only If |
 |---|---|
 | Redis Lua reservation | PG baseline proves row lock path is bottleneck and reconciliation is designed |
-| Centrifugo replacement | self hub misses WS go/no-go |
 | WAL/CDC outbox | polling outbox hot-table test fails or becomes visible bottleneck |
 | event replay | auction_events schema stable |
 | pprof deep dive | k6 baseline exists |
@@ -94,7 +93,7 @@ Cut immediately if it delays P0 gates:
 
 | Decision | Deadline | Criteria |
 |---|---|---|
-| self WS hub vs Centrifugo | May 27, 2026 18:00 Asia/Shanghai | reconnect, slow-consumer, memory, kill-after-commit tests |
+| self WS hub release gate | May 27, 2026 18:00 Asia/Shanghai | reconnect, slow-consumer, memory, kill-after-commit tests |
 | performance number inclusion | after final Linux native baseline | raw output + env + 3 runs |
 | P1 start | after all P0 gates green | no blocker failures |
 | demo freeze | after P0 demo + diagnostics + evidence records | no untriaged P0 risk |

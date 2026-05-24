@@ -27,7 +27,7 @@ P3 adds a P3-00 discipline gate before transport, relay, or data-path changes:
 ## Consequences
 
 - A green PR smoke result no longer supports the phrase "no bottleneck found."
-- P3 work cannot choose Centrifugo, relay sharding, CDC, Redis Lua reservation, or outbox partitioning from preference alone.
+- P3 work cannot choose relay sharding, CDC, Redis Lua reservation, or outbox partitioning from preference alone.
 - A failed local stress run is useful if it identifies a bottleneck, harness gap, or environment limit.
 - Windows local evidence may justify relative optimization and architecture direction, but not final capacity claims.
 

@@ -9,7 +9,7 @@
 | H5 UI | custom mobile auction UI | auction CTA/status/recovery need domain UX | admin components on mobile |
 | Backend | Go modular monolith | concurrency, pprof, simple deployment | microservices |
 | HTTP | Go standard net/http + router or Hertz | either OK; choose by team familiarity | framework-driven decision |
-| WebSocket | self hub P0 with go/no-go to Centrifugo | direct control of recovery/backpressure | Socket.IO mainline |
+| WebSocket | self hub with bounded queues and recovery gates | direct control of recovery/backpressure | Socket.IO mainline |
 | DB | PostgreSQL | transactions, row locks, constraints, audit | Redis-only truth |
 | Cache | Redis | snapshot/history/rate-limit/tickets/presence | Redis as money truth |
 | Object Storage | MinIO | S3-compatible local object storage | mixed local/multipart paths |
@@ -154,6 +154,6 @@ P0 is a single backend process. This is deliberate:
 
 Known multi-instance changes:
 
-- WS fanout must move to Centrifugo or Redis pub/sub.
+- WS fanout must be tested explicitly before any horizontal realtime claim.
 - outbox relay must remain single-owner per shard.
 - local in-memory limits need Redis/shared counters.

@@ -22,7 +22,7 @@
 | chat overwhelms bid | P0 | social feature harms core | social queue/drop, no outbox |
 | hidden DB trigger clears focus | P1 | surprising side effects | app-layer explicit clear |
 | performance numbers fake | P1 | credibility loss | baseline discipline |
-| self WS hub takes too long | P1 | delivery risk | go/no-go to Centrifugo |
+| self WS hub takes too long | P1 | delivery risk | focused fanout, reconnect, slow-consumer, and backpressure gates |
 | Redis down disables rate limit | P1 | abuse risk | bid fail-open but local semaphore, reconnect fail-closed |
 | DB/Redis versions differ | P1 | benchmark not reproducible | env recorded in baseline |
 | UI animation blocks bid | P1 | user experience and scoring | longtask test and cut rule |
@@ -64,7 +64,7 @@ A fake dashboard hurts credibility. Real small diagnostic is better.
 ## Known Limitations To State Honestly
 
 - P0 is single backend process, not HA.
-- Self WS hub may be replaced by Centrifugo if tests fail.
+- Self WS hub is the only runtime realtime implementation; horizontal realtime scale is a known future limitation until proven.
 - Polling outbox is not ultimate large-scale architecture.
 - Redis history is bounded; snapshot fallback is normal.
 - Chat/presence are best-effort.
@@ -91,4 +91,4 @@ Use engineering answers, not hype:
 - "Outbox handles commit-after-crash; WS is not exactly once."
 - "History is bounded; gap triggers snapshot."
 - "We do not claim a performance number until the baseline file proves it."
-- "Centrifugo is our contingency if self hub fails recovery gates."
+- "Self hub remains scoped to the tested release envelope; we do not claim horizontal realtime scale until evidence proves it."

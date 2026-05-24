@@ -22,7 +22,8 @@
 15. `14-evidence-and-references.md`：外部证据、论据、可追问口径。
 16. `16-industrial-p2-p3-roadmap.md`：P1 完成后的工业级 P2/P3+ 后续路线图、调研依据、取舍和门禁。
 17. `17-local-stress-and-p3-execution-plan.md`：Windows-first 压测、mock 边界、周期性瓶颈发现和 P3 执行细则。
-18. `templates/`：正式开发时需要持续填写的模板。
+18. `18-p3-p4-roadmap-reset.md`：P3/P4 中期重置后的性能极限探索、架构决策门槛和 P4 差异化路线。
+19. `templates/`：正式开发时需要持续填写的模板。
 
 ## 一句话方案
 
@@ -36,6 +37,7 @@
 - Chat、保证金、讲解中、用户加入广播是完整度功能，不是技术亮点。
 - 竞拍正确性、可恢复实时、异常可诊断、实测纪律才是最终亮点。
 - P1 完成后，后续工业化工作以 `16-industrial-p2-p3-roadmap.md` 为准：先补 auth/ACL/room/rate-limit/payment hardening，再做 multi-instance realtime 和最终 baseline。
+- P3/P4 中期重置后，以 `18-p3-p4-roadmap-reset.md`、`docs/p3-decision-log.md` 和 `docs/evidence/index.md` 作为当前执行面：性能探索先关闭 admission 找真实极限，完成归因和优化后再回填 admission limit。
 
 ## 复制到新仓库后
 

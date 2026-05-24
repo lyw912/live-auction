@@ -6,21 +6,36 @@ Authoritative roadmap: `docs/design-v2-industrial/16-industrial-p2-p3-roadmap.md
 
 Execution plan: `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan.md`
 
+Reset execution surface: `docs/design-v2-industrial/18-p3-p4-roadmap-reset.md`, `docs/p3-decision-log.md`, `docs/evidence/index.md`
+
 ## Milestones
 
 | ID | Deliverable | Status | Required Evidence |
 |---|---|---|---|
 | P3-00 | Local stress loop and bottleneck evidence discipline | BOTTLENECK_FOUND | `docs/evidence/p3-00-stress-attacker-round-1-2026-05-24.md` records the first real downstream-pressure stress-attacker result. The primary bottleneck is the outbox relay claim query/backlog path; PG hot-row locking is a secondary bottleneck. Raw artifacts live under `docs/perf/raw/p3-attack-20260524-035952/` |
 | P3-01A | Outbox claim bottleneck fix | DONE | `docs/evidence/p3-01-outbox-claim-fix-2026-05-24.md` records the indexed claim fix and retest. Claim query dropped from `1584.153ms` to `14.165ms`; `auc_live` backlog after 30 seconds dropped from `8142` pending to `633` pending and later fully drained. |
-| P3-01 | Realtime transport decision and adapter | EVIDENCE_IN_PROGRESS | `docs/evidence/p3-01-realtime-fanout-attack-2026-05-24.md` records focused fanout and slow-consumer attacks. Current Windows-local evidence does not justify immediate adapter adoption; synchronous 300-watcher connect is an environment/connection-storm limit, while staggered 300 watchers / 50 trigger rps passed. |
+| P3-01 | Self-hub realtime pressure drilldown | EVIDENCE_IN_PROGRESS | `docs/evidence/p3-01-realtime-fanout-attack-2026-05-24.md` records focused fanout and slow-consumer attacks. Current Windows-local evidence supports keeping the self-hub mainline; synchronous 300-watcher connect is an environment/connection-storm limit, while staggered 300 watchers / 50 trigger rps passed. |
 | P3-02 | Relay shard ownership for multi-instance backend | DONE_WITH_WINDOWS_LOCAL_EVIDENCE | `docs/evidence/p3-02-relay-shard-ownership-2026-05-24.md` records DB shard lease ownership, focused failover test, and owner-kill local pressure evidence under `docs/perf/raw/p3-relay-owner-kill-202605240531/`. This is not final capacity evidence. |
 | P3-03 | Multi-room isolation | HARNESS_SMOKE_PASS | `docs/evidence/p3-03-local-stress-harness-2026-05-24.md` records repaired P3 local stress harness and a downstream-pressure smoke where `multi-room-isolation` passed with cross-room leak rate 0. This is not yet an adversarial hot/cold bottleneck round. |
 | P3-04 | Data path evolution decision | NOT_STARTED | measured evidence for PG lock, outbox hot table, snapshot pressure, or fanout bottleneck before Redis Lua/CDC changes |
+| P3-R0 | P3/P4 evidence and roadmap reset | DONE | `docs/design-v2-industrial/18-p3-p4-roadmap-reset.md`, `docs/p3-decision-log.md`, and `docs/evidence/index.md` reset the execution order around admission-off performance discovery, evidence indexing, and architecture go/no-go gates. |
+
+## Reset Roadmap
+
+| Order | Milestone | Status | Required Evidence |
+|---:|---|---|---|
+| 1 | P3-R1 admission-off harness proof | NEXT | All downstream workloads prove `ADMISSION_ENABLED=false`, `auction_admission_enabled 0` before/after, and zero admission reject counter delta. |
+| 2 | P3-R2 hot/cold multi-room adversarial stress | PENDING | Per-room hot/cold metrics, cross-room invariant, and bottleneck verdict. |
+| 3 | P3-R3 clean realtime fanout and slow-consumer drilldown | PENDING | Staggered fanout, healthy-vs-slow, reconnect storm, runtime/pprof metrics, environment classification. |
+| 4 | P3-R4 PG hot-row drilldown | PENDING | Lock/tx/pool profile and before/after optimization or explicit keep-PG decision. |
+| 5 | P3-R5 outbox second-order pressure | PENDING | Longer/multi-room outbox burst with backlog, lag, table/update evidence. |
+| 6 | P3-R6 architecture go/no-go | PENDING | ADR for CDC/partitioning, Redis Lua, or keep-current decision. Realtime remains self-hub unless a future task explicitly reopens transport scope. |
+| 7 | P3-R7 final local ceiling sweep | PENDING | Known local bottleneck table with no hidden admission. |
+| 8 | P3-R8 admission limit calibration | PENDING | Admission-on protection workloads below the measured downstream cliff. |
 
 ## Notes
 
 - P3 may not claim horizontal scale until two backend instances are tested with real relay ownership and realtime fanout.
-- Centrifugo can replace the transport layer, but not PostgreSQL truth, outbox, idempotency, snapshot fallback, or diagnostics.
 - Redis Lua and Debezium/CDC remain evidence-gated decisions, not default implementation work.
 - Green smoke is not bottleneck evidence. P3 starts by running the recurring local stress loop from the execution plan and only then chooses transport, relay, or data-path changes.
 - 2026-05-24 first P3-00 attempt exposed P2 harness/runtime gaps: load seed did not cover all k6 user families, scripts treated admission `429` as transport failure, and WS handlers did not reliably observe client close.
@@ -37,5 +52,6 @@ Execution plan: `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan
 - 2026-05-24 local P3 stress harness was repaired after another harness gap: k6 could exit 0 while producing zero checks and zero completed iterations, and continuous Windows runs could pollute later workloads. The runner now can manage a backend binary directly, isolate workloads, validate nonzero checks, separate `admission-on` from `downstream-pressure`, and capture readyz/metrics/DB diagnostics on failure. Evidence: `docs/evidence/p3-03-local-stress-harness-2026-05-24.md`.
 - 2026-05-24 repaired admission-on full smoke passed all committed P3 workloads under `docs/perf/raw/p3-local-stress-202605240620/`; repaired downstream-pressure realtime/isolation smoke passed watcher fanout, slow consumer, reconnect storm, and multi-room isolation under `docs/perf/raw/p3-local-stress-202605240623/`.
 - 2026-05-24 focused P3-01 realtime attacks added durable fanout and slow-consumer pressure workloads plus runner metrics sampling. Raw artifacts: `docs/perf/raw/p3-local-stress-202605240651/`, `docs/perf/raw/p3-local-stress-202605240653/`, `docs/perf/raw/p3-local-stress-202605240655/`, and `docs/perf/raw/p3-local-stress-202605240658/`.
-- 2026-05-24 P3-01 current verdict: do not introduce a realtime adapter yet based only on Windows local evidence. Synchronous 300-watcher connection startup hit local connection-refused errors, but the same 300 watchers / 50 trigger rps steady fanout passed when connections were staggered. Slow consumers produced HTTP/outbox tail pressure without WS errors or goroutine leak. Next P3-01 work should target connection-storm admission/backoff and a cleaner healthy-vs-slow-client isolation probe.
+- 2026-05-24 P3-01 current verdict: keep the self-hub as the only runtime realtime implementation. Synchronous 300-watcher connection startup hit local connection-refused errors, but the same 300 watchers / 50 trigger rps steady fanout passed when connections were staggered. Slow consumers produced HTTP/outbox tail pressure without WS errors or goroutine leak. Next P3-01 work should target connection-storm admission/backoff and a cleaner healthy-vs-slow-client isolation probe.
 - 2026-05-24 P3-01 follow-up added app-level WebSocket ticket/connect admission and focused connection-storm plus healthy-vs-slow-client probes. Real `cmd/server` admission now returns controlled `429`/`Retry-After` under a low connect ceiling, but fully simultaneous 300-connect Windows-local storm can still fail below the Go handler; treat client reconnect jitter/backoff as required product behavior. Healthy-vs-slow probe passed at 100 healthy + 100 slow watchers with 0 healthy WS errors, while trigger-side failures/dropped iterations remain upstream/local pressure evidence rather than realtime adapter proof.
+- 2026-05-24 roadmap reset completed. Future P3/P4 work starts from admission-off downstream pressure, evidence index lookup, and explicit go/no-go gates. Admission limits are calibrated only after practical downstream limits and optimization deltas are known.

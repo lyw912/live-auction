@@ -32,7 +32,7 @@ P4: add differentiating verification, replay, and risk-control tooling.
 P5: freeze reproducible release evidence, including final Linux capacity calibration, and interview defense material.
 ```
 
-PostgreSQL remains the auction truth. Redis, Centrifugo/NATS, WebSocket, metrics, and replay tooling are secondary systems around that truth.
+PostgreSQL remains the auction truth. Redis, WebSocket, metrics, and replay tooling are secondary systems around that truth.
 
 ## Public Research Baseline
 
@@ -44,7 +44,6 @@ Private TikTok Shop/Taobao/Whatnot/eBay backend details are not public. The usab
 | Fast live auctions | Whatnot documents live auction bidding, seller auction creation, and many auctions lasting 30 seconds or less: https://help.whatnot.com/hc/en-us/articles/14932924544141-Bid-on-an-item-during-a-show and https://help.whatnot.com/hc/en-us/articles/9779931101837-Start-an-auction-during-a-show | Last-second contention, short timers, custom amounts, immediate feedback, and payment readiness are not edge cases; they are the main workload. |
 | Marketplace bidding | eBay automatic bidding uses a maximum-bid/proxy model: https://www.ebay.com/help/buying/bidding/automatic-bidding?id=4014 | Proxy bidding is a credible P4 extension, but it changes domain semantics and should not be slipped into the current fixed-increment live auction without an ADR. |
 | SQL serialization point | PostgreSQL documents MVCC and explicit row-level locks: https://www.postgresql.org/docs/current/mvcc-intro.html and https://www.postgresql.org/docs/current/explicit-locking.html | The current PG row lock design is defensible for single-auction money correctness. Do not replace it with Redis authority without reconciliation proof. |
-| Realtime fanout | Centrifugo provides WebSocket pub/sub, channel history, missed-message recovery, and cluster fanout: https://centrifugal.dev/docs/getting-started/highlights and https://centrifugal.dev/docs/tutorial/recovery | If self hub fails connection/fanout gates, use Centrifugo as transport while keeping DB/outbox/snapshot truth in app code. |
 | Outbox/CDC | Debezium documents the outbox event router pattern for capturing a dedicated outbox table: https://debezium.io/documentation/reference/stable/transformations/outbox-event-router.html | Polling outbox is acceptable until measured hot-table pain. CDC is P3/P4 only after the outbox schema and delivery semantics are stable. |
 | Distributed rate limit | Redis documents centralized token-bucket rate limiting with Lua for distributed services: https://redis.io/docs/latest/develop/use-cases/rate-limiter | P2 should implement Redis token/GCRA limits for user/IP/auction, with idempotent replay before limit checks. |
 | Payment reliability | Stripe recommends idempotency keys for retryable POSTs and webhooks for async event delivery: https://docs.stripe.com/plan-integration/get-started/server-side-integration and https://docs.stripe.com/webhooks | P2 payment should model provider order creation, signed callbacks, idempotent event processing, and reconciliation even if the provider is local mock. |
@@ -53,11 +52,10 @@ Private TikTok Shop/Taobao/Whatnot/eBay backend details are not public. The usab
 | Correctness testing | Jepsen analyses focus on histories, linearizability/serializability, and failure behavior: https://jepsen.io/analyses/etcd-3.4.3 and https://jepsen.io/analyses/voltdb-6-3 | Add an auction history checker and invariant verifier. Make correctness claims checkable after chaos/load runs. |
 | Overload control | AWS Builders Library discusses fairness, throttling, bounded work, backpressure, and operational instrumentation: https://aws.amazon.com/builders-library/fairness-in-multi-tenant-systems and https://aws.amazon.com/builders-library/instrumenting-distributed-systems-for-operational-visibility | P2/P3 should implement layered admission control, per-room isolation, and logs/metrics that explain why requests were shed. |
 
-Open-source candidates to compare before adoption:
+Infrastructure candidates to keep evidence-gated:
 
 | Candidate | Fit | Why Not Immediately Adopt |
 |---|---|---|
-| Centrifugo | Browser realtime pub/sub, channel history, recovery, clustering. | It solves transport, not auction truth, idempotency, order creation, or snapshot correctness. |
 | NATS / JetStream | Durable pub/sub, service messaging, edge/cloud messaging. | Adds message-broker operations and does not directly solve browser WebSocket auth/recovery UX. |
 | Debezium | CDC and outbox routing from PostgreSQL to Kafka-compatible consumers. | Strong P3/P4 option only if polling outbox is measured as bottleneck. |
 | Envoy/global ratelimit style services | Mature gateway-side throttling pattern. | Too heavy for current monolith; Redis-backed in-app limiter is enough for P2, with clear migration boundary. |
@@ -72,7 +70,7 @@ Do not cite exact GitHub star counts in final materials unless they are rechecke
 | 完整工程链路 | P0/P1 flow exists from item to bid/order/mock pay/history/diagnostics. | "Why is identity and room access still mock/header-driven?" | P2-01 real session/auth boundary and P2-02 room ACL. |
 | 接口网关 | Schema/idempotency exists; mock auth exists. | "Where is actual auth, ACL, and rate limit?" | P2-01, P2-02, P2-04. |
 | 数据治理 | DB constraints, events, idempotency, trace_id, outbox exist. | "Can you replay or audit a full contested auction after load?" | P4-01 auction flight recorder and P4-02 invariant verifier. |
-| 毫秒级实时同步 | Self hub, history/snapshot, backpressure tests exist. | "Can two backend instances serve the same room without event loss or duplicate fanout?" | P3-01 Centrifugo adapter or shared fanout, P3-02 relay shard ownership. |
+| 毫秒级实时同步 | Self hub, history/snapshot, backpressure tests exist. | "Can two backend instances serve the same room without event loss or duplicate fanout?" | P3-01 self-hub pressure drilldown, P3-02 relay shard ownership. |
 | 系统可用性 | Restart/outbox/recovery gates exist. | "What happens when rate-limit Redis fails, payment callback repeats, or room ACL changes mid-session?" | P2-04, P2-05, P2-06 degradation tests. |
 | 性能 | P1 scripts and Windows local smoke exist. | "Where is local bottleneck evidence, and where is final Linux capacity proof?" | P2-07 Windows/local bottleneck harness, P5 final Linux baseline. |
 | 独特思考 | Server-authoritative correctness + recoverable realtime is real. | "This is still a single-room mock-auth demo unless product/security scope is hardened." | P2 product/security hardening, P4 verifier/replay/risk tooling. |
@@ -258,32 +256,31 @@ Execution details for local stress cadence, mock boundaries, workload levels, an
 
 In plain terms, P3 is the phase where the project stops asking "can the demo flow pass?" and starts asking "which subsystem bends first when the real backend is pushed, and what is the smallest correctness-preserving change that fixes it?"
 
-### P3-01 Realtime Transport Decision
+### P3-01 Self-Hub Realtime Pressure
 
-Before choosing a transport, run watcher fanout, slow consumer, reconnect storm, and runtime profiling locally. The decision must cite measured self-hub behavior, not only feature comparison.
+Before making any realtime scaling claim, run watcher fanout, slow consumer, reconnect storm, and runtime profiling locally. The decision must cite measured self-hub behavior, not feature comparison.
 
-Decision options:
+Scoped options:
 
 | Option | Pros | Cons | Recommended Use |
 |---|---|---|---|
-| Keep self hub | Full control, low dependency count, already implemented. | Multi-instance fanout and history become app-owned; high risk of subtle backpressure bugs. | Keep only if it passes strict multi-instance tests. |
-| Centrifugo adapter | Browser WebSocket, channels, history/recovery, cluster fanout are product features. | Adds component and auth integration; still needs app-owned truth/snapshot. | Preferred P3 path if goal is credible industrial realtime. |
+| Keep self hub | Full control, low dependency count, already implemented. | Multi-instance fanout and history remain app-owned; high risk of subtle backpressure bugs. | Mainline runtime path. |
 | Redis Pub/Sub between hubs | Simple to wire. | Pub/Sub is not durable; history/snapshot still app-owned; cluster behavior easy to under-test. | Only as a temporary bridge, not final claim. |
 | NATS/JetStream | Strong messaging substrate, useful for services. | Does not directly provide browser WS semantics; more ops. | Consider later for internal eventing, not P3 browser fanout. |
 
-Recommended P3 design:
+Current P3 design:
 
 ```text
-outbox relay -> publish auction event to Centrifugo channel
-              -> update Redis snapshot/history owned by app
-H5/PC client -> Centrifugo WebSocket
+outbox relay -> update Redis snapshot/history owned by app
+              -> publish auction event to self hub
+H5/PC client -> app WebSocket endpoint
 snapshot API -> app backend
 ```
 
 The app still owns:
 
 - auth/session and membership.
-- channel token generation.
+- WebSocket ticket generation.
 - auction seq and payload shape.
 - snapshot fallback.
 - gap semantics.
@@ -299,7 +296,7 @@ When multiple backend instances run:
 - only one active owner per shard.
 - shard ownership changes are visible in diagnostics.
 - head-of-line rule remains per auction.
-- DEAD event still emits gap notice through the chosen realtime adapter.
+- DEAD event still emits gap notice through the self hub.
 
 Acceptance gates:
 
@@ -333,7 +330,7 @@ Do not jump directly to CDC. Use measurements:
 | PG row lock dominates hot auction latency | local lock/tx/pool metrics first; final Linux confirmation before capacity claim | consider Redis Lua reservation ADR, but only with reconciliation. |
 | outbox claim/update hot table dominates | outbox burst explain/analyze, table bloat, delivery lag | partition outbox table or Debezium CDC outbox. |
 | snapshot rebuild DB pressure | reconnect storm metrics show semaphore saturation | precomputed snapshot versioning and room-level fair queue. |
-| fanout CPU/memory dominates | WS pprof and fanout lag | Centrifugo or serialization-once-per-event optimization. |
+| fanout CPU/memory dominates | WS pprof and fanout lag | serialization-once-per-event, queue, lock, or admission optimization. |
 
 No P3 data-path change is accepted because a bottleneck is merely suspected. It needs the local stress or drilldown bundle defined in `17-local-stress-and-p3-execution-plan.md`.
 
@@ -452,9 +449,9 @@ No. A senior reviewer can reject the project before scale if auth, membership, r
 
 No, not yet. The strongest current technical story is a simple, auditable serialization point for money. Redis Lua can reduce latency under one workload, but it risks split-brain authority. It belongs behind measured PG bottleneck evidence and a reconciliation ADR.
 
-### Should The Project Adopt Centrifugo Immediately?
+### Should The Project Add Another Realtime Transport Immediately?
 
-Not before P2 hardening. Centrifugo is a strong P3 candidate because it addresses known transport concerns, but adopting it before ACL/session/channel token design would create another mock integration. The adapter boundary should be designed in P2 and implemented in P3.
+No. The release path should keep the self-hub as the only runtime realtime implementation. Adding a second transport before self-hub fanout, slow-consumer, reconnect, and multi-room evidence fails would create another integration surface without proving the core challenge better.
 
 ### Should Real OAuth/Real Payment/Real Live Streaming Be Added?
 
@@ -483,7 +480,7 @@ That is the level at which senior experts have to argue with concrete tradeoffs 
 | 5 | P2-05 payment provider boundary | Makes order/payment lifecycle reviewable. |
 | 6 | P2-06 diagnostics | Keeps new failure modes visible. |
 | 7 | P2-07 local baseline and bottleneck harness | Finds local correctness, script, and bottleneck-direction issues before scale work. |
-| 8 | P3-01/P3-02 realtime adapter + relay leases | Enables multi-instance claim. |
+| 8 | P3-01/P3-02 self-hub drilldown + relay leases | Enables honest multi-instance and realtime limitation claims. |
 | 9 | P3-03 multi-room isolation | Proves scale is not one hot-room benchmark. |
 | 10 | P4 verifier/flight recorder/risk simulator | Converts correctness into judge-facing evidence. |
 | 11 | P5 release freeze | Locks claims to raw evidence. |
@@ -499,7 +496,7 @@ That is the level at which senior experts have to argue with concrete tradeoffs 
   - room membership ACL.
   - rate limiter degradation.
   - payment callback state machine.
-  - Centrifugo vs self hub.
+  - realtime self-hub release gate.
   - CDC outbox decision.
   - Redis Lua reservation, only if benchmark evidence justifies it.
 

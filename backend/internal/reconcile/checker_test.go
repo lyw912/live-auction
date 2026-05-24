@@ -28,6 +28,7 @@ func TestCheckerReportsCleanRelayProjectionAndDetectsSeqDrift(t *testing.T) {
 	prioritizeReconcileOutbox(t, db, auctionRow.ID)
 
 	relay := outbox.NewRelay(db, rdb, "reconcile-worker")
+	ownReconcileAuctionShard(t, db, auctionRow.ID, "reconcile-worker")
 	for i := 0; i < 20; i++ {
 		ok, err := relay.ProcessOne(ctx)
 		if err != nil {
@@ -234,5 +235,34 @@ func prioritizeReconcileOutbox(t *testing.T, db *pgxpool.Pool, auctionID string)
 		WHERE auction_id = $1
 	`, auctionID); err != nil {
 		t.Fatalf("prioritize outbox: %v", err)
+	}
+	if _, err := db.Exec(context.Background(), `
+		UPDATE outbox_delivery d
+		SET event_created_at = e.created_at
+		FROM outbox_events e
+		WHERE e.id = d.outbox_id
+		  AND e.auction_id = $1
+	`, auctionID); err != nil {
+		t.Fatalf("prioritize outbox delivery: %v", err)
+	}
+}
+
+func ownReconcileAuctionShard(t *testing.T, db *pgxpool.Pool, auctionID string, ownerID string) {
+	t.Helper()
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), `DELETE FROM outbox_relay_shard_leases WHERE owner_id = $1`, ownerID)
+	})
+	_, err := db.Exec(context.Background(), `
+		INSERT INTO outbox_relay_shard_leases (shard_id, owner_id, lease_until)
+		SELECT DISTINCT shard_id, $2, now() + interval '5 seconds'
+		FROM outbox_delivery
+		WHERE auction_id = $1
+		ON CONFLICT (shard_id) DO UPDATE
+		SET owner_id = EXCLUDED.owner_id,
+		    lease_until = EXCLUDED.lease_until,
+		    renewed_at = now()
+	`, auctionID, ownerID)
+	if err != nil {
+		t.Fatalf("own reconcile auction shard: %v", err)
 	}
 }

@@ -198,10 +198,10 @@ During P3/P4/P5 performance exploration, the local stress runner must fail the r
 
 P3 work cannot start from a blank architecture preference. It must start from the latest local stress evidence:
 
-- P3-01 realtime transport decision needs watcher fanout, slow consumer, reconnect storm, and runtime profiles.
+- P3-01 self-hub realtime drilldown needs watcher fanout, slow consumer, reconnect storm, and runtime profiles.
 - P3-02 relay shard ownership needs outbox burst, kill-owner/failover test, duplicate publish check, and relay lag metrics.
 - P3-03 multi-room isolation needs hot/cold room load, per-room metrics, and cross-room invariant checks.
-- P3-04 data path evolution needs measured PG lock, outbox, snapshot, or fanout evidence before Redis Lua, CDC, partitioning, or Centrifugo adoption is justified.
+- P3-04 data path evolution needs measured PG lock, outbox, snapshot, or fanout evidence before Redis Lua, CDC, or partitioning is justified.
 
 All P3 milestone bottleneck evidence must be downstream-pressure evidence with `ADMISSION_ENABLED=false`, unless the milestone explicitly says it is testing admission/protection behavior.
 
@@ -246,7 +246,7 @@ P3 turns the project from "one backend process can demonstrate the auction" into
 In practical terms:
 
 1. Pressure the current self hub and outbox relay until the evidence says whether they are enough.
-2. If self hub fails fanout/recovery/slow-consumer gates, introduce a realtime adapter such as Centrifugo while keeping PostgreSQL, outbox, snapshot, and diagnostics in the app.
+2. Keep realtime delivery on the self hub for the release path; do not add a second transport without explicitly reopening scope.
 3. If a second backend can run, add relay shard ownership so only one owner claims a shard and failover is observable.
 4. Prove hot/cold room isolation so one popular room does not collapse unrelated rooms.
 5. Only then discuss data-path changes such as partitioned outbox, CDC, or Redis Lua reservation.

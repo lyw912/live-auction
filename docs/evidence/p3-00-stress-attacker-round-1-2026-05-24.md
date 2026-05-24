@@ -14,7 +14,7 @@ This run is Windows local evidence. It proves bottleneck direction and concrete 
 
 - Subsystem: PostgreSQL hot auction row and outbox relay claim path.
 - Hypothesis: once admission ceilings are explicitly raised, the current single-auction write path and outbox relay query will become the first P3 bottleneck before realtime transport does.
-- Why this matters: P3 architecture work must start from measured bottlenecks. This result gives a concrete fix target before making Centrifugo, relay shard ownership, Redis Lua, CDC, or other data-path decisions.
+- Why this matters: P3 architecture work must start from measured bottlenecks. This result gives a concrete fix target before making relay shard ownership, Redis Lua, CDC, or other data-path decisions.
 
 ## Pressure Profile
 

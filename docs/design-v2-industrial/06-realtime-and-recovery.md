@@ -186,13 +186,14 @@ Browser timers can throttle/freeze in background. Therefore:
 - no `fresh=1` bypassing cache.
 - server must not classify all hidden clients as slow consumers solely from JS heartbeat delay.
 
-## Centrifugo Contingency
+## Self-Hub Release Gate
 
-Self hub must pass go/no-go. If not:
+The runtime realtime implementation is the app-owned self hub. It must keep:
 
-- relay publishes to Centrifugo API.
-- Centrifugo history/recovery handles channel history.
-- app still keeps DB snapshot fallback.
-- client protocol adapter is isolated.
+- browser ticket auth through `auction.v1` and one-time tickets;
+- app-owned `auction_id + seq` recovery semantics;
+- Redis history and DB snapshot fallback;
+- bounded per-connection queues and slow-consumer closure;
+- diagnostics for reconnect, recovery source, slow close, and snapshot saturation.
 
-Centrifugo does not remove the need for outbox or snapshot truth.
+Do not add a second transport path without a new ADR and a clean self-hub failure bundle.
