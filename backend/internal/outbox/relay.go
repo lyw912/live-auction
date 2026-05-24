@@ -188,26 +188,8 @@ func (r *Relay) WithNotify(enabled bool) *Relay {
 }
 
 func (r *Relay) ProcessOne(ctx context.Context) (bool, error) {
-	start := time.Now()
-	if err := r.ensureShardLease(ctx); err != nil {
-		return false, err
-	}
-	event, ok, err := r.claimOne(ctx)
-	if err != nil || !ok {
-		return ok, err
-	}
-	if err := r.publish(ctx, event); err != nil {
-		if markErr := r.markFailure(ctx, event, err); markErr != nil {
-			return true, markErr
-		}
-		return true, err
-	}
-	if err := r.markPublished(ctx, event.OutboxID); err != nil {
-		return true, err
-	}
-	observability.Observe("auction_outbox_lag_seconds", time.Since(event.CreatedAt).Seconds(), nil, observability.DefaultLatencyBuckets)
-	observability.Observe("auction_fanout_latency_seconds", time.Since(start).Seconds(), nil, observability.DefaultLatencyBuckets)
-	return true, nil
+	ok, _, err := r.processOne(ctx, true)
+	return ok, err
 }
 
 func (r *Relay) ProcessBatch(ctx context.Context, limit int) (int, error) {
@@ -215,17 +197,51 @@ func (r *Relay) ProcessBatch(ctx context.Context, limit int) (int, error) {
 		limit = r.drainBatch
 	}
 	processed := 0
+	touchedShards := map[int]struct{}{}
 	for processed < limit {
-		ok, err := r.ProcessOne(ctx)
+		ok, shardID, err := r.processOne(ctx, false)
 		if err != nil {
 			return processed, err
 		}
 		if !ok {
-			return processed, nil
+			break
 		}
+		touchedShards[shardID] = struct{}{}
 		processed++
 	}
+	for shardID := range touchedShards {
+		if err := r.refreshWatermark(ctx, shardID); err != nil {
+			return processed, err
+		}
+	}
 	return processed, nil
+}
+
+func (r *Relay) processOne(ctx context.Context, refreshWatermark bool) (bool, int, error) {
+	start := time.Now()
+	if err := r.ensureShardLease(ctx); err != nil {
+		return false, 0, err
+	}
+	event, ok, err := r.claimOne(ctx)
+	if err != nil || !ok {
+		return ok, 0, err
+	}
+	shardID, err := r.shardIDForOutbox(ctx, event.OutboxID)
+	if err != nil {
+		return true, 0, err
+	}
+	if err := r.publish(ctx, event); err != nil {
+		if markErr := r.markFailure(ctx, event, err, refreshWatermark); markErr != nil {
+			return true, shardID, markErr
+		}
+		return true, shardID, err
+	}
+	if err := r.markPublished(ctx, event.OutboxID, refreshWatermark); err != nil {
+		return true, shardID, err
+	}
+	observability.Observe("auction_outbox_lag_seconds", time.Since(event.CreatedAt).Seconds(), nil, observability.DefaultLatencyBuckets)
+	observability.Observe("auction_fanout_latency_seconds", time.Since(start).Seconds(), nil, observability.DefaultLatencyBuckets)
+	return true, shardID, nil
 }
 
 func (r *Relay) claimOne(ctx context.Context) (Event, bool, error) {
@@ -388,7 +404,7 @@ func randomStreamEpoch() (string, error) {
 	return hex.EncodeToString(buf[:]), nil
 }
 
-func (r *Relay) markPublished(ctx context.Context, outboxID int64) error {
+func (r *Relay) markPublished(ctx context.Context, outboxID int64, refreshWatermark bool) error {
 	_, err := r.db.Exec(ctx, `
 		UPDATE outbox_delivery
 		SET status = 'PUBLISHED',
@@ -410,10 +426,13 @@ func (r *Relay) markPublished(ctx context.Context, outboxID int64) error {
 	if err != nil {
 		return err
 	}
+	if !refreshWatermark {
+		return nil
+	}
 	return r.refreshWatermarkForOutbox(ctx, outboxID)
 }
 
-func (r *Relay) markFailure(ctx context.Context, event Event, publishErr error) error {
+func (r *Relay) markFailure(ctx context.Context, event Event, publishErr error, refreshWatermark bool) error {
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return err
@@ -467,8 +486,10 @@ func (r *Relay) markFailure(ctx context.Context, event Event, publishErr error) 
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
-	if refreshErr := r.refreshWatermarkForOutbox(ctx, event.OutboxID); refreshErr != nil {
-		return refreshErr
+	if refreshWatermark {
+		if refreshErr := r.refreshWatermarkForOutbox(ctx, event.OutboxID); refreshErr != nil {
+			return refreshErr
+		}
 	}
 	if dead {
 		observability.Inc("auction_outbox_dead_total", nil)
@@ -599,11 +620,19 @@ func classifySnapshotError(err error) string {
 }
 
 func (r *Relay) refreshWatermarkForOutbox(ctx context.Context, outboxID int64) error {
-	var shardID int
-	if err := r.db.QueryRow(ctx, `SELECT shard_id FROM outbox_delivery WHERE outbox_id = $1`, outboxID).Scan(&shardID); err != nil {
+	shardID, err := r.shardIDForOutbox(ctx, outboxID)
+	if err != nil {
 		return err
 	}
 	return r.refreshWatermark(ctx, shardID)
+}
+
+func (r *Relay) shardIDForOutbox(ctx context.Context, outboxID int64) (int, error) {
+	var shardID int
+	if err := r.db.QueryRow(ctx, `SELECT shard_id FROM outbox_delivery WHERE outbox_id = $1`, outboxID).Scan(&shardID); err != nil {
+		return 0, err
+	}
+	return shardID, nil
 }
 
 func (r *Relay) refreshWatermark(ctx context.Context, shardID int) error {

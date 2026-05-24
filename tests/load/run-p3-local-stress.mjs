@@ -33,6 +33,7 @@ const baseURL = process.env.BASE_URL || 'http://127.0.0.1:18080';
 const resetBetweenWorkloads = process.env.RESET_BETWEEN_WORKLOADS !== '0';
 const startDelaySeconds = Number(process.env.START_DELAY_SECONDS || 0);
 const metricsSampleSeconds = Number(process.env.METRICS_SAMPLE_SECONDS || 5);
+const postWorkloadObserveSeconds = Number(process.env.POST_WORKLOAD_OBSERVE_SECONDS || 0);
 const admissionEnabled = process.env.ADMISSION_ENABLED ?? (profile === 'admission-on' ? 'true' : 'false');
 const workloadFilter = (process.env.WORKLOADS || '')
   .split(',')
@@ -214,15 +215,18 @@ function runK6WithSampling(workload, rawPath, logPath) {
       settled = true;
       if (sampleTimer) clearInterval(sampleTimer);
       clearTimeout(timeoutTimer);
-      appendSample('final');
-      writeFileSync(logPath, `${stdout}${stderr}`);
-      resolve({
-        status: code,
-        signal,
-        stdout,
-        stderr,
-        error: timedOut ? { code: 'ETIMEDOUT' } : undefined,
-      });
+      (async () => {
+        appendSample('final');
+        await observePostWorkload(appendSample);
+        writeFileSync(logPath, `${stdout}${stderr}`);
+        resolve({
+          status: code,
+          signal,
+          stdout,
+          stderr,
+          error: timedOut ? { code: 'ETIMEDOUT' } : undefined,
+        });
+      })();
     });
   });
 }
@@ -430,6 +434,18 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function observePostWorkload(appendSample) {
+  if (!keepFullArtifacts || postWorkloadObserveSeconds <= 0) return;
+  const intervalSeconds = metricsSampleSeconds > 0 ? metricsSampleSeconds : 5;
+  const deadline = Date.now() + postWorkloadObserveSeconds * 1000;
+  let sample = 0;
+  while (Date.now() < deadline) {
+    await sleep(Math.min(intervalSeconds * 1000, Math.max(0, deadline - Date.now())));
+    sample++;
+    appendSample(`post-${sample}`);
+  }
+}
+
 async function waitReady() {
   const deadline = Date.now() + 20000;
   while (Date.now() < deadline) {
@@ -603,6 +619,7 @@ writeFileSync(join(rawRoot, 'environment.json'), JSON.stringify({
   reset_between_workloads: resetBetweenWorkloads,
   start_delay_seconds: startDelaySeconds,
   metrics_sample_seconds: metricsSampleSeconds,
+  post_workload_observe_seconds: postWorkloadObserveSeconds,
   artifact_mode: artifactMode,
   duration,
   vus,

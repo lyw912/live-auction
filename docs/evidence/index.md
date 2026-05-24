@@ -40,6 +40,7 @@
 | `docs/evidence/p3-11-multi-room-hot-cold-stress-2026-05-25.md` | AUTHORITATIVE | P3-R2 found shared bid-path DB/lock pressure: hot-room bid load degraded cold-room bid p95 from about `25ms` to about `506ms` without cross-room leak, cold WS error, or admission pollution. |
 | `docs/evidence/p3-12-realtime-fanout-drilldown-2026-05-25.md` | AUTHORITATIVE | P3-R3 clean realtime drilldown: self-hub passed 300 watcher fanout, healthy-vs-slow isolation, and 100-VU reconnect recovery; higher profiles expose PG/recovery ceilings, not fanout failure. |
 | `docs/evidence/p3-13-pg-hot-row-drilldown-2026-05-25.md` | AUTHORITATIVE | P3-R4 confirmed PostgreSQL hot auction row contention under clean admission-off bid pressure and implemented a conservative transaction-work reduction that lowered same-profile local p99 and lock/pool wait. Outbox pending remains the next bottleneck input. |
+| `docs/evidence/p3-14-outbox-second-order-pressure-2026-05-25.md` | AUTHORITATIVE | P3-R5 found outbox relay watermark refresh as a second-order drain bottleneck and optimized batch drain to refresh watermarks once per touched shard. Relay drain improved about 4.6x in the tested post-observe window, but backlog still remained. |
 | `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan.md` | AUTHORITATIVE | P3/P4 pressure protocol and admission-off policy. |
 | `docs/design-v2-industrial/18-p3-p4-roadmap-reset.md` | AUTHORITATIVE | Current P3/P4 execution order and decision gates. |
 | `docs/p3-decision-log.md` | AUTHORITATIVE | Current decisions, superseded evidence, and go/no-go gates. |
@@ -95,6 +96,6 @@ Clean or archive later only after confirming no evidence document references the
 | Gap | Why it matters | Next evidence |
 |---|---|---|
 | PG hot-row attribution after outbox fix | Closed by P3-R4 for Windows-local direction evidence. | `docs/evidence/p3-13-pg-hot-row-drilldown-2026-05-25.md`; final Linux capacity still separate. |
-| Outbox second-order pressure | Claim query fixed, but table/update/bloat under longer load is not closed. | Longer outbox burst, multi-room outbox pressure, bloat/dead tuple/lag evidence. |
+| Outbox second-order pressure | Closed for current Windows-local direction evidence; optimized watermark refresh but backlog still remains under 200 bid/s input. | `docs/evidence/p3-14-outbox-second-order-pressure-2026-05-25.md`; P3-R6 should decide keep/tune/parallelize. |
 | P4 invariant verifier | Stress evidence still relies too much on manual interpretation. | CLI report for seq, terminal state, order, winner, idempotency, cross-room leak, outbox coverage. |
 | Final Linux 3-run capacity baseline | Required before any public capacity claim. | P5 Linux native baseline with environment and raw output. |
