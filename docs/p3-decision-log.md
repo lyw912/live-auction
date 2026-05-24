@@ -36,6 +36,7 @@ Decision states:
 | P3-D13 | NATS/JetStream remains out of scope unless internal service messaging becomes a measured bottleneck. Selective design borrowing is accepted. | EVIDENCE_GATED | `18-p3-p4-roadmap-reset.md`, `docs/evidence/p3-01-outbox-claim-fix-2026-05-24.md`, `docs/evidence/p3-02-relay-shard-ownership-2026-05-24.md`, `docs/reviews/p3-07-nats-jetstream-borrowing-review-2026-05-25.md`, `docs/evidence/p3-07-nats-jetstream-borrowed-hardening-2026-05-25.md`. | Do not add external brokers, browser realtime replacements, or direct bid-path publishers. Allowed claims: borrowed delivery-state, ack/redelivery, dedupe, slow-consumer, monitoring, and snapshot/catchup design logic. Forbidden claims: NATS is integrated, JetStream improves current performance, or broker sequence replaces auction seq. Reconsider runtime adoption only through an ADR-backed change after measured need. |
 | P3-D14 | Redis remains projection/cache/admission support; Lua reservation and Streams are evidence-gated. Existing Redis Lua admission/ticket borrowing is accepted. | EVIDENCE_GATED | `00-project-brief.md`, `04-data-and-storage.md`, `12-engineering-rules.md`, `18-p3-p4-roadmap-reset.md`, `docs/reviews/p3-08-redis-lua-borrowing-review-2026-05-25.md`. | Allowed claims: borrowed Redis Lua for bounded GCRA admission and one-time WS ticket consume. Forbidden claims: Redis is auction truth, Lua decides winner/price/order, or Lua reservation improves performance before PG hot-row evidence and reconciliation ADR. |
 | P3-D15 | Outbox second-order pressure is confirmed and partially optimized through batched watermark refresh. | ACCEPTED | `docs/evidence/p3-14-outbox-second-order-pressure-2026-05-25.md`. | Keep DB-backed relay mainline for now. Do not introduce Debezium/CDC from P3-R5 alone; P3-R6 must decide keep/tune/parallelize with ADR-level evidence. |
+| P3-D16 | Current release-track architecture stays: PostgreSQL bid truth, app-owned DB relay, Redis projection/history, and self-hub realtime. | ACCEPTED | `docs/evidence/p3-15-architecture-go-no-go-2026-05-25.md`. | Redis Lua reservation, Debezium/CDC, NATS/JetStream runtime, and self-hub replacement are no-go for this P3 cycle without a new ADR, invariant verifier evidence, and a contradictory bottleneck bundle. Proceed to P3-R7 local ceiling sweep and P3-R8 admission calibration. |
 
 ## Go / No-Go Gates
 
@@ -146,6 +147,6 @@ No-go during:
 
 | Order | Decision to close | Required evidence |
 |---:|---|---|
-| 1 | What architecture choice follows P3-R4/P3-R5? | Keep current DB truth/relay, tune admission, or ADR-backed parallel relay/CDC/Redis reservation decision. |
-| 2 | Is any further bid-path redesign justified? | Linux or stronger local evidence plus ADR/invariant proof; P3-R4 alone only justifies conservative transaction-work reduction. |
-| 3 | What admission limits protect the release candidate? | Admission-on calibration below the measured downstream cliff. |
+| 1 | What is the final local ceiling after P3-R4/P3-R5 optimizations? | P3-R7 admission-off focused bid/outbox runs with no hidden admission and current bottleneck table. |
+| 2 | What admission limits protect the release candidate? | Admission-on calibration below the measured downstream cliff. |
+| 3 | Is any further bid-path or relay redesign justified after admission calibration? | Linux or stronger local evidence plus ADR/invariant proof; current P3 evidence keeps the existing architecture. |
