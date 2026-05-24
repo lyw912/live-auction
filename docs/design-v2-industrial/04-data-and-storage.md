@@ -358,10 +358,10 @@ system_anomaly_events (
 |---|---|---|---|
 | `auction:{id}:snapshot` | JSON/string | active + 30m | hot snapshot |
 | `auction:{id}:events` | stream/list | active + 30m | ordered recovery history |
-| `ws_ticket:{ticket}` | string | <=60s | one-time WS ticket |
-| `rate:bid:user:{auction}:{user}` | counter/bucket | short | user bid limit |
-| `rate:bid:ip:{auction}:{ip}` | counter/bucket | short | IP bid limit |
-| `rate:bid:auction:{auction}` | counter/bucket | short | auction global limit |
+| `ws_ticket:{ticket}` | string | <=60s | one-time WS ticket; consumed by the `ws_ticket_consume` Lua script with fail-closed semantics |
+| `bid:{auction}:limit:user:{user}` | GCRA TAT millis | short | user bid admission; single-key `bid_admission_gcra` Lua script |
+| `bid:{auction}:limit:ip:{ip}` | GCRA TAT millis | short | IP bid admission; same `{auction}` hash tag convention as other bid-admission keys |
+| `bid:{auction}:limit:auction` | GCRA TAT millis | short | auction global bid admission; protective only, not auction truth |
 | `room:{id}:presence` | set/hash | short | approximate presence |
 | `user_joined:{room}:{user}` | string | 30s | join dedupe |
 | `snapshot:singleflight:{room}` | lock | short | optional cross-process guard |

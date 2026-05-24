@@ -4,13 +4,18 @@ import (
 	"context"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"live-auction/backend/internal/observability"
+	"live-auction/backend/internal/redisx"
 )
 
 func TestTicketStoreIssueConsumeOneTime(t *testing.T) {
+	observability.Default = observability.NewRegistry()
 	store := NewTicketStore(openRedisForRealtime(t))
 	ctx := context.Background()
 	token, err := store.Issue(ctx, Ticket{
@@ -32,6 +37,16 @@ func TestTicketStoreIssueConsumeOneTime(t *testing.T) {
 	_, err = store.Consume(ctx, token)
 	if !IsInvalidTicket(err) {
 		t.Fatalf("second consume err = %v, want invalid ticket", err)
+	}
+	metrics := string(observability.Default.Render(ctx))
+	for _, want := range []string{
+		`redis_lua_script_total{outcome="consumed",script="` + redisx.ScriptWSTicketConsume + `"} 1`,
+		`redis_lua_script_total{outcome="missing",script="` + redisx.ScriptWSTicketConsume + `"} 1`,
+		`redis_lua_script_latency_seconds_count{outcome="consumed",script="` + redisx.ScriptWSTicketConsume + `"} 1`,
+	} {
+		if !strings.Contains(metrics, want) {
+			t.Fatalf("metrics missing %q in:\n%s", want, metrics)
+		}
 	}
 }
 

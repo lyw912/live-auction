@@ -70,10 +70,10 @@ Local Redis source anchors:
 
 | Current Area | Source Anchor | Verdict |
 |---|---|---|
-| Gateway Redis Lua GCRA admission | `backend/internal/gateway/bid_admission.go:158`, `:191`, `:210` | Good. The project already borrowed Redis Lua for distributed request-path protection. It checks completed idempotency replay before rate limiting, then uses Lua to atomically update per-key theoretical-arrival-time state. |
+| Gateway Redis Lua GCRA admission | `backend/internal/gateway/bid_admission.go:158`, `:191`, `:210` | Good. The project already borrowed Redis Lua for distributed request-path protection. It checks completed idempotency replay before rate limiting, then uses Lua to atomically update per-key theoretical-arrival-time state. The script is now named `bid_admission_gcra`, run through `redis.Script.Run` (`EVALSHA` with `EVAL` fallback), and emits `redis_lua_script_*` metrics. |
 | Redis down behavior for admission | `backend/internal/gateway/bid_admission.go:193`, `:262` | Correct boundary. Redis limiter failure records `RATE_LIMIT_REDIS_DOWN` and fails open so legitimate bids can still reach PostgreSQL. Abuse protection degrades; auction correctness does not. |
 | Admission tests | `backend/internal/gateway/bid_admission_integration_test.go:24`, `:70`, `:94`, `:124`, `:162` | The limiter has tests for completed replay bypass, Redis-down fail-open anomaly, user limit, local hot auction, and admission-disabled bypass. |
-| WS one-time ticket consume | `backend/internal/realtime/ticket.go:44` | Good. Lua atomically consumes one ephemeral ticket with GET+DEL. This is a safe Redis authority because a ticket is not money truth. |
+| WS one-time ticket consume | `backend/internal/realtime/ticket.go:44` | Good. Lua atomically consumes one ephemeral ticket with GET+DEL. This is a safe Redis authority because a ticket is not money truth. The script is named `ws_ticket_consume` and reports consumed/missing/error metrics. |
 | Ticket tests | `backend/internal/realtime/ticket_test.go:13`, `:56` | One-time consume and Redis-down behavior are tested. |
 | Bid truth path | `backend/internal/auction/bid.go:125`, `:196`, `:648`, `:678` | Strong. Place/confirm bid lock the auction row and evaluate auction rules in the transaction. |
 | Atomic event/outbox append | `backend/internal/auction/repository.go:481` | Strong. Auction seq/version, `auction_events`, `outbox_events`, and `outbox_delivery` are appended in the same PostgreSQL transaction. |
@@ -155,22 +155,26 @@ These improve explainability without changing auction truth:
 1. Script taxonomy:
    - Name the scripts in docs and metrics as `bid_admission_gcra` and `ws_ticket_consume`.
    - Record their role: protective admission or ephemeral auth, never money truth.
+   - Implementation landed in `backend/internal/redisx`.
 
 2. Script outcome metrics:
    - Track allowed/rejected/error/timeout by script and dimension.
    - Keep Redis-down anomaly as the product-visible signal.
+   - Implementation emits `redis_lua_script_total{script,outcome}` and `redis_lua_script_latency_seconds{script,outcome}`.
 
 3. Error classification:
-   - Distinguish Redis unavailable, context timeout, BUSY/script timeout, and script result parsing errors.
+   - Distinguish Redis unavailable, context timeout, BUSY/script timeout, `NOSCRIPT`, and script result parsing errors.
    - Admission can fail open; tickets should fail closed.
+   - Implementation classifies errors in `redisx.ClassifyScriptError`.
 
 4. Key naming discipline:
    - Current single-key scripts work in standalone and are cluster-compatible enough because each script touches one key.
    - Future multi-key scripts must use hash tags and avoid programmatically generated undisclosed keys.
+   - Bid admission keys now use `bid:{auction}:limit:*` helpers so every per-auction key has the same hash tag if a future combined script is introduced.
 
 5. Optional script preload:
-   - `Eval` is acceptable for the current tiny scripts.
-   - `ScriptLoad`/`EvalSha` is worth adding only if profiling or production startup discipline needs it; do not pretend it changes auction correctness.
+   - Direct `Eval` has been replaced by go-redis `Script.Run`, which optimistically uses `EVALSHA` and falls back to `EVAL` on `NOSCRIPT`.
+   - This improves operational discipline and script identity; it does not change auction correctness.
 
 ### P3-R4/P3-R6: Evidence-Gated Reservation Prototype
 

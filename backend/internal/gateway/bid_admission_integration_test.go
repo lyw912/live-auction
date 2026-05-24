@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,7 +18,9 @@ import (
 
 	"live-auction/backend/internal/auction"
 	"live-auction/backend/internal/config"
+	"live-auction/backend/internal/observability"
 	apierrors "live-auction/backend/internal/platform/errors"
+	"live-auction/backend/internal/redisx"
 	"live-auction/backend/internal/storage"
 )
 
@@ -44,13 +47,13 @@ func TestBidAdmissionCompletedReplayBypassesRedisLimiter(t *testing.T) {
 	if firstResp.Result != auction.BidResultAccepted {
 		t.Fatalf("first result = %s, want ACCEPTED body=%s", firstResp.Result, first.Body.String())
 	}
-	if _, err := rdb.Set(ctx, "bid:limit:user:"+auctionRow.ID+":user_1", 99, time.Second).Result(); err != nil {
+	if _, err := rdb.Set(ctx, redisx.BidLimitUserKey(auctionRow.ID, "user_1"), 99, time.Second).Result(); err != nil {
 		t.Fatalf("force user limit: %v", err)
 	}
-	if _, err := rdb.Set(ctx, "bid:limit:ip:"+auctionRow.ID+":192.0.2.1", 99, time.Second).Result(); err != nil {
+	if _, err := rdb.Set(ctx, redisx.BidLimitIPKey(auctionRow.ID, "192.0.2.1"), 99, time.Second).Result(); err != nil {
 		t.Fatalf("force ip limit: %v", err)
 	}
-	if _, err := rdb.Set(ctx, "bid:limit:auction:"+auctionRow.ID, 99, time.Second).Result(); err != nil {
+	if _, err := rdb.Set(ctx, redisx.BidLimitAuctionKey(auctionRow.ID), 99, time.Second).Result(); err != nil {
 		t.Fatalf("force auction limit: %v", err)
 	}
 
@@ -92,6 +95,7 @@ func TestBidAdmissionRedisDownFailsOpenAndRecordsAnomaly(t *testing.T) {
 }
 
 func TestBidAdmissionUserLimitReturnsRateLimited(t *testing.T) {
+	observability.Default = observability.NewRegistry()
 	db := openMonitorDB(t)
 	rdb := openMonitorRedis(t)
 	auctionRow := createAdmissionAuction(t, db, "user_1")
@@ -119,6 +123,16 @@ func TestBidAdmissionUserLimitReturnsRateLimited(t *testing.T) {
 		t.Fatalf("code = %s, want RATE_LIMITED", payload.Code)
 	}
 	assertAdmissionAnomalyRecorded(t, db, auctionRow.ID, string(apierrors.CodeRateLimited))
+	metrics := string(observability.Default.Render(context.Background()))
+	for _, want := range []string{
+		`redis_lua_script_total{outcome="allowed",script="` + redisx.ScriptBidAdmissionGCRA + `"}`,
+		`redis_lua_script_total{outcome="rejected",script="` + redisx.ScriptBidAdmissionGCRA + `"}`,
+		`redis_lua_script_latency_seconds_count{outcome="allowed",script="` + redisx.ScriptBidAdmissionGCRA + `"}`,
+	} {
+		if !strings.Contains(metrics, want) {
+			t.Fatalf("metrics missing %q in:\n%s", want, metrics)
+		}
+	}
 }
 
 func TestBidAdmissionLocalAuctionTooHotReturnsRetryAfter(t *testing.T) {
@@ -177,7 +191,7 @@ func TestAdmissionDisabledBypassesBidRedisAndLocalLimits(t *testing.T) {
 		ACL:    newRoomACL(db),
 		Bids:   newBidAdmission(cfg, db, rdb),
 	}
-	if _, err := rdb.Set(ctx, "bid:limit:user:"+auctionRow.ID+":user_1", 99, time.Second).Result(); err != nil {
+	if _, err := rdb.Set(ctx, redisx.BidLimitUserKey(auctionRow.ID, "user_1"), 99, time.Second).Result(); err != nil {
 		t.Fatalf("force user limit: %v", err)
 	}
 	raw, _ := handler.Bids.semaphores.LoadOrStore(auctionRow.ID, make(chan struct{}, 1))

@@ -10,9 +10,21 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"live-auction/backend/internal/redisx"
 )
 
 const TicketTTL = 60 * time.Second
+
+const wsTicketConsumeScript = `
+local value = redis.call("GET", KEYS[1])
+if value then
+  redis.call("DEL", KEYS[1])
+end
+return value
+`
+
+var wsTicketConsumeRunner = redisx.NewScriptRunner(redisx.ScriptWSTicketConsume, wsTicketConsumeScript)
 
 type Ticket struct {
 	UserID    string `json:"user_id"`
@@ -38,18 +50,13 @@ func (s *TicketStore) Issue(ctx context.Context, ticket Ticket) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	return token, s.redis.Set(ctx, ticketKey(token), payload, TicketTTL).Err()
+	return token, s.redis.Set(ctx, redisx.WSTicketKey(token), payload, TicketTTL).Err()
 }
 
 func (s *TicketStore) Consume(ctx context.Context, token string) (Ticket, error) {
-	key := ticketKey(token)
-	value, err := s.redis.Eval(ctx, `
-		local value = redis.call("GET", KEYS[1])
-		if value then
-			redis.call("DEL", KEYS[1])
-		end
-		return value
-	`, []string{key}).Result()
+	key := redisx.WSTicketKey(token)
+	start := time.Now()
+	value, err := wsTicketConsumeRunner.Run(ctx, s.redis, []string{key}).Result()
 	if errors.Is(err, redis.Nil) {
 		return Ticket{}, ErrInvalidTicket
 	}
@@ -63,19 +70,22 @@ func (s *TicketStore) Consume(ctx context.Context, token string) (Ticket, error)
 	case []byte:
 		payload = typed
 	default:
+		wsTicketConsumeRunner.Record(redisx.OutcomeParseError, time.Since(start))
 		return Ticket{}, ErrInvalidTicket
 	}
 	var ticket Ticket
 	if err := json.Unmarshal(payload, &ticket); err != nil {
+		wsTicketConsumeRunner.Record(redisx.OutcomeParseError, time.Since(start))
 		return Ticket{}, err
 	}
+	wsTicketConsumeRunner.Record(redisx.OutcomeConsumed, time.Since(start))
 	return ticket, nil
 }
 
 var ErrInvalidTicket = fmt.Errorf("invalid ws ticket")
 
 func ticketKey(token string) string {
-	return "ws_ticket:" + token
+	return redisx.WSTicketKey(token)
 }
 
 func randomToken() (string, error) {

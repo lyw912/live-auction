@@ -19,12 +19,30 @@ import (
 	"live-auction/backend/internal/config"
 	"live-auction/backend/internal/observability"
 	apierrors "live-auction/backend/internal/platform/errors"
+	"live-auction/backend/internal/redisx"
 )
 
 const (
 	rateLimitRedisDownAnomaly = "RATE_LIMIT_REDIS_DOWN"
 	bidLimitRetryAfterSeconds = 1
 )
+
+const bidAdmissionGCRAScript = `
+local now = tonumber(ARGV[1])
+local emission = tonumber(ARGV[2])
+local burst = tonumber(ARGV[3])
+local ttl = tonumber(ARGV[4])
+local tat = tonumber(redis.call("GET", KEYS[1]) or "0")
+local allow_at = tat - ((burst - 1) * emission)
+if now < allow_at then
+  return 0
+end
+local new_tat = math.max(tat, now) + emission
+redis.call("SET", KEYS[1], new_tat, "PX", ttl)
+return 1
+`
+
+var bidAdmissionGCRARunner = redisx.NewScriptRunner(redisx.ScriptBidAdmissionGCRA, bidAdmissionGCRAScript)
 
 type bidAdmission struct {
 	cfg        config.Config
@@ -178,9 +196,9 @@ func (a *bidAdmission) checkRedisLimits(ctx context.Context, r *http.Request, us
 		limit int
 		code  apierrors.Code
 	}{
-		{key: fmt.Sprintf("bid:limit:user:%s:%s", auctionID, user.ID), limit: a.cfg.BidUserLimitPerSecond, code: apierrors.CodeRateLimited},
-		{key: fmt.Sprintf("bid:limit:ip:%s:%s", auctionID, clientIP(r)), limit: a.cfg.BidIPLimitPerSecond, code: apierrors.CodeRateLimited},
-		{key: fmt.Sprintf("bid:limit:auction:%s", auctionID), limit: a.cfg.BidAuctionLimitPerSecond, code: apierrors.CodeBidAuctionTooHot},
+		{key: redisx.BidLimitUserKey(auctionID, user.ID), limit: a.cfg.BidUserLimitPerSecond, code: apierrors.CodeRateLimited},
+		{key: redisx.BidLimitIPKey(auctionID, clientIP(r)), limit: a.cfg.BidIPLimitPerSecond, code: apierrors.CodeRateLimited},
+		{key: redisx.BidLimitAuctionKey(auctionID), limit: a.cfg.BidAuctionLimitPerSecond, code: apierrors.CodeBidAuctionTooHot},
 	}
 	nowMS := time.Now().UnixMilli()
 	windowMS := window.Milliseconds()
@@ -213,22 +231,15 @@ func evalGCRALimit(ctx context.Context, redisClient redis.Cmdable, key string, l
 		emissionMS = 1
 	}
 	ttlMS := windowMS + emissionMS*int64(limit)
-	result, err := redisClient.Eval(ctx, `
-local now = tonumber(ARGV[1])
-local emission = tonumber(ARGV[2])
-local burst = tonumber(ARGV[3])
-local ttl = tonumber(ARGV[4])
-local tat = tonumber(redis.call("GET", KEYS[1]) or "0")
-local allow_at = tat - ((burst - 1) * emission)
-if now < allow_at then
-  return 0
-end
-local new_tat = math.max(tat, now) + emission
-redis.call("SET", KEYS[1], new_tat, "PX", ttl)
-return 1
-`, []string{key}, nowMS, emissionMS, limit, ttlMS).Int()
+	start := time.Now()
+	result, err := bidAdmissionGCRARunner.Run(ctx, redisClient, []string{key}, nowMS, emissionMS, limit, ttlMS).Int()
 	if err != nil {
 		return false, err
+	}
+	if result == 1 {
+		bidAdmissionGCRARunner.Record(redisx.OutcomeAllowed, time.Since(start))
+	} else {
+		bidAdmissionGCRARunner.Record(redisx.OutcomeRejected, time.Since(start))
 	}
 	return result == 1, nil
 }
