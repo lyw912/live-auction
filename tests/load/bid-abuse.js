@@ -2,6 +2,8 @@ import { check, sleep } from 'k6';
 import { Counter, Rate } from 'k6/metrics';
 import { getSnapshot, placeBid } from './lib/live-auction.js';
 
+const admissionEnabled = String(__ENV.ADMISSION_ENABLED || '').toLowerCase() !== 'false';
+
 export const options = {
   scenarios: {
     repeated_user_ip_abuse: {
@@ -14,7 +16,7 @@ export const options = {
   summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(90)', 'p(95)', 'p(99)', 'p(99.9)'],
   thresholds: {
     checks: ['rate>0.95'],
-    auction_k6_bid_limited_total: ['count>0'],
+    ...(admissionEnabled ? { auction_k6_bid_limited_total: ['count>0'] } : {}),
   },
 };
 

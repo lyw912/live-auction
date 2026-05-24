@@ -11,6 +11,17 @@ const backendDir = join(root, 'backend');
 const serverBinDir = join(backendDir, 'tmp');
 const serverBin = process.platform === 'win32' ? join(serverBinDir, 'p3-local-server.exe') : join(serverBinDir, 'p3-local-server');
 const duration = process.env.DURATION || '5s';
+const durationSeconds = (() => {
+  const match = /^(\d+(?:\.\d+)?)(ms|s|m)?$/.exec(duration);
+  if (!match) return 5;
+  const value = Number(match[1]);
+  const unit = match[2] || 's';
+  if (unit === 'ms') return value / 1000;
+  if (unit === 'm') return value * 60;
+  return value;
+})();
+const shortSessionSeconds = String(Math.max(1, Math.min(5, Math.floor(durationSeconds * 0.6))));
+const shortTriggerStartDelay = `${Math.max(1, Math.min(5, Math.floor(durationSeconds * 0.2)))}s`;
 const vus = process.env.VUS || '2';
 const workloadTimeoutMs = Number(process.env.WORKLOAD_TIMEOUT_MS || 60000);
 const artifactMode = process.env.P3_ARTIFACT_MODE || 'minimal';
@@ -102,12 +113,12 @@ const workloads = [
       HEALTHY_WATCHERS: process.env.HEALTHY_WATCHERS || vus,
       SLOW_CONSUMERS: process.env.SLOW_CONSUMERS || vus,
       DURATION: duration,
-      SESSION_SECONDS: process.env.SESSION_SECONDS || '35',
+      SESSION_SECONDS: process.env.SESSION_SECONDS || shortSessionSeconds,
       BLOCK_MS: process.env.BLOCK_MS || '150',
       TRIGGER_RATE: process.env.TRIGGER_RATE || '20',
       TRIGGER_PRE_ALLOCATED_VUS: process.env.TRIGGER_PRE_ALLOCATED_VUS || '40',
       TRIGGER_MAX_VUS: process.env.TRIGGER_MAX_VUS || '120',
-      TRIGGER_START_DELAY: process.env.TRIGGER_START_DELAY || '5s',
+      TRIGGER_START_DELAY: process.env.TRIGGER_START_DELAY || shortTriggerStartDelay,
       CONNECT_STAGGER_MS: process.env.CONNECT_STAGGER_MS || '10',
     },
   },
@@ -240,6 +251,21 @@ function admissionDelta(before, after) {
   return out;
 }
 
+function admissionProof(beforeMetrics, afterMetrics) {
+  const beforeEnabled = parseMetricValue(beforeMetrics, 'auction_admission_enabled');
+  const afterEnabled = parseMetricValue(afterMetrics, 'auction_admission_enabled');
+  const delta = admissionDelta(admissionSnapshot(beforeMetrics), admissionSnapshot(afterMetrics));
+  const positiveDeltas = Object.fromEntries(Object.entries(delta).filter(([, value]) => value > 0));
+  return {
+    expected_disabled: admissionEnabled === 'false',
+    enabled_before: beforeEnabled,
+    enabled_after: afterEnabled,
+    reject_delta: delta,
+    polluted: admissionEnabled === 'false' && (beforeEnabled !== 0 || afterEnabled !== 0 || Object.keys(positiveDeltas).length > 0),
+    pollution: positiveDeltas,
+  };
+}
+
 function readK6Summary(rawPath) {
   try {
     return JSON.parse(readFileSync(rawPath, 'utf8'));
@@ -249,22 +275,33 @@ function readK6Summary(rawPath) {
 }
 
 function metricRate(summary, name) {
-  const value = summary?.metrics?.[name]?.values?.rate;
+  const metric = summary?.metrics?.[name] || {};
+  const values = metric.values || metric;
+  const value = values.rate;
+  if (!Number.isFinite(Number(value)) && Number.isFinite(Number(values.passes)) && Number.isFinite(Number(values.fails))) {
+    const total = Number(values.passes) + Number(values.fails);
+    return total > 0 ? Number(values.passes) / total : 0;
+  }
   return Number.isFinite(Number(value)) ? Number(value) : 0;
 }
 
 function metricValue(summary, name, key) {
-  const value = summary?.metrics?.[name]?.values?.[key];
+  const metric = summary?.metrics?.[name] || {};
+  const values = metric.values || metric;
+  const value = values[key];
   return Number.isFinite(Number(value)) ? Number(value) : 0;
 }
 
 function metricCount(summary, name) {
-  const value = summary?.metrics?.[name]?.values?.count;
+  const metric = summary?.metrics?.[name] || {};
+  const values = metric.values || metric;
+  const value = values.count ?? values.passes;
   return Number.isFinite(Number(value)) ? Number(value) : 0;
 }
 
 function metricMax(summary, name) {
-  const values = summary?.metrics?.[name]?.values || {};
+  const metric = summary?.metrics?.[name] || {};
+  const values = metric.values || metric;
   const value = values.max ?? values.value;
   return Number.isFinite(Number(value)) ? Number(value) : 0;
 }
@@ -339,13 +376,11 @@ function compactLog(text) {
 
 function assertAdmissionDisabled(workloadName, beforeMetrics, afterMetrics) {
   if (admissionEnabled !== 'false') return;
-  const beforeEnabled = parseMetricValue(beforeMetrics, 'auction_admission_enabled');
-  const afterEnabled = parseMetricValue(afterMetrics, 'auction_admission_enabled');
-  if (beforeEnabled !== 0 || afterEnabled !== 0) {
-    throw new Error(`${workloadName} expected auction_admission_enabled 0 before/after, got ${beforeEnabled}/${afterEnabled}`);
+  const proof = admissionProof(beforeMetrics, afterMetrics);
+  if (proof.enabled_before !== 0 || proof.enabled_after !== 0) {
+    throw new Error(`${workloadName} expected auction_admission_enabled 0 before/after, got ${proof.enabled_before}/${proof.enabled_after}`);
   }
-  const delta = admissionDelta(admissionSnapshot(beforeMetrics), admissionSnapshot(afterMetrics));
-  const blocked = Object.entries(delta).filter(([, value]) => value > 0);
+  const blocked = Object.entries(proof.reject_delta).filter(([, value]) => value > 0);
   if (blocked.length > 0) {
     throw new Error(`${workloadName} observed admission while ADMISSION_ENABLED=false: ${blocked.map(([k, v]) => `${k}+${v}`).join(', ')}`);
   }
@@ -411,6 +446,19 @@ async function stopServer(child) {
   }
 }
 
+function cleanupLocalPorts() {
+  if (process.platform !== 'win32') return;
+  const script = [
+    '$ports = @(8080,18080,5173,5174,5175,5176,5177)',
+    'foreach ($port in $ports) {',
+    '  Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue |',
+    '    Select-Object -ExpandProperty OwningProcess -Unique |',
+    '    ForEach-Object { if ($_ -and $_ -ne 0 -and $_ -ne $PID) { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue } }',
+    '}',
+  ].join('; ');
+  save('port-cleanup.txt', run('powershell.exe', ['-NoProfile', '-Command', script], { timeout: 30000 }));
+}
+
 function validateK6Summary(workloadName, rawPath) {
   const summary = readK6Summary(rawPath);
   if (!summary) throw new Error('could not read k6 summary');
@@ -435,6 +483,7 @@ function writeCompactReport(finalResults) {
       timedOut: result.timedOut,
       validationError: result.validationError,
       environment_signals: result.environment_signals,
+      admission_proof: result.admission_proof,
       k6: result.k6,
       raw: result.raw,
       metrics_before: result.metrics_before,
@@ -452,11 +501,13 @@ function writeCompactReport(finalResults) {
     `- admission_enabled: ${admissionEnabled}`,
     `- raw_root: ${rawRoot}`,
     '',
-    '| Workload | Status | Iterations | Dropped | Env signals | p99 ms | Error |',
-    '|---|---:|---:|---:|---|---:|---|',
+    '| Workload | Status | Admission enabled before/after | Admission reject delta | Iterations | Dropped | Env signals | p99 ms | Error |',
+    '|---|---:|---:|---:|---:|---:|---|---:|---|',
     ...report.workloads.map((workload) => [
       workload.workload,
       workload.status,
+      `${workload.admission_proof?.enabled_before ?? ''}/${workload.admission_proof?.enabled_after ?? ''}`,
+      workload.admission_proof ? JSON.stringify(workload.admission_proof.reject_delta) : '',
       workload.k6?.iterations ?? 0,
       workload.k6?.dropped_iterations ?? 0,
       workload.environment_signals?.signals?.join(', ') || '',
@@ -548,15 +599,21 @@ try {
     let status = result.status === 0 ? 'PASS' : 'FAIL';
     let validationError = '';
     let k6Summary = readK6Summary(rawPath);
+    const admission_proof = admissionProof(beforeMetrics.stdout, afterMetrics.stdout);
     const combinedLog = `${result.stdout || ''}${result.stderr || ''}`;
     if (status === 'PASS') {
       try {
         k6Summary = validateK6Summary(workload.name, rawPath);
-        assertAdmissionDisabled(workload.name, beforeMetrics.stdout, afterMetrics.stdout);
       } catch (err) {
         status = 'FAIL';
         validationError = err.message;
       }
+    }
+    try {
+      assertAdmissionDisabled(workload.name, beforeMetrics.stdout, afterMetrics.stdout);
+    } catch (err) {
+      status = 'FAIL';
+      validationError = validationError ? `${validationError}; ${err.message}` : err.message;
     }
     const timedOut = result.error?.code === 'ETIMEDOUT';
     results.push({
@@ -567,6 +624,7 @@ try {
       profile,
       admission_enabled: admissionEnabled,
       environment_signals: environmentSignals(k6Summary, combinedLog),
+      admission_proof,
       k6: compactK6Summary(k6Summary),
       metrics_before: join(rawRoot, `${workload.name}-metrics-before.prom`),
       metrics_after: join(rawRoot, `${workload.name}-metrics-after.prom`),
@@ -594,4 +652,5 @@ try {
   console.log('p3 local stress smoke complete');
 } finally {
   await stopServer(server);
+  cleanupLocalPorts();
 }

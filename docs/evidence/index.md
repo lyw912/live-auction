@@ -36,6 +36,7 @@
 | `docs/reviews/p3-08-redis-lua-borrowing-review-2026-05-25.md` | AUTHORITATIVE | Hostile Redis Lua comparison: accept existing Lua GCRA admission and one-time WS ticket borrowing; keep PostgreSQL as auction money truth; keep Lua reservation/full rewrite evidence-gated behind PG hot-row proof, reconciliation ADR, and invariant tests. |
 | `docs/evidence/p3-08-redis-lua-borrowed-hardening-2026-05-25.md` | AUTHORITATIVE | Redis Lua borrowed hardening implemented in app-owned code: script runner, stable script names, `EVALSHA` fallback discipline, script metrics/error classes, hash-tagged admission keys, and focused tests. |
 | `docs/evidence/p3-09-raw-artifact-retention-cleanup-2026-05-25.md` | AUTHORITATIVE_FOR_EVIDENCE_HYGIENE | `docs/perf/raw` cleanup applied the current retention policy: keep evidence-referenced compact artifacts and delete old full logs, duplicate failed attempts, and unreferenced ignored raw directories. |
+| `docs/evidence/p3-10-admission-off-harness-proof-2026-05-25.md` | AUTHORITATIVE_FOR_HARNESS | P3-R1 closed: committed downstream workloads prove `ADMISSION_ENABLED=false`, `auction_admission_enabled 0/0`, and zero admission reject delta in compact reports. |
 | `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan.md` | AUTHORITATIVE | P3/P4 pressure protocol and admission-off policy. |
 | `docs/design-v2-industrial/18-p3-p4-roadmap-reset.md` | AUTHORITATIVE | Current P3/P4 execution order and decision gates. |
 | `docs/p3-decision-log.md` | AUTHORITATIVE | Current decisions, superseded evidence, and go/no-go gates. |
@@ -90,7 +91,6 @@ Clean or archive later only after confirming no evidence document references the
 
 | Gap | Why it matters | Next evidence |
 |---|---|---|
-| Admission-off proof for all downstream P3 workloads | Avoids hidden ceilings and false bottlenecks. | Runner-enforced `ADMISSION_ENABLED=false`, before/after metrics, zero admission reject delta. |
 | Hot/cold multi-room adversarial pressure | `multi-room-isolation` is only smoke-level today. | Hot room bid/fanout pressure plus cold room latency/fanout and cross-room invariant. |
 | Clean realtime fanout/slow-consumer/reconnect drilldown | Self-hub needs cleaner downstream-pressure evidence before final runtime claims. | Staggered fanout, healthy-vs-slow, reconnect storm, pprof/runtime metrics, environment classification. |
 | PG hot-row attribution after outbox fix | Current bid path still saturates locally. | Lock/tx/pool metrics, pprof, transaction-work breakdown, invariant checker. |

@@ -21,6 +21,7 @@ Decision states:
 |---|---|---|---|---|
 | P3-D01 | PostgreSQL remains auction money truth. | ACCEPTED | `00-project-brief.md`, `12-engineering-rules.md`, P0/P1/P2 tests. | Redis, WebSocket, CDC, and clients cannot decide winner, price, cap, cancel, or hammer. |
 | P3-D02 | Admission is disabled during downstream performance exploration. | ACCEPTED | `09-performance-and-benchmark.md`, `17-local-stress-and-p3-execution-plan.md`. | Use `ADMISSION_ENABLED=false`; reject any downstream bottleneck claim polluted by admission `429` or admission counters. |
+| P3-D02A | The committed P3 downstream workload harness now proves admission-off cleanliness. | ACCEPTED | `docs/evidence/p3-10-admission-off-harness-proof-2026-05-25.md`. | Future downstream runs should read structured `admission_proof` first; any nonzero enabled value or reject delta is a harness gap, not subsystem bottleneck evidence. |
 | P3-D03 | Windows local is direction/regression evidence only. | ACCEPTED | `docs/perf/windows-local-strategy.md`. | No final capacity, user count, p99, or p999 claim from Windows local runs. |
 | P3-D04 | Earlier admission-raised pressure is useful but must be treated carefully. | ACCEPTED | `docs/evidence/p3-00-stress-attacker-round-1-2026-05-24.md`. | It found the outbox claim bottleneck, but future downstream evidence must use full admission-off proof. |
 | P3-D05 | Outbox claim O(pending squared) bottleneck is fixed for the tested profile. | ACCEPTED | `docs/evidence/p3-01-outbox-claim-fix-2026-05-24.md`. | Do not jump to CDC/partitioning unless new outbox pressure shows backlog, lag, bloat, or claim/update pain again. |
@@ -144,9 +145,8 @@ No-go during:
 
 | Order | Decision to close | Required evidence |
 |---:|---|---|
-| 1 | Can every downstream workload prove admission-off cleanliness? | Runner fails if `auction_admission_enabled != 0` or admission counters move. |
-| 2 | Does hot/cold multi-room pressure isolate cold rooms? | Per-room bid/fanout metrics, cross-room invariant, and bottleneck classification. |
-| 3 | Is self hub good enough for current release? | Clean fanout, healthy-vs-slow, reconnect storm, runtime profile, and environment classification. |
-| 4 | Is PG hot-row contention acceptable or optimizable? | Lock/tx/pool/pprof evidence and before/after local optimization delta. |
-| 5 | Does outbox stay fixed under longer and multi-room pressure? | Backlog/lag/table/update evidence after claim fix and relay leases. |
-| 6 | What admission limits protect the release candidate? | Admission-on calibration below the measured downstream cliff. |
+| 1 | Does hot/cold multi-room pressure isolate cold rooms? | Per-room bid/fanout metrics, cross-room invariant, and bottleneck classification. |
+| 2 | Is self hub good enough for current release? | Clean fanout, healthy-vs-slow, reconnect storm, runtime profile, and environment classification. |
+| 3 | Is PG hot-row contention acceptable or optimizable? | Lock/tx/pool/pprof evidence and before/after local optimization delta. |
+| 4 | Does outbox stay fixed under longer and multi-room pressure? | Backlog/lag/table/update evidence after claim fix and relay leases. |
+| 5 | What admission limits protect the release candidate? | Admission-on calibration below the measured downstream cliff. |

@@ -9,6 +9,16 @@ function readJSON(path) {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
+function metricValues(metric) {
+  return metric?.values || metric || {};
+}
+
+function metricCount(metric) {
+  const values = metricValues(metric);
+  const value = values.count ?? values.passes;
+  return Number.isFinite(Number(value)) ? Number(value) : 0;
+}
+
 function findReports(dir) {
   if (!existsSync(dir)) return [];
   const out = [];
@@ -29,6 +39,7 @@ function workloadKey(workload) {
 
 function classify(workload) {
   if (workload.status !== 'PASS') return 'HARNESS_GAP';
+  if (workload.admission_proof?.polluted) return 'HARNESS_GAP';
   if (workload.environment_signals?.possible_env_limit) return 'ENV_LIMIT';
   if (workload.k6?.dropped_iterations > 0) return 'ENV_LIMIT';
   return 'NO_REGRESSION_OR_NEEDS_DOMAIN_METRICS';
@@ -53,7 +64,7 @@ function artifactHints(workload) {
     return ['compact report', 'k6 summary dropped_iterations/vus_max', 'workload log excerpt', 'Windows/Docker resource check'];
   }
   if (verdict === 'HARNESS_GAP') {
-    return ['compact report', 'failed workload log', 'readyz dump', 'before/after metrics'];
+    return ['compact report', 'admission_proof reject_delta', 'failed workload log if present', 'readyz dump', 'before/after metrics'];
   }
   if (subsystem === 'pg-hot-row') {
     return ['compact report', 'before/after metrics', 'pg_locks/pg_stat_activity only if p99 or retry-later moved'];
@@ -98,6 +109,7 @@ function summarizeReport(path) {
       dropped_iterations: workload.k6?.dropped_iterations || 0,
       p99_ms: workload.k6?.http_req_duration_ms?.p99 || 0,
       checks_rate: workload.k6?.checks?.rate || 0,
+      admission_proof: workload.admission_proof || {},
       env_signals: workload.environment_signals?.signals || [],
       next_artifacts: artifactHints(workload),
       needs_full_drilldown: needsFullDrilldown(workload),
