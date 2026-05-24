@@ -1,6 +1,0 @@
-  status   | count 
------------+-------
- PENDING   |   600
- PUBLISHED |  6182
-(2 rows)
-

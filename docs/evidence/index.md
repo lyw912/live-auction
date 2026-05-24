@@ -35,6 +35,7 @@
 | `docs/evidence/p3-07-nats-jetstream-borrowed-hardening-2026-05-25.md` | AUTHORITATIVE | NATS/JetStream-borrowed delivery diagnostics implemented in app-owned outbox/realtime code with full backend and frontend typecheck verification. |
 | `docs/reviews/p3-08-redis-lua-borrowing-review-2026-05-25.md` | AUTHORITATIVE | Hostile Redis Lua comparison: accept existing Lua GCRA admission and one-time WS ticket borrowing; keep PostgreSQL as auction money truth; keep Lua reservation/full rewrite evidence-gated behind PG hot-row proof, reconciliation ADR, and invariant tests. |
 | `docs/evidence/p3-08-redis-lua-borrowed-hardening-2026-05-25.md` | AUTHORITATIVE | Redis Lua borrowed hardening implemented in app-owned code: script runner, stable script names, `EVALSHA` fallback discipline, script metrics/error classes, hash-tagged admission keys, and focused tests. |
+| `docs/evidence/p3-09-raw-artifact-retention-cleanup-2026-05-25.md` | AUTHORITATIVE_FOR_EVIDENCE_HYGIENE | `docs/perf/raw` cleanup applied the current retention policy: keep evidence-referenced compact artifacts and delete old full logs, duplicate failed attempts, and unreferenced ignored raw directories. |
 | `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan.md` | AUTHORITATIVE | P3/P4 pressure protocol and admission-off policy. |
 | `docs/design-v2-industrial/18-p3-p4-roadmap-reset.md` | AUTHORITATIVE | Current P3/P4 execution order and decision gates. |
 | `docs/p3-decision-log.md` | AUTHORITATIVE | Current decisions, superseded evidence, and go/no-go gates. |
@@ -78,6 +79,10 @@ Ignore unless investigating:
 - old raw bundles not referenced by this index;
 - full logs from smoke runs;
 - raw files from runs classified as harness-only.
+
+Historical cleanup:
+
+- `docs/evidence/p3-09-raw-artifact-retention-cleanup-2026-05-25.md` records the 2026-05-25 cleanup of pre-policy raw artifacts.
 
 Clean or archive later only after confirming no evidence document references the raw path.
 

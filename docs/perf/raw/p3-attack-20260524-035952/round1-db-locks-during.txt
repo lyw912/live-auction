@@ -1,8 +1,0 @@
-       mode       | granted | count 
-------------------+---------+-------
- RowExclusiveLock | t       |     6
- ExclusiveLock    | t       |     4
- AccessShareLock  | t       |     3
- RowShareLock     | t       |     2
-(4 rows)
-

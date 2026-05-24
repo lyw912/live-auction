@@ -70,7 +70,7 @@ Raw output:
 - `outbox-after-drain.txt`: 3600 `PUBLISHED` rows for `auc_live`.
 - `outbox-drain-poll.csv`: pending rows reached 0 before the first 5 second poll.
 
-An earlier attempted run at `docs/perf/raw/p3-relay-owner-kill-202605240524/` found a harness gap: Windows Node `spawn(..., { shell: true })` killed only the shell wrapper, leaving `p3-outboxrelay.exe` alive. The runner now starts server and relay binaries with `shell: false` and asserts the live owner before and after kill.
+An earlier attempted run, `p3-relay-owner-kill-202605240524`, found a harness gap: Windows Node `spawn(..., { shell: true })` killed only the shell wrapper, leaving `p3-outboxrelay.exe` alive. Its raw directory was cleaned by P3-09 because the retained evidence is this summarized finding, not the failed raw bundle. The runner now starts server and relay binaries with `shell: false` and asserts the live owner before and after kill.
 
 ## Remaining Work
 
