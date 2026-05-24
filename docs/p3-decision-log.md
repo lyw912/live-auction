@@ -27,7 +27,7 @@ Decision states:
 | P3-D05 | Outbox claim O(pending squared) bottleneck is fixed for the tested profile. | ACCEPTED | `docs/evidence/p3-01-outbox-claim-fix-2026-05-24.md`. | Do not jump to CDC/partitioning unless new outbox pressure shows backlog, lag, bloat, or claim/update pain again. |
 | P3-D06 | PG hot-row pressure is the next bid-path bottleneck candidate. | EVIDENCE_GATED | Post-fix bid pressure still hit 800 VUs, dropped iterations, and high local p99. | Run clean admission-off hot-row drilldown before Redis Lua or transaction redesign. |
 | P3-D07 | Relay shard ownership is implemented with Windows-local failover evidence. | ACCEPTED | `docs/evidence/p3-02-relay-shard-ownership-2026-05-24.md`. | Treat as correctness/failover evidence, not final multi-instance capacity proof. |
-| P3-D08 | Self-hub is the only realtime runtime implementation. | ACCEPTED | `docs/evidence/p3-01-realtime-fanout-attack-2026-05-24.md`, `docs/design-v2-industrial/06-realtime-and-recovery.md`. | Do not keep alternate transport code, compose services, frontend protocol branches, or PoC harnesses in the mainline. Continue proving self-hub fanout, slow-consumer, reconnect, and snapshot behavior. |
+| P3-D08 | Self-hub is the only realtime runtime implementation. | ACCEPTED | `docs/evidence/p3-12-realtime-fanout-drilldown-2026-05-25.md`, `docs/design-v2-industrial/06-realtime-and-recovery.md`. | Do not keep alternate transport code, compose services, frontend protocol branches, or PoC harnesses in the mainline. Higher local pressure currently points to PG/recovery ceilings, not a reason to replace the self-hub. |
 | P3-D09 | Synchronous 300-connect Windows failures are environment/connect-storm evidence, not self-hub fanout proof. | ACCEPTED | P3-01 realtime fanout attack evidence. | Use staggered setup for steady fanout tests; keep connection-storm as a separate product/backoff/admission scenario. |
 | P3-D10 | Multi-room event isolation holds in the tested Windows-local round, but shared bid-path resources are not isolated. | ACCEPTED | `docs/evidence/p3-11-multi-room-hot-cold-stress-2026-05-25.md`. | No cross-room leak or cold WS failure appeared, but hot-room bid pressure degraded cold-room bid latency. Treat this as a P3-R4 PG/DB-pool isolation input, not as a realtime fanout failure. |
 | P3-D11 | P4 invariant verifier may start before all P3 architecture choices are closed. | ACCEPTED | Reset analysis and P4 roadmap. | Implementing verifier early is allowed because it improves stress attribution and reviewer defense. |
@@ -145,7 +145,6 @@ No-go during:
 
 | Order | Decision to close | Required evidence |
 |---:|---|---|
-| 1 | Is self hub good enough for current release? | Clean fanout, healthy-vs-slow, reconnect storm, runtime profile, and environment classification. |
-| 2 | Is PG hot-row/shared bid-path contention acceptable or optimizable? | Lock/tx/pool/pprof evidence, plus whether per-room/per-auction isolation or audited early-reject policy is safe. |
-| 3 | Does outbox stay fixed under longer and multi-room pressure? | Backlog/lag/table/update evidence after claim fix and relay leases. |
-| 4 | What admission limits protect the release candidate? | Admission-on calibration below the measured downstream cliff. |
+| 1 | Is PG hot-row/shared bid-path contention acceptable or optimizable? | Lock/tx/pool/pprof evidence, plus whether per-room/per-auction isolation or audited early-reject policy is safe. |
+| 2 | Does outbox stay fixed under longer and multi-room pressure? | Backlog/lag/table/update evidence after claim fix and relay leases. |
+| 3 | What admission limits protect the release candidate? | Admission-on calibration below the measured downstream cliff. |

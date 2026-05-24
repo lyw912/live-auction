@@ -38,6 +38,7 @@
 | `docs/evidence/p3-09-raw-artifact-retention-cleanup-2026-05-25.md` | AUTHORITATIVE_FOR_EVIDENCE_HYGIENE | `docs/perf/raw` cleanup applied the current retention policy: keep evidence-referenced compact artifacts and delete old full logs, duplicate failed attempts, and unreferenced ignored raw directories. |
 | `docs/evidence/p3-10-admission-off-harness-proof-2026-05-25.md` | AUTHORITATIVE_FOR_HARNESS | P3-R1 closed: committed downstream workloads prove `ADMISSION_ENABLED=false`, `auction_admission_enabled 0/0`, and zero admission reject delta in compact reports. |
 | `docs/evidence/p3-11-multi-room-hot-cold-stress-2026-05-25.md` | AUTHORITATIVE | P3-R2 found shared bid-path DB/lock pressure: hot-room bid load degraded cold-room bid p95 from about `25ms` to about `506ms` without cross-room leak, cold WS error, or admission pollution. |
+| `docs/evidence/p3-12-realtime-fanout-drilldown-2026-05-25.md` | AUTHORITATIVE | P3-R3 clean realtime drilldown: self-hub passed 300 watcher fanout, healthy-vs-slow isolation, and 100-VU reconnect recovery; higher profiles expose PG/recovery ceilings, not fanout failure. |
 | `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan.md` | AUTHORITATIVE | P3/P4 pressure protocol and admission-off policy. |
 | `docs/design-v2-industrial/18-p3-p4-roadmap-reset.md` | AUTHORITATIVE | Current P3/P4 execution order and decision gates. |
 | `docs/p3-decision-log.md` | AUTHORITATIVE | Current decisions, superseded evidence, and go/no-go gates. |
@@ -92,7 +93,6 @@ Clean or archive later only after confirming no evidence document references the
 
 | Gap | Why it matters | Next evidence |
 |---|---|---|
-| Clean realtime fanout/slow-consumer/reconnect drilldown | Self-hub needs cleaner downstream-pressure evidence before final runtime claims. | Staggered fanout, healthy-vs-slow, reconnect storm, pprof/runtime metrics, environment classification. |
 | PG hot-row attribution after outbox fix | Current bid path still saturates locally. | Lock/tx/pool metrics, pprof, transaction-work breakdown, invariant checker. |
 | Outbox second-order pressure | Claim query fixed, but table/update/bloat under longer load is not closed. | Longer outbox burst, multi-room outbox pressure, bloat/dead tuple/lag evidence. |
 | P4 invariant verifier | Stress evidence still relies too much on manual interpretation. | CLI report for seq, terminal state, order, winner, idempotency, cross-room leak, outbox coverage. |
