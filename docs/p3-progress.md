@@ -23,14 +23,15 @@ Reset execution surface: `docs/design-v2-industrial/18-p3-p4-roadmap-reset.md`, 
 | P3-05 | Raw artifact retention cleanup | DONE | `docs/evidence/p3-09-raw-artifact-retention-cleanup-2026-05-25.md` applies the existing raw artifact policy to pre-policy files under `docs/perf/raw`: keep evidence-referenced compact artifacts and delete old full logs, duplicate failed attempts, and unreferenced ignored run directories. |
 | P3-R0 | P3/P4 evidence and roadmap reset | DONE | `docs/design-v2-industrial/18-p3-p4-roadmap-reset.md`, `docs/p3-decision-log.md`, and `docs/evidence/index.md` reset the execution order around admission-off performance discovery, evidence indexing, and architecture go/no-go gates. |
 | P3-R1 | Admission-off harness proof | DONE | `docs/evidence/p3-10-admission-off-harness-proof-2026-05-25.md` records a real-backend downstream-pressure proof across the committed workload set. Every workload reported `auction_admission_enabled 0/0`, zero admission reject delta, zero dropped iterations, and no active post-run port owner. |
+| P3-R2 | Hot/cold multi-room adversarial stress | BOTTLENECK_FOUND | `docs/evidence/p3-11-multi-room-hot-cold-stress-2026-05-25.md` records clean hot/cold downstream-pressure evidence. No cross-room leak or cold WS failure appeared, but hot-room bid pressure degraded unrelated cold-room bid p95 from about `25ms` baseline to about `506ms`, pointing to shared bid-path DB/lock pressure. |
 
 ## Reset Roadmap
 
 | Order | Milestone | Status | Required Evidence |
 |---:|---|---|---|
 | 1 | P3-R1 admission-off harness proof | DONE | `docs/evidence/p3-10-admission-off-harness-proof-2026-05-25.md` proves `ADMISSION_ENABLED=false`, `auction_admission_enabled 0` before/after, and zero admission reject counter delta across the committed downstream workload set. |
-| 2 | P3-R2 hot/cold multi-room adversarial stress | NEXT | Per-room hot/cold metrics, cross-room invariant, and bottleneck verdict. |
-| 3 | P3-R3 clean realtime fanout and slow-consumer drilldown | PENDING | Staggered fanout, healthy-vs-slow, reconnect storm, runtime/pprof metrics, environment classification. |
+| 2 | P3-R2 hot/cold multi-room adversarial stress | DONE | `docs/evidence/p3-11-multi-room-hot-cold-stress-2026-05-25.md` records per-room hot/cold metrics, cross-room invariant, and bottleneck verdict. |
+| 3 | P3-R3 clean realtime fanout and slow-consumer drilldown | NEXT | Staggered fanout, healthy-vs-slow, reconnect storm, runtime/pprof metrics, environment classification. |
 | 4 | P3-R4 PG hot-row drilldown | PENDING | Lock/tx/pool profile and before/after optimization or explicit keep-PG decision. |
 | 5 | P3-R5 outbox second-order pressure | PENDING | Longer/multi-room outbox burst with backlog, lag, table/update evidence. |
 | 6 | P3-R6 architecture go/no-go | PENDING | ADR for CDC/partitioning, Redis Lua, or keep-current decision. Realtime remains self-hub unless a future task explicitly reopens transport scope. |
@@ -66,3 +67,4 @@ Reset execution surface: `docs/design-v2-industrial/18-p3-p4-roadmap-reset.md`, 
 - 2026-05-25 Redis Lua borrowed hardening was implemented in app-owned code: `redisx` script runner, stable script names, `EVALSHA` fallback, script metrics/error classes, `{auction}` hash-tagged bid admission keys, and focused tests. Evidence: `docs/evidence/p3-08-redis-lua-borrowed-hardening-2026-05-25.md`.
 - 2026-05-25 `docs/perf/raw` was cleaned according to the existing raw artifact retention policy. Full logs, duplicate failed attempts, unreferenced ignored run directories, and old pre-policy noise were removed; evidence-referenced compact artifacts remain. Evidence: `docs/evidence/p3-09-raw-artifact-retention-cleanup-2026-05-25.md`.
 - 2026-05-25 P3-R1 closed the admission-off harness gate. The runner now records structured admission proof in compact reports, fails downstream-pressure runs if admission is enabled or admission counters move, parses current k6 summary-export metric shapes correctly, and cleans local ports after managed runs. Evidence: `docs/evidence/p3-10-admission-off-harness-proof-2026-05-25.md`.
+- 2026-05-25 P3-R2 found a real multi-room shared-resource bottleneck. Hot-room bid pressure did not leak events or break cold-room WS, but it raised cold-room bid p95 from about `25ms` to about `506ms` under clean admission-off evidence. Do not patch by silently dropping low bids outside the auction lock; rejected bids currently affect audit seq/outbox semantics. Evidence: `docs/evidence/p3-11-multi-room-hot-cold-stress-2026-05-25.md`.

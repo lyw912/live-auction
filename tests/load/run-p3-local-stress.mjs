@@ -62,7 +62,13 @@ const workloads = [
   {
     name: 'multi-room-isolation',
     script: 'tests/load/multi-room-isolation.js',
-    env: { DURATION: duration, HOT_BID_VUS: vus, COLD_WS_VUS: process.env.COLD_WS_VUS || '1', COLD_SESSION_SECONDS: '1.2' },
+    env: {
+      DURATION: duration,
+      HOT_BID_VUS: vus,
+      COLD_WS_VUS: process.env.COLD_WS_VUS || '1',
+      COLD_SESSION_SECONDS: process.env.COLD_SESSION_SECONDS || shortSessionSeconds,
+      HOT_SLEEP_SECONDS: process.env.HOT_SLEEP_SECONDS || '0.05',
+    },
   },
   { name: 'bid-abuse', script: 'tests/load/bid-abuse.js', env: { VUS: vus, DURATION: duration, GRACEFUL_STOP: '5s' } },
   {
@@ -337,9 +343,15 @@ function compactK6Summary(summary) {
   const customCounters = {};
   for (const name of metricNames) {
     if (!name.startsWith('auction_k6_')) continue;
+    const metric = summary.metrics[name] || {};
+    const values = metric.values || metric;
     customCounters[name] = {
       count: metricCount(summary, name),
       rate: metricRate(summary, name),
+      value: Number.isFinite(Number(values.value)) ? Number(values.value) : undefined,
+      p95: Number.isFinite(Number(values['p(95)'])) ? Number(values['p(95)']) : undefined,
+      p99: Number.isFinite(Number(values['p(99)'])) ? Number(values['p(99)']) : undefined,
+      max: Number.isFinite(Number(values.max)) ? Number(values.max) : undefined,
     };
   }
   return {

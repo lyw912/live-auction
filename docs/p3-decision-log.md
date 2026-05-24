@@ -29,7 +29,7 @@ Decision states:
 | P3-D07 | Relay shard ownership is implemented with Windows-local failover evidence. | ACCEPTED | `docs/evidence/p3-02-relay-shard-ownership-2026-05-24.md`. | Treat as correctness/failover evidence, not final multi-instance capacity proof. |
 | P3-D08 | Self-hub is the only realtime runtime implementation. | ACCEPTED | `docs/evidence/p3-01-realtime-fanout-attack-2026-05-24.md`, `docs/design-v2-industrial/06-realtime-and-recovery.md`. | Do not keep alternate transport code, compose services, frontend protocol branches, or PoC harnesses in the mainline. Continue proving self-hub fanout, slow-consumer, reconnect, and snapshot behavior. |
 | P3-D09 | Synchronous 300-connect Windows failures are environment/connect-storm evidence, not self-hub fanout proof. | ACCEPTED | P3-01 realtime fanout attack evidence. | Use staggered setup for steady fanout tests; keep connection-storm as a separate product/backoff/admission scenario. |
-| P3-D10 | Multi-room isolation is not yet proven adversarially. | ACCEPTED | `docs/evidence/p3-03-local-stress-harness-2026-05-24.md`. | Run hot/cold multi-room pressure with per-room metrics before claiming isolation. |
+| P3-D10 | Multi-room event isolation holds in the tested Windows-local round, but shared bid-path resources are not isolated. | ACCEPTED | `docs/evidence/p3-11-multi-room-hot-cold-stress-2026-05-25.md`. | No cross-room leak or cold WS failure appeared, but hot-room bid pressure degraded cold-room bid latency. Treat this as a P3-R4 PG/DB-pool isolation input, not as a realtime fanout failure. |
 | P3-D11 | P4 invariant verifier may start before all P3 architecture choices are closed. | ACCEPTED | Reset analysis and P4 roadmap. | Implementing verifier early is allowed because it improves stress attribution and reviewer defense. |
 | P3-D12 | Debezium/CDC is blocked until polling outbox is again the first measured bottleneck. | EVIDENCE_GATED | `docs/evidence/p3-01-outbox-claim-fix-2026-05-24.md`, `docs/evidence/p3-02-relay-shard-ownership-2026-05-24.md`. | Do not run Debezium or any CDC process in the mainline and do not replace `backend/internal/outbox/relay.go` until P3-R5 proves claim/update/table pressure remains after current fixes. |
 | P3-D12A | Debezium may be cited only as selective design borrowing, not runtime integration. | ACCEPTED | `docs/reviews/p3-06-debezium-borrowing-review-2026-05-25.md`, `docs/adr/p3-02-debezium-borrowing-decision.md`, `docs/evidence/p3-06-debezium-borrowed-hardening-2026-05-25.md`. | Implemented claims: outbox envelope validation, offset/watermark diagnostics, snapshot lifecycle audit, control signals, and error-classification ideas. Forbidden claims: Debezium is integrated, Debezium improves current performance, or CDC replaces auction correctness. |
@@ -145,8 +145,7 @@ No-go during:
 
 | Order | Decision to close | Required evidence |
 |---:|---|---|
-| 1 | Does hot/cold multi-room pressure isolate cold rooms? | Per-room bid/fanout metrics, cross-room invariant, and bottleneck classification. |
-| 2 | Is self hub good enough for current release? | Clean fanout, healthy-vs-slow, reconnect storm, runtime profile, and environment classification. |
-| 3 | Is PG hot-row contention acceptable or optimizable? | Lock/tx/pool/pprof evidence and before/after local optimization delta. |
-| 4 | Does outbox stay fixed under longer and multi-room pressure? | Backlog/lag/table/update evidence after claim fix and relay leases. |
-| 5 | What admission limits protect the release candidate? | Admission-on calibration below the measured downstream cliff. |
+| 1 | Is self hub good enough for current release? | Clean fanout, healthy-vs-slow, reconnect storm, runtime profile, and environment classification. |
+| 2 | Is PG hot-row/shared bid-path contention acceptable or optimizable? | Lock/tx/pool/pprof evidence, plus whether per-room/per-auction isolation or audited early-reject policy is safe. |
+| 3 | Does outbox stay fixed under longer and multi-room pressure? | Backlog/lag/table/update evidence after claim fix and relay leases. |
+| 4 | What admission limits protect the release candidate? | Admission-on calibration below the measured downstream cliff. |
