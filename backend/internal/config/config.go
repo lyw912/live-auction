@@ -33,10 +33,18 @@ type Config struct {
 	BidLimitRedisTimeout     time.Duration
 	FakePaymentWebhookSecret string
 
-	AdmissionEnabled     bool
-	WSTicketMaxInFlight  int
-	WSConnectMaxInFlight int
-	WSRetryAfter         time.Duration
+	AdmissionEnabled       bool
+	WSTicketMaxInFlight    int
+	WSConnectMaxInFlight   int
+	WSRetryAfter           time.Duration
+	WSQueueMessages        int
+	WSQueueBytes           int64
+	WSRecoveryMaxEvents    int64
+	WSSnapshotRebuildMax   int
+	RealtimeHistoryTTL     time.Duration
+	RealtimeSnapshotTTL    time.Duration
+	RealtimeStreamEpochTTL time.Duration
+	OutboxNotifyEnabled    bool
 
 	DBPingTimeout    time.Duration
 	RedisPingTimeout time.Duration
@@ -70,10 +78,18 @@ func Load() Config {
 		BidLimitRedisTimeout:     getEnvDuration("BID_LIMIT_REDIS_TIMEOUT", 50*time.Millisecond),
 		FakePaymentWebhookSecret: getEnv("FAKE_PAYMENT_WEBHOOK_SECRET", "local_fake_payment_secret"),
 
-		AdmissionEnabled:     getEnvBool("ADMISSION_ENABLED", true),
-		WSTicketMaxInFlight:  getEnvInt("WS_TICKET_MAX_IN_FLIGHT", 256),
-		WSConnectMaxInFlight: getEnvInt("WS_CONNECT_MAX_IN_FLIGHT", 512),
-		WSRetryAfter:         getEnvDuration("WS_RETRY_AFTER", time.Second),
+		AdmissionEnabled:       getEnvBool("ADMISSION_ENABLED", true),
+		WSTicketMaxInFlight:    getEnvInt("WS_TICKET_MAX_IN_FLIGHT", 256),
+		WSConnectMaxInFlight:   getEnvInt("WS_CONNECT_MAX_IN_FLIGHT", 512),
+		WSRetryAfter:           getEnvDuration("WS_RETRY_AFTER", time.Second),
+		WSQueueMessages:        getEnvInt("WS_QUEUE_MESSAGES", 256),
+		WSQueueBytes:           getEnvInt64("WS_QUEUE_BYTES", 1<<20),
+		WSRecoveryMaxEvents:    getEnvInt64("WS_RECOVERY_MAX_EVENTS", 300),
+		WSSnapshotRebuildMax:   getEnvInt("WS_SNAPSHOT_REBUILD_MAX_IN_FLIGHT", 4),
+		RealtimeHistoryTTL:     getEnvDuration("REALTIME_HISTORY_TTL", 30*time.Minute),
+		RealtimeSnapshotTTL:    getEnvDuration("REALTIME_SNAPSHOT_TTL", 30*time.Minute),
+		RealtimeStreamEpochTTL: getEnvDuration("REALTIME_STREAM_EPOCH_TTL", 24*time.Hour),
+		OutboxNotifyEnabled:    getEnvBool("OUTBOX_NOTIFY_ENABLED", true),
 
 		DBPingTimeout:    getEnvDuration("DB_PING_TIMEOUT", 2*time.Second),
 		RedisPingTimeout: getEnvDuration("REDIS_PING_TIMEOUT", 2*time.Second),
@@ -94,6 +110,18 @@ func getEnvInt(key string, fallback int) int {
 		return fallback
 	}
 	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func getEnvInt64(key string, fallback int64) int64 {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
 	if err != nil {
 		return fallback
 	}

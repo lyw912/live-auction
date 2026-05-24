@@ -144,6 +144,30 @@ func TestServeWSHistoryRecoveryAndSnapshotFallback(t *testing.T) {
 	assertWSMessageType(t, conn, "snapshot")
 }
 
+func TestServeWSRecoveryWindowGapFallsBackToSnapshot(t *testing.T) {
+	db := openDBForRealtime(t)
+	rdb := openRedisForRealtime(t)
+	repo := auction.NewRepository(db)
+	auctionRow := createActiveAuctionForRealtime(t, repo, db)
+	rt := NewServerWithOptions(db, rdb, Options{RecoveryMaxEvents: 2})
+	server := httptest.NewServer(rtHandler(rt))
+	t.Cleanup(server.Close)
+
+	eventsKey := "auction:" + auctionRow.ID + ":events"
+	if err := rdb.Del(context.Background(), eventsKey, "auction:"+auctionRow.ID+":snapshot").Err(); err != nil {
+		t.Fatalf("redis cleanup: %v", err)
+	}
+	pushRealtimeEvent(t, rdb, auctionRow.ID, 1, "auction_started")
+	pushRealtimeEvent(t, rdb, auctionRow.ID, 2, "bid_accepted")
+	pushRealtimeEvent(t, rdb, auctionRow.ID, 3, "bid_accepted")
+	pushRealtimeEvent(t, rdb, auctionRow.ID, 4, "bid_accepted")
+
+	token := issueRealtimeTicket(t, rt, auctionRow.RoomID, auctionRow.ID)
+	conn := dialRealtime(t, server.URL, auctionRow.RoomID, auctionRow.ID, 1, token)
+	defer conn.Close(websocket.StatusNormalClosure, "")
+	assertWSMessageType(t, conn, "snapshot")
+}
+
 func TestServeWSReceivesOutboxFanoutWhileConnected(t *testing.T) {
 	db := openDBForRealtime(t)
 	rdb := openRedisForRealtime(t)
@@ -215,6 +239,28 @@ func TestHubClosesSlowConsumerOnBoundedQueueOverflow(t *testing.T) {
 	case <-closed:
 	case <-time.After(time.Second):
 		t.Fatalf("slow consumer was not closed")
+	}
+}
+
+func TestHubClosesSlowConsumerOnByteBudgetOverflow(t *testing.T) {
+	hub := NewHubWithOptions(HubOptions{QueueMessages: 10, QueueBytes: 8})
+	closed := make(chan struct{})
+	sub := hub.Subscribe("auction_1", func() { close(closed) })
+	defer hub.Unsubscribe("auction_1", sub)
+
+	stats := hub.Publish(context.Background(), "auction_1", []byte(`12345`))
+	if stats.SlowClosed != 0 || stats.Enqueued != 1 {
+		t.Fatalf("first publish stats = %#v", stats)
+	}
+	stats = hub.Publish(context.Background(), "auction_1", []byte(`67890`))
+	if stats.SlowClosed != 1 {
+		t.Fatalf("second publish stats = %#v, want slow close", stats)
+	}
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatalf("byte-budget slow consumer was not closed")
 	}
 }
 

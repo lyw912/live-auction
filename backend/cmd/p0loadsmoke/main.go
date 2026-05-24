@@ -228,11 +228,12 @@ func runFanoutSmoke() fanoutResult {
 			<-ready
 			for j := 0; j < messages; j++ {
 				select {
-				case _, ok := <-sub.Messages():
+				case message, ok := <-sub.Messages():
 					if !ok {
 						errors.Add(1)
 						return
 					}
+					sub.Ack(message)
 					healthyReceived.Add(1)
 				case <-time.After(2 * time.Second):
 					errors.Add(1)

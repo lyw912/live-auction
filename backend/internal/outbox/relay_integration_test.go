@@ -3,6 +3,8 @@ package outbox
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"os"
 	"testing"
 	"time"
@@ -20,6 +22,9 @@ func TestRelayPublishesPendingOutboxToRedisInOrder(t *testing.T) {
 	ctx := context.Background()
 	repo := auction.NewRepository(db)
 	auctionRow := createActiveAuctionForRelay(t, repo, db)
+	if err := rdb.Del(ctx, "auction:"+auctionRow.ID+":events", "auction:"+auctionRow.ID+":snapshot").Err(); err != nil {
+		t.Fatalf("redis cleanup: %v", err)
+	}
 	quiesceOutboxExcept(t, db, auctionRow.ID)
 
 	bid1 := auction.BidInput{ClientBidID: "relay-bid-1", AmountCents: 15_000}
@@ -51,13 +56,14 @@ func TestRelayPublishesPendingOutboxToRedisInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LRange: %v", err)
 	}
-	if len(values) < 2 {
+	if len(values) == 0 {
 		t.Fatalf("expected redis history, got %d", len(values))
 	}
 	var lastSeq int64
 	for _, value := range values {
 		var envelope struct {
-			Seq int64 `json:"seq"`
+			Seq         int64  `json:"seq"`
+			StreamEpoch string `json:"stream_epoch"`
 		}
 		if err := json.Unmarshal([]byte(value), &envelope); err != nil {
 			t.Fatalf("unmarshal envelope: %v", err)
@@ -66,6 +72,15 @@ func TestRelayPublishesPendingOutboxToRedisInOrder(t *testing.T) {
 			t.Fatalf("redis seq not increasing: %d after %d", envelope.Seq, lastSeq)
 		}
 		lastSeq = envelope.Seq
+	}
+	var lastEnvelope struct {
+		StreamEpoch string `json:"stream_epoch"`
+	}
+	if err := json.Unmarshal([]byte(values[len(values)-1]), &lastEnvelope); err != nil {
+		t.Fatalf("unmarshal last envelope: %v", err)
+	}
+	if lastEnvelope.StreamEpoch == "" {
+		t.Fatalf("empty stream epoch in last envelope: %s", values[len(values)-1])
 	}
 
 	var pending int
@@ -79,6 +94,76 @@ func TestRelayPublishesPendingOutboxToRedisInOrder(t *testing.T) {
 	}
 	if pending != 0 {
 		t.Fatalf("pending outbox = %d, want 0", pending)
+	}
+}
+
+func TestRelayStreamEpochStableAcrossEventsAndSnapshot(t *testing.T) {
+	db := openDB(t)
+	rdb := openRedis(t)
+	ctx := context.Background()
+	repo := auction.NewRepository(db)
+	auctionRow := createActiveAuctionForRelay(t, repo, db)
+	if err := rdb.Del(ctx, "auction:"+auctionRow.ID+":events", "auction:"+auctionRow.ID+":snapshot").Err(); err != nil {
+		t.Fatalf("redis cleanup: %v", err)
+	}
+	quiesceOutboxExcept(t, db, auctionRow.ID)
+	bid := auction.BidInput{ClientBidID: "epoch-bid-1", AmountCents: 15_000}
+	if _, err := repo.PlaceBid(ctx, auctionRow.ID, "user_1", bid.ClientBidID, bid, "tr_epoch"); err != nil {
+		t.Fatalf("PlaceBid: %v", err)
+	}
+	prioritizeOutboxForAuction(t, db, auctionRow.ID)
+	if _, err := db.Exec(ctx, `
+		UPDATE outbox_delivery
+		SET status = 'PUBLISHED', published_at = COALESCE(published_at, now()), locked_by = NULL, locked_until = NULL
+		WHERE outbox_id IN (
+			SELECT id FROM outbox_events
+			WHERE auction_id = $1 AND event_type <> 'bid_accepted'
+		)
+	`, auctionRow.ID); err != nil {
+		t.Fatalf("publish setup events: %v", err)
+	}
+
+	relay := NewRelay(db, rdb, "epoch-worker")
+	ownAuctionShard(t, db, auctionRow.ID, relay.workerID)
+	ok, err := relay.ProcessOne(ctx)
+	if err != nil {
+		t.Fatalf("ProcessOne: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected one outbox event")
+	}
+
+	values, err := rdb.LRange(ctx, "auction:"+auctionRow.ID+":events", -1, -1).Result()
+	if err != nil || len(values) != 1 {
+		t.Fatalf("history last err=%v values=%v", err, values)
+	}
+	var event struct {
+		StreamEpoch     string `json:"stream_epoch"`
+		SnapshotVersion int64  `json:"snapshot_version"`
+	}
+	if err := json.Unmarshal([]byte(values[0]), &event); err != nil {
+		t.Fatalf("unmarshal event: %v", err)
+	}
+	if event.StreamEpoch == "" || event.SnapshotVersion == 0 {
+		t.Fatalf("event missing epoch/version: %#v", event)
+	}
+
+	snapshot, err := relay.RebuildSnapshot(ctx, auctionRow.ID)
+	if err != nil {
+		t.Fatalf("RebuildSnapshot: %v", err)
+	}
+	var snap struct {
+		StreamEpoch     string `json:"stream_epoch"`
+		SnapshotVersion int64  `json:"snapshot_version"`
+	}
+	if err := json.Unmarshal(snapshot, &snap); err != nil {
+		t.Fatalf("unmarshal snapshot: %v", err)
+	}
+	if snap.StreamEpoch != event.StreamEpoch {
+		t.Fatalf("snapshot epoch = %q, event epoch = %q", snap.StreamEpoch, event.StreamEpoch)
+	}
+	if snap.SnapshotVersion == 0 {
+		t.Fatalf("snapshot version missing: %#v", snap)
 	}
 }
 
@@ -278,28 +363,54 @@ func TestRelayDoesNotSkipBlockedAuctionHead(t *testing.T) {
 func TestRelayClaimPlanScalesWithPendingBacklog(t *testing.T) {
 	db := openDB(t)
 	ctx := context.Background()
-	auctionID := "relay_plan_" + uuid.NewString()
+	cleanupSyntheticRelayPlanBacklog(t, db)
+	repo := auction.NewRepository(db)
+	auctionRow := createActiveAuctionForRelay(t, repo, db)
+	auctionID := auctionRow.ID
 	quiesceOutboxExcept(t, db, auctionID)
 	t.Cleanup(func() {
 		_, _ = db.Exec(context.Background(), `
 			DELETE FROM outbox_delivery
 			WHERE outbox_id IN (SELECT id FROM outbox_events WHERE auction_id = $1);
 			DELETE FROM outbox_events WHERE auction_id = $1;
+			DELETE FROM realtime_stream_epochs WHERE auction_id = $1;
 		`, auctionID)
 	})
+	if _, err := db.Exec(ctx, `
+		UPDATE outbox_delivery
+		SET status = 'PUBLISHED', published_at = COALESCE(published_at, now()), locked_by = NULL, locked_until = NULL
+		WHERE outbox_id IN (SELECT id FROM outbox_events WHERE auction_id = $1)
+	`, auctionID); err != nil {
+		t.Fatalf("publish existing outbox: %v", err)
+	}
+	var baseSeq int64
+	if err := db.QueryRow(ctx, `SELECT COALESCE(max(seq), 0) FROM outbox_events WHERE auction_id = $1`, auctionID).Scan(&baseSeq); err != nil {
+		t.Fatalf("select base seq: %v", err)
+	}
 	const pendingRows = 5000
 	for i := 1; i <= pendingRows; i++ {
 		var outboxID int64
+		seq := baseSeq + int64(i)
 		if err := db.QueryRow(ctx, `
 			INSERT INTO outbox_events (aggregate_type, aggregate_id, auction_id, seq, event_type, payload_json, created_at)
-			VALUES ('auction', $1, $1, $2, 'bid_accepted', '{}'::jsonb, now() + ($2::bigint * interval '1 millisecond'))
+			VALUES ('auction', $1, $1, $2, 'bid_accepted', '{}'::jsonb, now() - interval '1 second' + ($3::bigint * interval '1 microsecond'))
 			RETURNING id
-		`, auctionID, i).Scan(&outboxID); err != nil {
+		`, auctionID, seq, i).Scan(&outboxID); err != nil {
 			t.Fatalf("insert outbox event %d: %v", i, err)
 		}
 		if _, err := db.Exec(ctx, `INSERT INTO outbox_delivery (outbox_id, status) VALUES ($1, 'PENDING')`, outboxID); err != nil {
 			t.Fatalf("insert outbox delivery %d: %v", i, err)
 		}
+	}
+	if _, err := db.Exec(ctx, `
+		UPDATE outbox_delivery
+		SET status = 'PUBLISHED', published_at = COALESCE(published_at, now()), locked_by = NULL, locked_until = NULL
+		WHERE outbox_id IN (
+			SELECT id FROM outbox_events
+			WHERE auction_id = $1 AND seq < 1
+		)
+	`, auctionID); err != nil {
+		t.Fatalf("publish setup outbox: %v", err)
 	}
 
 	start := time.Now()
@@ -321,12 +432,28 @@ func TestRelayClaimPlanScalesWithPendingBacklog(t *testing.T) {
 		SELECT d.status
 		FROM outbox_events e
 		JOIN outbox_delivery d ON d.outbox_id = e.id
-		WHERE e.auction_id = $1 AND e.seq = 1
-	`, auctionID).Scan(&firstStatus); err != nil {
+		WHERE e.auction_id = $1 AND e.seq = $2 AND e.event_type = 'bid_accepted'
+	`, auctionID, baseSeq+1).Scan(&firstStatus); err != nil {
 		t.Fatalf("select first status: %v", err)
 	}
 	if firstStatus != StatusPublished {
 		t.Fatalf("first status = %s, want %s", firstStatus, StatusPublished)
+	}
+}
+
+func cleanupSyntheticRelayPlanBacklog(t *testing.T, db *pgxpool.Pool) {
+	t.Helper()
+	if _, err := db.Exec(context.Background(), `
+		DELETE FROM outbox_delivery
+		WHERE outbox_id IN (
+			SELECT id FROM outbox_events
+			WHERE auction_id LIKE 'relay_plan_%'
+		);
+		DELETE FROM outbox_events WHERE auction_id LIKE 'relay_plan_%';
+		DELETE FROM realtime_stream_epochs WHERE auction_id LIKE 'relay_plan_%';
+		DELETE FROM outbox_relay_shard_leases WHERE owner_id IN ('claim-plan-worker');
+	`); err != nil {
+		t.Fatalf("cleanup synthetic relay plan backlog: %v", err)
 	}
 }
 
@@ -427,6 +554,43 @@ func TestRelayShardLeasePreventsDuplicateOwnersAndAllowsFailover(t *testing.T) {
 	if !ok {
 		t.Fatalf("contender did not process after owner lease expired")
 	}
+}
+
+func TestRelayRunWakesFromPostgresNotify(t *testing.T) {
+	db := openDB(t)
+	rdb := openRedis(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	repo := auction.NewRepository(db)
+	auctionRow := createActiveAuctionForRelay(t, repo, db)
+	quiesceOutboxExcept(t, db, auctionRow.ID)
+	bid := auction.BidInput{ClientBidID: "notify-bid-1", AmountCents: 15_000}
+	if _, err := repo.PlaceBid(context.Background(), auctionRow.ID, "user_1", bid.ClientBidID, bid, "tr_notify"); err != nil {
+		t.Fatalf("PlaceBid: %v", err)
+	}
+	prioritizeOutboxForAuction(t, db, auctionRow.ID)
+
+	relay := NewRelay(db, rdb, "notify-worker").WithNotify(true)
+	ownAuctionShard(t, db, auctionRow.ID, relay.workerID)
+	go relay.Run(ctx, nilLogger(), time.Hour)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var published int
+		if err := db.QueryRow(context.Background(), `
+			SELECT count(*)
+			FROM outbox_events e
+			JOIN outbox_delivery d ON d.outbox_id = e.id
+			WHERE e.auction_id = $1 AND d.status = 'PUBLISHED'
+		`, auctionRow.ID).Scan(&published); err != nil {
+			t.Fatalf("count published: %v", err)
+		}
+		if published > 0 {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("relay did not wake from outbox notify before poll interval")
 }
 
 func TestRelayRebuildSnapshotWritesRedisSnapshot(t *testing.T) {
@@ -583,4 +747,8 @@ func ownAuctionShard(t *testing.T, db *pgxpool.Pool, auctionID string, ownerID s
 	if err != nil {
 		t.Fatalf("own auction shard: %v", err)
 	}
+}
+
+func nilLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }

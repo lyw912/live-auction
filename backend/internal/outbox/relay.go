@@ -2,6 +2,8 @@ package outbox
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
@@ -37,6 +40,7 @@ type Relay struct {
 	drainBatch   int
 	leaseTTL     time.Duration
 	publisher    func(context.Context, string, []byte)
+	notify       bool
 }
 
 func (r *Relay) Run(ctx context.Context, log *slog.Logger, interval time.Duration) {
@@ -45,6 +49,8 @@ func (r *Relay) Run(ctx context.Context, log *slog.Logger, interval time.Duratio
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	notifyCh, closeNotify := r.startNotifyListener(ctx, log)
+	defer closeNotify()
 	for {
 		select {
 		case <-ctx.Done():
@@ -62,8 +68,67 @@ func (r *Relay) Run(ctx context.Context, log *slog.Logger, interval time.Duratio
 			select {
 			case <-ctx.Done():
 				return
+			case <-notifyCh:
 			case <-ticker.C:
 			}
+		}
+	}
+}
+
+func (r *Relay) startNotifyListener(ctx context.Context, log *slog.Logger) (<-chan struct{}, func()) {
+	if !r.notify {
+		return nil, func() {}
+	}
+	notifyCh := make(chan struct{}, 1)
+	listenCtx, cancel := context.WithCancel(ctx)
+	go func() {
+		backoff := 100 * time.Millisecond
+		for {
+			if listenCtx.Err() != nil {
+				return
+			}
+			if err := r.listenForOutboxNotifications(listenCtx, notifyCh); err != nil && listenCtx.Err() == nil {
+				log.Warn("outbox_notify_listener_failed", slog.String("error", err.Error()))
+				select {
+				case <-listenCtx.Done():
+					return
+				case <-time.After(backoff):
+				}
+				if backoff < 2*time.Second {
+					backoff *= 2
+				}
+			} else {
+				backoff = 100 * time.Millisecond
+			}
+		}
+	}()
+	return notifyCh, cancel
+}
+
+func (r *Relay) listenForOutboxNotifications(ctx context.Context, notifyCh chan<- struct{}) error {
+	conn, err := r.db.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+	if _, err := conn.Exec(ctx, "LISTEN outbox_delivery_ready"); err != nil {
+		return err
+	}
+	for {
+		_, err := conn.Conn().WaitForNotification(ctx)
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return nil
+			}
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) {
+				return fmt.Errorf("listen outbox delivery ready: %s", pgErr.Message)
+			}
+			return err
+		}
+		select {
+		case notifyCh <- struct{}{}:
+		default:
 		}
 	}
 }
@@ -88,11 +153,17 @@ func NewRelay(db *pgxpool.Pool, redisClient *redis.Client, workerID string) *Rel
 		historyTTL:   DefaultHistoryTTL,
 		drainBatch:   DefaultDrainBatch,
 		leaseTTL:     DefaultLeaseTTL,
+		notify:       true,
 	}
 }
 
 func (r *Relay) WithPublisher(publisher func(context.Context, string, []byte)) *Relay {
 	r.publisher = publisher
+	return r
+}
+
+func (r *Relay) WithNotify(enabled bool) *Relay {
+	r.notify = enabled
 	return r
 }
 
@@ -227,12 +298,18 @@ func (r *Relay) ensureShardLease(ctx context.Context) error {
 }
 
 func (r *Relay) publish(ctx context.Context, event Event) error {
+	epoch, err := r.ensureStreamEpoch(ctx, event.AuctionID)
+	if err != nil {
+		return err
+	}
 	envelope := map[string]any{
-		"auction_id": event.AuctionID,
-		"seq":        event.Seq,
-		"event_type": event.EventType,
-		"payload":    json.RawMessage(event.Payload),
-		"outbox_id":  event.OutboxID,
+		"auction_id":       event.AuctionID,
+		"seq":              event.Seq,
+		"stream_epoch":     epoch,
+		"snapshot_version": event.Seq,
+		"event_type":       event.EventType,
+		"payload":          json.RawMessage(event.Payload),
+		"outbox_id":        event.OutboxID,
 	}
 	data, err := json.Marshal(envelope)
 	if err != nil {
@@ -254,6 +331,31 @@ func (r *Relay) publish(ctx context.Context, event Event) error {
 		r.publisher(ctx, event.AuctionID, data)
 	}
 	return nil
+}
+
+func (r *Relay) ensureStreamEpoch(ctx context.Context, auctionID string) (string, error) {
+	generated, err := randomStreamEpoch()
+	if err != nil {
+		return "", err
+	}
+	var epoch string
+	err = r.db.QueryRow(ctx, `
+		INSERT INTO realtime_stream_epochs (auction_id, value, expires_at)
+		VALUES ($1, $3, now() + ($2::double precision * interval '1 second'))
+		ON CONFLICT (auction_id) DO UPDATE
+		SET expires_at = GREATEST(realtime_stream_epochs.expires_at, now() + ($2::double precision * interval '1 second')),
+		    updated_at = now()
+		RETURNING value
+	`, auctionID, r.historyTTL.Seconds(), generated).Scan(&epoch)
+	return epoch, err
+}
+
+func randomStreamEpoch() (string, error) {
+	var buf [8]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf[:]), nil
 }
 
 func (r *Relay) markPublished(ctx context.Context, outboxID int64) error {
@@ -331,12 +433,18 @@ func (r *Relay) publishGapNotice(ctx context.Context, event Event) {
 }
 
 func (r *Relay) RebuildSnapshot(ctx context.Context, auctionID string) ([]byte, error) {
+	epoch, err := r.ensureStreamEpoch(ctx, auctionID)
+	if err != nil {
+		return nil, err
+	}
 	var payload []byte
-	err := r.db.QueryRow(ctx, `
+	err = r.db.QueryRow(ctx, `
 		SELECT jsonb_build_object(
 			'event_type', 'snapshot',
 			'auction_id', a.id,
 			'seq', a.seq,
+			'stream_epoch', $2::text,
+			'snapshot_version', a.version,
 			'source', 'db',
 			'stale', false,
 			'payload', jsonb_build_object(
@@ -358,7 +466,7 @@ func (r *Relay) RebuildSnapshot(ctx context.Context, auctionID string) ([]byte, 
 			LIMIT 1
 		) cancel_event ON true
 		WHERE a.id = $1
-	`, auctionID).Scan(&payload)
+	`, auctionID, epoch).Scan(&payload)
 	if err != nil {
 		return nil, err
 	}

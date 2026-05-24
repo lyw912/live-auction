@@ -25,30 +25,100 @@ type Server struct {
 	ticket            *TicketStore
 	hub               *Hub
 	admission         *Admission
+	options           Options
 	snapshotSemaphore chan struct{}
 	snapshotGroup     *snapshotGroup
 	rebuildSnapshotFn func(context.Context, string) ([]byte, error)
 }
 
+type Options struct {
+	HubQueueMessages      int
+	HubQueueBytes         int64
+	RecoveryMaxEvents     int64
+	SnapshotRebuildLimit  int
+	HistoryTTL            time.Duration
+	SnapshotTTL           time.Duration
+	StreamEpochTTL        time.Duration
+	RecoveryReadChunkSize int64
+}
+
+func defaultOptions() Options {
+	return Options{
+		HubQueueMessages:      defaultAuctionQueueSize,
+		HubQueueBytes:         defaultAuctionQueueBytes,
+		RecoveryMaxEvents:     300,
+		SnapshotRebuildLimit:  4,
+		HistoryTTL:            30 * time.Minute,
+		SnapshotTTL:           30 * time.Minute,
+		StreamEpochTTL:        24 * time.Hour,
+		RecoveryReadChunkSize: 256,
+	}
+}
+
 func NewServer(db *pgxpool.Pool, redisClient *redis.Client) *Server {
-	return NewServerWithHub(db, redisClient, NewHub(defaultAuctionQueueSize))
+	return NewServerWithOptions(db, redisClient, defaultOptions())
 }
 
 func NewServerWithHub(db *pgxpool.Pool, redisClient *redis.Client, hub *Hub) *Server {
+	options := defaultOptions()
 	if hub == nil {
-		hub = NewHub(defaultAuctionQueueSize)
+		hub = NewHubWithOptions(HubOptions{QueueMessages: options.HubQueueMessages, QueueBytes: options.HubQueueBytes})
 	}
+	return newServer(db, redisClient, hub, options)
+}
+
+func NewServerWithOptions(db *pgxpool.Pool, redisClient *redis.Client, options Options) *Server {
+	options = normalizeOptions(options)
+	hub := NewHubWithOptions(HubOptions{QueueMessages: options.HubQueueMessages, QueueBytes: options.HubQueueBytes})
+	return newServer(db, redisClient, hub, options)
+}
+
+func newServer(db *pgxpool.Pool, redisClient *redis.Client, hub *Hub, options Options) *Server {
+	options = normalizeOptions(options)
 	server := &Server{
 		db:                db,
 		redis:             redisClient,
 		ticket:            NewTicketStore(redisClient),
 		hub:               hub,
 		admission:         NewAdmission(0, 0, time.Second),
-		snapshotSemaphore: make(chan struct{}, 4),
+		options:           options,
+		snapshotSemaphore: make(chan struct{}, options.SnapshotRebuildLimit),
 		snapshotGroup:     newSnapshotGroup(),
 	}
 	server.rebuildSnapshotFn = server.rebuildSnapshotFromDB
 	return server
+}
+
+func normalizeOptions(options Options) Options {
+	defaults := defaultOptions()
+	if options.HubQueueMessages <= 0 {
+		options.HubQueueMessages = defaults.HubQueueMessages
+	}
+	if options.HubQueueBytes <= 0 {
+		options.HubQueueBytes = defaults.HubQueueBytes
+	}
+	if options.RecoveryMaxEvents <= 0 {
+		options.RecoveryMaxEvents = defaults.RecoveryMaxEvents
+	}
+	if options.SnapshotRebuildLimit <= 0 {
+		options.SnapshotRebuildLimit = defaults.SnapshotRebuildLimit
+	}
+	if options.HistoryTTL <= 0 {
+		options.HistoryTTL = defaults.HistoryTTL
+	}
+	if options.SnapshotTTL <= 0 {
+		options.SnapshotTTL = defaults.SnapshotTTL
+	}
+	if options.StreamEpochTTL <= 0 {
+		options.StreamEpochTTL = defaults.StreamEpochTTL
+	}
+	if options.RecoveryReadChunkSize <= 0 {
+		options.RecoveryReadChunkSize = defaults.RecoveryReadChunkSize
+	}
+	if options.RecoveryReadChunkSize > options.RecoveryMaxEvents {
+		options.RecoveryReadChunkSize = options.RecoveryMaxEvents
+	}
+	return options
 }
 
 func (s *Server) TicketStore() *TicketStore {
@@ -202,7 +272,7 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 
 	for {
 		select {
-		case message, ok := <-sub.Messages():
+		case queued, ok := <-sub.Messages():
 			if !ok {
 				observability.Inc("auction_ws_slow_consumer_disconnect_total", nil)
 				_ = s.recordWSActivity(context.Background(), roomID, auctionID, ticket.UserID, "ws_slow_consumer_closed", map[string]any{
@@ -211,9 +281,11 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 				_ = conn.Close(websocket.StatusPolicyViolation, string(apierrors.CodeSlowConsumer))
 				return
 			}
+			message := queued.data
 			ctx, cancel := context.WithTimeout(connCtx, 5*time.Second)
 			err := conn.Write(ctx, websocket.MessageText, message)
 			cancel()
+			sub.Ack(queued)
 			if err != nil {
 				observability.Inc("auction_ws_slow_consumer_disconnect_total", nil)
 				_ = s.recordWSActivity(context.Background(), roomID, auctionID, ticket.UserID, "ws_slow_consumer_closed", map[string]any{
@@ -236,12 +308,21 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) PublishAuctionEvent(ctx context.Context, auctionID string, payload []byte) {
-	s.hub.Publish(ctx, auctionID, payload)
+	stats := s.hub.Publish(ctx, auctionID, payload)
+	if stats.Subscribers == 0 {
+		return
+	}
+	observability.Observe("auction_ws_publish_subscribers", float64(stats.Subscribers), nil, []float64{1, 10, 50, 100, 300, 1000})
+	observability.Observe("auction_ws_send_queue_depth", float64(stats.MaxQueueDepth), nil, []float64{1, 16, 64, 128, 256, 512})
+	observability.Observe("auction_ws_send_queue_bytes", float64(stats.MaxQueueBytes), nil, []float64{1024, 16384, 65536, 262144, 1048576, 4194304})
+	if stats.SlowClosed > 0 {
+		observability.Add("auction_ws_slow_consumer_disconnect_total", float64(stats.SlowClosed), nil)
+	}
 }
 
 func (s *Server) recoveryMessages(ctx context.Context, auctionID string, lastSeq int64) ([][]byte, string) {
 	redisStart := time.Now()
-	values, err := s.redis.LRange(ctx, "auction:"+auctionID+":events", 0, -1).Result()
+	values, err := s.redis.LRange(ctx, "auction:"+auctionID+":events", -s.options.RecoveryMaxEvents, -1).Result()
 	observability.Observe("redis_command_latency_seconds", time.Since(redisStart).Seconds(), map[string]string{"command": "lrange_recovery_events"}, observability.DefaultLatencyBuckets)
 	if err == nil {
 		var out [][]byte
@@ -258,6 +339,7 @@ func (s *Server) recoveryMessages(ctx context.Context, auctionID string, lastSeq
 			next++
 		}
 		if len(out) > 0 {
+			observability.Observe("auction_ws_recovery_publications", float64(len(out)), map[string]string{"source": "history"}, []float64{1, 10, 50, 100, 300, 1000})
 			return out, "history"
 		}
 	}
@@ -305,6 +387,8 @@ func (s *Server) rebuildSnapshotFromDB(ctx context.Context, auctionID string) ([
 			'event_type', 'snapshot',
 			'auction_id', a.id,
 			'seq', a.seq,
+			'stream_epoch', COALESCE(epoch.value, ''),
+			'snapshot_version', a.version,
 			'source', 'db',
 			'stale', false,
 			'payload', jsonb_build_object(
@@ -324,12 +408,17 @@ func (s *Server) rebuildSnapshotFromDB(ctx context.Context, auctionID string) ([
 			ORDER BY ev.seq DESC
 			LIMIT 1
 		) cancel_event ON true
+		LEFT JOIN LATERAL (
+			SELECT value
+			FROM realtime_stream_epochs
+			WHERE auction_id = a.id
+		) epoch ON true
 		WHERE a.id = $1
 	`, auctionID).Scan(&payload)
 	if err != nil {
 		return nil, err
 	}
-	_ = s.redis.Set(ctx, "auction:"+auctionID+":snapshot", payload, 30*time.Minute).Err()
+	_ = s.redis.Set(ctx, "auction:"+auctionID+":snapshot", payload, s.options.SnapshotTTL).Err()
 	return payload, nil
 }
 

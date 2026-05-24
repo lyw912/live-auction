@@ -47,6 +47,10 @@ type AdmissionConfig struct {
 	BidAuctionMaxInFlight int
 	WSTicketMaxInFlight   int
 	WSConnectMaxInFlight  int
+	WSQueueMessages       int
+	WSQueueBytes          int64
+	WSRecoveryMaxEvents   int64
+	WSSnapshotRebuildMax  int
 }
 
 var Default = NewRegistry()
@@ -105,6 +109,10 @@ func SetAdmissionConfig(cfg AdmissionConfig) {
 	Set("auction_admission_config_limit", float64(cfg.BidAuctionMaxInFlight), map[string]string{"kind": "bid_auction_max_in_flight"})
 	Set("auction_admission_config_limit", float64(cfg.WSTicketMaxInFlight), map[string]string{"kind": "ws_ticket_max_in_flight"})
 	Set("auction_admission_config_limit", float64(cfg.WSConnectMaxInFlight), map[string]string{"kind": "ws_connect_max_in_flight"})
+	Set("auction_realtime_config_limit", float64(cfg.WSQueueMessages), map[string]string{"kind": "ws_queue_messages"})
+	Set("auction_realtime_config_limit", float64(cfg.WSQueueBytes), map[string]string{"kind": "ws_queue_bytes"})
+	Set("auction_realtime_config_limit", float64(cfg.WSRecoveryMaxEvents), map[string]string{"kind": "ws_recovery_max_events"})
+	Set("auction_realtime_config_limit", float64(cfg.WSSnapshotRebuildMax), map[string]string{"kind": "ws_snapshot_rebuild_max_in_flight"})
 }
 
 func (r *Registry) ServeHTTP(w http.ResponseWriter, req *http.Request) {

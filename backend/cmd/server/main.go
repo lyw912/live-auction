@@ -33,13 +33,14 @@ func main() {
 	}
 	defer deps.Close()
 
-	rt := realtime.NewServer(deps.Postgres, deps.Redis).WithAdmission(realtimeAdmission(cfg))
+	rt := realtime.NewServerWithOptions(deps.Postgres, deps.Redis, realtimeOptions(cfg)).WithAdmission(realtimeAdmission(cfg))
 	workerID := envOrDefault("OUTBOX_WORKER_ID", "server-main")
 	schedulerWorkerID := envOrDefault("SCHEDULER_WORKER_ID", workerID)
 	if envFlag("DISABLE_EMBEDDED_OUTBOX_RELAY") {
 		log.Info("embedded outbox relay disabled", slog.String("worker_id", workerID))
 	} else {
 		go outbox.NewRelay(deps.Postgres, deps.Redis, workerID).
+			WithNotify(cfg.OutboxNotifyEnabled).
 			WithPublisher(rt.PublishAuctionEvent).
 			Run(ctx, log, 500*time.Millisecond)
 	}
@@ -64,6 +65,18 @@ func main() {
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Error("server shutdown failed", slog.String("error", err.Error()))
+	}
+}
+
+func realtimeOptions(cfg config.Config) realtime.Options {
+	return realtime.Options{
+		HubQueueMessages:     cfg.WSQueueMessages,
+		HubQueueBytes:        cfg.WSQueueBytes,
+		RecoveryMaxEvents:    cfg.WSRecoveryMaxEvents,
+		SnapshotRebuildLimit: cfg.WSSnapshotRebuildMax,
+		HistoryTTL:           cfg.RealtimeHistoryTTL,
+		SnapshotTTL:          cfg.RealtimeSnapshotTTL,
+		StreamEpochTTL:       cfg.RealtimeStreamEpochTTL,
 	}
 }
 

@@ -17,8 +17,20 @@ import (
 )
 
 func NewRouter(cfg config.Config, deps *storage.Dependencies, log *slog.Logger) http.Handler {
-	rt := realtime.NewServer(deps.Postgres, deps.Redis).WithAdmission(newRealtimeAdmission(cfg))
+	rt := realtime.NewServerWithOptions(deps.Postgres, deps.Redis, realtimeOptions(cfg)).WithAdmission(newRealtimeAdmission(cfg))
 	return NewRouterWithRealtime(cfg, deps, log, rt)
+}
+
+func realtimeOptions(cfg config.Config) realtime.Options {
+	return realtime.Options{
+		HubQueueMessages:     cfg.WSQueueMessages,
+		HubQueueBytes:        cfg.WSQueueBytes,
+		RecoveryMaxEvents:    cfg.WSRecoveryMaxEvents,
+		SnapshotRebuildLimit: cfg.WSSnapshotRebuildMax,
+		HistoryTTL:           cfg.RealtimeHistoryTTL,
+		SnapshotTTL:          cfg.RealtimeSnapshotTTL,
+		StreamEpochTTL:       cfg.RealtimeStreamEpochTTL,
+	}
 }
 
 func newRealtimeAdmission(cfg config.Config) *realtime.Admission {
@@ -41,6 +53,10 @@ func NewRouterWithRealtime(cfg config.Config, deps *storage.Dependencies, log *s
 		BidAuctionMaxInFlight: cfg.BidAuctionMaxInFlight,
 		WSTicketMaxInFlight:   cfg.WSTicketMaxInFlight,
 		WSConnectMaxInFlight:  cfg.WSConnectMaxInFlight,
+		WSQueueMessages:       cfg.WSQueueMessages,
+		WSQueueBytes:          cfg.WSQueueBytes,
+		WSRecoveryMaxEvents:   cfg.WSRecoveryMaxEvents,
+		WSSnapshotRebuildMax:  cfg.WSSnapshotRebuildMax,
 	})
 
 	r := chi.NewRouter()
