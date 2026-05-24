@@ -239,9 +239,14 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	slow := make(chan struct{})
+	slow := make(chan SlowConsumerInfo, 1)
 	var closeSlow sync.Once
-	sub := s.hub.Subscribe(auctionID, func() { closeSlow.Do(func() { close(slow) }) })
+	sub := s.hub.Subscribe(auctionID, func(info SlowConsumerInfo) {
+		closeSlow.Do(func() {
+			slow <- info
+			close(slow)
+		})
+	})
 	defer s.hub.Unsubscribe(auctionID, sub)
 	observability.AddGauge("auction_ws_connections", 1, map[string]string{"room": roomID})
 	defer observability.AddGauge("auction_ws_connections", -1, map[string]string{"room": roomID})
@@ -294,11 +299,20 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 				_ = conn.Close(websocket.StatusPolicyViolation, string(apierrors.CodeSlowConsumer))
 				return
 			}
-		case <-slow:
+		case info := <-slow:
 			observability.Inc("auction_ws_slow_consumer_disconnect_total", nil)
-			_ = s.recordWSActivity(context.Background(), roomID, auctionID, ticket.UserID, "ws_slow_consumer_closed", map[string]any{
+			payload := map[string]any{
 				"phase": "backpressure",
-			})
+			}
+			if info.Reason != "" {
+				payload["reason"] = info.Reason
+				payload["queue_depth"] = info.QueueDepth
+				payload["queue_bytes"] = info.QueueBytes
+				payload["queue_messages_limit"] = info.QueueMessagesLimit
+				payload["queue_bytes_limit"] = info.QueueBytesLimit
+				payload["payload_bytes"] = info.PayloadBytes
+			}
+			_ = s.recordWSActivity(context.Background(), roomID, auctionID, ticket.UserID, "ws_slow_consumer_closed", payload)
 			_ = conn.Close(websocket.StatusPolicyViolation, string(apierrors.CodeSlowConsumer))
 			return
 		case <-connCtx.Done():
@@ -317,6 +331,8 @@ func (s *Server) PublishAuctionEvent(ctx context.Context, auctionID string, payl
 	observability.Observe("auction_ws_send_queue_bytes", float64(stats.MaxQueueBytes), nil, []float64{1024, 16384, 65536, 262144, 1048576, 4194304})
 	if stats.SlowClosed > 0 {
 		observability.Add("auction_ws_slow_consumer_disconnect_total", float64(stats.SlowClosed), nil)
+		observability.Observe("auction_ws_slow_consumer_queue_depth", float64(stats.SlowMaxDepth), nil, []float64{1, 16, 64, 128, 256, 512})
+		observability.Observe("auction_ws_slow_consumer_queue_bytes", float64(stats.SlowMaxBytes), nil, []float64{1024, 16384, 65536, 262144, 1048576, 4194304})
 	}
 }
 

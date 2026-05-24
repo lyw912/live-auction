@@ -32,7 +32,7 @@ Decision states:
 | P3-D11 | P4 invariant verifier may start before all P3 architecture choices are closed. | ACCEPTED | Reset analysis and P4 roadmap. | Implementing verifier early is allowed because it improves stress attribution and reviewer defense. |
 | P3-D12 | Debezium/CDC is blocked until polling outbox is again the first measured bottleneck. | EVIDENCE_GATED | `docs/evidence/p3-01-outbox-claim-fix-2026-05-24.md`, `docs/evidence/p3-02-relay-shard-ownership-2026-05-24.md`. | Do not run Debezium or any CDC process in the mainline and do not replace `backend/internal/outbox/relay.go` until P3-R5 proves claim/update/table pressure remains after current fixes. |
 | P3-D12A | Debezium may be cited only as selective design borrowing, not runtime integration. | ACCEPTED | `docs/reviews/p3-06-debezium-borrowing-review-2026-05-25.md`, `docs/adr/p3-02-debezium-borrowing-decision.md`, `docs/evidence/p3-06-debezium-borrowed-hardening-2026-05-25.md`. | Implemented claims: outbox envelope validation, offset/watermark diagnostics, snapshot lifecycle audit, control signals, and error-classification ideas. Forbidden claims: Debezium is integrated, Debezium improves current performance, or CDC replaces auction correctness. |
-| P3-D13 | NATS/JetStream remains out of scope unless internal service messaging becomes a measured bottleneck. | EVIDENCE_GATED | `18-p3-p4-roadmap-reset.md`, `docs/evidence/p3-01-outbox-claim-fix-2026-05-24.md`, `docs/evidence/p3-02-relay-shard-ownership-2026-05-24.md`. | Do not add external brokers, browser realtime replacements, or direct bid-path publishers. Reconsider only through an ADR-backed change after measured need. |
+| P3-D13 | NATS/JetStream remains out of scope unless internal service messaging becomes a measured bottleneck. Selective design borrowing is accepted. | EVIDENCE_GATED | `18-p3-p4-roadmap-reset.md`, `docs/evidence/p3-01-outbox-claim-fix-2026-05-24.md`, `docs/evidence/p3-02-relay-shard-ownership-2026-05-24.md`, `docs/reviews/p3-07-nats-jetstream-borrowing-review-2026-05-25.md`, `docs/evidence/p3-07-nats-jetstream-borrowed-hardening-2026-05-25.md`. | Do not add external brokers, browser realtime replacements, or direct bid-path publishers. Allowed claims: borrowed delivery-state, ack/redelivery, dedupe, slow-consumer, monitoring, and snapshot/catchup design logic. Forbidden claims: NATS is integrated, JetStream improves current performance, or broker sequence replaces auction seq. Reconsider runtime adoption only through an ADR-backed change after measured need. |
 | P3-D14 | Redis remains projection/cache/admission support; Lua reservation and Streams are evidence-gated. | EVIDENCE_GATED | `00-project-brief.md`, `04-data-and-storage.md`, `12-engineering-rules.md`, `18-p3-p4-roadmap-reset.md`. | Keep current Redis usage. Do not make Redis auction truth, do not implement Lua reservation until PG hot-row evidence and reconciliation ADR exist. |
 
 ## Go / No-Go Gates
@@ -54,6 +54,12 @@ No-go while:
 - the only argument is Debezium maturity, GitHub popularity, or generic CDC best practice without this project's outbox evidence.
 
 ### NATS / JetStream
+
+Current accepted position:
+
+- NATS/JetStream has been reviewed against local source in `docs/reviews/p3-07-nats-jetstream-borrowing-review-2026-05-25.md`.
+- The project may cite selective design borrowing only: consumer delivery-state vocabulary, ack/redelivery/backoff/TERM-style poison handling, publish-message dedupe identity, slow-consumer pending-byte discipline, monitoring vocabulary, and snapshot/catchup failure thinking.
+- The project does not run NATS, JetStream, a broker-backed fanout path, or a browser NATS client.
 
 Go only if all are true:
 

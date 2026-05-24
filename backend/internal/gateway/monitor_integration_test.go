@@ -34,10 +34,13 @@ func TestMonitorRoutesReturnRealDBRowsAndRequireHost(t *testing.T) {
 	assertMonitorHasItems(t, router, "/api/monitor/auctions", "auction_id", row.ID)
 	assertMonitorHasItems(t, router, "/api/monitor/anomalies", "type", "MONITOR_TEST")
 	assertMonitorHasItems(t, router, "/api/monitor/outbox", "aggregate_id", row.ID)
+	assertMonitorHasItems(t, router, "/api/monitor/outbox", "delivery_state", "READY")
 	assertMonitorHasItems(t, router, "/api/monitor/outbox/watermarks", "shard_id", float64(0))
+	assertMonitorHasItems(t, router, "/api/monitor/outbox/watermarks", "ack_pending_count", float64(1))
 	assertMonitorHasItems(t, router, "/api/monitor/scheduler", "target_id", row.ID)
 	assertMonitorHasItems(t, router, "/api/monitor/rejects", "auction_id", row.ID)
 	assertMonitorHasItems(t, router, "/api/monitor/recovery", "room_id", row.RoomID)
+	assertMonitorHasItems(t, router, "/api/monitor/recovery", "max_queue_bytes", float64(65536))
 	assertMonitorHasItems(t, router, "/api/monitor/snapshots", "auction_id", row.ID)
 	assertMonitorHasItems(t, router, "/api/monitor/signals", "target_id", row.ID)
 	assertMonitorCreateSignal(t, router, row.ID)
@@ -211,7 +214,8 @@ func createMonitorAuction(t *testing.T, repo *auction.Repository, db *pgxpool.Po
 		INSERT INTO user_activity_events (room_id, auction_id, user_id, event_type, source, payload_json)
 		VALUES
 		  ($1, $2, 'user_1', 'ws_reconnect', 'ws', '{"last_seq": 1}'),
-		  ($1, $2, 'user_1', 'ws_recovered', 'ws', '{"source": "db"}')
+		  ($1, $2, 'user_1', 'ws_recovered', 'ws', '{"source": "db"}'),
+		  ($1, $2, 'user_1', 'ws_slow_consumer_closed', 'ws', '{"phase":"backpressure","reason":"pending_bytes","queue_depth":256,"queue_bytes":65536,"queue_messages_limit":256,"queue_bytes_limit":1048576}')
 	`, started.RoomID, started.ID); err != nil {
 		t.Fatalf("insert recovery activity: %v", err)
 	}
@@ -248,14 +252,34 @@ func seedMonitorDebeziumDiagnostics(t *testing.T, db *pgxpool.Pool, auctionID st
 		  last_published_seq, last_published_at, oldest_ready_age_ms,
 		  ready_count, publishing_count, dead_count
 		)
-		VALUES (0, 'monitor-worker', 1, $1, 1, now(), 0, 1, 0, 0)
+		VALUES (0, 'monitor-worker', 1, $1, 1, now(), 0, 1, 1, 0)
 		ON CONFLICT (shard_id) DO UPDATE
 		SET owner_id = EXCLUDED.owner_id,
 		    last_published_auction_id = EXCLUDED.last_published_auction_id,
 		    ready_count = EXCLUDED.ready_count,
+		    publishing_count = EXCLUDED.publishing_count,
 		    updated_at = now()
 	`, auctionID); err != nil {
 		t.Fatalf("seed watermarks: %v", err)
+	}
+	if _, err := db.Exec(ctx, `
+		UPDATE outbox_delivery
+		SET status = 'PUBLISHING',
+		    attempts = 2,
+		    max_attempts = 5,
+		    locked_by = 'monitor-worker',
+		    locked_until = now() + interval '30 seconds',
+		    last_error_at = now() - interval '2 seconds'
+		WHERE outbox_id = (
+		  SELECT d.outbox_id
+		  FROM outbox_delivery d
+		  JOIN outbox_events e ON e.id = d.outbox_id
+		  WHERE e.auction_id = $1
+		  ORDER BY d.outbox_id
+		  LIMIT 1
+		)
+	`, auctionID); err != nil {
+		t.Fatalf("seed ack pending outbox: %v", err)
 	}
 	if _, err := db.Exec(ctx, `
 		INSERT INTO snapshot_rebuild_events (auction_id, request_id, source, status, stale, duration_ms)

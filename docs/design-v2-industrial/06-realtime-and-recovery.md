@@ -58,6 +58,17 @@ The app-owned relay borrows Debezium-style event and offset discipline without a
 - `outbox_relay_watermarks` exposes per-shard progress and lag using project offsets, not WAL LSN.
 - publish/failure refreshes only the affected shard watermark.
 
+## P3 NATS/JetStream-Borrowed Delivery Semantics
+
+The app-owned relay also borrows NATS/JetStream consumer vocabulary without adding a NATS runtime:
+
+- `outbox_id` is the delivery message id. Future broker adapters may map it to a broker message-id header, but broker sequence must never replace `auction_id + seq`.
+- `outbox_delivery.status` maps to consumer delivery state in diagnostics: `PENDING/FAILED -> READY or NAK_RETRY_WAIT`, `PUBLISHING -> ACK_PENDING`, `PUBLISHED -> ACKED`, `DEAD -> TERM`.
+- `attempts`, `max_attempts`, `redelivery_count`, `next_attempt_at`, `locked_until`, `last_error_class`, and `last_error_retriable` are exposed in monitor APIs so retries and poison handling can be audited.
+- `outbox_relay_watermarks` plus monitor lateral counts expose ack-pending, retrying, redelivered, dead, oldest ready, and oldest retry age by shard.
+- Non-retriable payload failures are treated like a JetStream `+TERM`: immediate `DEAD`, anomaly, and `outbox_gap_notice`.
+- WebSocket slow-consumer events include pending-message or pending-byte reason and queue pressure fields.
+
 Failure classes:
 
 | Class | Retriable | Behavior |

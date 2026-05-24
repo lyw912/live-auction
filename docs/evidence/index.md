@@ -31,6 +31,8 @@
 | `docs/reviews/p3-06-debezium-borrowing-review-2026-05-25.md` | AUTHORITATIVE | Hostile Debezium comparison: borrow CDC/outbox design discipline, do not rebuild runtime around Debezium. |
 | `docs/adr/p3-02-debezium-borrowing-decision.md` | AUTHORITATIVE | Decision to keep Debezium/CDC evidence-gated and map borrowed ideas to project-owned outbox/recovery semantics. |
 | `docs/evidence/p3-06-debezium-borrowed-hardening-2026-05-25.md` | AUTHORITATIVE | Debezium-borrowed envelope validation, relay watermarks, snapshot audit, control signals, and error classification implemented with focused tests. |
+| `docs/reviews/p3-07-nats-jetstream-borrowing-review-2026-05-25.md` | AUTHORITATIVE | Hostile NATS/JetStream comparison: borrow delivery-state, ack/redelivery, dedupe, slow-consumer, monitoring, and snapshot/catchup design logic; do not rebuild runtime around a broker without measured internal messaging need. |
+| `docs/evidence/p3-07-nats-jetstream-borrowed-hardening-2026-05-25.md` | AUTHORITATIVE | NATS/JetStream-borrowed delivery diagnostics implemented in app-owned outbox/realtime code with full backend and frontend typecheck verification. |
 | `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan.md` | AUTHORITATIVE | P3/P4 pressure protocol and admission-off policy. |
 | `docs/design-v2-industrial/18-p3-p4-roadmap-reset.md` | AUTHORITATIVE | Current P3/P4 execution order and decision gates. |
 | `docs/p3-decision-log.md` | AUTHORITATIVE | Current decisions, superseded evidence, and go/no-go gates. |

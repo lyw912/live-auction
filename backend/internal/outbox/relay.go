@@ -644,6 +644,26 @@ func (r *Relay) refreshWatermark(ctx context.Context, shardID int) error {
 		    dead_count = EXCLUDED.dead_count,
 		    updated_at = EXCLUDED.updated_at
 	`, shardID)
+	if err == nil {
+		var retrying, ackPending, redelivered float64
+		var oldestRetryAge float64
+		scanErr := r.db.QueryRow(ctx, `
+			SELECT count(*) FILTER (WHERE status = 'FAILED')::double precision,
+			       count(*) FILTER (WHERE status = 'PUBLISHING')::double precision,
+			       count(*) FILTER (WHERE attempts > 1)::double precision,
+			       COALESCE(max(extract(epoch from (now() - last_error_at)))
+			         FILTER (WHERE status = 'FAILED'), 0)::double precision
+			FROM outbox_delivery
+			WHERE shard_id = $1
+		`, shardID).Scan(&retrying, &ackPending, &redelivered, &oldestRetryAge)
+		if scanErr == nil {
+			labels := map[string]string{"shard": strconv.Itoa(shardID)}
+			observability.Set("auction_outbox_retrying", retrying, labels)
+			observability.Set("auction_outbox_ack_pending", ackPending, labels)
+			observability.Set("auction_outbox_redelivered", redelivered, labels)
+			observability.Set("auction_outbox_oldest_retry_age_seconds", oldestRetryAge, labels)
+		}
+	}
 	return err
 }
 

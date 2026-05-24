@@ -62,6 +62,7 @@ func TestRelayPublishesPendingOutboxToRedisInOrder(t *testing.T) {
 	var lastSeq int64
 	for _, value := range values {
 		var envelope struct {
+			OutboxID      int64           `json:"outbox_id"`
 			Seq           int64           `json:"seq"`
 			StreamEpoch   string          `json:"stream_epoch"`
 			SchemaVersion int             `json:"event_schema_version"`
@@ -71,6 +72,9 @@ func TestRelayPublishesPendingOutboxToRedisInOrder(t *testing.T) {
 		}
 		if err := json.Unmarshal([]byte(value), &envelope); err != nil {
 			t.Fatalf("unmarshal envelope: %v", err)
+		}
+		if envelope.OutboxID <= 0 {
+			t.Fatalf("missing delivery message id/outbox id in envelope: %#v", envelope)
 		}
 		if envelope.SchemaVersion != EventSchemaVersion {
 			t.Fatalf("schema version = %d, want %d", envelope.SchemaVersion, EventSchemaVersion)
@@ -370,6 +374,84 @@ func TestRelayInvalidEnvelopeDeadLettersWithoutRetry(t *testing.T) {
 	}
 	if gapNotices != 1 {
 		t.Fatalf("gap notices = %d, want 1", gapNotices)
+	}
+	var anomalyPayload struct {
+		ErrorClass  string `json:"error_class"`
+		Retriable   bool   `json:"retriable"`
+		Attempts    int    `json:"attempts"`
+		MaxAttempts int    `json:"max_attempts"`
+	}
+	var anomalyPayloadJSON []byte
+	if err := db.QueryRow(ctx, `
+		SELECT payload_json
+		FROM system_anomaly_events
+		WHERE auction_id = $1 AND type = 'OUTBOX_DEAD_LETTER'
+		ORDER BY id DESC
+		LIMIT 1
+	`, auctionRow.ID).Scan(&anomalyPayloadJSON); err != nil {
+		t.Fatalf("select dead-letter anomaly payload: %v", err)
+	}
+	if err := json.Unmarshal(anomalyPayloadJSON, &anomalyPayload); err != nil {
+		t.Fatalf("unmarshal dead-letter anomaly payload: %v", err)
+	}
+	if anomalyPayload.ErrorClass != ErrorClassPayloadInvalid || anomalyPayload.Retriable || anomalyPayload.Attempts != 1 {
+		t.Fatalf("invalid envelope did not produce TERM-style dead letter payload: %#v", anomalyPayload)
+	}
+}
+
+func TestRelayWatermarkTracksAckPendingAndRedelivery(t *testing.T) {
+	db := openDB(t)
+	ctx := context.Background()
+	repo := auction.NewRepository(db)
+	auctionRow := createActiveAuctionForRelay(t, repo, db)
+	quiesceOutboxExcept(t, db, auctionRow.ID)
+	bid := auction.BidInput{ClientBidID: "watermark-redelivery-bid-1", AmountCents: 15_000}
+	if _, err := repo.PlaceBid(ctx, auctionRow.ID, "user_1", bid.ClientBidID, bid, "tr_watermark_redelivery"); err != nil {
+		t.Fatalf("PlaceBid: %v", err)
+	}
+	prioritizeOutboxForAuction(t, db, auctionRow.ID)
+	var outboxID int64
+	var shardID int
+	if err := db.QueryRow(ctx, `
+		SELECT d.outbox_id, d.shard_id
+		FROM outbox_delivery d
+		JOIN outbox_events e ON e.id = d.outbox_id
+		WHERE e.auction_id = $1
+		ORDER BY d.outbox_id
+		LIMIT 1
+	`, auctionRow.ID).Scan(&outboxID, &shardID); err != nil {
+		t.Fatalf("select outbox shard: %v", err)
+	}
+	if _, err := db.Exec(ctx, `
+		UPDATE outbox_delivery
+		SET status = 'PUBLISHING',
+		    attempts = 3,
+		    locked_by = 'ack-worker',
+		    locked_until = now() + interval '30 seconds',
+		    last_error = 'previous timeout',
+		    last_error_class = $2,
+		    last_error_retriable = true,
+		    last_error_at = now() - interval '5 seconds'
+		WHERE outbox_id = $1
+	`, outboxID, ErrorClassPublishTimeout); err != nil {
+		t.Fatalf("mark ack pending: %v", err)
+	}
+	relay := NewRelay(db, openRedis(t), "watermark-worker")
+	if err := relay.refreshWatermark(ctx, shardID); err != nil {
+		t.Fatalf("refreshWatermark: %v", err)
+	}
+	var ackPending float64
+	var redelivered float64
+	if err := db.QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE status = 'PUBLISHING')::double precision,
+		       count(*) FILTER (WHERE attempts > 1)::double precision
+		FROM outbox_delivery
+		WHERE shard_id = $1
+	`, shardID).Scan(&ackPending, &redelivered); err != nil {
+		t.Fatalf("select ack pending/redelivered: %v", err)
+	}
+	if ackPending < 1 || redelivered < 1 {
+		t.Fatalf("ackPending=%v redelivered=%v, want both >= 1", ackPending, redelivered)
 	}
 }
 

@@ -22,6 +22,8 @@ type PublishStats struct {
 	PayloadBytes  int
 	MaxQueueDepth int
 	MaxQueueBytes int64
+	SlowMaxDepth  int
+	SlowMaxBytes  int64
 }
 
 type Hub struct {
@@ -36,12 +38,21 @@ type subscription struct {
 	ch          chan queuedMessage
 	closed      bool
 	queuedBytes int64
-	onSlow      func()
+	onSlow      func(SlowConsumerInfo)
 }
 
 type queuedMessage struct {
 	data []byte
 	size int64
+}
+
+type SlowConsumerInfo struct {
+	Reason             string `json:"reason"`
+	QueueDepth         int    `json:"queue_depth"`
+	QueueBytes         int64  `json:"queue_bytes"`
+	QueueMessagesLimit int    `json:"queue_messages_limit"`
+	QueueBytesLimit    int64  `json:"queue_bytes_limit"`
+	PayloadBytes       int    `json:"payload_bytes"`
 }
 
 func NewHub(queueSize int) *Hub {
@@ -62,7 +73,7 @@ func NewHubWithOptions(options HubOptions) *Hub {
 	}
 }
 
-func (h *Hub) Subscribe(auctionID string, onSlow func()) *subscription {
+func (h *Hub) Subscribe(auctionID string, onSlow func(SlowConsumerInfo)) *subscription {
 	sub := &subscription{
 		ch:     make(chan queuedMessage, h.queueMessages),
 		onSlow: onSlow,
@@ -100,7 +111,7 @@ func (h *Hub) Publish(_ context.Context, auctionID string, payload []byte) Publi
 	}
 	for _, sub := range subs {
 		message := append([]byte(nil), payload...)
-		depth, bytes, ok := sub.trySend(message, h.queueBytes)
+		depth, bytes, slowInfo, ok := sub.trySend(message, h.queueBytes)
 		if depth > stats.MaxQueueDepth {
 			stats.MaxQueueDepth = depth
 		}
@@ -111,7 +122,13 @@ func (h *Hub) Publish(_ context.Context, auctionID string, payload []byte) Publi
 			stats.Enqueued++
 		} else {
 			stats.SlowClosed++
-			sub.closeSlow()
+			if slowInfo.QueueDepth > stats.SlowMaxDepth {
+				stats.SlowMaxDepth = slowInfo.QueueDepth
+			}
+			if slowInfo.QueueBytes > stats.SlowMaxBytes {
+				stats.SlowMaxBytes = slowInfo.QueueBytes
+			}
+			sub.closeSlow(slowInfo)
 		}
 	}
 	observability.Observe("auction_ws_publish_payload_bytes", float64(len(payload)), nil, []float64{128, 512, 1024, 4096, 16384, 65536})
@@ -138,26 +155,40 @@ func (s *subscription) release(message queuedMessage) {
 	s.mu.Unlock()
 }
 
-func (s *subscription) trySend(message []byte, maxBytes int64) (int, int64, bool) {
+func (s *subscription) trySend(message []byte, maxBytes int64) (int, int64, SlowConsumerInfo, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return len(s.ch), s.queuedBytes, true
+		return len(s.ch), s.queuedBytes, SlowConsumerInfo{}, true
 	}
 	size := int64(len(message))
 	if maxBytes > 0 && s.queuedBytes+size > maxBytes {
-		return len(s.ch), s.queuedBytes, false
+		return len(s.ch), s.queuedBytes, SlowConsumerInfo{
+			Reason:             "pending_bytes",
+			QueueDepth:         len(s.ch),
+			QueueBytes:         s.queuedBytes,
+			QueueMessagesLimit: cap(s.ch),
+			QueueBytesLimit:    maxBytes,
+			PayloadBytes:       len(message),
+		}, false
 	}
 	select {
 	case s.ch <- queuedMessage{data: message, size: size}:
 		s.queuedBytes += size
-		return len(s.ch), s.queuedBytes, true
+		return len(s.ch), s.queuedBytes, SlowConsumerInfo{}, true
 	default:
-		return len(s.ch), s.queuedBytes, false
+		return len(s.ch), s.queuedBytes, SlowConsumerInfo{
+			Reason:             "pending_messages",
+			QueueDepth:         len(s.ch),
+			QueueBytes:         s.queuedBytes,
+			QueueMessagesLimit: cap(s.ch),
+			QueueBytesLimit:    maxBytes,
+			PayloadBytes:       len(message),
+		}, false
 	}
 }
 
-func (s *subscription) closeSlow() {
+func (s *subscription) closeSlow(info SlowConsumerInfo) {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -168,7 +199,7 @@ func (s *subscription) closeSlow() {
 	onSlow := s.onSlow
 	s.mu.Unlock()
 	if onSlow != nil {
-		onSlow()
+		onSlow(info)
 	}
 }
 

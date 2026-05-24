@@ -229,7 +229,7 @@ func TestServeWSAdmissionRejectsWhenConnectSaturated(t *testing.T) {
 func TestHubClosesSlowConsumerOnBoundedQueueOverflow(t *testing.T) {
 	hub := NewHub(1)
 	closed := make(chan struct{})
-	sub := hub.Subscribe("auction_1", func() { close(closed) })
+	sub := hub.Subscribe("auction_1", func(SlowConsumerInfo) { close(closed) })
 	defer hub.Unsubscribe("auction_1", sub)
 
 	hub.Publish(context.Background(), "auction_1", []byte(`{"seq":1}`))
@@ -245,7 +245,7 @@ func TestHubClosesSlowConsumerOnBoundedQueueOverflow(t *testing.T) {
 func TestHubClosesSlowConsumerOnByteBudgetOverflow(t *testing.T) {
 	hub := NewHubWithOptions(HubOptions{QueueMessages: 10, QueueBytes: 8})
 	closed := make(chan struct{})
-	sub := hub.Subscribe("auction_1", func() { close(closed) })
+	sub := hub.Subscribe("auction_1", func(SlowConsumerInfo) { close(closed) })
 	defer hub.Unsubscribe("auction_1", sub)
 
 	stats := hub.Publish(context.Background(), "auction_1", []byte(`12345`))

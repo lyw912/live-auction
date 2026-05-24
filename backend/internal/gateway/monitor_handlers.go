@@ -43,6 +43,7 @@ type monitorAnomalyRow struct {
 
 type monitorOutboxRow struct {
 	OutboxID           int64      `json:"outbox_id"`
+	DeliveryMessageID  string     `json:"delivery_message_id"`
 	AggregateType      string     `json:"aggregate_type"`
 	AggregateID        string     `json:"aggregate_id"`
 	AuctionID          *string    `json:"auction_id,omitempty"`
@@ -52,12 +53,17 @@ type monitorOutboxRow struct {
 	EventKey           string     `json:"event_key"`
 	PayloadHash        string     `json:"payload_sha256"`
 	Status             string     `json:"status"`
+	DeliveryState      string     `json:"delivery_state"`
 	Attempts           int        `json:"attempts"`
+	MaxAttempts        int        `json:"max_attempts"`
+	RedeliveryCount    int        `json:"redelivery_count"`
 	ShardID            *int       `json:"shard_id,omitempty"`
 	LeaseOwner         *string    `json:"lease_owner,omitempty"`
 	LeaseUntil         *time.Time `json:"lease_until,omitempty"`
 	NextAttemptAt      time.Time  `json:"next_attempt_at"`
+	AckDeadlineAt      *time.Time `json:"ack_deadline_at,omitempty"`
 	LagMs              int64      `json:"lag_ms"`
+	RetryAgeMs         int64      `json:"retry_age_ms"`
 	LastError          *string    `json:"last_error,omitempty"`
 	LastErrorClass     *string    `json:"last_error_class,omitempty"`
 	LastErrorRetriable *bool      `json:"last_error_retriable,omitempty"`
@@ -76,6 +82,11 @@ type monitorOutboxWatermarkRow struct {
 	ReadyCount             int64      `json:"ready_count"`
 	PublishingCount        int64      `json:"publishing_count"`
 	DeadCount              int64      `json:"dead_count"`
+	RetryingCount          int64      `json:"retrying_count"`
+	AckPendingCount        int64      `json:"ack_pending_count"`
+	RedeliveredCount       int64      `json:"redelivered_count"`
+	OldestRetryAgeMS       int64      `json:"oldest_retry_age_ms"`
+	MaxAttempts            int        `json:"max_attempts"`
 	UpdatedAt              time.Time  `json:"updated_at"`
 }
 
@@ -111,6 +122,10 @@ type monitorRecoveryRow struct {
 	SnapshotFromDB          int64  `json:"snapshot_from_db"`
 	SnapshotStale           int64  `json:"snapshot_stale"`
 	SlowConsumerDisconnects int64  `json:"slow_consumer_disconnects"`
+	SlowPendingBytes        int64  `json:"slow_pending_bytes"`
+	SlowPendingMessages     int64  `json:"slow_pending_messages"`
+	MaxQueueBytes           int64  `json:"max_queue_bytes"`
+	MaxQueueDepth           int64  `json:"max_queue_depth"`
 }
 
 type monitorSnapshotRow struct {
@@ -238,10 +253,22 @@ func anomalyFilterQuery(r *http.Request) (string, []any) {
 
 func (h MonitorHandler) Outbox(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.Deps.Postgres.Query(r.Context(), `
-		SELECT e.id, e.aggregate_type, e.aggregate_id, e.auction_id, e.seq,
+		SELECT e.id,
+		       'outbox:' || e.id::text AS delivery_message_id,
+		       e.aggregate_type, e.aggregate_id, e.auction_id, e.seq,
 		       e.event_type, e.event_schema_version, e.event_key, e.payload_sha256,
-		       d.status, d.attempts, d.shard_id, l.owner_id, l.lease_until, d.next_attempt_at,
+		       d.status,
+		       CASE
+		         WHEN d.status = 'PUBLISHED' THEN 'ACKED'
+		         WHEN d.status = 'PUBLISHING' THEN 'ACK_PENDING'
+		         WHEN d.status = 'DEAD' THEN 'TERM'
+		         WHEN d.status = 'FAILED' THEN 'NAK_RETRY_WAIT'
+		         ELSE 'READY'
+		       END AS delivery_state,
+		       d.attempts, d.max_attempts, GREATEST(d.attempts - 1, 0) AS redelivery_count,
+		       d.shard_id, l.owner_id, l.lease_until, d.next_attempt_at, d.locked_until AS ack_deadline_at,
 		       (extract(epoch from (now() - e.created_at)) * 1000)::bigint AS lag_ms,
+		       COALESCE((extract(epoch from (now() - d.last_error_at)) * 1000)::bigint, 0) AS retry_age_ms,
 		       d.last_error, d.last_error_class, d.last_error_retriable, e.created_at, d.published_at
 		FROM outbox_events e
 		JOIN outbox_delivery d ON d.outbox_id = e.id
@@ -259,10 +286,11 @@ func (h MonitorHandler) Outbox(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var row monitorOutboxRow
 		if err := rows.Scan(
-			&row.OutboxID, &row.AggregateType, &row.AggregateID, &row.AuctionID, &row.Seq,
+			&row.OutboxID, &row.DeliveryMessageID, &row.AggregateType, &row.AggregateID, &row.AuctionID, &row.Seq,
 			&row.EventType, &row.SchemaVersion, &row.EventKey, &row.PayloadHash,
-			&row.Status, &row.Attempts, &row.ShardID, &row.LeaseOwner, &row.LeaseUntil,
-			&row.NextAttemptAt, &row.LagMs, &row.LastError, &row.LastErrorClass,
+			&row.Status, &row.DeliveryState, &row.Attempts, &row.MaxAttempts, &row.RedeliveryCount,
+			&row.ShardID, &row.LeaseOwner, &row.LeaseUntil,
+			&row.NextAttemptAt, &row.AckDeadlineAt, &row.LagMs, &row.RetryAgeMs, &row.LastError, &row.LastErrorClass,
 			&row.LastErrorRetriable, &row.CreatedAt, &row.PublishedAt,
 		); err != nil {
 			writeError(w, r, internalMonitorError(err))
@@ -279,11 +307,27 @@ func (h MonitorHandler) Outbox(w http.ResponseWriter, r *http.Request) {
 
 func (h MonitorHandler) OutboxWatermarks(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.Deps.Postgres.Query(r.Context(), `
-		SELECT shard_id, owner_id, last_published_outbox_id, last_published_auction_id,
-		       last_published_seq, last_published_at, oldest_ready_age_ms,
-		       ready_count, publishing_count, dead_count, updated_at
-		FROM outbox_relay_watermarks
-		ORDER BY shard_id
+		SELECT w.shard_id, w.owner_id, w.last_published_outbox_id, w.last_published_auction_id,
+		       w.last_published_seq, w.last_published_at, w.oldest_ready_age_ms,
+		       w.ready_count, w.publishing_count, w.dead_count,
+		       COALESCE(s.retrying_count, 0) AS retrying_count,
+		       COALESCE(s.ack_pending_count, 0) AS ack_pending_count,
+		       COALESCE(s.redelivered_count, 0) AS redelivered_count,
+		       COALESCE(s.oldest_retry_age_ms, 0) AS oldest_retry_age_ms,
+		       COALESCE(s.max_attempts, 0) AS max_attempts,
+		       w.updated_at
+		FROM outbox_relay_watermarks w
+		LEFT JOIN LATERAL (
+		  SELECT count(*) FILTER (WHERE d.status = 'FAILED') AS retrying_count,
+		         count(*) FILTER (WHERE d.status = 'PUBLISHING') AS ack_pending_count,
+		         count(*) FILTER (WHERE d.attempts > 1) AS redelivered_count,
+		         COALESCE(max((extract(epoch from (now() - d.last_error_at)) * 1000)::bigint)
+		           FILTER (WHERE d.status = 'FAILED'), 0) AS oldest_retry_age_ms,
+		         COALESCE(max(d.max_attempts), 0) AS max_attempts
+		  FROM outbox_delivery d
+		  WHERE d.shard_id = w.shard_id
+		) s ON true
+		ORDER BY w.shard_id
 		LIMIT $1
 	`, monitorLimit(r))
 	if err != nil {
@@ -294,7 +338,7 @@ func (h MonitorHandler) OutboxWatermarks(w http.ResponseWriter, r *http.Request)
 	result := []monitorOutboxWatermarkRow{}
 	for rows.Next() {
 		var row monitorOutboxWatermarkRow
-		if err := rows.Scan(&row.ShardID, &row.OwnerID, &row.LastPublishedOutboxID, &row.LastPublishedAuctionID, &row.LastPublishedSeq, &row.LastPublishedAt, &row.OldestReadyAgeMS, &row.ReadyCount, &row.PublishingCount, &row.DeadCount, &row.UpdatedAt); err != nil {
+		if err := rows.Scan(&row.ShardID, &row.OwnerID, &row.LastPublishedOutboxID, &row.LastPublishedAuctionID, &row.LastPublishedSeq, &row.LastPublishedAt, &row.OldestReadyAgeMS, &row.ReadyCount, &row.PublishingCount, &row.DeadCount, &row.RetryingCount, &row.AckPendingCount, &row.RedeliveredCount, &row.OldestRetryAgeMS, &row.MaxAttempts, &row.UpdatedAt); err != nil {
 			writeError(w, r, internalMonitorError(err))
 			return
 		}
@@ -377,7 +421,11 @@ func (h MonitorHandler) Recovery(w http.ResponseWriter, r *http.Request) {
 		       count(*) FILTER (WHERE event_type = 'ws_recovered' AND payload_json->>'source' IN ('snapshot','db','redis')) AS snapshot_recovered,
 		       count(*) FILTER (WHERE event_type = 'ws_recovered' AND payload_json->>'source' = 'db') AS snapshot_from_db,
 		       count(*) FILTER (WHERE event_type = 'ws_recovered' AND payload_json->>'stale' = 'true') AS snapshot_stale,
-		       count(*) FILTER (WHERE event_type = 'ws_slow_consumer_closed') AS slow_consumer_disconnects
+		       count(*) FILTER (WHERE event_type = 'ws_slow_consumer_closed') AS slow_consumer_disconnects,
+		       count(*) FILTER (WHERE event_type = 'ws_slow_consumer_closed' AND payload_json->>'reason' = 'pending_bytes') AS slow_pending_bytes,
+		       count(*) FILTER (WHERE event_type = 'ws_slow_consumer_closed' AND payload_json->>'reason' = 'pending_messages') AS slow_pending_messages,
+		       COALESCE(max((payload_json->>'queue_bytes')::bigint) FILTER (WHERE event_type = 'ws_slow_consumer_closed' AND payload_json ? 'queue_bytes'), 0) AS max_queue_bytes,
+		       COALESCE(max((payload_json->>'queue_depth')::bigint) FILTER (WHERE event_type = 'ws_slow_consumer_closed' AND payload_json ? 'queue_depth'), 0) AS max_queue_depth
 		FROM user_activity_events
 		WHERE created_at >= now() - interval '10 minutes'
 		  AND event_type IN ('ws_reconnect','ws_recovered','ws_slow_consumer_closed')
@@ -394,7 +442,7 @@ func (h MonitorHandler) Recovery(w http.ResponseWriter, r *http.Request) {
 	result := []monitorRecoveryRow{}
 	for rows.Next() {
 		var row monitorRecoveryRow
-		if err := rows.Scan(&row.RoomID, &row.ReconnectCountRecent, &row.HistoryRecovered, &row.SnapshotRecovered, &row.SnapshotFromDB, &row.SnapshotStale, &row.SlowConsumerDisconnects); err != nil {
+		if err := rows.Scan(&row.RoomID, &row.ReconnectCountRecent, &row.HistoryRecovered, &row.SnapshotRecovered, &row.SnapshotFromDB, &row.SnapshotStale, &row.SlowConsumerDisconnects, &row.SlowPendingBytes, &row.SlowPendingMessages, &row.MaxQueueBytes, &row.MaxQueueDepth); err != nil {
 			writeError(w, r, internalMonitorError(err))
 			return
 		}

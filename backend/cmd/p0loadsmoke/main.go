@@ -251,7 +251,7 @@ func runFanoutSmoke() fanoutResult {
 
 	slowHub := realtime.NewHub(1)
 	slowClosed := make(chan struct{})
-	slow := slowHub.Subscribe(auctionID, func() { close(slowClosed) })
+	slow := slowHub.Subscribe(auctionID, func(realtime.SlowConsumerInfo) { close(slowClosed) })
 	slowHub.Publish(context.Background(), auctionID, []byte(`{"seq":1}`))
 	slowHub.Publish(context.Background(), auctionID, []byte(`{"seq":2}`))
 	closed := false

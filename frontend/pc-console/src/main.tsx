@@ -210,12 +210,15 @@ function App() {
       const roomPayload = await fetch('/api/rooms').then((r) => readJSON<{ items?: Room[] }>(r));
       const roomRows = roomPayload.items ?? [];
       const nextRoomID = roomRows.find((room) => room.id === roomID)?.id ?? roomRows[0]?.id ?? roomID;
-      const [auctionRows, orderRows, auctionsDiag, anomalies, outbox, scheduler, rejects, recovery] = await Promise.all([
+      const [auctionRows, orderRows, auctionsDiag, anomalies, outbox, outboxWatermarks, snapshots, signals, scheduler, rejects, recovery] = await Promise.all([
         fetch(`/api/auctions?room_id=${nextRoomID}`).then((r) => readJSON<Auction[]>(r)),
         fetch('/api/orders').then((r) => readJSON<Order[]>(r)),
         fetch('/api/monitor/auctions').then((r) => readJSON<MonitorPayload>(r)),
         fetch(`/api/monitor/anomalies?${monitorQuery(nextRoomID, monitorFilter)}`).then((r) => readJSON<MonitorPayload>(r)),
         fetch('/api/monitor/outbox').then((r) => readJSON<MonitorPayload>(r)),
+        fetch('/api/monitor/outbox/watermarks').then((r) => readJSON<MonitorPayload>(r)),
+        fetch('/api/monitor/snapshots').then((r) => readJSON<MonitorPayload>(r)),
+        fetch('/api/monitor/signals').then((r) => readJSON<MonitorPayload>(r)),
         fetch('/api/monitor/scheduler').then((r) => readJSON<MonitorPayload>(r)),
         fetch('/api/monitor/rejects').then((r) => readJSON<MonitorPayload>(r)),
         fetch('/api/monitor/recovery').then((r) => readJSON<MonitorPayload>(r))
@@ -224,7 +227,7 @@ function App() {
       if (nextRoomID !== roomID) setRoomID(nextRoomID);
       setAuctions(auctionRows);
       setOrders(orderRows);
-      setMonitor({ auctions: auctionsDiag, anomalies, outbox, scheduler, rejects, recovery });
+      setMonitor({ auctions: auctionsDiag, anomalies, outbox, outboxWatermarks, snapshots, signals, scheduler, rejects, recovery });
       const nextSelected = auctionRows.find((row) => row.id === selectedAuctionID)?.id ?? auctionRows.find((row) => row.status === 'ACTIVE')?.id ?? auctionRows[0]?.id ?? '';
       setSelectedAuctionID(nextSelected);
       setItems(auctionRows.map((auction) => auction.item).filter(Boolean));
@@ -569,6 +572,9 @@ function App() {
             <Tabs.TabPane key="recovery" title="Recovery"><MonitorTable payload={monitor.recovery} empty="暂无恢复数据" sourceKey="room_id" /></Tabs.TabPane>
             <Tabs.TabPane key="anomalies" title="Anomalies"><MonitorTable payload={monitor.anomalies} empty="暂无异常" sourceKey="id" icon={<AlertTriangle size={16} />} /></Tabs.TabPane>
             <Tabs.TabPane key="outbox" title="Outbox"><MonitorTable payload={monitor.outbox} empty="暂无 outbox 数据" sourceKey="outbox_id" /></Tabs.TabPane>
+            <Tabs.TabPane key="watermarks" title="Watermarks"><MonitorTable payload={monitor.outboxWatermarks} empty="暂无 outbox watermark" sourceKey="shard_id" /></Tabs.TabPane>
+            <Tabs.TabPane key="snapshots" title="Snapshots"><MonitorTable payload={monitor.snapshots} empty="暂无 snapshot 记录" sourceKey="request_id" /></Tabs.TabPane>
+            <Tabs.TabPane key="signals" title="Signals"><MonitorTable payload={monitor.signals} empty="暂无 control signal" sourceKey="id" /></Tabs.TabPane>
             <Tabs.TabPane key="scheduler" title="Scheduler"><MonitorTable payload={monitor.scheduler} empty="暂无 scheduler 数据" sourceKey="job_id" /></Tabs.TabPane>
           </Tabs>
         </section>
@@ -601,7 +607,26 @@ function NumberField({ label, name, value, min, max, onChange }: { label: string
 function MonitorTable({ payload, empty, icon, sourceKey }: { payload?: MonitorPayload; empty: string; icon?: React.ReactNode; sourceKey: string }) {
   const rows = payload?.items ?? [];
   if (rows.length === 0) return <div className="empty-state">{icon}{empty}</div>;
-  const keys = Object.keys(rows[0]).slice(0, 7);
+  const priorityKeys = [
+    sourceKey,
+    'delivery_state',
+    'delivery_message_id',
+    'event_key',
+    'seq',
+    'attempts',
+    'max_attempts',
+    'redelivery_count',
+    'ack_pending_count',
+    'oldest_retry_age_ms',
+    'slow_pending_bytes',
+    'max_queue_bytes',
+    'status',
+    'error_class'
+  ];
+  const keys = Array.from(new Set([
+    ...priorityKeys.filter((key) => key in rows[0]),
+    ...Object.keys(rows[0])
+  ])).slice(0, 10);
   return (
     <Table
       rowKey={(record) => String(record.id ?? record.auction_id ?? record.outbox_id ?? record.job_id ?? record.room_id)}
