@@ -13,14 +13,22 @@ This skill is adversarial and independent. Treat existing green tests, prior rev
 
 ## Required Context
 
-Read only what is needed, starting with:
+Read compact evidence first. Do not bulk-read raw artifact directories.
+
+Default context order:
 
 1. `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan.md`
-2. `docs/perf/windows-local-strategy.md`
-3. `docs/design-v2-industrial/09-performance-and-benchmark.md`
-4. `docs/p3-progress.md`
-5. relevant scripts under `tests/load/`
-6. relevant backend metrics/DB/realtime/outbox code only after a bottleneck points there
+2. `tests/load/analyze-p3-artifacts.mjs` output or existing `analysis-compact.json` / `analysis-compact.md`
+3. the single relevant workload script under `tests/load/`
+4. only the subsystem code or raw artifact identified by the compact report
+
+Read broader docs only when needed:
+
+- `docs/perf/windows-local-strategy.md`
+- `docs/design-v2-industrial/09-performance-and-benchmark.md`
+- `docs/p3-progress.md`
+
+Never open every file in `docs/perf/raw/**`. Use compact reports to pick the one workload and one artifact type to inspect.
 
 If current methods, tool behavior, or profiling techniques matter, browse the web and prefer official docs:
 
@@ -42,6 +50,9 @@ If current methods, tool behavior, or profiling techniques matter, browse the we
 - Separate SUT bottlenecks from load-generator, laptop, Docker, network, or script limits.
 - Do not publish or imply final capacity from Windows. Local results can prove bottleneck direction, regressions, and relative improvements.
 - Failed tests are valuable if they expose a real limit and preserve enough evidence to reproduce.
+- Default to `P3_ARTIFACT_MODE=minimal`. Use `P3_ARTIFACT_MODE=full` only for focused drilldown after compact evidence identifies a specific candidate bottleneck or harness gap.
+- For routine attribution, run `pnpm exec node tests/load/analyze-p3-artifacts.mjs` and read its compact index before reading raw k6 JSON, Prometheus snapshots, DB snapshots, or logs.
+- Do not read unrelated historical raw runs. For before/after comparison, compare matching workload names and scale settings from compact reports first, then open only the two raw artifacts needed to verify the suspected delta.
 - Always distinguish admission-on tests from downstream-pressure tests:
   - Admission-on tests keep product rate/admission limits enabled and are only allowed to prove ACL/auth correctness, stable business `429`, abuse protection, and that protected downstream systems are not overloaded.
   - Downstream-pressure tests must explicitly raise or otherwise document admission ceilings before claiming PG hot-row, outbox, fanout, reconnect, Redis, or runtime bottlenecks.
@@ -57,17 +68,20 @@ If current methods, tool behavior, or profiling techniques matter, browse the we
 2. Inspect the current harness.
    Read existing k6 scripts and metrics. Identify whether the current script can actually stress the target. If not, modify it or create a focused temporary script.
 
-3. Establish baseline.
+3. Prove pressure reaches the target.
+   Confirm `P3_PROFILE=downstream-pressure` and `ADMISSION_ENABLED=false` for downstream tests. Confirm no admission counter deltas. Confirm k6 did not hit dropped-iteration, VU ceiling, socket, timeout, or Windows/Docker limits before the backend metrics moved.
+
+4. Establish baseline.
    Run a small known-good pass only to verify seed, auth, membership, backend, and metrics. Do not call this a performance result.
 
-4. Escalate pressure.
+5. Escalate pressure.
    Increase VUs, arrival rate, duration, connection count, event rate, room count, payload shape, or failure condition until one appears:
    - `BOTTLENECK_FOUND`
    - `HARNESS_GAP`
    - `ENV_LIMIT`
    - `NO_REGRESSION_WITH_CEILING`
 
-5. Attribute.
+6. Attribute.
    Capture the narrowest evidence that explains the result:
    - admission: `RATE_LIMITED`, `BID_AUCTION_TOO_HOT`, HTTP `429`, retry-after, accepted/rejected distribution, admission in-flight/limit settings.
    - PG: lock wait, tx duration, pool wait, `pg_locks`, `pg_stat_activity`, slow/explain plan.
@@ -78,10 +92,10 @@ If current methods, tool behavior, or profiling techniques matter, browse the we
    - runtime: CPU, heap, GC, goroutine leaks, file descriptors.
    - environment: load generator CPU, port exhaustion, Docker resource limit, Windows socket/FD behavior.
 
-6. Quantify.
+7. Quantify.
    Use before/after or round-to-round comparisons where possible. Report percentages, deltas, confidence caveats, and whether the change is meaningful under the same local setup.
 
-7. Decide next strike.
+8. Decide next strike.
    If evidence is inconclusive, run another round with a sharper hypothesis. If a design change is proposed, state the minimum change and the exact follow-up test that would falsify it.
 
 ## Script Policy

@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = join(fileURLToPath(new URL('../..', import.meta.url)));
 const loadDir = join(root, 'tests/load');
+const skillDir = join(root, '.codex/skills/live-auction-v2-stress-attacker');
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -108,5 +109,12 @@ const p3AnalyzeText = readFileSync(join(loadDir, 'analyze-p3-artifacts.mjs'), 'u
 assert(p3AnalyzeText.includes('analysis-compact.json'), 'P3 artifact analyzer must read compact reports first');
 assert(p3AnalyzeText.includes('p3-artifact-index.json'), 'P3 artifact analyzer must produce an aggregate compact index');
 assert(p3AnalyzeText.includes('ENV_LIMIT'), 'P3 artifact analyzer must preserve environment-limit verdict hints');
+assert(p3AnalyzeText.includes('next_artifacts'), 'P3 artifact analyzer must recommend the smallest next raw artifacts to inspect');
+assert(p3AnalyzeText.includes('needs_full_drilldown'), 'P3 artifact analyzer must say when full artifacts may be needed');
+
+const stressSkillText = readFileSync(join(skillDir, 'SKILL.md'), 'utf8');
+assert(stressSkillText.includes('Read compact evidence first'), 'stress attacker skill must require compact-first context loading');
+assert(stressSkillText.includes('Never open every file in `docs/perf/raw/**`'), 'stress attacker skill must forbid bulk raw artifact reading');
+assert(stressSkillText.includes('Default to `P3_ARTIFACT_MODE=minimal`'), 'stress attacker skill must default to minimal artifact mode');
 
 console.log('k6 suite config ok');

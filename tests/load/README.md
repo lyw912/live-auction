@@ -61,6 +61,8 @@ pnpm exec node tests/load/analyze-p3-artifacts.mjs
 
 This writes `docs/perf/raw/p3-artifact-index.json` and prints the latest workload verdict hints. Open raw JSON, Prometheus snapshots, DB snapshots, or logs only after the compact report points to a specific workload and candidate bottleneck.
 
+Default `P3_ARTIFACT_MODE=minimal` is enough for normal P3 development: smoke, regression checks, admission pollution checks, environment-limit detection, and first-pass bottleneck attribution. Use `P3_ARTIFACT_MODE=full` only for a single focused drilldown when the compact report says the run reached the backend, admission stayed off, environment signals are clean, and the remaining question needs full logs, during metrics, DB snapshots, or runtime profiles.
+
 When adding a P3 pressure script, design it so the first result can distinguish three cases:
 
 - admission/protection interference: HTTP `429`, `RATE_LIMITED`, `BID_AUCTION_TOO_HOT`, WebSocket ticket/connect admission, or admission counter deltas;

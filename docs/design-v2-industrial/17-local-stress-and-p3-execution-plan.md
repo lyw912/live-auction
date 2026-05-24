@@ -87,6 +87,37 @@ For attribution and trend comparison, read compact outputs first:
 
 Do not load every raw file for routine analysis. Open raw k6 JSON, Prometheus snapshots, DB snapshots, or logs only when the compact report points to a specific workload and candidate bottleneck.
 
+## Stress Attacker Execution Protocol
+
+The stress-attacker workflow is a protocol, not an instruction to read all evidence.
+
+1. Target one subsystem.
+   Pick exactly one primary target for the round: PG hot row, outbox relay/table, WebSocket fanout, slow consumers, reconnect/snapshot, Redis, Go runtime, admission/protection, or environment.
+
+2. Prove the harness can reach that target.
+   Use real backend paths, seeded users, real room membership, real PostgreSQL, real Redis, and real WebSocket where relevant. If the current script cannot drive the target, write or adjust a focused script before drawing conclusions.
+
+3. Keep downstream pressure free of admission.
+   For PG/outbox/WS/reconnect/Redis/runtime pressure, use `P3_PROFILE=downstream-pressure` and `ADMISSION_ENABLED=false`. If admission counters or admission `429` move, the result is admission pollution or harness gap.
+
+4. Rule out environment before architecture conclusions.
+   Check k6 dropped iterations, max-VU exhaustion, connect refusal, socket/ephemeral-port exhaustion, client-side timeouts, Docker resource limits, and Windows-local connection behavior. If these move before backend bottleneck metrics move, report `ENV_LIMIT`.
+
+5. Use a controlled load model.
+   Use open-model arrival rate for sustained HTTP bid/outbox pressure so slow responses do not hide offered load. Use VU/session models for connection-count questions such as watchers, reconnect, and slow consumers.
+
+6. Compare like with like.
+   Before/after comparisons must keep the same workload, profile, admission setting, seed shape, scale, duration, and local environment. If any of these changed, label the comparison as directional only.
+
+7. Read compact evidence first.
+   Run `pnpm exec node tests/load/analyze-p3-artifacts.mjs`, read `analysis-compact.md` / `analysis-compact.json`, and inspect only the raw artifacts named by the compact report for the suspected bottleneck.
+
+8. Escalate instrumentation only when needed.
+   Stay in `P3_ARTIFACT_MODE=minimal` for smoke, regression checks, routine attribution, and before/after comparison. Switch to `P3_ARTIFACT_MODE=full` only for one focused drilldown round when compact evidence is inconclusive or points to a subsystem that needs full logs, during-sample metrics, DB snapshots, or profiles.
+
+9. End with a falsifiable next step.
+   A P3 stress result must end in one of `BOTTLENECK_FOUND`, `HARNESS_GAP`, `ENV_LIMIT`, or `NO_REGRESSION_WITH_CEILING`, plus the exact next workload or diagnostic that could disprove the attribution.
+
 ## Why Short Smoke Does Not Expose The Bottlenecks
 
 ### PG Hot Row
@@ -201,10 +232,10 @@ For bid and outbox HTTP pressure, P3 should add arrival-rate variants so slow re
 
 Every local stress or drilldown bundle should contain:
 
-- raw k6 summary and log;
-- backend `/metrics` scrape before/during/after where feasible;
-- DB lock/outbox SQL snapshots when bid or outbox is involved;
-- Go runtime profile or metric snapshot when fanout, memory, or goroutine growth is involved;
+- compact analysis report and aggregate index for routine attribution;
+- raw k6 aggregate summary;
+- backend `/metrics` scrape before/after by default;
+- full logs, during-sample metrics, DB lock/outbox SQL snapshots, readyz dumps, and Go runtime profiles only for failed workloads or `P3_ARTIFACT_MODE=full` drilldown;
 - invariant checker output for workloads that mutate auction money state;
 - short verdict: `NO_REGRESSION`, `BOTTLENECK_FOUND`, `HARNESS_GAP`, or `ENV_LIMIT`.
 
