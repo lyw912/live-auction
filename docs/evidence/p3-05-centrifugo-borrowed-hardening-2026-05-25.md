@@ -6,7 +6,7 @@ Status: `IMPLEMENTED_FOCUSED_TESTED`
 
 Origin:
 
-- `docs/evidence/p3-04-centrifugo-judge-origin-2026-05-25.md`
+- `docs/reviews/p3-04-centrifugo-judge-origin-2026-05-25.md`
 - `docs/adr/p3-01-centrifugo-borrowing-decision.md`
 
 ## Scope

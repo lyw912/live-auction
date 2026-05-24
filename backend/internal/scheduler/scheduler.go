@@ -25,6 +25,8 @@ const (
 	StatusSucceeded = "SUCCEEDED"
 	StatusFailed    = "FAILED"
 	StatusDead      = "DEAD"
+
+	eventSchemaVersion = 1
 )
 
 type Runner struct {
@@ -419,10 +421,16 @@ func appendAuctionEvent(ctx context.Context, tx pgx.Tx, auctionID string, eventT
 	}
 	var outboxID int64
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO outbox_events (aggregate_type, aggregate_id, auction_id, seq, event_type, payload_json)
-		VALUES ('auction', $1, $1, $2, $3, $4)
+		INSERT INTO outbox_events (
+			aggregate_type, aggregate_id, auction_id, seq, event_type,
+			event_schema_version, event_key, payload_json, payload_sha256
+		)
+		VALUES (
+			'auction', $1, $1, $2, $3, $4, $1, $5,
+			encode(digest(convert_to($5::jsonb::text, 'UTF8'), 'sha256'), 'hex')
+		)
 		RETURNING id
-	`, auctionID, seq, eventType, payloadJSON).Scan(&outboxID); err != nil {
+	`, auctionID, seq, eventType, eventSchemaVersion, payloadJSON).Scan(&outboxID); err != nil {
 		return err
 	}
 	_, err = tx.Exec(ctx, `

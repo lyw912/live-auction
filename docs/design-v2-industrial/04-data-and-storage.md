@@ -156,7 +156,10 @@ outbox_events (
   auction_id text,
   seq bigint,
   event_type text not null,
+  event_schema_version int not null default 1,
+  event_key text not null,
   payload_json jsonb not null,
+  payload_sha256 text not null,
   created_at timestamptz not null default now()
 )
 ```
@@ -171,7 +174,11 @@ outbox_delivery (
   locked_until timestamptz,
   next_attempt_at timestamptz not null default now(),
   published_at timestamptz,
-  last_error text
+  last_error text,
+  last_error_class text,
+  last_error_retriable boolean,
+  last_error_at timestamptz,
+  last_published_watermark jsonb
 )
 ```
 
@@ -187,6 +194,58 @@ CREATE INDEX ix_outbox_delivery_claim
 
 CREATE INDEX ix_outbox_events_auction_seq
   ON outbox_events(auction_id, seq);
+```
+
+P3 Debezium-borrowed diagnostics:
+
+```sql
+outbox_relay_watermarks (
+  shard_id int primary key,
+  owner_id text,
+  last_published_outbox_id bigint,
+  last_published_auction_id text,
+  last_published_seq bigint,
+  last_published_at timestamptz,
+  oldest_ready_age_ms bigint not null default 0,
+  ready_count bigint not null default 0,
+  publishing_count bigint not null default 0,
+  dead_count bigint not null default 0,
+  updated_at timestamptz not null default now()
+)
+```
+
+```sql
+snapshot_rebuild_events (
+  id bigserial primary key,
+  auction_id text not null references auctions(id),
+  request_id text not null,
+  source text not null,
+  status text not null,
+  stale boolean not null default false,
+  duration_ms bigint,
+  error_class text,
+  error_message text,
+  created_at timestamptz not null default now()
+)
+```
+
+```sql
+system_control_signals (
+  id bigserial primary key,
+  signal_type text not null,
+  target_type text not null,
+  target_id text not null,
+  requested_by text not null,
+  reason text not null,
+  payload_json jsonb not null default '{}',
+  status text not null default 'PENDING',
+  locked_by text,
+  locked_until timestamptz,
+  processed_at timestamptz,
+  result_json jsonb,
+  error_message text,
+  created_at timestamptz not null default now()
+)
 ```
 
 ### idempotency_records

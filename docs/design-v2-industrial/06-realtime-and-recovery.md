@@ -48,6 +48,25 @@ For each shard:
 4. publish serially within shard.
 5. mark PUBLISHED or FAILED/DEAD.
 
+## P3 Debezium-Borrowed Relay Governance
+
+The app-owned relay borrows Debezium-style event and offset discipline without adding Debezium runtime:
+
+- `outbox_events.event_schema_version` gates event contract evolution.
+- `outbox_events.event_key` is the routing/ordering key, currently `auction_id`.
+- `outbox_events.payload_sha256` is generated from PostgreSQL JSONB text and validated before publish.
+- `outbox_relay_watermarks` exposes per-shard progress and lag using project offsets, not WAL LSN.
+- publish/failure refreshes only the affected shard watermark.
+
+Failure classes:
+
+| Class | Retriable | Behavior |
+|---|---:|---|
+| `PAYLOAD_INVALID` | no | delivery goes `DEAD` immediately, anomaly and gap notice emitted |
+| `REDIS_UNAVAILABLE` | yes | normal retry budget/backoff |
+| `PUBLISH_TIMEOUT` | yes | normal retry budget/backoff |
+| `UNKNOWN` | yes | normal retry budget/backoff |
+
 Head-of-line rule:
 
 ```sql
@@ -176,6 +195,21 @@ server retry_after wins
 ```
 
 Server can reject excessive reconnect with `retry_after_ms`.
+
+## Operator Signals
+
+Host-only monitor APIs may write `system_control_signals`; relay processes them outside bid/cancel/end transactions.
+
+Supported signals:
+
+| Signal | Target | Effect |
+|---|---|---|
+| `force_snapshot_rebuild` | `auction` | rebuilds Redis snapshot from PostgreSQL and records snapshot lifecycle rows |
+| `retry_dead_outbox` | `outbox` | moves a `DEAD` delivery back to `PENDING` and clears failure fields |
+| `pause_relay_shard` | `relay_shard` | marks a relay shard lease as paused for short operator investigation |
+| `resume_relay_shard` | `relay_shard` | removes a paused shard lease |
+
+Signals do not mutate auction truth, price, winner, order, or idempotency result.
 
 ## Background Browser
 

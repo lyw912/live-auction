@@ -25,9 +25,12 @@
 | `docs/evidence/p3-01-outbox-claim-fix-2026-05-24.md` | AUTHORITATIVE | Outbox claim bottleneck fixed for the tested local profile. |
 | `docs/evidence/p3-02-relay-shard-ownership-2026-05-24.md` | AUTHORITATIVE | Relay shard ownership/failover is implemented with Windows-local evidence. |
 | `docs/evidence/p3-03-local-stress-harness-2026-05-24.md` | AUTHORITATIVE_FOR_HARNESS | P3 runner isolation, zero-check detection, and workload management are fixed. |
-| `docs/evidence/p3-04-centrifugo-judge-origin-2026-05-25.md` | AUTHORITATIVE | Original hostile Centrifugo comparison that triggered P3 realtime hardening. |
+| `docs/reviews/p3-04-centrifugo-judge-origin-2026-05-25.md` | AUTHORITATIVE | Original hostile Centrifugo comparison that triggered P3 realtime hardening. |
 | `docs/evidence/p3-05-centrifugo-borrowed-hardening-2026-05-25.md` | AUTHORITATIVE | Bounded recovery, byte backpressure, stream epoch, outbox notify wakeup, and metrics implemented with focused tests. |
 | `docs/adr/p3-01-centrifugo-borrowing-decision.md` | AUTHORITATIVE | Decision to borrow Centrifugo mechanisms without adding a second runtime transport. |
+| `docs/reviews/p3-06-debezium-borrowing-review-2026-05-25.md` | AUTHORITATIVE | Hostile Debezium comparison: borrow CDC/outbox design discipline, do not rebuild runtime around Debezium. |
+| `docs/adr/p3-02-debezium-borrowing-decision.md` | AUTHORITATIVE | Decision to keep Debezium/CDC evidence-gated and map borrowed ideas to project-owned outbox/recovery semantics. |
+| `docs/evidence/p3-06-debezium-borrowed-hardening-2026-05-25.md` | AUTHORITATIVE | Debezium-borrowed envelope validation, relay watermarks, snapshot audit, control signals, and error classification implemented with focused tests. |
 | `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan.md` | AUTHORITATIVE | P3/P4 pressure protocol and admission-off policy. |
 | `docs/design-v2-industrial/18-p3-p4-roadmap-reset.md` | AUTHORITATIVE | Current P3/P4 execution order and decision gates. |
 | `docs/p3-decision-log.md` | AUTHORITATIVE | Current decisions, superseded evidence, and go/no-go gates. |

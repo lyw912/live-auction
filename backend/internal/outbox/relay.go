@@ -3,11 +3,14 @@ package outbox
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -29,6 +32,17 @@ const (
 	DefaultHistoryTTL   = 30 * time.Minute
 	DefaultDrainBatch   = 64
 	DefaultLeaseTTL     = 5 * time.Second
+	EventSchemaVersion  = 1
+
+	ErrorClassRedisUnavailable = "REDIS_UNAVAILABLE"
+	ErrorClassPayloadInvalid   = "PAYLOAD_INVALID"
+	ErrorClassPublishTimeout   = "PUBLISH_TIMEOUT"
+	ErrorClassUnknown          = "UNKNOWN"
+
+	SignalForceSnapshotRebuild = "force_snapshot_rebuild"
+	SignalRetryDeadOutbox      = "retry_dead_outbox"
+	SignalPauseRelayShard      = "pause_relay_shard"
+	SignalResumeRelayShard     = "resume_relay_shard"
 )
 
 type Relay struct {
@@ -59,6 +73,9 @@ func (r *Relay) Run(ctx context.Context, log *slog.Logger, interval time.Duratio
 		}
 		if err := r.renewShardLeases(ctx); err != nil {
 			log.Warn("outbox_lease_renew_failed", slog.String("error", err.Error()))
+		}
+		if _, err := r.ProcessSignals(ctx, 16); err != nil {
+			log.Warn("outbox_signal_process_failed", slog.String("error", err.Error()))
 		}
 		processed, err := r.ProcessBatch(ctx, r.drainBatch)
 		if err != nil {
@@ -134,14 +151,17 @@ func (r *Relay) listenForOutboxNotifications(ctx context.Context, notifyCh chan<
 }
 
 type Event struct {
-	OutboxID      int64           `json:"outbox_id"`
-	AggregateType string          `json:"aggregate_type"`
-	AggregateID   string          `json:"aggregate_id"`
-	AuctionID     string          `json:"auction_id"`
-	Seq           int64           `json:"seq"`
-	EventType     string          `json:"event_type"`
-	Payload       json.RawMessage `json:"payload"`
-	CreatedAt     time.Time       `json:"created_at"`
+	OutboxID           int64           `json:"outbox_id"`
+	AggregateType      string          `json:"aggregate_type"`
+	AggregateID        string          `json:"aggregate_id"`
+	AuctionID          string          `json:"auction_id"`
+	Seq                int64           `json:"seq"`
+	EventType          string          `json:"event_type"`
+	EventSchemaVersion int             `json:"event_schema_version"`
+	EventKey           string          `json:"event_key"`
+	Payload            json.RawMessage `json:"payload"`
+	PayloadSHA256      string          `json:"payload_sha256"`
+	CreatedAt          time.Time       `json:"created_at"`
 }
 
 func NewRelay(db *pgxpool.Pool, redisClient *redis.Client, workerID string) *Relay {
@@ -217,7 +237,8 @@ func (r *Relay) claimOne(ctx context.Context) (Event, bool, error) {
 
 	var event Event
 	err = tx.QueryRow(ctx, `
-		SELECT e.id, e.aggregate_type, e.aggregate_id, e.auction_id, e.seq, e.event_type, e.payload_json, e.created_at
+		SELECT e.id, e.aggregate_type, e.aggregate_id, e.auction_id, e.seq, e.event_type,
+		       e.event_schema_version, e.event_key, e.payload_json, e.payload_sha256, e.created_at
 		FROM outbox_delivery d
 		JOIN outbox_events e ON e.id = d.outbox_id
 		JOIN outbox_relay_shard_leases l ON l.shard_id = d.shard_id
@@ -240,7 +261,10 @@ func (r *Relay) claimOne(ctx context.Context) (Event, bool, error) {
 		ORDER BY d.event_created_at, d.outbox_id
 		LIMIT 1
 		FOR UPDATE OF d SKIP LOCKED
-	`, r.workerID).Scan(&event.OutboxID, &event.AggregateType, &event.AggregateID, &event.AuctionID, &event.Seq, &event.EventType, &event.Payload, &event.CreatedAt)
+	`, r.workerID).Scan(
+		&event.OutboxID, &event.AggregateType, &event.AggregateID, &event.AuctionID, &event.Seq, &event.EventType,
+		&event.EventSchemaVersion, &event.EventKey, &event.Payload, &event.PayloadSHA256, &event.CreatedAt,
+	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Event{}, false, nil
 	}
@@ -298,18 +322,24 @@ func (r *Relay) ensureShardLease(ctx context.Context) error {
 }
 
 func (r *Relay) publish(ctx context.Context, event Event) error {
+	if err := validateEventEnvelope(event); err != nil {
+		return err
+	}
 	epoch, err := r.ensureStreamEpoch(ctx, event.AuctionID)
 	if err != nil {
 		return err
 	}
 	envelope := map[string]any{
-		"auction_id":       event.AuctionID,
-		"seq":              event.Seq,
-		"stream_epoch":     epoch,
-		"snapshot_version": event.Seq,
-		"event_type":       event.EventType,
-		"payload":          json.RawMessage(event.Payload),
-		"outbox_id":        event.OutboxID,
+		"auction_id":           event.AuctionID,
+		"seq":                  event.Seq,
+		"stream_epoch":         epoch,
+		"snapshot_version":     event.Seq,
+		"event_type":           event.EventType,
+		"event_schema_version": event.EventSchemaVersion,
+		"event_key":            event.EventKey,
+		"payload":              json.RawMessage(event.Payload),
+		"payload_sha256":       event.PayloadSHA256,
+		"outbox_id":            event.OutboxID,
 	}
 	data, err := json.Marshal(envelope)
 	if err != nil {
@@ -361,10 +391,26 @@ func randomStreamEpoch() (string, error) {
 func (r *Relay) markPublished(ctx context.Context, outboxID int64) error {
 	_, err := r.db.Exec(ctx, `
 		UPDATE outbox_delivery
-		SET status = 'PUBLISHED', published_at = now(), locked_by = NULL, locked_until = NULL, last_error = NULL
+		SET status = 'PUBLISHED',
+		    published_at = now(),
+		    locked_by = NULL,
+		    locked_until = NULL,
+		    last_error = NULL,
+		    last_error_class = NULL,
+		    last_error_retriable = NULL,
+		    last_error_at = NULL,
+		    last_published_watermark = jsonb_build_object(
+		      'outbox_id', outbox_id,
+		      'auction_id', auction_id,
+		      'seq', auction_seq,
+		      'published_at', now()
+		    )
 		WHERE outbox_id = $1
 	`, outboxID)
-	return err
+	if err != nil {
+		return err
+	}
+	return r.refreshWatermarkForOutbox(ctx, outboxID)
 }
 
 func (r *Relay) markFailure(ctx context.Context, event Event, publishErr error) error {
@@ -376,24 +422,37 @@ func (r *Relay) markFailure(ctx context.Context, event Event, publishErr error) 
 
 	var attempts int
 	var maxAttempts int
+	errClass, retriable := classifyPublishError(publishErr)
+	nextStatus := "CASE WHEN attempts + 1 >= max_attempts THEN 'DEAD' ELSE 'FAILED' END"
+	if !retriable {
+		nextStatus = "'DEAD'"
+	}
 	if err := tx.QueryRow(ctx, `
 		UPDATE outbox_delivery
 		SET attempts = attempts + 1,
-		    status = CASE WHEN attempts + 1 >= max_attempts THEN 'DEAD' ELSE 'FAILED' END,
+		    status = `+nextStatus+`,
 		    next_attempt_at = now() + interval '1 second',
 		    locked_by = NULL,
 		    locked_until = NULL,
-		    last_error = $2
+		    last_error = $2,
+		    last_error_class = $3,
+		    last_error_retriable = $4,
+		    last_error_at = now()
 		WHERE outbox_id = $1
 		RETURNING attempts, max_attempts
-	`, event.OutboxID, publishErr.Error()).Scan(&attempts, &maxAttempts); err != nil {
+	`, event.OutboxID, publishErr.Error(), errClass, retriable).Scan(&attempts, &maxAttempts); err != nil {
 		return err
 	}
-	if attempts >= maxAttempts {
+	dead := !retriable || attempts >= maxAttempts
+	if dead {
 		payload, err := json.Marshal(map[string]any{
-			"outbox_id": event.OutboxID,
-			"seq":       event.Seq,
-			"error":     publishErr.Error(),
+			"outbox_id":    event.OutboxID,
+			"seq":          event.Seq,
+			"error":        publishErr.Error(),
+			"error_class":  errClass,
+			"retriable":    retriable,
+			"attempts":     attempts,
+			"max_attempts": maxAttempts,
 		})
 		if err != nil {
 			return err
@@ -408,7 +467,10 @@ func (r *Relay) markFailure(ctx context.Context, event Event, publishErr error) 
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
-	if attempts >= maxAttempts {
+	if refreshErr := r.refreshWatermarkForOutbox(ctx, event.OutboxID); refreshErr != nil {
+		return refreshErr
+	}
+	if dead {
 		observability.Inc("auction_outbox_dead_total", nil)
 		r.publishGapNotice(ctx, event)
 	}
@@ -433,8 +495,15 @@ func (r *Relay) publishGapNotice(ctx context.Context, event Event) {
 }
 
 func (r *Relay) RebuildSnapshot(ctx context.Context, auctionID string) ([]byte, error) {
+	requestID := "snapshot_" + time.Now().UTC().Format("20060102150405.000000000")
+	start := time.Now()
+	_ = r.recordSnapshotEvent(ctx, auctionID, requestID, "db", "REQUESTED", false, nil, nil, nil)
+	_ = r.recordSnapshotEvent(ctx, auctionID, requestID, "db", "STARTED", false, nil, nil, nil)
 	epoch, err := r.ensureStreamEpoch(ctx, auctionID)
 	if err != nil {
+		duration := time.Since(start).Milliseconds()
+		errClass := classifySnapshotError(err)
+		_ = r.recordSnapshotEvent(ctx, auctionID, requestID, "db", "FAILED", false, &duration, &errClass, err)
 		return nil, err
 	}
 	var payload []byte
@@ -468,7 +537,270 @@ func (r *Relay) RebuildSnapshot(ctx context.Context, auctionID string) ([]byte, 
 		WHERE a.id = $1
 	`, auctionID, epoch).Scan(&payload)
 	if err != nil {
+		duration := time.Since(start).Milliseconds()
+		errClass := classifySnapshotError(err)
+		_ = r.recordSnapshotEvent(ctx, auctionID, requestID, "db", "FAILED", false, &duration, &errClass, err)
 		return nil, err
 	}
-	return payload, r.redis.Set(ctx, fmt.Sprintf("auction:%s:snapshot", auctionID), payload, r.historyTTL).Err()
+	if err := r.redis.Set(ctx, fmt.Sprintf("auction:%s:snapshot", auctionID), payload, r.historyTTL).Err(); err != nil {
+		duration := time.Since(start).Milliseconds()
+		errClass := classifySnapshotError(err)
+		_ = r.recordSnapshotEvent(ctx, auctionID, requestID, "db", "FAILED", false, &duration, &errClass, err)
+		return nil, err
+	}
+	duration := time.Since(start).Milliseconds()
+	_ = r.recordSnapshotEvent(ctx, auctionID, requestID, "db", "COMPLETED", false, &duration, nil, nil)
+	return payload, nil
+}
+
+func validateEventEnvelope(event Event) error {
+	if event.EventSchemaVersion != EventSchemaVersion {
+		return fmt.Errorf("%s: unsupported event schema version %d", ErrorClassPayloadInvalid, event.EventSchemaVersion)
+	}
+	if strings.TrimSpace(event.EventKey) == "" {
+		return fmt.Errorf("%s: empty event key", ErrorClassPayloadInvalid)
+	}
+	if strings.TrimSpace(event.PayloadSHA256) == "" {
+		return fmt.Errorf("%s: empty payload hash", ErrorClassPayloadInvalid)
+	}
+	actual := sha256.Sum256(event.Payload)
+	if hex.EncodeToString(actual[:]) != event.PayloadSHA256 {
+		return fmt.Errorf("%s: payload hash mismatch for outbox %d", ErrorClassPayloadInvalid, event.OutboxID)
+	}
+	if !json.Valid(event.Payload) {
+		return fmt.Errorf("%s: invalid JSON payload for outbox %d", ErrorClassPayloadInvalid, event.OutboxID)
+	}
+	return nil
+}
+
+func classifyPublishError(err error) (string, bool) {
+	if err == nil {
+		return "", false
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, strings.ToLower(ErrorClassPayloadInvalid)), strings.Contains(message, "invalid json"), strings.Contains(message, "payload hash"):
+		return ErrorClassPayloadInvalid, false
+	case errors.Is(err, context.DeadlineExceeded), strings.Contains(message, "timeout"), strings.Contains(message, "deadline"):
+		return ErrorClassPublishTimeout, true
+	case strings.Contains(message, "redis"), strings.Contains(message, "connection refused"), strings.Contains(message, "i/o timeout"), strings.Contains(message, "connectex"):
+		return ErrorClassRedisUnavailable, true
+	default:
+		return ErrorClassUnknown, true
+	}
+}
+
+func classifySnapshotError(err error) string {
+	class, _ := classifyPublishError(err)
+	if class == "" {
+		return ErrorClassUnknown
+	}
+	return class
+}
+
+func (r *Relay) refreshWatermarkForOutbox(ctx context.Context, outboxID int64) error {
+	var shardID int
+	if err := r.db.QueryRow(ctx, `SELECT shard_id FROM outbox_delivery WHERE outbox_id = $1`, outboxID).Scan(&shardID); err != nil {
+		return err
+	}
+	return r.refreshWatermark(ctx, shardID)
+}
+
+func (r *Relay) refreshWatermark(ctx context.Context, shardID int) error {
+	_, err := r.db.Exec(ctx, `
+		INSERT INTO outbox_relay_watermarks (
+		  shard_id, owner_id, last_published_outbox_id, last_published_auction_id,
+		  last_published_seq, last_published_at, oldest_ready_age_ms, ready_count,
+		  publishing_count, dead_count, updated_at
+		)
+		SELECT shard_id,
+		       max(l.owner_id) AS owner_id,
+		       (array_agg(outbox_id ORDER BY published_at DESC NULLS LAST, outbox_id DESC)
+		          FILTER (WHERE status = 'PUBLISHED'))[1] AS last_published_outbox_id,
+		       (array_agg(auction_id ORDER BY published_at DESC NULLS LAST, outbox_id DESC)
+		          FILTER (WHERE status = 'PUBLISHED'))[1] AS last_published_auction_id,
+		       (array_agg(auction_seq ORDER BY published_at DESC NULLS LAST, outbox_id DESC)
+		          FILTER (WHERE status = 'PUBLISHED'))[1] AS last_published_seq,
+		       max(published_at) FILTER (WHERE status = 'PUBLISHED') AS last_published_at,
+		       COALESCE(max((extract(epoch from (now() - event_created_at)) * 1000)::bigint)
+		          FILTER (WHERE status IN ('PENDING','FAILED') AND next_attempt_at <= now()), 0) AS oldest_ready_age_ms,
+		       count(*) FILTER (WHERE status IN ('PENDING','FAILED') AND next_attempt_at <= now()) AS ready_count,
+		       count(*) FILTER (WHERE status = 'PUBLISHING') AS publishing_count,
+		       count(*) FILTER (WHERE status = 'DEAD') AS dead_count,
+		       now()
+		FROM outbox_delivery d
+		LEFT JOIN outbox_relay_shard_leases l USING (shard_id)
+		WHERE d.shard_id = $1
+		GROUP BY shard_id
+		ON CONFLICT (shard_id) DO UPDATE
+		SET owner_id = EXCLUDED.owner_id,
+		    last_published_outbox_id = EXCLUDED.last_published_outbox_id,
+		    last_published_auction_id = EXCLUDED.last_published_auction_id,
+		    last_published_seq = EXCLUDED.last_published_seq,
+		    last_published_at = EXCLUDED.last_published_at,
+		    oldest_ready_age_ms = EXCLUDED.oldest_ready_age_ms,
+		    ready_count = EXCLUDED.ready_count,
+		    publishing_count = EXCLUDED.publishing_count,
+		    dead_count = EXCLUDED.dead_count,
+		    updated_at = EXCLUDED.updated_at
+	`, shardID)
+	return err
+}
+
+func (r *Relay) recordSnapshotEvent(ctx context.Context, auctionID string, requestID string, source string, status string, stale bool, durationMS *int64, errClass *string, eventErr error) error {
+	var errorMessage *string
+	if eventErr != nil {
+		value := eventErr.Error()
+		errorMessage = &value
+	}
+	_, err := r.db.Exec(ctx, `
+		INSERT INTO snapshot_rebuild_events (
+		  auction_id, request_id, source, status, stale, duration_ms, error_class, error_message
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`, auctionID, requestID, source, status, stale, durationMS, errClass, errorMessage)
+	return err
+}
+
+func (r *Relay) ProcessSignals(ctx context.Context, limit int) (int, error) {
+	if limit <= 0 {
+		limit = 16
+	}
+	processed := 0
+	for processed < limit {
+		ok, err := r.processOneSignal(ctx)
+		if err != nil || !ok {
+			return processed, err
+		}
+		processed++
+	}
+	return processed, nil
+}
+
+func (r *Relay) processOneSignal(ctx context.Context) (bool, error) {
+	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var id int64
+	var signalType string
+	var targetType string
+	var targetID string
+	err = tx.QueryRow(ctx, `
+		SELECT id, signal_type, target_type, target_id
+		FROM system_control_signals
+		WHERE status = 'PENDING'
+		ORDER BY created_at, id
+		LIMIT 1
+		FOR UPDATE SKIP LOCKED
+	`).Scan(&id, &signalType, &targetType, &targetID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE system_control_signals
+		SET status = 'PROCESSING', locked_by = $2, locked_until = now() + interval '30 seconds'
+		WHERE id = $1
+	`, id, r.workerID); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+
+	result, execErr := r.executeSignal(ctx, signalType, targetType, targetID)
+	status := "SUCCEEDED"
+	var errorMessage *string
+	if execErr != nil {
+		status = "FAILED"
+		value := execErr.Error()
+		errorMessage = &value
+	}
+	resultJSON, marshalErr := json.Marshal(result)
+	if marshalErr != nil {
+		return true, marshalErr
+	}
+	_, err = r.db.Exec(ctx, `
+		UPDATE system_control_signals
+		SET status = $2,
+		    processed_at = now(),
+		    locked_by = NULL,
+		    locked_until = NULL,
+		    result_json = $3,
+		    error_message = $4
+		WHERE id = $1
+	`, id, status, resultJSON, errorMessage)
+	if err != nil {
+		return true, err
+	}
+	return true, execErr
+}
+
+func (r *Relay) executeSignal(ctx context.Context, signalType string, targetType string, targetID string) (map[string]any, error) {
+	switch signalType {
+	case SignalForceSnapshotRebuild:
+		if targetType != "auction" {
+			return nil, fmt.Errorf("force_snapshot_rebuild requires auction target")
+		}
+		payload, err := r.RebuildSnapshot(ctx, targetID)
+		return map[string]any{"auction_id": targetID, "snapshot_bytes": len(payload)}, err
+	case SignalRetryDeadOutbox:
+		if targetType != "outbox" {
+			return nil, fmt.Errorf("retry_dead_outbox requires outbox target")
+		}
+		outboxID, err := strconv.ParseInt(targetID, 10, 64)
+		if err != nil || outboxID <= 0 {
+			return nil, fmt.Errorf("retry_dead_outbox target_id must be a positive outbox id")
+		}
+		tag, err := r.db.Exec(ctx, `
+			UPDATE outbox_delivery
+			SET status = 'PENDING',
+			    next_attempt_at = now(),
+			    locked_by = NULL,
+			    locked_until = NULL,
+			    last_error = NULL,
+			    last_error_class = NULL,
+			    last_error_retriable = NULL,
+			    last_error_at = NULL
+			WHERE outbox_id = $1 AND status = 'DEAD'
+		`, outboxID)
+		return map[string]any{"outbox_id": outboxID, "rows": tag.RowsAffected()}, err
+	case SignalPauseRelayShard:
+		if targetType != "relay_shard" {
+			return nil, fmt.Errorf("pause_relay_shard requires relay_shard target")
+		}
+		shardID, err := strconv.Atoi(targetID)
+		if err != nil || shardID < 0 || shardID >= 16 {
+			return nil, fmt.Errorf("relay_shard target_id must be an integer from 0 to 15")
+		}
+		tag, err := r.db.Exec(ctx, `
+			INSERT INTO outbox_relay_shard_leases (shard_id, owner_id, lease_until)
+			VALUES ($2, 'paused:' || $1, now() + interval '5 minutes')
+			ON CONFLICT (shard_id) DO UPDATE
+			SET owner_id = EXCLUDED.owner_id,
+			    lease_until = EXCLUDED.lease_until,
+			    renewed_at = now()
+		`, r.workerID, shardID)
+		return map[string]any{"shard_id": shardID, "rows": tag.RowsAffected()}, err
+	case SignalResumeRelayShard:
+		if targetType != "relay_shard" {
+			return nil, fmt.Errorf("resume_relay_shard requires relay_shard target")
+		}
+		shardID, err := strconv.Atoi(targetID)
+		if err != nil || shardID < 0 || shardID >= 16 {
+			return nil, fmt.Errorf("relay_shard target_id must be an integer from 0 to 15")
+		}
+		tag, err := r.db.Exec(ctx, `
+			DELETE FROM outbox_relay_shard_leases
+			WHERE shard_id = $1 AND owner_id LIKE 'paused:%'
+		`, shardID)
+		return map[string]any{"shard_id": shardID, "rows": tag.RowsAffected()}, err
+	default:
+		return nil, fmt.Errorf("unsupported signal type %s", signalType)
+	}
 }

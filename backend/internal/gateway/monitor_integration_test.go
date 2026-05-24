@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -26,15 +27,20 @@ func TestMonitorRoutesReturnRealDBRowsAndRequireHost(t *testing.T) {
 	row := createMonitorAuction(t, repo, db)
 	insertMonitorAnomaly(t, db, row.ID)
 	forceMonitorSchedulerJob(t, db, row.ID)
+	seedMonitorDebeziumDiagnostics(t, db, row.ID)
 
 	router := NewRouter(testConfig(), deps, slog.Default())
 	assertMonitorForbiddenForUser(t, router, "/api/monitor/auctions")
 	assertMonitorHasItems(t, router, "/api/monitor/auctions", "auction_id", row.ID)
 	assertMonitorHasItems(t, router, "/api/monitor/anomalies", "type", "MONITOR_TEST")
 	assertMonitorHasItems(t, router, "/api/monitor/outbox", "aggregate_id", row.ID)
+	assertMonitorHasItems(t, router, "/api/monitor/outbox/watermarks", "shard_id", float64(0))
 	assertMonitorHasItems(t, router, "/api/monitor/scheduler", "target_id", row.ID)
 	assertMonitorHasItems(t, router, "/api/monitor/rejects", "auction_id", row.ID)
 	assertMonitorHasItems(t, router, "/api/monitor/recovery", "room_id", row.RoomID)
+	assertMonitorHasItems(t, router, "/api/monitor/snapshots", "auction_id", row.ID)
+	assertMonitorHasItems(t, router, "/api/monitor/signals", "target_id", row.ID)
+	assertMonitorCreateSignal(t, router, row.ID)
 }
 
 func TestMonitorAnomaliesFilterByTypeUserAuctionAndTrace(t *testing.T) {
@@ -103,6 +109,32 @@ func assertMonitorHasItems(t *testing.T, router http.Handler, path string, field
 		}
 	}
 	t.Fatalf("%s missing %s=%v in %#v", path, field, want, body.Items)
+}
+
+func assertMonitorCreateSignal(t *testing.T, router http.Handler, auctionID string) {
+	t.Helper()
+	body := bytes.NewBufferString(`{"signal_type":"force_snapshot_rebuild","target_type":"auction","target_id":"` + auctionID + `","reason":"monitor integration test"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/monitor/signals", body)
+	req.Header.Set("X-Mock-Role", "host")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create signal status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode create signal: %v", err)
+	}
+	if payload["status"] != "PENDING" {
+		t.Fatalf("create signal payload = %#v", payload)
+	}
+	req = httptest.NewRequest(http.MethodPost, "/api/monitor/signals", bytes.NewBufferString(`{"signal_type":"retry_dead_outbox","target_type":"auction","target_id":"bad","reason":"bad"}`))
+	req.Header.Set("X-Mock-Role", "host")
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid signal status = %d body=%s", rec.Code, rec.Body.String())
+	}
 }
 
 func openMonitorDB(t *testing.T) *pgxpool.Pool {
@@ -204,5 +236,37 @@ func forceMonitorSchedulerJob(t *testing.T, db *pgxpool.Pool, auctionID string) 
 		WHERE job_type = 'END_AUCTION' AND target_id = $1
 	`, auctionID, time.Now().UTC().Add(24*time.Hour)); err != nil {
 		t.Fatalf("update scheduler job: %v", err)
+	}
+}
+
+func seedMonitorDebeziumDiagnostics(t *testing.T, db *pgxpool.Pool, auctionID string) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := db.Exec(ctx, `
+		INSERT INTO outbox_relay_watermarks (
+		  shard_id, owner_id, last_published_outbox_id, last_published_auction_id,
+		  last_published_seq, last_published_at, oldest_ready_age_ms,
+		  ready_count, publishing_count, dead_count
+		)
+		VALUES (0, 'monitor-worker', 1, $1, 1, now(), 0, 1, 0, 0)
+		ON CONFLICT (shard_id) DO UPDATE
+		SET owner_id = EXCLUDED.owner_id,
+		    last_published_auction_id = EXCLUDED.last_published_auction_id,
+		    ready_count = EXCLUDED.ready_count,
+		    updated_at = now()
+	`, auctionID); err != nil {
+		t.Fatalf("seed watermarks: %v", err)
+	}
+	if _, err := db.Exec(ctx, `
+		INSERT INTO snapshot_rebuild_events (auction_id, request_id, source, status, stale, duration_ms)
+		VALUES ($1, $2, 'db', 'COMPLETED', false, 12)
+	`, auctionID, "monitor_snapshot_"+uuid.NewString()); err != nil {
+		t.Fatalf("seed snapshot events: %v", err)
+	}
+	if _, err := db.Exec(ctx, `
+		INSERT INTO system_control_signals (signal_type, target_type, target_id, requested_by, reason, status, result_json)
+		VALUES ('force_snapshot_rebuild', 'auction', $1, 'host_1', 'monitor seed', 'SUCCEEDED', '{"snapshot_bytes":128}')
+	`, auctionID); err != nil {
+		t.Fatalf("seed signals: %v", err)
 	}
 }

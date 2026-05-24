@@ -132,6 +132,52 @@ Fields:
 - next_attempt_at
 - lag
 - last_error
+- event_schema_version
+- event_key
+- payload_sha256
+- last_error_class
+- last_error_retriable
+
+### Outbox Watermarks
+
+Fields:
+
+- shard_id
+- owner_id
+- last_published_outbox_id
+- last_published_auction_id
+- last_published_seq
+- last_published_at
+- oldest_ready_age_ms
+- ready_count
+- publishing_count
+- dead_count
+
+### Snapshot Rebuilds
+
+Fields:
+
+- auction_id
+- request_id
+- source
+- status
+- stale
+- duration_ms
+- error_class
+- error_message
+
+### Control Signals
+
+Fields:
+
+- signal_type
+- target_type
+- target_id
+- requested_by
+- reason
+- status
+- result_json
+- error_message
 
 ### Scheduler
 

@@ -42,7 +42,11 @@ Server always derives user from session/mock token.
 | GET | `/api/monitor/auctions` | diagnostic active auctions |
 | GET | `/api/monitor/anomalies` | anomalies |
 | GET | `/api/monitor/outbox` | outbox delivery |
+| GET | `/api/monitor/outbox/watermarks` | outbox relay shard watermarks |
 | GET | `/api/monitor/scheduler` | scheduler jobs |
+| GET | `/api/monitor/snapshots` | snapshot rebuild lifecycle |
+| GET | `/api/monitor/signals` | operator control signals |
+| POST | `/api/monitor/signals` | create host-only operator control signal |
 
 ## H5 APIs
 

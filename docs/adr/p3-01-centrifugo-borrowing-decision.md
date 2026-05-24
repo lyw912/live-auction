@@ -4,7 +4,7 @@ Date: 2026-05-25 Asia/Shanghai
 
 Status: Accepted
 
-Origin: `docs/evidence/p3-04-centrifugo-judge-origin-2026-05-25.md`
+Origin: `docs/reviews/p3-04-centrifugo-judge-origin-2026-05-25.md`
 
 ## Context
 

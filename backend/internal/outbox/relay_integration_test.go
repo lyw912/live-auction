@@ -62,11 +62,24 @@ func TestRelayPublishesPendingOutboxToRedisInOrder(t *testing.T) {
 	var lastSeq int64
 	for _, value := range values {
 		var envelope struct {
-			Seq         int64  `json:"seq"`
-			StreamEpoch string `json:"stream_epoch"`
+			Seq           int64           `json:"seq"`
+			StreamEpoch   string          `json:"stream_epoch"`
+			SchemaVersion int             `json:"event_schema_version"`
+			EventKey      string          `json:"event_key"`
+			Payload       json.RawMessage `json:"payload"`
+			PayloadSHA256 string          `json:"payload_sha256"`
 		}
 		if err := json.Unmarshal([]byte(value), &envelope); err != nil {
 			t.Fatalf("unmarshal envelope: %v", err)
+		}
+		if envelope.SchemaVersion != EventSchemaVersion {
+			t.Fatalf("schema version = %d, want %d", envelope.SchemaVersion, EventSchemaVersion)
+		}
+		if envelope.EventKey != auctionRow.ID {
+			t.Fatalf("event key = %q, want %q", envelope.EventKey, auctionRow.ID)
+		}
+		if envelope.PayloadSHA256 == "" || len(envelope.Payload) == 0 {
+			t.Fatalf("missing payload hash/envelope payload: %#v", envelope)
 		}
 		if envelope.Seq <= lastSeq {
 			t.Fatalf("redis seq not increasing: %d after %d", envelope.Seq, lastSeq)
@@ -194,6 +207,12 @@ func TestRelayPoisonMarksDeadAndWritesAnomaly(t *testing.T) {
 	`, auctionRow.ID); err != nil {
 		t.Fatalf("publish non-poison outbox: %v", err)
 	}
+	if _, err := db.Exec(ctx, `
+		DELETE FROM outbox_relay_watermarks
+		WHERE shard_id IN (SELECT DISTINCT shard_id FROM outbox_delivery WHERE auction_id = $1)
+	`, auctionRow.ID); err != nil {
+		t.Fatalf("clear watermarks: %v", err)
+	}
 	prioritizeOutboxForAuction(t, db, auctionRow.ID)
 
 	badRedis := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: 0})
@@ -225,6 +244,39 @@ func TestRelayPoisonMarksDeadAndWritesAnomaly(t *testing.T) {
 	if dead != 1 {
 		t.Fatalf("dead deliveries = %d, want 1", dead)
 	}
+	var errClass string
+	var retriable bool
+	if err := db.QueryRow(ctx, `
+		SELECT d.last_error_class, d.last_error_retriable
+		FROM outbox_events e
+		JOIN outbox_delivery d ON d.outbox_id = e.id
+		WHERE e.auction_id = $1 AND d.status = 'DEAD'
+	`, auctionRow.ID).Scan(&errClass, &retriable); err != nil {
+		t.Fatalf("select error classification: %v", err)
+	}
+	if errClass != ErrorClassRedisUnavailable || !retriable {
+		t.Fatalf("error classification = (%s,%v), want (%s,true)", errClass, retriable, ErrorClassRedisUnavailable)
+	}
+	var actualDeadForShard int64
+	if err := db.QueryRow(ctx, `
+		SELECT count(*)
+		FROM outbox_delivery
+		WHERE status = 'DEAD'
+		  AND shard_id IN (SELECT DISTINCT shard_id FROM outbox_delivery WHERE auction_id = $1)
+	`, auctionRow.ID).Scan(&actualDeadForShard); err != nil {
+		t.Fatalf("select actual dead count for shard: %v", err)
+	}
+	var watermarkDeadForShard int64
+	if err := db.QueryRow(ctx, `
+		SELECT COALESCE(sum(dead_count), 0)
+		FROM outbox_relay_watermarks
+		WHERE shard_id IN (SELECT DISTINCT shard_id FROM outbox_delivery WHERE auction_id = $1)
+	`, auctionRow.ID).Scan(&watermarkDeadForShard); err != nil {
+		t.Fatalf("select dead watermark count: %v", err)
+	}
+	if watermarkDeadForShard != actualDeadForShard || watermarkDeadForShard == 0 {
+		t.Fatalf("dead watermark count = %d, actual shard dead = %d", watermarkDeadForShard, actualDeadForShard)
+	}
 	var anomalies int
 	if err := db.QueryRow(ctx, `SELECT count(*) FROM system_anomaly_events WHERE auction_id = $1 AND type = 'OUTBOX_DEAD_LETTER'`, auctionRow.ID).Scan(&anomalies); err != nil {
 		t.Fatalf("count anomalies: %v", err)
@@ -245,6 +297,79 @@ func TestRelayPoisonMarksDeadAndWritesAnomaly(t *testing.T) {
 	}
 	if notice.EventType != "outbox_gap_notice" || notice.AuctionID != auctionRow.ID || len(notice.MissingSeq) != 1 {
 		t.Fatalf("unexpected gap notice: %#v", notice)
+	}
+}
+
+func TestRelayInvalidEnvelopeDeadLettersWithoutRetry(t *testing.T) {
+	db := openDB(t)
+	rdb := openRedis(t)
+	ctx := context.Background()
+	repo := auction.NewRepository(db)
+	auctionRow := createActiveAuctionForRelay(t, repo, db)
+	quiesceOutboxExcept(t, db, auctionRow.ID)
+	bid := auction.BidInput{ClientBidID: "invalid-envelope-bid-1", AmountCents: 15_000}
+	if _, err := repo.PlaceBid(ctx, auctionRow.ID, "user_1", bid.ClientBidID, bid, "tr_invalid_envelope"); err != nil {
+		t.Fatalf("PlaceBid: %v", err)
+	}
+	if _, err := db.Exec(ctx, `
+		UPDATE outbox_delivery
+		SET status = 'PUBLISHED', published_at = COALESCE(published_at, now()), locked_by = NULL, locked_until = NULL
+		WHERE outbox_id IN (
+			SELECT id FROM outbox_events
+			WHERE auction_id = $1 AND event_type <> 'bid_accepted'
+		)
+	`, auctionRow.ID); err != nil {
+		t.Fatalf("publish setup events: %v", err)
+	}
+	if _, err := db.Exec(ctx, `
+		UPDATE outbox_events
+		SET payload_sha256 = repeat('0', 64)
+		WHERE id = (
+			SELECT id
+			FROM outbox_events
+			WHERE auction_id = $1 AND event_type = 'bid_accepted'
+			ORDER BY seq
+			LIMIT 1
+		)
+	`, auctionRow.ID); err != nil {
+		t.Fatalf("corrupt payload hash: %v", err)
+	}
+	prioritizeOutboxForAuction(t, db, auctionRow.ID)
+
+	var gapNotices int
+	relay := NewRelay(db, rdb, "invalid-envelope-worker").WithPublisher(func(_ context.Context, auctionID string, payload []byte) {
+		if auctionID == auctionRow.ID {
+			gapNotices++
+		}
+	})
+	ownAuctionShard(t, db, auctionRow.ID, relay.workerID)
+	ok, err := relay.ProcessOne(ctx)
+	if !ok {
+		t.Fatalf("expected invalid event to be claimed")
+	}
+	if err == nil {
+		t.Fatalf("expected invalid envelope error")
+	}
+
+	var status string
+	var attempts int
+	var errClass string
+	var retriable bool
+	if err := db.QueryRow(ctx, `
+		SELECT d.status, d.attempts, d.last_error_class, d.last_error_retriable
+		FROM outbox_events e
+		JOIN outbox_delivery d ON d.outbox_id = e.id
+		WHERE e.auction_id = $1 AND e.event_type = 'bid_accepted'
+		ORDER BY e.seq
+		LIMIT 1
+	`, auctionRow.ID).Scan(&status, &attempts, &errClass, &retriable); err != nil {
+		t.Fatalf("select invalid delivery: %v", err)
+	}
+	if status != StatusDead || attempts != 1 || errClass != ErrorClassPayloadInvalid || retriable {
+		t.Fatalf("invalid delivery = status=%s attempts=%d class=%s retriable=%v", status, attempts, errClass, retriable)
+	}
+	if gapNotices != 1 {
+		t.Fatalf("gap notices = %d, want 1", gapNotices)
 	}
 }
 
@@ -392,10 +517,17 @@ func TestRelayClaimPlanScalesWithPendingBacklog(t *testing.T) {
 		var outboxID int64
 		seq := baseSeq + int64(i)
 		if err := db.QueryRow(ctx, `
-			INSERT INTO outbox_events (aggregate_type, aggregate_id, auction_id, seq, event_type, payload_json, created_at)
-			VALUES ('auction', $1, $1, $2, 'bid_accepted', '{}'::jsonb, now() - interval '1 second' + ($3::bigint * interval '1 microsecond'))
+			INSERT INTO outbox_events (
+				aggregate_type, aggregate_id, auction_id, seq, event_type,
+				event_schema_version, event_key, payload_json, payload_sha256, created_at
+			)
+			VALUES (
+				'auction', $1, $1, $2, 'bid_accepted', $4, $1, '{}'::jsonb,
+				encode(digest(convert_to('{}'::jsonb::text, 'UTF8'), 'sha256'), 'hex'),
+				now() - interval '1 second' + ($3::bigint * interval '1 microsecond')
+			)
 			RETURNING id
-		`, auctionID, seq, i).Scan(&outboxID); err != nil {
+		`, auctionID, seq, i, EventSchemaVersion).Scan(&outboxID); err != nil {
 			t.Fatalf("insert outbox event %d: %v", i, err)
 		}
 		if _, err := db.Exec(ctx, `INSERT INTO outbox_delivery (outbox_id, status) VALUES ($1, 'PENDING')`, outboxID); err != nil {
@@ -613,6 +745,187 @@ func TestRelayRebuildSnapshotWritesRedisSnapshot(t *testing.T) {
 	}
 	if len(stored) == 0 {
 		t.Fatalf("empty redis snapshot")
+	}
+	var statuses []string
+	rows, err := db.Query(ctx, `
+		SELECT status
+		FROM snapshot_rebuild_events
+		WHERE auction_id = $1
+		ORDER BY id
+	`, auctionRow.ID)
+	if err != nil {
+		t.Fatalf("query snapshot audit: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var status string
+		if err := rows.Scan(&status); err != nil {
+			t.Fatalf("scan snapshot audit: %v", err)
+		}
+		statuses = append(statuses, status)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("snapshot audit rows: %v", err)
+	}
+	wantStatuses := []string{"REQUESTED", "STARTED", "COMPLETED"}
+	if len(statuses) != len(wantStatuses) {
+		t.Fatalf("snapshot statuses = %#v, want %#v", statuses, wantStatuses)
+	}
+	for i := range wantStatuses {
+		if statuses[i] != wantStatuses[i] {
+			t.Fatalf("snapshot statuses = %#v, want %#v", statuses, wantStatuses)
+		}
+	}
+}
+
+func TestRelayProcessSignalsRebuildsSnapshotAndRetriesDeadOutbox(t *testing.T) {
+	db := openDB(t)
+	rdb := openRedis(t)
+	ctx := context.Background()
+	repo := auction.NewRepository(db)
+	auctionRow := createActiveAuctionForRelay(t, repo, db)
+	quiesceOutboxExcept(t, db, auctionRow.ID)
+
+	var outboxID int64
+	if err := db.QueryRow(ctx, `
+		SELECT e.id
+		FROM outbox_events e
+		JOIN outbox_delivery d ON d.outbox_id = e.id
+		WHERE e.auction_id = $1
+		ORDER BY e.seq
+		LIMIT 1
+	`, auctionRow.ID).Scan(&outboxID); err != nil {
+		t.Fatalf("select outbox id: %v", err)
+	}
+	if _, err := db.Exec(ctx, `
+		UPDATE outbox_delivery
+		SET status = 'DEAD',
+		    attempts = 3,
+		    last_error = 'test poison',
+		    last_error_class = $2,
+		    last_error_retriable = false,
+		    last_error_at = now()
+		WHERE outbox_id = $1
+	`, outboxID, ErrorClassPayloadInvalid); err != nil {
+		t.Fatalf("mark dead outbox: %v", err)
+	}
+	if _, err := db.Exec(ctx, `
+		INSERT INTO system_control_signals (signal_type, target_type, target_id, requested_by, reason)
+		VALUES
+		  ($1, 'auction', $2, 'host_1', 'test rebuild'),
+		  ($3, 'outbox', $4::bigint::text, 'host_1', 'test retry')
+	`, SignalForceSnapshotRebuild, auctionRow.ID, SignalRetryDeadOutbox, outboxID); err != nil {
+		t.Fatalf("insert signals: %v", err)
+	}
+
+	relay := NewRelay(db, rdb, "signal-worker")
+	processed, err := relay.ProcessSignals(ctx, 4)
+	if err != nil {
+		t.Fatalf("ProcessSignals: %v", err)
+	}
+	if processed != 2 {
+		t.Fatalf("processed = %d, want 2", processed)
+	}
+	var succeeded int
+	if err := db.QueryRow(ctx, `
+		SELECT count(*)
+		FROM system_control_signals
+		WHERE status = 'SUCCEEDED'
+		  AND signal_type IN ($1, $2)
+		  AND target_id IN ($3, $4::bigint::text)
+	`, SignalForceSnapshotRebuild, SignalRetryDeadOutbox, auctionRow.ID, outboxID).Scan(&succeeded); err != nil {
+		t.Fatalf("count succeeded signals: %v", err)
+	}
+	if succeeded != 2 {
+		t.Fatalf("succeeded signals = %d, want 2", succeeded)
+	}
+	var deliveryStatus string
+	var lastError *string
+	if err := db.QueryRow(ctx, `
+		SELECT status, last_error
+		FROM outbox_delivery
+		WHERE outbox_id = $1
+	`, outboxID).Scan(&deliveryStatus, &lastError); err != nil {
+		t.Fatalf("select retried delivery: %v", err)
+	}
+	if deliveryStatus != StatusPending || lastError != nil {
+		t.Fatalf("retried delivery status=%s last_error=%v, want PENDING nil", deliveryStatus, lastError)
+	}
+	stored, err := rdb.Get(ctx, "auction:"+auctionRow.ID+":snapshot").Bytes()
+	if err != nil {
+		t.Fatalf("Get snapshot after signal: %v", err)
+	}
+	if len(stored) == 0 {
+		t.Fatalf("empty snapshot after signal")
+	}
+}
+
+func TestRelayProcessSignalsPauseAndResumeShard(t *testing.T) {
+	db := openDB(t)
+	rdb := openRedis(t)
+	ctx := context.Background()
+	repo := auction.NewRepository(db)
+	auctionRow := createActiveAuctionForRelay(t, repo, db)
+	quiesceOutboxExcept(t, db, auctionRow.ID)
+
+	var shardID int
+	if err := db.QueryRow(ctx, `
+		SELECT shard_id
+		FROM outbox_delivery
+		WHERE auction_id = $1
+		ORDER BY outbox_id
+		LIMIT 1
+	`, auctionRow.ID).Scan(&shardID); err != nil {
+		t.Fatalf("select shard id: %v", err)
+	}
+	if _, err := db.Exec(ctx, `DELETE FROM outbox_relay_shard_leases WHERE shard_id = $1`, shardID); err != nil {
+		t.Fatalf("clear shard lease: %v", err)
+	}
+	if _, err := db.Exec(ctx, `
+		INSERT INTO system_control_signals (signal_type, target_type, target_id, requested_by, reason)
+		VALUES
+		  ($1, 'relay_shard', $2::int::text, 'host_1', 'test pause'),
+		  ($3, 'relay_shard', $2::int::text, 'host_1', 'test resume')
+	`, SignalPauseRelayShard, shardID, SignalResumeRelayShard); err != nil {
+		t.Fatalf("insert shard signals: %v", err)
+	}
+
+	relay := NewRelay(db, rdb, "signal-shard-worker")
+	processed, err := relay.ProcessSignals(ctx, 1)
+	if err != nil {
+		t.Fatalf("ProcessSignals pause: %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("pause processed = %d, want 1", processed)
+	}
+	var ownerID string
+	if err := db.QueryRow(ctx, `
+		SELECT owner_id
+		FROM outbox_relay_shard_leases
+		WHERE shard_id = $1
+	`, shardID).Scan(&ownerID); err != nil {
+		t.Fatalf("select paused shard lease: %v", err)
+	}
+	if ownerID != "paused:"+relay.workerID {
+		t.Fatalf("paused owner = %q, want %q", ownerID, "paused:"+relay.workerID)
+	}
+	processed, err = relay.ProcessSignals(ctx, 1)
+	if err != nil {
+		t.Fatalf("ProcessSignals resume: %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("resume processed = %d, want 1", processed)
+	}
+	var remaining int
+	if err := db.QueryRow(ctx, `
+		SELECT count(*)
+		FROM outbox_relay_shard_leases
+		WHERE shard_id = $1 AND owner_id LIKE 'paused:%'
+	`, shardID).Scan(&remaining); err != nil {
+		t.Fatalf("count paused shard leases: %v", err)
+	}
+	if remaining != 0 {
+		t.Fatalf("paused shard leases = %d, want 0", remaining)
 	}
 }
 
