@@ -479,6 +479,11 @@ func (r *Repository) beginTx(ctx context.Context) (pgx.Tx, error) {
 }
 
 func appendAuctionEvent(ctx context.Context, tx pgx.Tx, auctionID string, eventType string, traceID string, payload map[string]any) error {
+	_, err := appendAuctionEventWithSeq(ctx, tx, auctionID, eventType, traceID, payload)
+	return err
+}
+
+func appendAuctionEventWithSeq(ctx context.Context, tx pgx.Tx, auctionID string, eventType string, traceID string, payload map[string]any) (int64, error) {
 	var seq int64
 	var version int64
 	if err := tx.QueryRow(ctx, `
@@ -487,12 +492,12 @@ func appendAuctionEvent(ctx context.Context, tx pgx.Tx, auctionID string, eventT
 		WHERE id = $1
 		RETURNING seq, version
 	`, auctionID).Scan(&seq, &version); err != nil {
-		return err
+		return 0, err
 	}
 	payload["state_version"] = version
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	var outboxID int64
 	serverTimeMS := time.Now().UTC().UnixMilli()
@@ -500,7 +505,7 @@ func appendAuctionEvent(ctx context.Context, tx pgx.Tx, auctionID string, eventT
 		INSERT INTO auction_events (auction_id, seq, event_type, payload_json, server_time_ms, trace_id)
 		VALUES ($1, $2, $3, $4, $5, $6)
 	`, auctionID, seq, eventType, payloadJSON, serverTimeMS, traceID); err != nil {
-		return err
+		return 0, err
 	}
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO outbox_events (
@@ -513,13 +518,13 @@ func appendAuctionEvent(ctx context.Context, tx pgx.Tx, auctionID string, eventT
 		)
 		RETURNING id
 	`, auctionID, seq, eventType, eventSchemaVersion, payloadJSON).Scan(&outboxID); err != nil {
-		return err
+		return 0, err
 	}
 	_, err = tx.Exec(ctx, `
 		INSERT INTO outbox_delivery (outbox_id, status)
 		VALUES ($1, 'PENDING')
 	`, outboxID)
-	return err
+	return seq, err
 }
 
 func upsertSchedulerJob(ctx context.Context, tx pgx.Tx, jobType string, targetType string, targetID string, idempotencyKey string, runAt time.Time) error {

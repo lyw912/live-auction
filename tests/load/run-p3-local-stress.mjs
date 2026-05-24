@@ -56,6 +56,16 @@ const workloads = [
   { name: 'preflight', script: 'tests/load/preflight.js', env: { VUS: '1', DURATION: '1s' } },
   { name: 'final-second-bid-burst', script: 'tests/load/final-second-bid-burst.js', env: { VUS: vus, DURATION: duration, GRACEFUL_STOP: '5s' } },
   { name: 'outbox-burst', script: 'tests/load/outbox-burst.js', env: { VUS: vus, DURATION: duration, GRACEFUL_STOP: '5s' } },
+  {
+    name: 'p3-bid-pressure',
+    script: 'tests/load/p3-bid-pressure.js',
+    env: {
+      RATE: process.env.RATE || '100',
+      DURATION: duration,
+      PRE_ALLOCATED_VUS: process.env.PRE_ALLOCATED_VUS || '80',
+      MAX_VUS: process.env.MAX_VUS || '256',
+    },
+  },
   { name: 'watcher-fanout', script: 'tests/load/watcher-fanout.js', env: { VUS: vus, DURATION: duration, SESSION_SECONDS: '1.2', SESSION_MS: '1000' } },
   { name: 'slow-consumer', script: 'tests/load/slow-consumer.js', env: { VUS: vus, DURATION: duration, SESSION_SECONDS: '1.2', SESSION_MS: '1000', BLOCK_MS: '5' } },
   { name: 'reconnect-storm', script: 'tests/load/reconnect-storm.js', env: { VUS: vus, DURATION: duration, SESSION_SECONDS: '1.2' } },
@@ -162,7 +172,13 @@ function runK6WithSampling(workload, rawPath, logPath) {
     let settled = false;
     let timedOut = false;
     const samplesPath = join(rawRoot, `${workload.name}-metrics-samples.prom`);
+    const activitySamplesPath = join(rawRoot, `${workload.name}-db-activity-samples.txt`);
+    const locksSamplesPath = join(rawRoot, `${workload.name}-db-locks-samples.txt`);
+    const outboxSamplesPath = join(rawRoot, `${workload.name}-outbox-samples.txt`);
     if (keepFullArtifacts) writeFileSync(samplesPath, '');
+    if (keepFullArtifacts) writeFileSync(activitySamplesPath, '');
+    if (keepFullArtifacts) writeFileSync(locksSamplesPath, '');
+    if (keepFullArtifacts) writeFileSync(outboxSamplesPath, '');
 
     function appendSample(label) {
       if (!keepFullArtifacts) return;
@@ -170,6 +186,9 @@ function runK6WithSampling(workload, rawPath, logPath) {
       const now = new Date().toISOString();
       const body = `${result.stdout || result.stderr || ''}`.trim();
       writeFileSync(samplesPath, `\n# sample ${label} ${now} status=${result.status ?? ''}\n${body}\n`, { flag: 'a' });
+      writeFileSync(activitySamplesPath, `\n# sample ${label} ${now}\n${sqlOutput("SELECT pid, state, wait_event_type, wait_event, now()-query_start AS age, left(query, 180) AS query FROM pg_stat_activity WHERE datname='live_auction' AND (state <> 'idle' OR wait_event_type IS NOT NULL) ORDER BY query_start NULLS LAST LIMIT 30;")}\n`, { flag: 'a' });
+      writeFileSync(locksSamplesPath, `\n# sample ${label} ${now}\n${sqlOutput("SELECT locktype, mode, granted, count(*) FROM pg_locks GROUP BY locktype, mode, granted ORDER BY locktype, mode, granted;")}\n`, { flag: 'a' });
+      writeFileSync(outboxSamplesPath, `\n# sample ${label} ${now}\n${sqlOutput("SELECT status, count(*) FROM outbox_delivery GROUP BY status ORDER BY status; SELECT event_type, count(*) FROM auction_events GROUP BY event_type ORDER BY event_type;")}\n`, { flag: 'a' });
     }
 
     child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
@@ -223,6 +242,10 @@ function capture(name, command, args) {
 
 function captureSQL(name, sql) {
   capture(name, 'docker', ['exec', 'live-auction-postgres', 'psql', '-U', 'live_auction', '-d', 'live_auction', '-c', sql]);
+}
+
+function sqlOutput(sql) {
+  return output('docker', ['exec', 'live-auction-postgres', 'psql', '-U', 'live_auction', '-d', 'live_auction', '-c', sql]);
 }
 
 function parseMetricValue(text, metric, labels = {}) {

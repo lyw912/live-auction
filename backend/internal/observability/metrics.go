@@ -215,6 +215,17 @@ func (r *Registry) collectDatabase(ctx context.Context) {
 	if db == nil {
 		return
 	}
+	stat := db.Stat()
+	r.Set("db_pool_conns", float64(stat.AcquiredConns()), map[string]string{"state": "acquired"})
+	r.Set("db_pool_conns", float64(stat.ConstructingConns()), map[string]string{"state": "constructing"})
+	r.Set("db_pool_conns", float64(stat.IdleConns()), map[string]string{"state": "idle"})
+	r.Set("db_pool_conns", float64(stat.TotalConns()), map[string]string{"state": "total"})
+	r.Set("db_pool_max_conns", float64(stat.MaxConns()), nil)
+	r.Set("db_pool_acquire_total", float64(stat.AcquireCount()), nil)
+	r.Set("db_pool_empty_acquire_total", float64(stat.EmptyAcquireCount()), nil)
+	r.Set("db_pool_canceled_acquire_total", float64(stat.CanceledAcquireCount()), nil)
+	r.Set("db_pool_acquire_duration_seconds_total", stat.AcquireDuration().Seconds(), nil)
+	r.Set("db_pool_empty_acquire_wait_seconds_total", stat.EmptyAcquireWaitTime().Seconds(), nil)
 	rows, err := db.Query(ctx, `
 		SELECT type, severity, count(*)
 		FROM system_anomaly_events

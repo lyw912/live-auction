@@ -681,16 +681,13 @@ func (r *Repository) evaluateAndApplyBid(ctx context.Context, tx pgx.Tx, a locke
 	serverTimeMS := now.UnixMilli()
 	reject := func(code apierrors.Code) (BidResponse, string, *string, error) {
 		reason := string(code)
-		if err := appendAuctionEvent(ctx, tx, a.ID, "bid_rejected", traceID, map[string]any{
+		seq, err := appendAuctionEventWithSeq(ctx, tx, a.ID, "bid_rejected", traceID, map[string]any{
 			"bid_id":       bidID,
 			"user_id":      userID,
 			"amount_cents": input.AmountCents,
 			"reason":       reason,
-		}); err != nil {
-			return BidResponse{}, "", nil, err
-		}
-		var seq int64
-		if err := tx.QueryRow(ctx, `SELECT seq FROM auctions WHERE id = $1`, a.ID).Scan(&seq); err != nil {
+		})
+		if err != nil {
 			return BidResponse{}, "", nil, err
 		}
 		resp := BidResponse{
@@ -796,7 +793,6 @@ func (r *Repository) evaluateAndApplyBid(ctx context.Context, tx pgx.Tx, a locke
 		"result":              result,
 		"current_price_cents": input.AmountCents,
 	}
-	var seq int64
 	if result == BidResultAcceptedSold {
 		orderID, err := createOrderForSoldAuction(ctx, tx, a, userID, input.AmountCents)
 		if err != nil {
@@ -804,10 +800,8 @@ func (r *Repository) evaluateAndApplyBid(ctx context.Context, tx pgx.Tx, a locke
 		}
 		eventPayload["order_id"] = orderID
 	}
-	if err := appendAuctionEvent(ctx, tx, a.ID, eventType, traceID, eventPayload); err != nil {
-		return BidResponse{}, "", nil, err
-	}
-	if err := tx.QueryRow(ctx, `SELECT seq FROM auctions WHERE id = $1`, a.ID).Scan(&seq); err != nil {
+	seq, err := appendAuctionEventWithSeq(ctx, tx, a.ID, eventType, traceID, eventPayload)
+	if err != nil {
 		return BidResponse{}, "", nil, err
 	}
 	resp := BidResponse{
