@@ -23,6 +23,8 @@ Allowed before baseline:
 
 Windows local testing is mandatory during development and is valuable for finding correctness, degradation, and bottleneck-direction issues. It is not final capacity evidence.
 
+For P3/P4/P5 bottleneck exploration and capacity discovery, admission must be fully disabled with `ADMISSION_ENABLED=false`. Do not use raised admission ceilings as a performance-exploration substitute. A run with admission `429`, `RATE_LIMITED`, `BID_AUCTION_TOO_HOT`, or WebSocket admission rejection is overload-protection evidence, not downstream bottleneck evidence.
+
 Use Windows local runs for:
 
 - concurrent correctness and attack scenarios;
@@ -45,6 +47,8 @@ P3 local stress cadence, mock boundaries, open/closed load-model rules, and bott
 ## Baseline Environment
 
 Final capacity baseline must run on Linux native or clearly documented equivalent. WSL2 is development-only. This is a release/final-claim gate, not a blocker for P2/P3 implementation progress.
+
+Capacity discovery runs keep admission disabled. Admission thresholds are configured only after the practical performance limit is known and optimization has stopped for the release candidate.
 
 Record:
 

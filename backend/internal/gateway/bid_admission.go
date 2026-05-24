@@ -156,6 +156,9 @@ func (a *bidAdmission) markBidIdempotencyTimeout(ctx context.Context, auctionID 
 }
 
 func (a *bidAdmission) checkRedisLimits(ctx context.Context, r *http.Request, user AuthUser, auctionID string, traceID string) error {
+	if !a.cfg.AdmissionEnabled {
+		return nil
+	}
 	if a.redis == nil {
 		return nil
 	}
@@ -231,6 +234,9 @@ return 1
 }
 
 func (a *bidAdmission) acquireLocalPermit(ctx context.Context, auctionID string, userID string, traceID string) (*bidAdmissionPermit, error) {
+	if !a.cfg.AdmissionEnabled {
+		return &bidAdmissionPermit{}, nil
+	}
 	limit := a.cfg.BidAuctionMaxInFlight
 	if limit <= 0 {
 		limit = 64

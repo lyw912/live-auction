@@ -10,6 +10,8 @@ Detailed P3 cadence and drilldown rules: `docs/design-v2-industrial/17-local-str
 
 Windows local testing is required and valuable. It is not final capacity evidence.
 
+During P3/P4/P5 performance exploration, admission must be fully disabled with `ADMISSION_ENABLED=false`. Do not raise ceilings as a substitute. The goal is to force pressure into the downstream subsystem and expose the real bottleneck. Runs with admission rejections are admission/protection evidence, not bottleneck evidence.
+
 Use Windows local runs to find and fix:
 
 - correctness bugs: multiple winners, multiple orders, seq gaps, idempotency drift;
@@ -32,10 +34,10 @@ Do not use Windows local runs to claim:
    Goal: every workload runs, invariants are checked, failures are diagnosable.
 
 2. Local relative optimization.
-   Goal: compare before/after under the same laptop setup. Acceptable claims are directional, such as lower outbox lag, fewer slow consumers, or smaller lock waits under the same script.
+   Goal: compare before/after under the same laptop setup with admission disabled. Acceptable claims are directional, such as lower outbox lag, fewer slow consumers, or smaller lock waits under the same script.
 
 3. Final Linux calibration.
-   Goal: only at the release/final evidence phase, run native Linux 3-run raw outputs to decide whether any capacity number can be published.
+   Goal: only at the release/final evidence phase, run native Linux 3-run raw outputs to decide whether any capacity number can be published. Admission remains disabled for capacity discovery; admission limits are chosen and validated after bottleneck exploration stops.
 
 ## When To Test Each Suspected Bottleneck Locally
 
@@ -57,6 +59,7 @@ For changes touching bid, outbox, realtime, recovery, room routing, payment, or 
 - capture raw output under `docs/perf/raw/windows-local/` or summarize in `docs/evidence/`;
 - state clearly that the result is Windows local smoke or relative comparison;
 - run or update an invariant check when the workload mutates money state.
+- for P3/P4/P5 downstream-pressure evidence, include raw proof that `auction_admission_enabled 0` before and after the workload and that admission rejection counters did not increase.
 
 ## Test-Attacker Link
 

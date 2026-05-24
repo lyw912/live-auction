@@ -445,6 +445,12 @@ func (h AuctionHandler) CreateWSTicket(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
 		return
 	}
+	releaseTicket, ok := h.RT.Admission().TryTicket()
+	if !ok {
+		h.RT.Admission().WriteRejected(w)
+		return
+	}
+	defer releaseTicket()
 	var req struct {
 		RoomID    string `json:"room_id"`
 		AuctionID string `json:"auction_id"`

@@ -17,10 +17,32 @@ import (
 )
 
 func NewRouter(cfg config.Config, deps *storage.Dependencies, log *slog.Logger) http.Handler {
-	return NewRouterWithRealtime(cfg, deps, log, realtime.NewServer(deps.Postgres, deps.Redis))
+	rt := realtime.NewServer(deps.Postgres, deps.Redis).WithAdmission(newRealtimeAdmission(cfg))
+	return NewRouterWithRealtime(cfg, deps, log, rt)
+}
+
+func newRealtimeAdmission(cfg config.Config) *realtime.Admission {
+	if !cfg.AdmissionEnabled {
+		return realtime.NewAdmission(0, 0, cfg.WSRetryAfter)
+	}
+	return realtime.NewAdmission(
+		cfg.WSTicketMaxInFlight,
+		cfg.WSConnectMaxInFlight,
+		cfg.WSRetryAfter,
+	)
 }
 
 func NewRouterWithRealtime(cfg config.Config, deps *storage.Dependencies, log *slog.Logger, rt *realtime.Server) http.Handler {
+	observability.SetAdmissionConfig(observability.AdmissionConfig{
+		Enabled:               cfg.AdmissionEnabled,
+		BidUserLimit:          cfg.BidUserLimitPerSecond,
+		BidIPLimit:            cfg.BidIPLimitPerSecond,
+		BidAuctionLimit:       cfg.BidAuctionLimitPerSecond,
+		BidAuctionMaxInFlight: cfg.BidAuctionMaxInFlight,
+		WSTicketMaxInFlight:   cfg.WSTicketMaxInFlight,
+		WSConnectMaxInFlight:  cfg.WSConnectMaxInFlight,
+	})
+
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP)
 	r.Use(traceMiddleware)

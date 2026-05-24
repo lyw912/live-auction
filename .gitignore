@@ -33,3 +33,7 @@ infra/.data/
 
 # Logs
 *.log
+
+# Local performance artifacts
+docs/perf/raw/*
+!docs/perf/raw/README.md

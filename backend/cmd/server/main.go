@@ -33,11 +33,17 @@ func main() {
 	}
 	defer deps.Close()
 
-	rt := realtime.NewServer(deps.Postgres, deps.Redis)
-	go outbox.NewRelay(deps.Postgres, deps.Redis, "server-main").
-		WithPublisher(rt.PublishAuctionEvent).
-		Run(ctx, log, 500*time.Millisecond)
-	go scheduler.NewRunner(deps.Postgres, "server-main").Run(ctx, log, 500*time.Millisecond)
+	rt := realtime.NewServer(deps.Postgres, deps.Redis).WithAdmission(realtimeAdmission(cfg))
+	workerID := envOrDefault("OUTBOX_WORKER_ID", "server-main")
+	schedulerWorkerID := envOrDefault("SCHEDULER_WORKER_ID", workerID)
+	if envFlag("DISABLE_EMBEDDED_OUTBOX_RELAY") {
+		log.Info("embedded outbox relay disabled", slog.String("worker_id", workerID))
+	} else {
+		go outbox.NewRelay(deps.Postgres, deps.Redis, workerID).
+			WithPublisher(rt.PublishAuctionEvent).
+			Run(ctx, log, 500*time.Millisecond)
+	}
+	go scheduler.NewRunner(deps.Postgres, schedulerWorkerID).Run(ctx, log, 500*time.Millisecond)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
@@ -58,5 +64,32 @@ func main() {
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Error("server shutdown failed", slog.String("error", err.Error()))
+	}
+}
+
+func realtimeAdmission(cfg config.Config) *realtime.Admission {
+	if !cfg.AdmissionEnabled {
+		return realtime.NewAdmission(0, 0, cfg.WSRetryAfter)
+	}
+	return realtime.NewAdmission(
+		cfg.WSTicketMaxInFlight,
+		cfg.WSConnectMaxInFlight,
+		cfg.WSRetryAfter,
+	)
+}
+
+func envOrDefault(key string, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func envFlag(key string) bool {
+	switch os.Getenv(key) {
+	case "1", "true", "TRUE", "yes", "YES", "on", "ON":
+		return true
+	default:
+		return false
 	}
 }

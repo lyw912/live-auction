@@ -174,6 +174,34 @@ func TestServeWSReceivesOutboxFanoutWhileConnected(t *testing.T) {
 	assertWSMessageType(t, conn, "bid_accepted")
 }
 
+func TestServeWSAdmissionRejectsWhenConnectSaturated(t *testing.T) {
+	db := openDBForRealtime(t)
+	rdb := openRedisForRealtime(t)
+	repo := auction.NewRepository(db)
+	auctionRow := createActiveAuctionForRealtime(t, repo, db)
+	rt := NewServer(db, rdb).WithAdmission(NewAdmission(0, 1, time.Second))
+	server := httptest.NewServer(rtHandler(rt))
+	t.Cleanup(server.Close)
+
+	token := issueRealtimeTicket(t, rt, auctionRow.RoomID, auctionRow.ID)
+	conn := dialRealtime(t, server.URL, auctionRow.RoomID, auctionRow.ID, auctionRow.Seq, token)
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	token = issueRealtimeTicket(t, rt, auctionRow.RoomID, auctionRow.ID)
+	_, response, err := websocket.Dial(context.Background(), wsURL(server.URL, auctionRow.RoomID, auctionRow.ID, auctionRow.Seq), &websocket.DialOptions{
+		Subprotocols: []string{"auction.v1", "ticket." + token},
+	})
+	if err == nil {
+		t.Fatalf("saturated dial unexpectedly succeeded")
+	}
+	if response == nil || response.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("saturated dial status = %v, want 429", responseStatus(response))
+	}
+	if response.Header.Get("Retry-After") != "1" {
+		t.Fatalf("Retry-After = %q, want 1", response.Header.Get("Retry-After"))
+	}
+}
+
 func TestHubClosesSlowConsumerOnBoundedQueueOverflow(t *testing.T) {
 	hub := NewHub(1)
 	closed := make(chan struct{})

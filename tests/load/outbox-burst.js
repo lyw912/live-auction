@@ -8,6 +8,7 @@ export const options = {
       executor: 'constant-vus',
       vus: Number(__ENV.VUS || 8),
       duration: __ENV.DURATION || '20s',
+      gracefulStop: __ENV.GRACEFUL_STOP || '5s',
     },
   },
   summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(90)', 'p(95)', 'p(99)', 'p(99.9)'],

@@ -158,7 +158,7 @@ func findSessionCookie(t *testing.T, cookies []*http.Cookie) *http.Cookie {
 }
 
 func testConfig() config.Config {
-	return config.Config{AppEnv: "test", MockHostUserID: "host_1", MockUserID: "user_1", SessionTTL: 12 * time.Hour}
+	return config.Config{AppEnv: "test", MockHostUserID: "host_1", MockUserID: "user_1", SessionTTL: 12 * time.Hour, AdmissionEnabled: true}
 }
 
 func nilLogger() *slog.Logger {

@@ -39,6 +39,16 @@ type Registry struct {
 	db         *pgxpool.Pool
 }
 
+type AdmissionConfig struct {
+	Enabled               bool
+	BidUserLimit          int
+	BidIPLimit            int
+	BidAuctionLimit       int
+	BidAuctionMaxInFlight int
+	WSTicketMaxInFlight   int
+	WSConnectMaxInFlight  int
+}
+
 var Default = NewRegistry()
 
 var DefaultLatencyBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5}
@@ -81,6 +91,20 @@ func Observe(name string, value float64, labels map[string]string, buckets []flo
 
 func Handler(db *pgxpool.Pool) http.Handler {
 	return Default.WithDatabase(db)
+}
+
+func SetAdmissionConfig(cfg AdmissionConfig) {
+	enabled := 0.0
+	if cfg.Enabled {
+		enabled = 1
+	}
+	Set("auction_admission_enabled", enabled, nil)
+	Set("auction_admission_config_limit", float64(cfg.BidUserLimit), map[string]string{"kind": "bid_user_per_second"})
+	Set("auction_admission_config_limit", float64(cfg.BidIPLimit), map[string]string{"kind": "bid_ip_per_second"})
+	Set("auction_admission_config_limit", float64(cfg.BidAuctionLimit), map[string]string{"kind": "bid_auction_per_second"})
+	Set("auction_admission_config_limit", float64(cfg.BidAuctionMaxInFlight), map[string]string{"kind": "bid_auction_max_in_flight"})
+	Set("auction_admission_config_limit", float64(cfg.WSTicketMaxInFlight), map[string]string{"kind": "ws_ticket_max_in_flight"})
+	Set("auction_admission_config_limit", float64(cfg.WSConnectMaxInFlight), map[string]string{"kind": "ws_connect_max_in_flight"})
 }
 
 func (r *Registry) ServeHTTP(w http.ResponseWriter, req *http.Request) {

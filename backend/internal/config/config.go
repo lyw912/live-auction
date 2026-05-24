@@ -33,6 +33,11 @@ type Config struct {
 	BidLimitRedisTimeout     time.Duration
 	FakePaymentWebhookSecret string
 
+	AdmissionEnabled     bool
+	WSTicketMaxInFlight  int
+	WSConnectMaxInFlight int
+	WSRetryAfter         time.Duration
+
 	DBPingTimeout    time.Duration
 	RedisPingTimeout time.Duration
 }
@@ -64,6 +69,11 @@ func Load() Config {
 		BidLimitWindow:           getEnvDuration("BID_LIMIT_WINDOW", time.Second),
 		BidLimitRedisTimeout:     getEnvDuration("BID_LIMIT_REDIS_TIMEOUT", 50*time.Millisecond),
 		FakePaymentWebhookSecret: getEnv("FAKE_PAYMENT_WEBHOOK_SECRET", "local_fake_payment_secret"),
+
+		AdmissionEnabled:     getEnvBool("ADMISSION_ENABLED", true),
+		WSTicketMaxInFlight:  getEnvInt("WS_TICKET_MAX_IN_FLIGHT", 256),
+		WSConnectMaxInFlight: getEnvInt("WS_CONNECT_MAX_IN_FLIGHT", 512),
+		WSRetryAfter:         getEnvDuration("WS_RETRY_AFTER", time.Second),
 
 		DBPingTimeout:    getEnvDuration("DB_PING_TIMEOUT", 2*time.Second),
 		RedisPingTimeout: getEnvDuration("REDIS_PING_TIMEOUT", 2*time.Second),

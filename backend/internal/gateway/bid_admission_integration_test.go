@@ -159,6 +159,52 @@ func TestBidAdmissionLocalAuctionTooHotReturnsRetryAfter(t *testing.T) {
 	assertAdmissionAnomalyRecorded(t, db, auctionRow.ID, string(apierrors.CodeBidAuctionTooHot))
 }
 
+func TestAdmissionDisabledBypassesBidRedisAndLocalLimits(t *testing.T) {
+	db := openMonitorDB(t)
+	rdb := openMonitorRedis(t)
+	ctx := context.Background()
+	auctionRow := createAdmissionAuction(t, db, "user_1")
+	cfg := admissionTestConfig()
+	cfg.AdmissionEnabled = false
+	cfg.BidUserLimitPerSecond = 1
+	cfg.BidIPLimitPerSecond = 1
+	cfg.BidAuctionLimitPerSecond = 1
+	cfg.BidAuctionMaxInFlight = 1
+	handler := AuctionHandler{
+		Config: cfg,
+		Deps:   &storage.Dependencies{Postgres: db, Redis: rdb},
+		Repo:   auction.NewRepository(db),
+		ACL:    newRoomACL(db),
+		Bids:   newBidAdmission(cfg, db, rdb),
+	}
+	if _, err := rdb.Set(ctx, "bid:limit:user:"+auctionRow.ID+":user_1", 99, time.Second).Result(); err != nil {
+		t.Fatalf("force user limit: %v", err)
+	}
+	raw, _ := handler.Bids.semaphores.LoadOrStore(auctionRow.ID, make(chan struct{}, 1))
+	raw.(chan struct{}) <- struct{}{}
+	router := chi.NewRouter()
+	router.Use(traceMiddleware)
+	router.Use(mockAuthMiddleware(cfg))
+	router.Post("/api/auctions/{id}/bids", handler.PlaceBid)
+
+	body := `{"client_bid_id":"admission-disabled","amount_cents":15000,"client_seen_seq":0}`
+	rec := performBid(router, auctionRow.ID, body, "admission-disabled", "user_1")
+	if rec.Code == http.StatusTooManyRequests {
+		t.Fatalf("admission disabled still returned 429 body=%s", rec.Body.String())
+	}
+	var count int
+	if err := db.QueryRow(context.Background(), `
+		SELECT count(*)
+		FROM system_anomaly_events
+		WHERE auction_id = $1 AND type IN ($2, $3)
+	`, auctionRow.ID, string(apierrors.CodeRateLimited), string(apierrors.CodeBidAuctionTooHot)).Scan(&count); err != nil {
+		t.Fatalf("count admission anomalies: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("admission disabled recorded %d admission anomalies", count)
+	}
+}
+
 func createAdmissionAuction(t *testing.T, db *pgxpool.Pool, viewerID string) auction.Auction {
 	t.Helper()
 	repo := auction.NewRepository(db)

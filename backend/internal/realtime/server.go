@@ -24,6 +24,7 @@ type Server struct {
 	redis             *redis.Client
 	ticket            *TicketStore
 	hub               *Hub
+	admission         *Admission
 	snapshotSemaphore chan struct{}
 	snapshotGroup     *snapshotGroup
 	rebuildSnapshotFn func(context.Context, string) ([]byte, error)
@@ -42,6 +43,7 @@ func NewServerWithHub(db *pgxpool.Pool, redisClient *redis.Client, hub *Hub) *Se
 		redis:             redisClient,
 		ticket:            NewTicketStore(redisClient),
 		hub:               hub,
+		admission:         NewAdmission(0, 0, time.Second),
 		snapshotSemaphore: make(chan struct{}, 4),
 		snapshotGroup:     newSnapshotGroup(),
 	}
@@ -51,6 +53,18 @@ func NewServerWithHub(db *pgxpool.Pool, redisClient *redis.Client, hub *Hub) *Se
 
 func (s *Server) TicketStore() *TicketStore {
 	return s.ticket
+}
+
+func (s *Server) Admission() *Admission {
+	return s.admission
+}
+
+func (s *Server) WithAdmission(admission *Admission) *Server {
+	if admission == nil {
+		admission = NewAdmission(0, 0, time.Second)
+	}
+	s.admission = admission
+	return s
 }
 
 func (s *Server) ValidateRoomAuction(ctx context.Context, roomID string, auctionID string) error {
@@ -106,6 +120,13 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 	roomID := r.URL.Query().Get("room_id")
 	auctionID := r.URL.Query().Get("auction_id")
 	lastSeq, _ := strconv.ParseInt(r.URL.Query().Get("last_seq"), 10, 64)
+
+	releaseConnect, ok := s.admission.TryConnect()
+	if !ok {
+		s.admission.WriteRejected(w)
+		return
+	}
+	defer releaseConnect()
 
 	token := ticketFromRequest(r)
 	if token == "" {
