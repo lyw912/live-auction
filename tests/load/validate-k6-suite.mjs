@@ -24,6 +24,7 @@ const scripts = [
   'p3-slow-consumer-pressure.js',
   'p3-ws-connection-storm.js',
   'p3-healthy-vs-slow-consumer.js',
+  'p3-admission-calibration.js',
 ];
 
 for (const script of scripts) {
@@ -81,6 +82,7 @@ assert(p3RunnerText.includes('p3-ws-fanout-pressure.js'), 'P3 runner must includ
 assert(p3RunnerText.includes('p3-slow-consumer-pressure.js'), 'P3 runner must include slow-consumer pressure workload');
 assert(p3RunnerText.includes('p3-ws-connection-storm.js'), 'P3 runner must include connection storm workload');
 assert(p3RunnerText.includes('p3-healthy-vs-slow-consumer.js'), 'P3 runner must include healthy-vs-slow workload');
+assert(p3RunnerText.includes('p3-admission-calibration.js'), 'P3 runner must include admission calibration workload');
 for (const script of scripts.filter((script) => !script.startsWith('p3-'))) {
   assert(p3RunnerText.includes(script), `P3 runner must include ${script}`);
 }
@@ -104,6 +106,10 @@ assert(p3StormText.includes('429'), 'P3 connection storm must treat admission 42
 const p3HealthyVsSlowText = readFileSync(join(loadDir, 'p3-healthy-vs-slow-consumer.js'), 'utf8');
 assert(p3HealthyVsSlowText.includes('auction_k6_hvs_healthy_messages_total'), 'P3 healthy-vs-slow must record healthy messages');
 assert(p3HealthyVsSlowText.includes('BLOCK_MS'), 'P3 healthy-vs-slow must support explicit slow-client blocking');
+const p3AdmissionText = readFileSync(join(loadDir, 'p3-admission-calibration.js'), 'utf8');
+assert(p3AdmissionText.includes('constant-arrival-rate'), 'P3 admission calibration must use open arrival-rate pressure');
+assert(p3AdmissionText.includes('auction_k6_admission_controlled_rejections_total'), 'P3 admission calibration must record controlled admission rejections');
+assert(p3AdmissionText.includes('Retry-After'), 'P3 admission calibration must record retry-after behavior');
 
 const p3AnalyzeText = readFileSync(join(loadDir, 'analyze-p3-artifacts.mjs'), 'utf8');
 assert(p3AnalyzeText.includes('analysis-compact.json'), 'P3 artifact analyzer must read compact reports first');

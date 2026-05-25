@@ -72,8 +72,8 @@ func Load() Config {
 
 		BidUserLimitPerSecond:    getEnvInt("BID_USER_LIMIT_PER_SECOND", 3),
 		BidIPLimitPerSecond:      getEnvInt("BID_IP_LIMIT_PER_SECOND", 10),
-		BidAuctionLimitPerSecond: getEnvInt("BID_AUCTION_LIMIT_PER_SECOND", 120),
-		BidAuctionMaxInFlight:    getEnvInt("BID_AUCTION_MAX_IN_FLIGHT", 64),
+		BidAuctionLimitPerSecond: getEnvInt("BID_AUCTION_LIMIT_PER_SECOND", 80),
+		BidAuctionMaxInFlight:    getEnvInt("BID_AUCTION_MAX_IN_FLIGHT", 32),
 		BidLimitWindow:           getEnvDuration("BID_LIMIT_WINDOW", time.Second),
 		BidLimitRedisTimeout:     getEnvDuration("BID_LIMIT_REDIS_TIMEOUT", 50*time.Millisecond),
 		FakePaymentWebhookSecret: getEnv("FAKE_PAYMENT_WEBHOOK_SECRET", "local_fake_payment_secret"),

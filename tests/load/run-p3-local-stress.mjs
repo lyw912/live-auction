@@ -83,6 +83,17 @@ const workloads = [
   },
   { name: 'bid-abuse', script: 'tests/load/bid-abuse.js', env: { VUS: vus, DURATION: duration, GRACEFUL_STOP: '5s' } },
   {
+    name: 'p3-admission-calibration',
+    script: 'tests/load/p3-admission-calibration.js',
+    env: {
+      RATE: process.env.RATE || '120',
+      DURATION: duration,
+      PRE_ALLOCATED_VUS: process.env.PRE_ALLOCATED_VUS || '120',
+      MAX_VUS: process.env.MAX_VUS || '400',
+      USERS: process.env.USERS || '512',
+    },
+  },
+  {
     name: 'p3-ws-fanout-pressure',
     script: 'tests/load/p3-ws-fanout-pressure.js',
     env: {
