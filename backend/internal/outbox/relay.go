@@ -30,7 +30,7 @@ const (
 
 	DefaultHistoryLimit = 4096
 	DefaultHistoryTTL   = 30 * time.Minute
-	DefaultDrainBatch   = 64
+	DefaultDrainBatch   = 256
 	DefaultLeaseTTL     = 5 * time.Second
 	EventSchemaVersion  = 1
 
@@ -196,10 +196,13 @@ func (r *Relay) ProcessBatch(ctx context.Context, limit int) (int, error) {
 	if limit <= 0 {
 		limit = r.drainBatch
 	}
+	if err := r.ensureShardLease(ctx); err != nil {
+		return 0, err
+	}
 	processed := 0
 	touchedShards := map[int]struct{}{}
 	for processed < limit {
-		ok, shardID, err := r.processOne(ctx, false)
+		ok, shardID, err := r.processOneAfterLease(ctx, false)
 		if err != nil {
 			return processed, err
 		}
@@ -218,17 +221,17 @@ func (r *Relay) ProcessBatch(ctx context.Context, limit int) (int, error) {
 }
 
 func (r *Relay) processOne(ctx context.Context, refreshWatermark bool) (bool, int, error) {
-	start := time.Now()
 	if err := r.ensureShardLease(ctx); err != nil {
 		return false, 0, err
 	}
-	event, ok, err := r.claimOne(ctx)
+	return r.processOneAfterLease(ctx, refreshWatermark)
+}
+
+func (r *Relay) processOneAfterLease(ctx context.Context, refreshWatermark bool) (bool, int, error) {
+	start := time.Now()
+	event, shardID, ok, err := r.claimOne(ctx)
 	if err != nil || !ok {
 		return ok, 0, err
-	}
-	shardID, err := r.shardIDForOutbox(ctx, event.OutboxID)
-	if err != nil {
-		return true, 0, err
 	}
 	if err := r.publish(ctx, event); err != nil {
 		if markErr := r.markFailure(ctx, event, err, refreshWatermark); markErr != nil {
@@ -244,16 +247,17 @@ func (r *Relay) processOne(ctx context.Context, refreshWatermark bool) (bool, in
 	return true, shardID, nil
 }
 
-func (r *Relay) claimOne(ctx context.Context) (Event, bool, error) {
+func (r *Relay) claimOne(ctx context.Context) (Event, int, bool, error) {
 	tx, err := r.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return Event{}, false, err
+		return Event{}, 0, false, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	var event Event
+	var shardID int
 	err = tx.QueryRow(ctx, `
-		SELECT e.id, e.aggregate_type, e.aggregate_id, e.auction_id, e.seq, e.event_type,
+		SELECT e.id, d.shard_id, e.aggregate_type, e.aggregate_id, e.auction_id, e.seq, e.event_type,
 		       e.event_schema_version, e.event_key, e.payload_json, e.payload_sha256, e.created_at
 		FROM outbox_delivery d
 		JOIN outbox_events e ON e.id = d.outbox_id
@@ -278,14 +282,14 @@ func (r *Relay) claimOne(ctx context.Context) (Event, bool, error) {
 		LIMIT 1
 		FOR UPDATE OF d SKIP LOCKED
 	`, r.workerID).Scan(
-		&event.OutboxID, &event.AggregateType, &event.AggregateID, &event.AuctionID, &event.Seq, &event.EventType,
+		&event.OutboxID, &shardID, &event.AggregateType, &event.AggregateID, &event.AuctionID, &event.Seq, &event.EventType,
 		&event.EventSchemaVersion, &event.EventKey, &event.Payload, &event.PayloadSHA256, &event.CreatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Event{}, false, nil
+		return Event{}, 0, false, nil
 	}
 	if err != nil {
-		return Event{}, false, err
+		return Event{}, 0, false, err
 	}
 	_, err = tx.Exec(ctx, `
 		UPDATE outbox_delivery
@@ -293,12 +297,12 @@ func (r *Relay) claimOne(ctx context.Context) (Event, bool, error) {
 		WHERE outbox_id = $1
 	`, event.OutboxID, r.workerID)
 	if err != nil {
-		return Event{}, false, err
+		return Event{}, 0, false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return Event{}, false, err
+		return Event{}, 0, false, err
 	}
-	return event, true, nil
+	return event, shardID, true, nil
 }
 
 func (r *Relay) renewShardLeases(ctx context.Context) error {
