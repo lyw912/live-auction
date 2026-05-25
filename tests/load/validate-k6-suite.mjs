@@ -78,6 +78,10 @@ assert(p3RunnerText.includes('auction_admission_enabled'), 'P3 runner must verif
 assert(p3RunnerText.includes('environmentSignals'), 'P3 runner must record environment/load-generator attribution signals');
 assert(p3RunnerText.includes('dropped_iterations'), 'P3 runner must record k6 dropped iterations as possible environment/load-generator evidence');
 assert(p3RunnerText.includes('socket_port_exhaustion'), 'P3 runner must classify Windows socket/port exhaustion signatures');
+assert(p3RunnerText.includes('P3_INVARIANT_CHECK'), 'P3 runner must allow invariant verification to be explicitly disabled only for harness debugging');
+assert(p3RunnerText.includes('cmd/invariantcheck'), 'P3 runner must run the invariant verifier after workloads');
+assert(p3RunnerText.includes('-invariants.json'), 'P3 runner must write machine-readable invariant reports');
+assert(p3RunnerText.includes('INVARIANT_AUCTION_ID'), 'P3 runner must scope invariant checks away from unrelated historical local data');
 assert(p3RunnerText.includes('p3-ws-fanout-pressure.js'), 'P3 runner must include fanout pressure workload');
 assert(p3RunnerText.includes('p3-slow-consumer-pressure.js'), 'P3 runner must include slow-consumer pressure workload');
 assert(p3RunnerText.includes('p3-ws-connection-storm.js'), 'P3 runner must include connection storm workload');

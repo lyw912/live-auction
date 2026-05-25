@@ -7,6 +7,7 @@ P3/P4/P5 local stress runs can create large transient artifacts: k6 summaries, P
 Default retention:
 
 - keep `analysis-compact.json`, `analysis-compact.md`, `summary.json`, `environment.json`, per-workload k6 `*.json`, and before/after metrics for the current investigation;
+- keep per-workload `*-invariants.json` and `*-invariants.md` for mutating P3/P4/P5 runs because they are the machine-checkable correctness proof for the workload scope;
 - keep full logs, during-sample metrics, DB snapshots, and readyz dumps only for failed runs or when `P3_ARTIFACT_MODE=full`;
 - never keep generated `*.exe` files under `docs/perf/raw`;
 - promote only reviewed, small evidence summaries to `docs/evidence/` or a named report under `docs/perf/`.

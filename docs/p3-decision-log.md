@@ -39,6 +39,7 @@ Decision states:
 | P3-D16 | Current release-track architecture stays: PostgreSQL bid truth, app-owned DB relay, Redis projection/history, and self-hub realtime. | ACCEPTED | `docs/evidence/p3-15-architecture-go-no-go-2026-05-25.md`. | Redis Lua reservation, Debezium/CDC, NATS/JetStream runtime, and self-hub replacement are no-go for this P3 cycle without a new ADR, invariant verifier evidence, and a contradictory bottleneck bundle. Proceed to P3-R7 local ceiling sweep and P3-R8 admission calibration. |
 | P3-D17 | Final Windows-local downstream ceiling has been characterized for the current release-track architecture. | ACCEPTED | `docs/evidence/p3-16-final-local-ceiling-sweep-2026-05-26.md`. | Further local bid escalation above the clean profile is primarily k6 VU ceiling after DB row-lock latency growth. Proceed to admission-on calibration below the downstream cliff instead of adding Redis Lua reservation, CDC, broker runtime, or self-hub replacement. |
 | P3-D18 | Local admission protection defaults are calibrated below the R7 downstream cliff. | ACCEPTED | `docs/evidence/p3-17-admission-calibration-2026-05-26.md`. | Use `BID_AUCTION_LIMIT_PER_SECOND=80` and `BID_AUCTION_MAX_IN_FLIGHT=32` as conservative Windows-local release-track defaults. Do not market these as capacity numbers; recalibrate on Linux/native before public claims. |
+| P3-D19 | P4-R1 invariant verification is mandatory evidence for future mutating stress runs. | ACCEPTED | `docs/evidence/p4-01-invariant-verifier-2026-05-26.md`. | P3 runner now writes per-workload invariant JSON/Markdown and fails a workload when scoped invariants fail. Use scoped `auc_live` evidence for stress attribution; use unscoped verifier only as full database hygiene evidence. |
 
 ## Go / No-Go Gates
 
@@ -150,4 +151,4 @@ No-go during:
 | Order | Decision to close | Required evidence |
 |---:|---|---|
 | 1 | Is any further bid-path or relay redesign justified after admission calibration? | Linux or stronger local evidence plus ADR/invariant proof; current P3 evidence keeps the existing architecture. |
-| 2 | Can stress evidence become machine-checkable instead of manually interpreted? | P4 invariant verifier for seq continuity, one winner/order, idempotency replay, cross-room isolation, and outbox coverage. |
+| 2 | Can stress evidence become machine-checkable instead of manually interpreted? | Closed for P4-R1 by `docs/evidence/p4-01-invariant-verifier-2026-05-26.md`; next P4 work can build richer risk simulation on top. |

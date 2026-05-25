@@ -10,6 +10,7 @@ const rawRoot = join(root, process.env.RAW_ROOT || `docs/perf/raw/p3-local-stres
 const backendDir = join(root, 'backend');
 const serverBinDir = join(backendDir, 'tmp');
 const serverBin = process.platform === 'win32' ? join(serverBinDir, 'p3-local-server.exe') : join(serverBinDir, 'p3-local-server');
+const invariantBin = process.platform === 'win32' ? join(serverBinDir, 'invariantcheck.exe') : join(serverBinDir, 'invariantcheck');
 const duration = process.env.DURATION || '5s';
 const durationSeconds = (() => {
   const match = /^(\d+(?:\.\d+)?)(ms|s|m)?$/.exec(duration);
@@ -34,6 +35,9 @@ const resetBetweenWorkloads = process.env.RESET_BETWEEN_WORKLOADS !== '0';
 const startDelaySeconds = Number(process.env.START_DELAY_SECONDS || 0);
 const metricsSampleSeconds = Number(process.env.METRICS_SAMPLE_SECONDS || 5);
 const postWorkloadObserveSeconds = Number(process.env.POST_WORKLOAD_OBSERVE_SECONDS || 0);
+const invariantCheckEnabled = process.env.P3_INVARIANT_CHECK !== '0';
+const invariantAuctionID = process.env.INVARIANT_AUCTION_ID || process.env.AUCTION_ID || 'auc_live';
+const invariantRoomID = process.env.INVARIANT_ROOM_ID || '';
 const admissionEnabled = process.env.ADMISSION_ENABLED ?? (profile === 'admission-on' ? 'true' : 'false');
 const workloadFilter = (process.env.WORKLOADS || '')
   .split(',')
@@ -169,6 +173,51 @@ function run(command, args, options = {}) {
     shell: false,
     timeout: options.timeout || workloadTimeoutMs,
   });
+}
+
+function runInvariantCheck(workloadName) {
+  if (!invariantCheckEnabled) {
+    return { status: 'SKIP', json: undefined, markdown: undefined, error: '' };
+  }
+  const jsonPath = join(rawRoot, `${workloadName}-invariants.json`);
+  const markdownPath = join(rawRoot, `${workloadName}-invariants.md`);
+  const command = existsSync(invariantBin) ? invariantBin : 'go';
+  const args = existsSync(invariantBin)
+    ? ['-format', 'json', '-out', jsonPath, '-max-details', '20']
+    : ['run', './cmd/invariantcheck', '-format', 'json', '-out', jsonPath, '-max-details', '20'];
+  if (invariantAuctionID) args.push('-auction', invariantAuctionID);
+  if (invariantRoomID) args.push('-room', invariantRoomID);
+  const result = run(command, args, { cwd: backendDir, timeout: 60000 });
+  if (result.status === 0) {
+    const mdArgs = existsSync(invariantBin)
+      ? ['-format', 'markdown', '-out', markdownPath, '-max-details', '20']
+      : ['run', './cmd/invariantcheck', '-format', 'markdown', '-out', markdownPath, '-max-details', '20'];
+    if (invariantAuctionID) mdArgs.push('-auction', invariantAuctionID);
+    if (invariantRoomID) mdArgs.push('-room', invariantRoomID);
+    const mdResult = run(command, mdArgs, { cwd: backendDir, timeout: 60000 });
+    if (mdResult.status !== 0) {
+      return { status: 'FAIL', json: jsonPath, markdown: markdownPath, error: (mdResult.stderr || mdResult.stdout || '').trim() };
+    }
+    try {
+      const report = JSON.parse(readFileSync(jsonPath, 'utf8'));
+      return {
+        status: report.status || 'UNKNOWN',
+        json: jsonPath,
+        markdown: markdownPath,
+        summary: report.summary,
+        error: '',
+      };
+    } catch (err) {
+      return { status: 'FAIL', json: jsonPath, markdown: markdownPath, error: err.message };
+    }
+  }
+  writeFileSync(join(rawRoot, `${workloadName}-invariants.err.log`), `${result.stdout || ''}${result.stderr || ''}`);
+  return {
+    status: 'FAIL',
+    json: existsSync(jsonPath) ? jsonPath : undefined,
+    markdown: existsSync(markdownPath) ? markdownPath : undefined,
+    error: (result.stderr || result.stdout || '').trim(),
+  };
 }
 
 function runK6WithSampling(workload, rawPath, logPath) {
@@ -474,6 +523,9 @@ async function startManagedServer() {
   const build = run('go', ['build', '-o', serverBin, './cmd/server'], { cwd: backendDir, timeout: 180000 });
   save('go-build-server.txt', build);
   if (build.status !== 0) throw new Error('go-build-server.txt failed');
+  const invariantBuild = run('go', ['build', '-o', invariantBin, './cmd/invariantcheck'], { cwd: backendDir, timeout: 180000 });
+  save('go-build-invariantcheck.txt', invariantBuild);
+  if (invariantBuild.status !== 0) throw new Error('go-build-invariantcheck.txt failed');
   seedLoadData('seed-start.txt');
   const child = spawn(serverBin, [], {
     cwd: backendDir,
@@ -539,6 +591,11 @@ function writeCompactReport(finalResults) {
     artifact_mode: artifactMode,
     profile,
     admission_enabled: admissionEnabled,
+    invariant_check_enabled: invariantCheckEnabled,
+    invariant_scope: {
+      auction_id: invariantAuctionID,
+      room_id: invariantRoomID,
+    },
     workloads: finalResults.map((result) => ({
       workload: result.workload,
       status: result.status,
@@ -547,6 +604,7 @@ function writeCompactReport(finalResults) {
       environment_signals: result.environment_signals,
       admission_proof: result.admission_proof,
       k6: result.k6,
+      invariants: result.invariants,
       raw: result.raw,
       metrics_before: result.metrics_before,
       metrics_after: result.metrics_after,
@@ -561,13 +619,16 @@ function writeCompactReport(finalResults) {
     `- artifact_mode: ${artifactMode}`,
     `- profile: ${profile}`,
     `- admission_enabled: ${admissionEnabled}`,
+    `- invariant_check_enabled: ${invariantCheckEnabled}`,
+    `- invariant_scope: auction=${invariantAuctionID || '-'} room=${invariantRoomID || '-'}`,
     `- raw_root: ${rawRoot}`,
     '',
-    '| Workload | Status | Admission enabled before/after | Admission reject delta | Iterations | Dropped | Env signals | p99 ms | Error |',
-    '|---|---:|---:|---:|---:|---:|---|---:|---|',
+    '| Workload | Status | Invariants | Admission enabled before/after | Admission reject delta | Iterations | Dropped | Env signals | p99 ms | Error |',
+    '|---|---:|---:|---:|---:|---:|---:|---|---:|---|',
     ...report.workloads.map((workload) => [
       workload.workload,
       workload.status,
+      workload.invariants?.status ?? '',
       `${workload.admission_proof?.enabled_before ?? ''}/${workload.admission_proof?.enabled_after ?? ''}`,
       workload.admission_proof ? JSON.stringify(workload.admission_proof.reject_delta) : '',
       workload.k6?.iterations ?? 0,
@@ -631,6 +692,11 @@ writeFileSync(join(rawRoot, 'environment.json'), JSON.stringify({
   start_delay_seconds: startDelaySeconds,
   metrics_sample_seconds: metricsSampleSeconds,
   post_workload_observe_seconds: postWorkloadObserveSeconds,
+  invariant_check_enabled: invariantCheckEnabled,
+  invariant_scope: {
+    auction_id: invariantAuctionID,
+    room_id: invariantRoomID,
+  },
   artifact_mode: artifactMode,
   duration,
   vus,
@@ -679,6 +745,11 @@ try {
       validationError = validationError ? `${validationError}; ${err.message}` : err.message;
     }
     const timedOut = result.error?.code === 'ETIMEDOUT';
+    const invariantResult = runInvariantCheck(workload.name);
+    if (invariantResult.status === 'FAIL') {
+      status = 'FAIL';
+      validationError = validationError ? `${validationError}; invariant verifier failed` : 'invariant verifier failed';
+    }
     results.push({
       workload: workload.name,
       status,
@@ -689,6 +760,7 @@ try {
       environment_signals: environmentSignals(k6Summary, combinedLog),
       admission_proof,
       k6: compactK6Summary(k6Summary),
+      invariants: invariantResult,
       metrics_before: join(rawRoot, `${workload.name}-metrics-before.prom`),
       metrics_after: join(rawRoot, `${workload.name}-metrics-after.prom`),
       log_excerpt: compactLog(combinedLog),
