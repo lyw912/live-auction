@@ -42,6 +42,7 @@ Decision states:
 | P3-D19 | P4-R1 invariant verification is mandatory evidence for future mutating stress runs. | ACCEPTED | `docs/evidence/p4-01-invariant-verifier-2026-05-26.md`. | P3 runner now writes per-workload invariant JSON/Markdown and fails a workload when scoped invariants fail. Use scoped `auc_live` evidence for stress attribution; use unscoped verifier only as full database hygiene evidence. |
 | P3-D20 | P4-R2 auction flight recorder is the forensic surface for contested auctions. | ACCEPTED | `docs/evidence/p4-02-auction-flight-recorder-2026-05-26.md`. | Use the host-only flight recorder API to explain one auction's rules, bids, events, outbox, order/payment, snapshots, and anomalies after stress or abuse runs. |
 | P3-D21 | P4-R4 proxy bidding is deferred as a product-rule rewrite. | ACCEPTED | Official brief and `03-domain-model-and-rules.md` fixed-increment model. | Do not implement proxy/max-bid as an optimization. Reopen only through a separate product ADR with new rules and tests. |
+| P3-D22 | P4-R3 risk simulator is the post-optimization incident gate. | ACCEPTED | `docs/evidence/p4-03-risk-simulator-2026-05-26.md`. | After performance or architecture changes, run the P4 simulator to prove bid idempotency abuse, host-only diagnostics ACL, cap-SOLD order generation, payment double click, and scoped DB invariants still hold. |
 
 ## Go / No-Go Gates
 
@@ -153,4 +154,4 @@ No-go during:
 | Order | Decision to close | Required evidence |
 |---:|---|---|
 | 1 | Is any further bid-path or relay redesign justified after admission calibration? | Linux or stronger local evidence plus ADR/invariant proof; current P3 evidence keeps the existing architecture. |
-| 2 | Can stress evidence become machine-checkable instead of manually interpreted? | Closed for P4-R1/P4-R2 by `docs/evidence/p4-01-invariant-verifier-2026-05-26.md` and `docs/evidence/p4-02-auction-flight-recorder-2026-05-26.md`; next P4 work can build repeatable risk simulation on top. |
+| 2 | Can stress evidence become machine-checkable instead of manually interpreted? | Closed for P4-R1/P4-R2/P4-R3 by `docs/evidence/p4-01-invariant-verifier-2026-05-26.md`, `docs/evidence/p4-02-auction-flight-recorder-2026-05-26.md`, and `docs/evidence/p4-03-risk-simulator-2026-05-26.md`. |

@@ -46,6 +46,7 @@
 | `docs/evidence/p3-17-admission-calibration-2026-05-26.md` | AUTHORITATIVE | P3-R8 calibrates local admission-on protection below the R7 cliff: controlled `RATE_LIMITED` and `BID_AUCTION_TOO_HOT` 429 responses with `Retry-After`, no dropped iterations, no downstream backlog collapse, and local default auction limits of `80/s` and `32` in-flight. |
 | `docs/evidence/p4-01-invariant-verifier-2026-05-26.md` | AUTHORITATIVE | P4-R1 verifier implemented and integrated into P3 runner: seq, terminal, winner/price/order, idempotency, outbox coverage/order, DEAD anomaly, and room isolation are machine-checkable after stress runs. |
 | `docs/evidence/p4-02-auction-flight-recorder-2026-05-26.md` | AUTHORITATIVE | P4-R2 flight recorder implemented as a host-only monitor API: one auction's rules, bids, events, outbox delivery, orders, payment events, snapshots, and anomalies are available as a forensic timeline. |
+| `docs/evidence/p4-03-risk-simulator-2026-05-26.md` | AUTHORITATIVE | P4-R3 risk simulator implemented: repeatable real-backend scenarios for bid idempotency abuse, flight-recorder ACL, cap SOLD order/payment double click, and per-scenario scoped invariants. |
 | `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan.md` | AUTHORITATIVE | P3/P4 pressure protocol and admission-off policy. |
 | `docs/design-v2-industrial/18-p3-p4-roadmap-reset.md` | AUTHORITATIVE | Current P3/P4 execution order and decision gates. |
 | `docs/p3-decision-log.md` | AUTHORITATIVE | Current decisions, superseded evidence, and go/no-go gates. |
@@ -104,4 +105,5 @@ Clean or archive later only after confirming no evidence document references the
 | Outbox second-order pressure | Closed for current Windows-local direction evidence; optimized watermark refresh and later tuned R7 batch drain, but backlog still remains under high local input. | `docs/evidence/p3-14-outbox-second-order-pressure-2026-05-25.md`; `docs/evidence/p3-16-final-local-ceiling-sweep-2026-05-26.md`. |
 | P4 invariant verifier | Closed for P4-R1. | `docs/evidence/p4-01-invariant-verifier-2026-05-26.md`; Redis/browser projection correctness remains covered by realtime tests and future P4-R2/R3 evidence. |
 | P4 auction flight recorder | Closed for P4-R2. | `docs/evidence/p4-02-auction-flight-recorder-2026-05-26.md`; PC UI surfacing can be improved later, but the host-only API and integration proof exist. |
+| P4 risk simulator | Closed for P4-R3. | `docs/evidence/p4-03-risk-simulator-2026-05-26.md`; extend scenarios as new incident classes are discovered, but current money/ACL/payment smoke gate exists. |
 | Final Linux 3-run capacity baseline | Required before any public capacity claim. | P5 Linux native baseline with environment and raw output. |

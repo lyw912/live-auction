@@ -55,6 +55,7 @@ pnpm test:e2e:h5-live
 - Browser screenshots of H5 connected, pending bid, fat-finger confirm, cap SOLD, generated order/payment, paid state, PC host live flow, and diagnostics tabs.
 - Backend logs around `POST /api/auth/ws-ticket`, bid, confirm, generated order payment, PC item/auction/rule/lifecycle APIs, and monitor routes including `/api/monitor/auctions/{auction_id}/flight-recorder`.
 - Test output from `pnpm test:e2e:h5-live`.
+- P4 risk gate output from `pnpm test:risk:p4` after any performance-path change.
 - Optional DB rows from `auctions`, `bids`, `orders`, `auction_events`, `outbox_events`, and `anomalies`.
 
 ## Known Limits To State
