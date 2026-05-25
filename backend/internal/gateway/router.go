@@ -111,6 +111,7 @@ func NewRouterWithRealtime(cfg config.Config, deps *storage.Dependencies, log *s
 			r.Get("/rooms/{room_id}/chat", auctionHandler.ListChatMessages)
 			r.Post("/rooms/{room_id}/chat", auctionHandler.CreateChatMessage)
 			r.With(requireHost).Get("/monitor/auctions", monitorHandler.Auctions)
+			r.With(requireHost).Get("/monitor/auctions/{id}/flight-recorder", monitorHandler.FlightRecorder)
 			r.With(requireHost).Get("/monitor/anomalies", monitorHandler.Anomalies)
 			r.With(requireHost).Get("/monitor/outbox", monitorHandler.Outbox)
 			r.With(requireHost).Get("/monitor/outbox/watermarks", monitorHandler.OutboxWatermarks)

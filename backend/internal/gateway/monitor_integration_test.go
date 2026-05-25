@@ -44,6 +44,7 @@ func TestMonitorRoutesReturnRealDBRowsAndRequireHost(t *testing.T) {
 	assertMonitorHasItems(t, router, "/api/monitor/snapshots", "auction_id", row.ID)
 	assertMonitorHasItems(t, router, "/api/monitor/signals", "target_id", row.ID)
 	assertMonitorCreateSignal(t, router, row.ID)
+	assertMonitorFlightRecorder(t, router, row.ID)
 }
 
 func TestMonitorAnomaliesFilterByTypeUserAuctionAndTrace(t *testing.T) {
@@ -137,6 +138,58 @@ func assertMonitorCreateSignal(t *testing.T, router http.Handler, auctionID stri
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("invalid signal status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func assertMonitorFlightRecorder(t *testing.T, router http.Handler, auctionID string) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/monitor/auctions/"+auctionID+"/flight-recorder?limit=20&timeline_limit=80", nil)
+	req.Header.Set("X-Mock-Role", "host")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("flight recorder status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Summary struct {
+			AuctionID string `json:"auction_id"`
+			RoomID    string `json:"room_id"`
+			Status    string `json:"status"`
+		} `json:"summary"`
+		Rules     []map[string]any `json:"rules"`
+		Anomalies []map[string]any `json:"anomalies"`
+		Timeline  []map[string]any `json:"timeline"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode flight recorder: %v", err)
+	}
+	if body.Summary.AuctionID != auctionID {
+		t.Fatalf("flight recorder summary auction_id = %q, want %q", body.Summary.AuctionID, auctionID)
+	}
+	if len(body.Rules) == 0 {
+		t.Fatalf("flight recorder missing rules: %#v", body)
+	}
+	if len(body.Anomalies) == 0 {
+		t.Fatalf("flight recorder missing anomalies: %#v", body)
+	}
+	kinds := map[string]bool{}
+	for _, row := range body.Timeline {
+		if kind, ok := row["kind"].(string); ok {
+			kinds[kind] = true
+		}
+	}
+	for _, want := range []string{"auction_event", "bid", "outbox", "anomaly", "snapshot_rebuild"} {
+		if !kinds[want] {
+			t.Fatalf("flight recorder missing timeline kind %s in %#v", want, body.Timeline)
+		}
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/monitor/auctions/"+auctionID+"/flight-recorder", nil)
+	req.Header.Set("X-Mock-Role", "user")
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("flight recorder user status = %d, want 403", rec.Code)
 	}
 }
 

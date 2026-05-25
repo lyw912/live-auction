@@ -43,7 +43,7 @@ pnpm dev:pc
 7. Place a high bid that crosses the fat-finger threshold. H5 shows confirm UI and only submits `POST /api/auctions/{auction_id}/bids/confirm` after confirmation.
 8. Trigger or inspect a reject path such as self-leading or invalid amount; verify reason-specific copy and no optimistic success.
 9. Drive the active auction to cap/SOLD. H5 refreshes the winner's order from `/api/users/me/orders`, selects the newly generated pending order for the active auction, and calls mock payment once.
-10. Open PC diagnostics tabs and show active auction, reject, outbox, scheduler, recovery, and anomaly data from real backend producers.
+10. Open PC diagnostics tabs and show active auction, reject, outbox, scheduler, recovery, anomaly, and single-auction flight recorder data from real backend producers.
 11. Run the live backend H5 smoke if a scripted demo proof is needed:
 
 ```powershell
@@ -53,7 +53,7 @@ pnpm test:e2e:h5-live
 ## Evidence To Capture
 
 - Browser screenshots of H5 connected, pending bid, fat-finger confirm, cap SOLD, generated order/payment, paid state, PC host live flow, and diagnostics tabs.
-- Backend logs around `POST /api/auth/ws-ticket`, bid, confirm, generated order payment, PC item/auction/rule/lifecycle APIs, and monitor routes.
+- Backend logs around `POST /api/auth/ws-ticket`, bid, confirm, generated order payment, PC item/auction/rule/lifecycle APIs, and monitor routes including `/api/monitor/auctions/{auction_id}/flight-recorder`.
 - Test output from `pnpm test:e2e:h5-live`.
 - Optional DB rows from `auctions`, `bids`, `orders`, `auction_events`, `outbox_events`, and `anomalies`.
 

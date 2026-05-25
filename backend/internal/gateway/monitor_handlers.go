@@ -30,6 +30,83 @@ type monitorAuctionRow struct {
 	LastEventAt      *time.Time `json:"last_event_at,omitempty"`
 }
 
+type monitorFlightRecorderSummary struct {
+	AuctionID        string     `json:"auction_id"`
+	RoomID           string     `json:"room_id"`
+	ItemID           string     `json:"item_id"`
+	ItemTitle        string     `json:"item_title"`
+	Status           string     `json:"status"`
+	IsNarrating      bool       `json:"is_narrating"`
+	CurrentPrice     int64      `json:"current_price_cents"`
+	CurrentWinnerID  *string    `json:"current_winner_id,omitempty"`
+	StartPrice       int64      `json:"start_price_cents"`
+	Increment        int64      `json:"increment_cents"`
+	CapPrice         *int64     `json:"cap_price_cents,omitempty"`
+	StartAt          *time.Time `json:"start_at,omitempty"`
+	EndAt            *time.Time `json:"end_at,omitempty"`
+	Version          int64      `json:"version"`
+	Seq              int64      `json:"seq"`
+	AcceptedBidCount int64      `json:"accepted_bid_count"`
+	ExtendCount      int        `json:"extend_count"`
+	RuleVersion      int        `json:"rule_version"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+}
+
+type monitorFlightRecorderRule struct {
+	RuleVersion             int        `json:"rule_version"`
+	DurationSeconds         int        `json:"duration_seconds"`
+	ExtendWindowSeconds     int        `json:"extend_window_seconds"`
+	ExtendBySeconds         int        `json:"extend_by_seconds"`
+	MaxExtendCount          int        `json:"max_extend_count"`
+	FatFingerThresholdCents *int64     `json:"fat_finger_threshold_cents,omitempty"`
+	DepositBPS              *int16     `json:"deposit_bps,omitempty"`
+	DepositFloorCents       *int64     `json:"deposit_floor_cents,omitempty"`
+	DepositCapCents         *int64     `json:"deposit_cap_cents,omitempty"`
+	FrozenAt                *time.Time `json:"frozen_at,omitempty"`
+}
+
+type monitorFlightRecorderOrder struct {
+	OrderID           string     `json:"order_id"`
+	WinnerID          string     `json:"winner_id"`
+	AmountCents       int64      `json:"amount_cents"`
+	Status            string     `json:"status"`
+	DepositCents      int64      `json:"deposit_cents"`
+	DepositStatus     string     `json:"deposit_status"`
+	ProviderPaymentID *string    `json:"provider_payment_id,omitempty"`
+	ExpireAt          time.Time  `json:"expire_at"`
+	PaidAt            *time.Time `json:"paid_at,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+}
+
+type monitorFlightRecorderPaymentEvent struct {
+	ID                int64          `json:"id"`
+	Provider          string         `json:"provider"`
+	ProviderEventID   string         `json:"provider_event_id"`
+	ProviderPaymentID string         `json:"provider_payment_id"`
+	OrderID           string         `json:"order_id"`
+	EventType         string         `json:"event_type"`
+	SignatureValid    bool           `json:"signature_valid"`
+	ProcessedAt       *time.Time     `json:"processed_at,omitempty"`
+	Payload           map[string]any `json:"payload"`
+	TraceID           *string        `json:"trace_id,omitempty"`
+	CreatedAt         time.Time      `json:"created_at"`
+}
+
+type monitorFlightRecorderTimelineRow struct {
+	Time        time.Time      `json:"time"`
+	Kind        string         `json:"kind"`
+	AuctionID   string         `json:"auction_id"`
+	Seq         *int64         `json:"seq,omitempty"`
+	EventType   string         `json:"event_type"`
+	RefID       string         `json:"ref_id"`
+	UserID      *string        `json:"user_id,omitempty"`
+	AmountCents *int64         `json:"amount_cents,omitempty"`
+	Status      *string        `json:"status,omitempty"`
+	TraceID     *string        `json:"trace_id,omitempty"`
+	Payload     map[string]any `json:"payload"`
+}
+
 type monitorAnomalyRow struct {
 	ID         int64          `json:"id"`
 	Severity   string         `json:"severity"`
@@ -196,6 +273,67 @@ func (h MonitorHandler) Auctions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": result})
+}
+
+func (h MonitorHandler) FlightRecorder(w http.ResponseWriter, r *http.Request) {
+	auctionID := strings.TrimSpace(r.PathValue("id"))
+	if auctionID == "" {
+		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "auction id is required", http.StatusBadRequest))
+		return
+	}
+	var summary monitorFlightRecorderSummary
+	if err := h.Deps.Postgres.QueryRow(r.Context(), `
+		SELECT a.id, a.room_id, a.item_id, i.title, a.status, a.is_narrating,
+		       a.current_price_cents, a.current_winner_id, a.start_price_cents,
+		       a.increment_cents, a.cap_price_cents, a.start_at, a.end_at,
+		       a.version, a.seq, a.accepted_bid_count, a.extend_count,
+		       a.rule_version, a.created_at, a.updated_at
+		FROM auctions a
+		JOIN items i ON i.id = a.item_id
+		WHERE a.id = $1
+	`, auctionID).Scan(
+		&summary.AuctionID, &summary.RoomID, &summary.ItemID, &summary.ItemTitle, &summary.Status, &summary.IsNarrating,
+		&summary.CurrentPrice, &summary.CurrentWinnerID, &summary.StartPrice, &summary.Increment, &summary.CapPrice,
+		&summary.StartAt, &summary.EndAt, &summary.Version, &summary.Seq, &summary.AcceptedBidCount, &summary.ExtendCount,
+		&summary.RuleVersion, &summary.CreatedAt, &summary.UpdatedAt,
+	); err != nil {
+		writeError(w, r, internalMonitorError(err))
+		return
+	}
+
+	rules, err := h.flightRecorderRules(r, auctionID)
+	if err != nil {
+		writeError(w, r, internalMonitorError(err))
+		return
+	}
+	orders, err := h.flightRecorderOrders(r, auctionID)
+	if err != nil {
+		writeError(w, r, internalMonitorError(err))
+		return
+	}
+	payments, err := h.flightRecorderPaymentEvents(r, auctionID)
+	if err != nil {
+		writeError(w, r, internalMonitorError(err))
+		return
+	}
+	anomalies, err := h.flightRecorderAnomalies(r, auctionID)
+	if err != nil {
+		writeError(w, r, internalMonitorError(err))
+		return
+	}
+	timeline, err := h.flightRecorderTimeline(r, auctionID, monitorTimelineLimit(r))
+	if err != nil {
+		writeError(w, r, internalMonitorError(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"summary":        summary,
+		"rules":          rules,
+		"orders":         orders,
+		"payment_events": payments,
+		"anomalies":      anomalies,
+		"timeline":       timeline,
+	})
 }
 
 func (h MonitorHandler) Anomalies(w http.ResponseWriter, r *http.Request) {
@@ -582,10 +720,207 @@ func validateMonitorSignalRequest(req createSignalRequest) error {
 	return nil
 }
 
+func (h MonitorHandler) flightRecorderRules(r *http.Request, auctionID string) ([]monitorFlightRecorderRule, error) {
+	rows, err := h.Deps.Postgres.Query(r.Context(), `
+		SELECT rule_version, duration_seconds, extend_window_seconds, extend_by_seconds,
+		       max_extend_count, fat_finger_threshold_cents, deposit_bps,
+		       deposit_floor_cents, deposit_cap_cents, frozen_at
+		FROM auction_rules
+		WHERE auction_id = $1
+		ORDER BY rule_version
+	`, auctionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []monitorFlightRecorderRule{}
+	for rows.Next() {
+		var row monitorFlightRecorderRule
+		if err := rows.Scan(&row.RuleVersion, &row.DurationSeconds, &row.ExtendWindowSeconds, &row.ExtendBySeconds, &row.MaxExtendCount, &row.FatFingerThresholdCents, &row.DepositBPS, &row.DepositFloorCents, &row.DepositCapCents, &row.FrozenAt); err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
+}
+
+func (h MonitorHandler) flightRecorderOrders(r *http.Request, auctionID string) ([]monitorFlightRecorderOrder, error) {
+	rows, err := h.Deps.Postgres.Query(r.Context(), `
+		SELECT id, winner_id, amount_cents, status, deposit_cents, deposit_status,
+		       provider_payment_id, expire_at, paid_at, created_at
+		FROM orders
+		WHERE auction_id = $1
+		ORDER BY created_at, id
+	`, auctionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []monitorFlightRecorderOrder{}
+	for rows.Next() {
+		var row monitorFlightRecorderOrder
+		if err := rows.Scan(&row.OrderID, &row.WinnerID, &row.AmountCents, &row.Status, &row.DepositCents, &row.DepositStatus, &row.ProviderPaymentID, &row.ExpireAt, &row.PaidAt, &row.CreatedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
+}
+
+func (h MonitorHandler) flightRecorderPaymentEvents(r *http.Request, auctionID string) ([]monitorFlightRecorderPaymentEvent, error) {
+	rows, err := h.Deps.Postgres.Query(r.Context(), `
+		SELECT pe.id, pe.provider, pe.provider_event_id, pe.provider_payment_id,
+		       pe.order_id, pe.event_type, pe.signature_valid, pe.processed_at,
+		       pe.payload_json, pe.trace_id, pe.created_at
+		FROM payment_events pe
+		JOIN orders o ON o.id = pe.order_id
+		WHERE o.auction_id = $1
+		ORDER BY pe.created_at, pe.id
+	`, auctionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []monitorFlightRecorderPaymentEvent{}
+	for rows.Next() {
+		var row monitorFlightRecorderPaymentEvent
+		if err := rows.Scan(&row.ID, &row.Provider, &row.ProviderEventID, &row.ProviderPaymentID, &row.OrderID, &row.EventType, &row.SignatureValid, &row.ProcessedAt, &row.Payload, &row.TraceID, &row.CreatedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
+}
+
+func (h MonitorHandler) flightRecorderAnomalies(r *http.Request, auctionID string) ([]monitorAnomalyRow, error) {
+	rows, err := h.Deps.Postgres.Query(r.Context(), `
+		SELECT id, severity, type, auction_id, message, payload_json, created_at, resolved_at
+		FROM system_anomaly_events
+		WHERE auction_id = $1 OR payload_json->>'auction_id' = $1
+		ORDER BY created_at, id
+		LIMIT $2
+	`, auctionID, monitorLimit(r))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []monitorAnomalyRow{}
+	for rows.Next() {
+		var row monitorAnomalyRow
+		if err := rows.Scan(&row.ID, &row.Severity, &row.Type, &row.AuctionID, &row.Message, &row.Payload, &row.CreatedAt, &row.ResolvedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
+}
+
+func (h MonitorHandler) flightRecorderTimeline(r *http.Request, auctionID string, limit int) ([]monitorFlightRecorderTimelineRow, error) {
+	rows, err := h.Deps.Postgres.Query(r.Context(), `
+		WITH timeline AS (
+		  SELECT e.created_at AS time, 'auction_event' AS kind, e.auction_id, e.seq,
+		         e.event_type, e.id::text AS ref_id,
+		         NULLIF(e.payload_json->>'user_id', '') AS user_id,
+		         CASE WHEN e.payload_json ? 'amount_cents' THEN (e.payload_json->>'amount_cents')::bigint ELSE NULL END AS amount_cents,
+		         NULL::text AS status, e.trace_id, e.payload_json AS payload
+		  FROM auction_events e
+		  WHERE e.auction_id = $1
+		  UNION ALL
+		  SELECT b.created_at AS time, 'bid' AS kind, b.auction_id, b.seq,
+		         CASE WHEN b.status = 'ACCEPTED' THEN 'bid_accepted_row' ELSE 'bid_rejected_row' END AS event_type,
+		         b.id AS ref_id, b.user_id, b.amount_cents, b.status, b.trace_id,
+		         jsonb_build_object('client_bid_id', b.client_bid_id, 'reject_reason', b.reject_reason, 'request_hash', b.request_hash, 'response', b.response_json) AS payload
+		  FROM bids b
+		  WHERE b.auction_id = $1
+		  UNION ALL
+		  SELECT o.created_at AS time, 'outbox' AS kind, o.auction_id, o.seq,
+		         o.event_type || ':' || d.status AS event_type,
+		         o.id::text AS ref_id, NULL::text AS user_id, NULL::bigint AS amount_cents,
+		         d.status, NULL::text AS trace_id,
+		         jsonb_build_object(
+		           'delivery_message_id', 'outbox:' || o.id::text,
+		           'delivery_state', CASE
+		             WHEN d.status = 'PUBLISHED' THEN 'ACKED'
+		             WHEN d.status = 'PUBLISHING' THEN 'ACK_PENDING'
+		             WHEN d.status = 'DEAD' THEN 'TERM'
+		             WHEN d.status = 'FAILED' THEN 'NAK_RETRY_WAIT'
+		             ELSE 'READY'
+		           END,
+		           'attempts', d.attempts,
+		           'max_attempts', d.max_attempts,
+		           'shard_id', d.shard_id,
+		           'published_at', d.published_at,
+		           'last_error_class', d.last_error_class,
+		           'last_error', d.last_error,
+		           'payload_sha256', o.payload_sha256
+		         ) AS payload
+		  FROM outbox_events o
+		  JOIN outbox_delivery d ON d.outbox_id = o.id
+		  WHERE o.auction_id = $1
+		  UNION ALL
+		  SELECT o.created_at AS time, 'order' AS kind, o.auction_id, NULL::bigint AS seq,
+		         o.status AS event_type, o.id AS ref_id, o.winner_id AS user_id,
+		         o.amount_cents, o.status, NULL::text AS trace_id,
+		         jsonb_build_object('deposit_cents', o.deposit_cents, 'deposit_status', o.deposit_status, 'provider_payment_id', o.provider_payment_id, 'paid_at', o.paid_at, 'expire_at', o.expire_at) AS payload
+		  FROM orders o
+		  WHERE o.auction_id = $1
+		  UNION ALL
+		  SELECT pe.created_at AS time, 'payment_event' AS kind, o.auction_id, NULL::bigint AS seq,
+		         pe.event_type, pe.id::text AS ref_id, o.winner_id AS user_id,
+		         o.amount_cents, o.status, pe.trace_id,
+		         pe.payload_json || jsonb_build_object('order_id', pe.order_id, 'provider_payment_id', pe.provider_payment_id, 'signature_valid', pe.signature_valid, 'processed_at', pe.processed_at) AS payload
+		  FROM payment_events pe
+		  JOIN orders o ON o.id = pe.order_id
+		  WHERE o.auction_id = $1
+		  UNION ALL
+		  SELECT sae.created_at AS time, 'anomaly' AS kind, COALESCE(sae.auction_id, sae.payload_json->>'auction_id') AS auction_id,
+		         NULL::bigint AS seq, sae.type AS event_type, sae.id::text AS ref_id,
+		         NULLIF(sae.payload_json->>'user_id', '') AS user_id, NULL::bigint AS amount_cents,
+		         sae.severity AS status, NULLIF(sae.payload_json->>'trace_id', '') AS trace_id,
+		         sae.payload_json || jsonb_build_object('message', sae.message, 'resolved_at', sae.resolved_at) AS payload
+		  FROM system_anomaly_events sae
+		  WHERE sae.auction_id = $1 OR sae.payload_json->>'auction_id' = $1
+		  UNION ALL
+		  SELECT sre.created_at AS time, 'snapshot_rebuild' AS kind, sre.auction_id, NULL::bigint AS seq,
+		         sre.status AS event_type, sre.id::text AS ref_id, NULL::text AS user_id,
+		         NULL::bigint AS amount_cents, sre.status, NULL::text AS trace_id,
+		         jsonb_build_object('request_id', sre.request_id, 'source', sre.source, 'stale', sre.stale, 'duration_ms', sre.duration_ms, 'error_class', sre.error_class, 'error_message', sre.error_message) AS payload
+		  FROM snapshot_rebuild_events sre
+		  WHERE sre.auction_id = $1
+		)
+		SELECT time, kind, auction_id, seq, event_type, ref_id, user_id,
+		       amount_cents, status, trace_id, payload
+		FROM timeline
+		ORDER BY time, seq NULLS LAST, kind, ref_id
+		LIMIT $2
+	`, auctionID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []monitorFlightRecorderTimelineRow{}
+	for rows.Next() {
+		var row monitorFlightRecorderTimelineRow
+		if err := rows.Scan(&row.Time, &row.Kind, &row.AuctionID, &row.Seq, &row.EventType, &row.RefID, &row.UserID, &row.AmountCents, &row.Status, &row.TraceID, &row.Payload); err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
+}
+
 func monitorLimit(r *http.Request) int {
 	limit, err := strconv.Atoi(r.URL.Query().Get("limit"))
 	if err != nil || limit <= 0 || limit > 100 {
 		return 50
+	}
+	return limit
+}
+
+func monitorTimelineLimit(r *http.Request) int {
+	limit, err := strconv.Atoi(r.URL.Query().Get("timeline_limit"))
+	if err != nil || limit <= 0 || limit > 300 {
+		return 100
 	}
 	return limit
 }
