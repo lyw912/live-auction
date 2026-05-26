@@ -14,6 +14,7 @@
     "test:chaos:p1:validate": "node tests/chaos/validate-toxiproxy-config.mjs",
     "test:reconcile:p1": "cd backend && go run ./cmd/reconcile --limit 20",
     "test:perf:p1:ui": "node tests/perf/run-ui-performance-trace.mjs",
+    "test:perf:p10:ui": "node tests/perf/run-p10-ui-performance-gate.mjs",
     "test:alerts:p1:validate": "node tests/infra/validate-alert-rules.mjs"
   },
   "devDependencies": {
