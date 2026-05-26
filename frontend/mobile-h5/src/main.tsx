@@ -1893,6 +1893,8 @@ function ResultSheet({
   if (!kind || activeSheet) return null;
   const soldPrice = formatCents(orderAmountCents || terminalPriceCents);
   const nextTitle = nextAuction?.item?.title ?? '下一件拍品';
+  const nextPrice = nextAuction ? formatCents(nextAuction.current_price_cents ?? 0) : '';
+  const nextStatus = nextAuction?.status ?? '';
   const gapCents = Math.max(0, terminalPriceCents - userBestCents);
   const isPaymentDisabled = scenario.ctaDisabled || paymentPhase === 'pending' || paymentPhase === 'paid' || paymentPhase === 'expired' || !orderID;
   const title = kind === 'winner'
@@ -1922,7 +1924,7 @@ function ResultSheet({
         {kind === 'loser' && (
           <>
             <p>{terminalWinnerID ? `${terminalWinnerID.slice(0, 2)}**` : '领先者'} 以 {formatCents(terminalPriceCents)} 拍中。{gapCents > 0 ? `你距离成交差 ${formatCents(gapCents)}。` : '你未在最后价格领先。'}</p>
-            <p>可继续关注 {nextTitle}，本场历史会保留在出价记录中。</p>
+            <p>可继续关注 {nextTitle}，本场历史会保留在出价记录中。下一件来自当前直播间拍品列表，不是库存预留或个性化推荐。</p>
           </>
         )}
         {kind === 'unsold' && (
@@ -1932,6 +1934,14 @@ function ResultSheet({
           </>
         )}
       </div>
+      {kind !== 'winner' && nextAuction ? (
+        <div className="next-auction-card" data-testid="next-auction-handoff">
+          <span>Room list handoff</span>
+          <strong>{nextTitle}</strong>
+          <p>{nextStatus} · 当前/起拍 {nextPrice}</p>
+          <small>仅展示同直播间下一件可见拍品；未承诺相似度、库存预留或中标优先权。</small>
+        </div>
+      ) : null}
       <div className="result-actions">
         {kind === 'winner' ? (
           <>

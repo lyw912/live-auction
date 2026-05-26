@@ -221,12 +221,13 @@ test('H5 does not expose test state matrix in normal demo entry', async ({ page 
 
 test('H5 disables bid CTA for unsafe states and keeps text inside controls', async ({ page }) => {
   await page.goto('/?stateMatrix=1');
-  const unsafeStates = ['领先中', '提交中', '恢复中', '已断开', '已成交', '流拍', '已取消'];
+  const unsafeStates = ['领先中', '提交中', '恢复中', '已断开', '流拍', '已取消', '已成交'];
   for (const state of unsafeStates) {
     await page.getByRole('button', { name: state }).click();
     await expect(page.getByTestId('bid-cta')).toBeDisabled();
   }
 
+  await page.goto('/?stateMatrix=1');
   await page.getByRole('button', { name: '竞价中' }).click();
   await expect(page.getByTestId('bid-cta')).toBeEnabled();
 
@@ -606,13 +607,29 @@ test('H5 loser and unsold result sheets explain next action without enabling bid
   await expect(loserSheet.getByRole('heading', { name: '本场已落锤' })).toBeVisible();
   await expect(loserSheet.getByText('us** 以 ¥600.00 拍中')).toBeVisible();
   await expect(loserSheet.getByText('下一件：紫砂壶')).toBeVisible();
+  await expect(page.getByTestId('next-auction-handoff').getByText('Room list handoff')).toBeVisible();
+  await expect(page.getByTestId('next-auction-handoff').getByText('SCHEDULED')).toBeVisible();
+  await expect(page.getByTestId('next-auction-handoff').getByText(/未承诺相似度、库存预留或中标优先权/)).toBeVisible();
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
 
-  await page.getByRole('button', { name: '流拍', exact: true }).click();
+  await page.goto('/?stateMatrix=1');
+  await page.getByRole('button', { name: '竞价中' }).click();
+  await expect(page.getByLabel('auction-state').locator('.eyebrow')).toHaveText('竞价中');
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('auction:event', {
+      detail: {
+        auction_id: 'auc_live',
+        event_type: 'auction_ended',
+        seq: 42,
+        payload: {}
+      }
+    }));
+  });
   const unsoldSheet = page.getByTestId('result-sheet');
   await expect(unsoldSheet.getByRole('heading', { name: '本场未成交' })).toBeVisible();
   await expect(unsoldSheet.getByText('不会生成订单')).toBeVisible();
   await expect(unsoldSheet.getByText('紫砂壶 即将开始')).toBeVisible();
+  await expect(page.getByTestId('next-auction-handoff').getByText('紫砂壶')).toBeVisible();
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
 });
 
@@ -927,6 +944,7 @@ test('H5 chat reads seed messages and sends room chat API', async ({ page }) => 
 test('H5 server terminal events drive sold, ended, and cancelled states', async ({ page }) => {
   await page.goto('/?stateMatrix=1');
   await page.getByRole('button', { name: '竞价中' }).click();
+  await expect(page.getByLabel('auction-state').locator('.eyebrow')).toHaveText('竞价中');
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent('auction:event', {
       detail: {
@@ -944,13 +962,31 @@ test('H5 server terminal events drive sold, ended, and cancelled states', async 
   await expect(page.getByLabel('auction-state').locator('.eyebrow')).toHaveText('已成交');
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
 
+  await page.goto('/?stateMatrix=1');
   await page.getByRole('button', { name: '竞价中' }).click();
+  await expect(page.getByLabel('auction-state').locator('.eyebrow')).toHaveText('竞价中');
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('auction:event', {
+      detail: {
+        auction_id: 'auc_live',
+        event_type: 'auction_ended',
+        seq: 42,
+        payload: {}
+      }
+    }));
+  });
+  await expect(page.getByLabel('auction-state').locator('.eyebrow')).toHaveText('流拍');
+  await expect(page.getByTestId('bid-cta')).toBeDisabled();
+
+  await page.goto('/?stateMatrix=1');
+  await page.getByRole('button', { name: '竞价中' }).click();
+  await expect(page.getByLabel('auction-state').locator('.eyebrow')).toHaveText('竞价中');
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent('auction:event', {
       detail: {
         auction_id: 'auc_live',
         event_type: 'auction_cancelled',
-        seq: 43,
+        seq: 42,
         payload: { current_price_cents: 60000, reason: '主播已取消' }
       }
     }));

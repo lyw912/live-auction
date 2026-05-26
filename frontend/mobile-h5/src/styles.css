@@ -1093,6 +1093,33 @@ button {
   overflow-wrap: anywhere;
 }
 
+.next-auction-card {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 3px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-1);
+  padding: 9px;
+}
+
+.next-auction-card span,
+.next-auction-card small {
+  color: var(--color-muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.next-auction-card strong {
+  color: var(--color-ink-950);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.next-auction-card p {
+  margin: 0;
+}
+
 .sheet-handle {
   width: 42px;
   height: 4px;
