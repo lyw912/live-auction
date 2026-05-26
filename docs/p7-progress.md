@@ -13,7 +13,7 @@
 | P7-S4 H5 RankStrip And Leaderboard Sheet | DONE | `docs/evidence/p7-04-h5-rankstrip-leaderboard-sheet.md` |
 | P7-S4b Official Bid Hint States | DONE | `docs/evidence/p7-04b-official-bid-hint-states.md` |
 | P7-S5 Sound And Haptic Policy | DONE | `docs/evidence/p7-05-sound-haptic-policy.md` |
-| P7-S6 Countdown And Extension UX | TODO | Pending |
+| P7-S6 Countdown And Extension UX | DONE | `docs/evidence/p7-06-countdown-extension-ux.md` |
 
 ## Current Rules
 
@@ -26,3 +26,4 @@
 - P7-S4 moves action ranking into the fixed Bid Dock and expanded sheet while preserving the singular CTA and updated visual baselines.
 - P7-S4b adds bid-adjacent official hints for self-leading, multi-step bid amount, and authoritative price changes without introducing local success.
 - P7-S5 makes sound/haptic strictly opt-in, capability-aware, hidden-tab safe, and reduced-motion aware.
+- P7-S6 makes countdown tenths last-10-seconds only, surfaces event-authoritative extension old/new end times and extend count, and keeps local zero in syncing/recovery without client-side hammer.

@@ -1254,6 +1254,104 @@ test('H5 extension and sold visual effects use bounded nonblocking motion layers
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
 });
 
+test('H5 countdown shows stable tenths and authoritative extension explanation', async ({ page }) => {
+  const oldEndAt = '2099-05-22T14:00:09.900+08:00';
+  const serverTimeMS = Date.parse('2099-05-22T14:00:00+08:00');
+  await page.route('/api/auctions/auc_live', async (route) => {
+    await route.fulfill({
+      json: {
+        event_type: 'snapshot',
+        auction_id: 'auc_live',
+        seq: 41,
+        source: 'db',
+        stale: false,
+        current_price_cents: 35000,
+        increment_cents: 5000,
+        current_winner_id: 'user_2',
+        end_at: oldEndAt,
+        server_time_ms: serverTimeMS,
+        payload: {
+          status: 'ACTIVE',
+          current_price_cents: 35000,
+          leader_user_masked: '张**',
+          current_winner_id: 'user_2',
+          end_at: oldEndAt,
+          server_time_ms: serverTimeMS
+        }
+      }
+    });
+  });
+
+  await page.goto('/');
+  await expect(page.getByTestId('auction-countdown')).toContainText(/剩余 00:0\d\.\d/);
+  const before = await page.getByTestId('auction-countdown').boundingBox();
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('auction:event', {
+      detail: {
+        auction_id: 'auc_live',
+        event_type: 'bid_accepted',
+        seq: 42,
+        payload: {
+          current_price_cents: 40000,
+          current_winner_id: 'user_2',
+          user_id: 'user_2',
+          leader_user_masked: '张**',
+          old_end_at: '2099-05-22T14:00:09.900+08:00',
+          end_at: '2099-05-22T14:00:19.900+08:00',
+          extend_count: 2,
+          max_extend_count: 3,
+          server_time_ms: Date.parse('2099-05-22T14:00:00+08:00')
+        }
+      }
+    }));
+  });
+
+  await expect(page.getByTestId('auction-countdown')).toContainText('延时后 00:20');
+  await expect(page.getByTestId('auction-countdown')).toContainText('延时 14:00:09 -> 14:00:19 · 第 2/3 次');
+  const after = await page.getByTestId('auction-countdown').boundingBox();
+  expect(before).not.toBeNull();
+  expect(after).not.toBeNull();
+  expect(Math.abs((after?.width ?? 0) - (before?.width ?? 0))).toBeLessThan(80);
+});
+
+test('H5 local zero enters syncing without local hammer', async ({ page }) => {
+  let servedSnapshots = 0;
+  await page.route('/api/auctions/auc_live', async (route) => {
+    servedSnapshots += 1;
+    const serverTimeMS = Date.now();
+    const endAt = new Date(serverTimeMS + (servedSnapshots === 1 ? 100 : -100)).toISOString();
+    await route.fulfill({
+      json: {
+        event_type: 'snapshot',
+        auction_id: 'auc_live',
+        seq: 41,
+        source: 'db',
+        stale: false,
+        status: 'ACTIVE',
+        current_price_cents: 35000,
+        increment_cents: 5000,
+        current_winner_id: 'user_2',
+        end_at: endAt,
+        server_time_ms: serverTimeMS,
+        payload: {
+          status: 'ACTIVE',
+          current_price_cents: 35000,
+          leader_user_masked: '张**',
+          current_winner_id: 'user_2',
+          end_at: endAt,
+          server_time_ms: serverTimeMS
+        }
+      }
+    });
+  });
+
+  await page.goto('/');
+  await expect(page.getByTestId('auction-countdown')).toContainText(/到点同步中|本地到零，正在同步/);
+  await expect(page.getByTestId('bid-cta')).toBeDisabled();
+  await expect(page.getByLabel('auction-state').locator('.eyebrow')).not.toHaveText(/成交|已成交|流拍/);
+});
+
 test('H5 order realtime events update winner payment state', async ({ page }) => {
   await page.goto('/?stateMatrix=1');
   await page.getByRole('button', { name: '成交', exact: true }).click();

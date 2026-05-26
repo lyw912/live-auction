@@ -563,7 +563,7 @@ button {
   gap: 8px;
   padding: 0 10px;
   font-weight: 800;
-  min-width: 142px;
+  min-width: 168px;
 }
 
 .bid-dock[data-atmosphere-kind="leading"] .dock-price-row h2 {
@@ -629,12 +629,16 @@ button {
   min-width: 0;
   flex: 1 1 auto;
   overflow-wrap: anywhere;
+  font-family: var(--font-auction-tabular);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .countdown-row strong {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   color: var(--color-risk-orange);
-  font-size: 12px;
+  font-size: 11px;
+  overflow-wrap: anywhere;
 }
 
 .bid-stepper {

@@ -70,7 +70,10 @@ type AuctionRealtimeEvent = {
     status?: string;
     current_price_cents?: number;
     amount_cents?: number;
+    old_end_at?: string;
     end_at?: string;
+    extend_count?: number;
+    max_extend_count?: number;
     server_time_ms?: number;
     order_id?: string;
     leader_user_masked?: string;
@@ -100,7 +103,10 @@ type SnapshotResponse = {
     current_price_cents?: number;
     current_winner_id?: string;
     leader_user_masked?: string;
+    old_end_at?: string;
     end_at?: string;
+    extend_count?: number;
+    max_extend_count?: number;
     server_time_ms?: number;
     reason?: string;
     item?: AuctionItem;
@@ -222,6 +228,10 @@ function formatCents(cents: number) {
 }
 
 function formatRemaining(ms: number) {
+  if (ms <= 10_000) {
+    const tenths = Math.max(0, Math.ceil(ms / 100) / 10);
+    return `00:${tenths.toFixed(1).padStart(4, '0')}`;
+  }
   const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
@@ -237,6 +247,21 @@ function deriveCountdown(endAt: string, serverTimeMS: number, nowMS: number, ter
   const remaining = endAtMS - serverTimeMS - elapsed;
   if (remaining <= 0) return stale ? '本地到零，正在同步' : '到点同步中';
   return `${extended ? '延时后' : '剩余'} ${formatRemaining(remaining)}`;
+}
+
+function formatClockTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '--:--:--';
+  return date.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function extensionCopyFromEvent(detail: AuctionRealtimeEvent, oldEndAt: string, nextEndAt: string) {
+  const oldCopy = formatClockTime(detail.payload?.old_end_at ?? oldEndAt);
+  const nextCopy = formatClockTime(nextEndAt);
+  const count = detail.payload?.extend_count;
+  const max = detail.payload?.max_extend_count;
+  const countCopy = count != null && max != null ? ` · 第 ${count}/${max} 次` : count != null ? ` · 第 ${count} 次` : '';
+  return `延时 ${oldCopy} -> ${nextCopy}${countCopy}`;
 }
 
 function isCountdownExpired(endAt: string, serverTimeMS: number, nowMS: number) {
@@ -1007,6 +1032,7 @@ function App() {
     const increment = activeIncrementCentsRef.current;
     const nextEndAt = detail.payload?.end_at ?? detail.end_at;
     const nextServerTimeMS = detail.payload?.server_time_ms ?? detail.server_time_ms;
+    const previousEndAt = auctionEndAtRef.current;
     const previousLeading = leaderboardRef.current?.my_rank === 1;
     const winnerID = detail.payload?.current_winner_id ?? detail.payload?.user_id ?? '';
     setCurrentPriceCents(price);
@@ -1016,9 +1042,9 @@ function App() {
     if (nextEndAt) setAuctionEndAt(nextEndAt);
     if (nextServerTimeMS) setServerTimeMS(nextServerTimeMS);
     setLeaderMasked(detail.payload?.leader_user_masked ?? leaderMaskedRef.current);
-    const wasExtended = Boolean(nextEndAt && auctionEndAtRef.current && Date.parse(nextEndAt) > Date.parse(auctionEndAtRef.current));
-    if (wasExtended) {
-      setExtensionNotice('服务端已延时');
+    const wasExtended = Boolean(nextEndAt && previousEndAt && Date.parse(nextEndAt) > Date.parse(previousEndAt));
+    if (wasExtended && nextEndAt) {
+      setExtensionNotice(extensionCopyFromEvent(detail, previousEndAt, nextEndAt));
       setBidFeedback(`服务端已延时 seq ${detail.seq}`);
       showAtmosphere({
         kind: 'extended',
