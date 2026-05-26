@@ -25,7 +25,11 @@ func (r *Repository) PutMaxBidIntent(ctx context.Context, auctionID string, user
 	if idempotencyKey == "" {
 		return MaxBidIntentResponse{}, apierrors.New(apierrors.CodeInvalidArgument, "Idempotency-Key is required", http.StatusBadRequest)
 	}
-	requestHash := maxBidIntentRequestHash(auctionID, userID, idempotencyKey, input.MaxAmountCents)
+	source, err := normalizeMaxBidIntentSource(input.Source)
+	if err != nil {
+		return MaxBidIntentResponse{}, err
+	}
+	requestHash := maxBidIntentRequestHash(auctionID, userID, idempotencyKey, input.MaxAmountCents, source)
 	if replay, ok, err := r.completedMaxBidIntentIdempotency(ctx, auctionID, userID, idempotencyKey, requestHash); err != nil || ok {
 		return replay, err
 	}
@@ -39,6 +43,7 @@ func (r *Repository) PutMaxBidIntent(ctx context.Context, auctionID string, user
 	if err := upsertProcessing(ctx, tx, "max_bid_intent", auctionID, userID, idempotencyKey, requestHash); err != nil {
 		return MaxBidIntentResponse{}, err
 	}
+	input.Source = source
 	intent, err := r.upsertMaxBidIntentTx(ctx, tx, auctionID, userID, input)
 	if err != nil {
 		return MaxBidIntentResponse{}, err
@@ -113,12 +118,9 @@ func (r *Repository) upsertMaxBidIntentTx(ctx context.Context, tx pgx.Tx, auctio
 	if userID == "" || auctionID == "" || input.MaxAmountCents <= 0 {
 		return MaxBidIntent{}, apierrors.New(apierrors.CodeInvalidArgument, "auction_id, user_id, and positive max_amount_cents are required", http.StatusBadRequest)
 	}
-	source := input.Source
-	if source == "" {
-		source = MaxBidIntentSourceMaxBid
-	}
-	if source != MaxBidIntentSourceMaxBid && source != MaxBidIntentSourcePreBid {
-		return MaxBidIntent{}, apierrors.New(apierrors.CodeInvalidArgument, "source must be MAX_BID or PRE_BID", http.StatusBadRequest)
+	source, err := normalizeMaxBidIntentSource(input.Source)
+	if err != nil {
+		return MaxBidIntent{}, err
 	}
 
 	rule, err := lockAuctionForMaxBidIntent(ctx, tx, auctionID)
@@ -327,8 +329,18 @@ func (r *Repository) completedMaxBidIntentIdempotency(ctx context.Context, aucti
 	return resp, true, nil
 }
 
-func maxBidIntentRequestHash(auctionID string, userID string, idempotencyKey string, maxAmountCents int64) string {
-	return maxBidHashString(fmt.Sprintf("max-bid-intent:v1|%s|%s|%s|%d", auctionID, userID, idempotencyKey, maxAmountCents))
+func normalizeMaxBidIntentSource(source MaxBidIntentSource) (MaxBidIntentSource, error) {
+	if source == "" {
+		return MaxBidIntentSourceMaxBid, nil
+	}
+	if source != MaxBidIntentSourceMaxBid && source != MaxBidIntentSourcePreBid {
+		return "", apierrors.New(apierrors.CodeInvalidArgument, "source must be MAX_BID or PRE_BID", http.StatusBadRequest)
+	}
+	return source, nil
+}
+
+func maxBidIntentRequestHash(auctionID string, userID string, idempotencyKey string, maxAmountCents int64, source MaxBidIntentSource) string {
+	return maxBidHashString(fmt.Sprintf("max-bid-intent:v2|%s|%s|%s|%d|%s", auctionID, userID, idempotencyKey, maxAmountCents, source))
 }
 
 func maxBidIntentCancelRequestHash(auctionID string, userID string, idempotencyKey string) string {

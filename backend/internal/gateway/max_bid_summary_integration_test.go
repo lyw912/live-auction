@@ -23,34 +23,38 @@ func TestMaxBidSummaryRequiresHostAndDoesNotExposePrivateAmounts(t *testing.T) {
 	repo := auction.NewRepository(db)
 	row := createACLAuction(t, repo, db, "room_max_bid_summary_"+uuid.NewString(), "host_1", "user_1", "ACTIVE")
 	ctx := context.Background()
+	suffix := uuid.NewString()
+	user2 := "user_summary_2_" + suffix
+	user3 := "user_summary_3_" + suffix
+	user4 := "user_summary_4_" + suffix
 	if _, err := db.Exec(ctx, `
 		INSERT INTO users (id, role, display_name)
-		VALUES ('user_summary_2', 'user', 'Max Bid Summary 2'),
-		       ('user_summary_3', 'user', 'Max Bid Summary 3'),
-		       ('user_summary_4', 'user', 'Max Bid Summary 4')
+		VALUES ($1, 'user', 'Max Bid Summary 2'),
+		       ($2, 'user', 'Max Bid Summary 3'),
+		       ($3, 'user', 'Max Bid Summary 4')
 		ON CONFLICT DO NOTHING
-	`); err != nil {
+	`, user2, user3, user4); err != nil {
 		t.Fatalf("insert users: %v", err)
 	}
 	if _, err := db.Exec(ctx, `
 		INSERT INTO room_memberships (room_id, user_id, role, status)
 		VALUES
-		  ($1, 'user_summary_2', 'viewer', 'ACTIVE'),
-		  ($1, 'user_summary_3', 'viewer', 'ACTIVE'),
-		  ($1, 'user_summary_4', 'viewer', 'ACTIVE')
+		  ($1, $2, 'viewer', 'ACTIVE'),
+		  ($1, $3, 'viewer', 'ACTIVE'),
+		  ($1, $4, 'viewer', 'ACTIVE')
 		ON CONFLICT (room_id, user_id)
 		DO UPDATE SET role = EXCLUDED.role, status = EXCLUDED.status, left_at = NULL
-	`, row.RoomID); err != nil {
+	`, row.RoomID, user2, user3, user4); err != nil {
 		t.Fatalf("insert memberships: %v", err)
 	}
 	if _, err := db.Exec(ctx, `
 		INSERT INTO max_bid_intents (id, auction_id, user_id, max_amount_cents, status, source, cancelled_at, exhausted_at, last_applied_seq)
 		VALUES
-		  ('mbi_summary_active_max', $1, 'user_1', 95000, 'ACTIVE', 'MAX_BID', NULL, NULL, 3),
-		  ('mbi_summary_active_pre', $1, 'user_summary_2', 90000, 'ACTIVE', 'PRE_BID', NULL, NULL, NULL),
-		  ('mbi_summary_cancelled', $1, 'user_summary_3', 85000, 'CANCELLED', 'MAX_BID', now(), NULL, NULL),
-		  ('mbi_summary_exhausted', $1, 'user_summary_4', 80000, 'EXHAUSTED', 'MAX_BID', NULL, now(), 2)
-	`, row.ID); err != nil {
+		  ($2, $1, 'user_1', 95000, 'ACTIVE', 'MAX_BID', NULL, NULL, 3),
+		  ($3, $1, $6, 90000, 'ACTIVE', 'PRE_BID', NULL, NULL, NULL),
+		  ($4, $1, $7, 85000, 'CANCELLED', 'MAX_BID', now(), NULL, NULL),
+		  ($5, $1, $8, 80000, 'EXHAUSTED', 'MAX_BID', NULL, now(), 2)
+	`, row.ID, "mbi_summary_active_max_"+suffix, "mbi_summary_active_pre_"+suffix, "mbi_summary_cancelled_"+suffix, "mbi_summary_exhausted_"+suffix, user2, user3, user4); err != nil {
 		t.Fatalf("insert intents: %v", err)
 	}
 

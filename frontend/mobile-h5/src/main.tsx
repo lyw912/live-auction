@@ -1489,7 +1489,7 @@ function App() {
 
   const submitMaxBidIntent = async () => {
     const auctionID = activeAuctionIDRef.current;
-    if (!auctionID || maxBidPhase !== 'idle' || isDangerousActionDisabled(scenario, connectionPhase)) return;
+    if (!auctionID || (maxBidPhase !== 'idle' && maxBidPhase !== 'error') || isDangerousActionDisabled(scenario, connectionPhase)) return;
     const amount = Math.max(maxBidAmountCentsRef.current || 0, minimumNextBidCents);
     setMaxBidPhase('pending');
     setMaxBidFeedback('等待服务端确认 Max Bid');

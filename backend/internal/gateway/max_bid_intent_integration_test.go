@@ -3,7 +3,10 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -68,6 +71,11 @@ func TestMaxBidIntentRoutesAreCurrentUserScopedAndIdempotent(t *testing.T) {
 		t.Fatalf("changed key status = %d, want 409 body=%s", changed.Code, changed.Body.String())
 	}
 	assertAPIErrorCode(t, changed, apierrors.CodeIdempotencyKeyReusedWithDifferentRequest)
+	changedSource := performMaxBidIntent(router, http.MethodPut, row.ID, `{"max_amount_cents":25000,"client_seen_seq":0,"source":"PRE_BID"}`, "max-intent-1", "user_1")
+	if changedSource.Code != http.StatusConflict {
+		t.Fatalf("changed-source key status = %d, want 409 body=%s", changedSource.Code, changedSource.Body.String())
+	}
+	assertAPIErrorCode(t, changedSource, apierrors.CodeIdempotencyKeyReusedWithDifferentRequest)
 
 	currentUserGet := performMaxBidIntent(router, http.MethodGet, row.ID, "", "", "user_1")
 	if currentUserGet.Code != http.StatusOK {
@@ -122,6 +130,113 @@ func TestMaxBidIntentRoutesRequireMembershipAndIdempotencyKey(t *testing.T) {
 		t.Fatalf("missing-key PUT status = %d, want 400 body=%s", missingKey.Code, missingKey.Body.String())
 	}
 	assertAPIErrorCode(t, missingKey, apierrors.CodeInvalidArgument)
+}
+
+func TestMaxBidIntentRoutesRejectUnsafeAmountsAndTerminalAuctions(t *testing.T) {
+	db := openMonitorDB(t)
+	rdb := openMonitorRedis(t)
+	router := NewRouter(testConfig(), &storage.Dependencies{Postgres: db, Redis: rdb}, slog.Default())
+	repo := auction.NewRepository(db)
+	row := createACLAuction(t, repo, db, "room_max_bid_abuse_"+uuid.NewString(), "host_1", "user_1", "ACTIVE")
+	if _, err := db.Exec(context.Background(), `UPDATE auctions SET cap_price_cents = 40000 WHERE id = $1`, row.ID); err != nil {
+		t.Fatalf("set cap price: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		body string
+		want apierrors.Code
+	}{
+		{name: "below-current-minimum", body: `{"max_amount_cents":1,"client_seen_seq":0}`, want: apierrors.CodeMaxBidTooLow},
+		{name: "off-grid", body: `{"max_amount_cents":25001,"client_seen_seq":0}`, want: apierrors.CodeMaxBidIncrementMismatch},
+		{name: "above-cap", body: `{"max_amount_cents":45000,"client_seen_seq":0}`, want: apierrors.CodeMaxBidAboveCap},
+		{name: "invalid-source", body: `{"max_amount_cents":25000,"client_seen_seq":0,"source":"BOT"}`, want: apierrors.CodeInvalidArgument},
+	}
+	for _, tc := range cases {
+		rec := performMaxBidIntent(router, http.MethodPut, row.ID, tc.body, "max-intent-abuse-"+tc.name, "user_1")
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s status = %d, want 400 body=%s", tc.name, rec.Code, rec.Body.String())
+		}
+		assertAPIErrorCode(t, rec, tc.want)
+	}
+
+	accepted := performMaxBidIntent(router, http.MethodPut, row.ID, `{"max_amount_cents":25000,"client_seen_seq":0,"source":"MAX_BID"}`, "max-intent-before-terminal", "user_1")
+	if accepted.Code != http.StatusOK {
+		t.Fatalf("accepted PUT status = %d body=%s", accepted.Code, accepted.Body.String())
+	}
+	if _, err := db.Exec(context.Background(), `UPDATE auctions SET status = 'CANCELLED' WHERE id = $1`, row.ID); err != nil {
+		t.Fatalf("force terminal auction: %v", err)
+	}
+	terminalPut := performMaxBidIntent(router, http.MethodPut, row.ID, `{"max_amount_cents":30000,"client_seen_seq":0,"source":"MAX_BID"}`, "max-intent-terminal-put", "user_1")
+	if terminalPut.Code != http.StatusConflict {
+		t.Fatalf("terminal PUT status = %d, want 409 body=%s", terminalPut.Code, terminalPut.Body.String())
+	}
+	assertAPIErrorCode(t, terminalPut, apierrors.CodeAuctionNotActive)
+	terminalDelete := performMaxBidIntent(router, http.MethodDelete, row.ID, "", "max-intent-terminal-delete", "user_1")
+	if terminalDelete.Code != http.StatusConflict {
+		t.Fatalf("terminal DELETE status = %d, want 409 body=%s", terminalDelete.Code, terminalDelete.Body.String())
+	}
+	assertAPIErrorCode(t, terminalDelete, apierrors.CodeAuctionNotActive)
+}
+
+func TestMaxBidIntentRoutesBoundProcessingAndChurn(t *testing.T) {
+	db := openMonitorDB(t)
+	rdb := openMonitorRedis(t)
+	router := NewRouter(testConfig(), &storage.Dependencies{Postgres: db, Redis: rdb}, slog.Default())
+	repo := auction.NewRepository(db)
+	row := createACLAuction(t, repo, db, "room_max_bid_churn_"+uuid.NewString(), "host_1", "user_1", "ACTIVE")
+	ctx := context.Background()
+
+	stuckHash := maxBidIntentTestHash(row.ID, "user_1", "max-intent-stuck", 25_000, "MAX_BID")
+	if _, err := db.Exec(ctx, `
+		INSERT INTO idempotency_records (scope_type, scope_id, user_id, idempotency_key, request_hash, status, locked_until)
+		VALUES ('max_bid_intent', $1, 'user_1', 'max-intent-stuck', $2, 'PROCESSING', now() + interval '5 minutes')
+	`, row.ID, stuckHash); err != nil {
+		t.Fatalf("insert processing idempotency: %v", err)
+	}
+	processing := performMaxBidIntent(router, http.MethodPut, row.ID, `{"max_amount_cents":25000,"client_seen_seq":0,"source":"MAX_BID"}`, "max-intent-stuck", "user_1")
+	if processing.Code != http.StatusConflict {
+		t.Fatalf("processing status = %d, want 409 body=%s", processing.Code, processing.Body.String())
+	}
+	assertAPIErrorCode(t, processing, apierrors.CodeProcessingRetryLater)
+	processingChanged := performMaxBidIntent(router, http.MethodPut, row.ID, `{"max_amount_cents":30000,"client_seen_seq":0,"source":"MAX_BID"}`, "max-intent-stuck", "user_1")
+	if processingChanged.Code != http.StatusConflict {
+		t.Fatalf("processing changed status = %d, want 409 body=%s", processingChanged.Code, processingChanged.Body.String())
+	}
+	assertAPIErrorCode(t, processingChanged, apierrors.CodeIdempotencyKeyReusedWithDifferentRequest)
+
+	expiredHash := maxBidIntentTestHash(row.ID, "user_1", "max-intent-expired", 25_000, "MAX_BID")
+	if _, err := db.Exec(ctx, `
+		INSERT INTO idempotency_records (scope_type, scope_id, user_id, idempotency_key, request_hash, status, locked_until)
+		VALUES ('max_bid_intent', $1, 'user_1', 'max-intent-expired', $2, 'PROCESSING', now() - interval '1 minute')
+	`, row.ID, expiredHash); err != nil {
+		t.Fatalf("insert expired idempotency: %v", err)
+	}
+	expired := performMaxBidIntent(router, http.MethodPut, row.ID, `{"max_amount_cents":25000,"client_seen_seq":0,"source":"MAX_BID"}`, "max-intent-expired", "user_1")
+	if expired.Code != http.StatusConflict {
+		t.Fatalf("expired processing status = %d, want 409 body=%s", expired.Code, expired.Body.String())
+	}
+	assertAPIErrorCode(t, expired, apierrors.CodeIdempotencyTimeout)
+
+	create := performMaxBidIntent(router, http.MethodPut, row.ID, `{"max_amount_cents":25000,"client_seen_seq":0,"source":"MAX_BID"}`, "max-intent-churn-create", "user_1")
+	if create.Code != http.StatusOK {
+		t.Fatalf("create status = %d body=%s", create.Code, create.Body.String())
+	}
+	cancel := performMaxBidIntent(router, http.MethodDelete, row.ID, "", "max-intent-churn-cancel", "user_1")
+	if cancel.Code != http.StatusOK {
+		t.Fatalf("cancel status = %d body=%s", cancel.Code, cancel.Body.String())
+	}
+	recreate := performMaxBidIntent(router, http.MethodPut, row.ID, `{"max_amount_cents":30000,"client_seen_seq":0,"source":"PRE_BID"}`, "max-intent-churn-recreate", "user_1")
+	if recreate.Code != http.StatusOK {
+		t.Fatalf("recreate status = %d body=%s", recreate.Code, recreate.Body.String())
+	}
+	var intent auction.MaxBidIntentResponse
+	if err := json.Unmarshal(recreate.Body.Bytes(), &intent); err != nil {
+		t.Fatalf("decode recreate: %v", err)
+	}
+	if intent.Intent.Status != auction.MaxBidIntentStatusActive || intent.Intent.Source != auction.MaxBidIntentSourcePreBid || intent.Intent.Version < 2 {
+		t.Fatalf("recreated intent did not reset active PRE_BID state: %#v", intent.Intent)
+	}
 }
 
 func TestAuctionSnapshotCarriesOnlyCurrentUserMaxBidIntent(t *testing.T) {
@@ -222,4 +337,9 @@ func assertAPIErrorCode(t *testing.T, rec *httptest.ResponseRecorder, want apier
 	if payload.Code != want {
 		t.Fatalf("error code = %s, want %s body=%s", payload.Code, want, rec.Body.String())
 	}
+}
+
+func maxBidIntentTestHash(auctionID string, userID string, idempotencyKey string, maxAmountCents int64, source string) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("max-bid-intent:v2|%s|%s|%s|%d|%s", auctionID, userID, idempotencyKey, maxAmountCents, source)))
+	return hex.EncodeToString(sum[:])
 }

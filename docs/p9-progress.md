@@ -11,7 +11,7 @@
 | P9-S2 Verified Bidder UX Hooks | DONE | `docs/evidence/p9-02-verified-bidder-ux-states.md` |
 | P9-S3 Similar Auction Handoff | DONE | `docs/evidence/p9-03-similar-auction-handoff.md` |
 | P9-S4 Max Bid And Pre-Bid ADR | DONE | `docs/adr/p9-04-max-bid-pre-bid-decision.md`, `docs/evidence/p9-04-max-bid-pre-bid-adr.md` |
-| P9-S5 Max Bid/Pre-Bid Implementation Slice Set | IN_PROGRESS | `docs/evidence/p9-05-1-max-bid-intent-storage.md`, `docs/evidence/p9-05-2-max-bid-intent-api.md`, `docs/evidence/p9-05-3-max-bid-transaction-integration.md`, `docs/evidence/p9-05-4-max-bid-event-recovery-model.md`, `docs/evidence/p9-05-5-h5-max-bid-sheet.md`, `docs/evidence/p9-05-6-pc-max-bid-readiness-audit.md` |
+| P9-S5 Max Bid/Pre-Bid Implementation Slice Set | DONE | `docs/evidence/p9-05-1-max-bid-intent-storage.md`, `docs/evidence/p9-05-2-max-bid-intent-api.md`, `docs/evidence/p9-05-3-max-bid-transaction-integration.md`, `docs/evidence/p9-05-4-max-bid-event-recovery-model.md`, `docs/evidence/p9-05-5-h5-max-bid-sheet.md`, `docs/evidence/p9-05-6-pc-max-bid-readiness-audit.md`, `docs/evidence/p9-05-7-max-bid-abuse-boundaries.md` |
 | P9-S6 Risk And Abuse UX | TODO | - |
 
 ## Current Rules
@@ -27,4 +27,5 @@
 - P9-S5-4 keeps public realtime/Redis snapshots free of private Max Bid data and exposes current-user intent state only through authenticated REST snapshot/read paths.
 - P9-S5-5 adds H5 Max Bid controls as a secondary sheet with committed API responses, privacy copy, recovery disabling, and no client-side proxy bidding.
 - P9-S5-6 adds host-only PC Max Bid readiness/audit surfaces using aggregate counts and flight-recorder bid source metadata. It does not expose private ceilings, bidder ranking by ceiling, or host-side control over another user's intent.
+- P9-S5-7 closes Max Bid abuse boundaries: source changes are part of idempotency identity; unsafe amounts, terminal auctions, stuck idempotency records, churn, and H5 server reject recovery are covered by durable tests.
 - Route-mocked PC tests remain UI contract coverage. No-mock demo evidence must use backend-created auctions and real monitor APIs.

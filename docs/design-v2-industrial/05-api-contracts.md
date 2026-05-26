@@ -358,7 +358,7 @@ scope_type = max_bid_intent
 scope_id = auction_id
 user_id = current user
 idempotency_key = Idempotency-Key
-request_hash = sha256("max-bid-intent:v1|auction_id|user_id|idempotency_key|max_amount_cents")
+request_hash = sha256("max-bid-intent:v2|auction_id|user_id|idempotency_key|max_amount_cents|source")
 ```
 
 Cancel intent key:

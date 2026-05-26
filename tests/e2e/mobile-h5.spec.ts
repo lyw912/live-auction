@@ -968,6 +968,51 @@ test('H5 Max Bid sheet waits for committed API response and disables during reco
   await expect(sheet.getByRole('button', { name: /设置 Max Bid|更新 Max Bid/ })).toBeDisabled();
 });
 
+test('H5 Max Bid sheet surfaces server abuse rejects without optimistic success', async ({ page }) => {
+  const errorQueue = [
+    { code: 'MAX_BID_TOO_LOW', message: 'too low' },
+    { code: 'MAX_BID_INCREMENT_MISMATCH', message: 'off grid' },
+    { code: 'MAX_BID_ABOVE_CAP', message: 'above cap' },
+    { code: 'PROCESSING_RETRY_LATER', message: 'same idempotency key is still processing' }
+  ];
+  const seenKeys: string[] = [];
+  await page.route('/api/auctions/auc_live/max-bid-intent', async (route, request) => {
+    if (request.method() === 'GET') {
+      await route.fulfill({ status: 404, json: { code: 'AUCTION_NOT_FOUND', message: 'none' } });
+      return;
+    }
+    if (request.method() === 'PUT') {
+      seenKeys.push(request.headers()['idempotency-key'] ?? '');
+      await route.fulfill({ status: 400, json: errorQueue.shift() ?? { code: 'MAX_BID_TOO_LOW', message: 'too low' } });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await page.goto('/');
+  await page.getByLabel('bid-dock-shortcuts').getByRole('button', { name: 'Max' }).click();
+  const sheet = page.getByTestId('max-bid-sheet');
+  const submit = sheet.getByRole('button', { name: /设置 Max Bid|更新 Max Bid/ });
+
+  await submit.click();
+  await expect(sheet).toContainText('最高价低于当前最低有效出价');
+  await expect(sheet).not.toContainText('已代出价');
+
+  await submit.click();
+  await expect(sheet).toContainText('最高价需要按加价幅度设置');
+  await expect(sheet).not.toContainText('已代出价');
+
+  await submit.click();
+  await expect(sheet).toContainText('最高价超过本场封顶价');
+  await expect(sheet).not.toContainText('已代出价');
+
+  await submit.click();
+  await expect(sheet).toContainText('上一笔 Max Bid 仍在确认');
+  await expect(sheet).not.toContainText('已代出价');
+  expect(seenKeys).toHaveLength(4);
+  expect(new Set(seenKeys).size).toBe(4);
+});
+
 test('H5 bottom sheet history and orders use existing user APIs', async ({ page }) => {
   await page.route('/api/users/me/bids', async (route) => {
     await route.fulfill({
