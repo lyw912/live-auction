@@ -454,248 +454,441 @@ function App() {
   return (
     <Layout className="console-shell">
       <Layout.Sider className="sider" width={224}>
-        <div className="brand">Live Auction</div>
-        <nav>
-          <span><ClipboardList size={16} /> 拍品</span>
-          <span><RadioTower size={16} /> 竞拍</span>
-          <span><Activity size={16} /> 诊断</span>
-        </nav>
+        <ConsoleNav />
       </Layout.Sider>
       <Layout.Content className="content">
-        <section className="toolbar">
-          <div>
-            <h1>主控台</h1>
-            <p>{roomID} · host_1</p>
-          </div>
-          <Space>
-            <select
-              aria-label="room-selector"
-              className="native-input"
-              value={roomID}
-              onChange={(event) => {
-                setSelectedAuctionID('');
-                setRoomID(event.currentTarget.value);
-              }}
-            >
-              {rooms.length === 0 ? <option value={roomID}>{roomID}</option> : rooms.map((room) => (
-                <option key={room.id} value={room.id}>{room.id}</option>
-              ))}
-            </select>
-            <Button type="primary" icon={<RefreshCw size={16} />} loading={loading} onClick={loadAll}>刷新</Button>
-          </Space>
-        </section>
+        <ConsoleToolbar
+          loading={loading}
+          roomID={roomID}
+          rooms={rooms}
+          onRefresh={loadAll}
+          onRoomChange={(nextRoomID) => {
+            setSelectedAuctionID('');
+            setRoomID(nextRoomID);
+          }}
+        />
 
         <section className="band two-column">
-          <div className="rule-panel">
-            <h2>拍品上架</h2>
-            <Form layout="vertical">
-              <Form.Item label="标题">
-                <Input aria-label="item-title" value={itemDraft.title} onChange={(value) => setItemDraft((current) => ({ ...current, title: value }))} />
-              </Form.Item>
-              <Form.Item label="图片 URL">
-                <Input aria-label="item-image-url" value={itemDraft.imageURL} onChange={(value) => setItemDraft((current) => ({ ...current, imageURL: value }))} prefix={<Upload size={14} />} />
-              </Form.Item>
-              <Form.Item label="上传图片文件">
-                <input
-                  aria-label="item-image-file"
-                  className="native-input"
-                  type="file"
-                  accept="image/*"
-                  onChange={(event) => setItemImageFile(event.currentTarget.files?.[0] ?? null)}
-                />
-              </Form.Item>
-              <Form.Item label="描述">
-                <Input.TextArea aria-label="item-description" value={itemDraft.description} onChange={(value) => setItemDraft((current) => ({ ...current, description: value }))} />
-              </Form.Item>
-              <Button type="primary" loading={creating} disabled={!itemDraft.title || !ruleValidation.valid} onClick={createItemAndAuction}>创建拍品和竞拍</Button>
-            </Form>
-          </div>
-          <div className="rule-panel">
-            <h2>竞拍控制</h2>
-            {selectedAuction ? (
-              <>
-                <div className="control-grid">
-                  <Form.Item label="排期时间">
-                    <input
-                      aria-label="schedule-start-at"
-                      className="native-input"
-                      type="datetime-local"
-                      value={scheduleStartAt}
-                      onChange={(event) => setScheduleStartAt(event.currentTarget.value)}
-                    />
-                  </Form.Item>
-                  <Form.Item label="取消原因">
-                    <Input aria-label="cancel-reason" value={cancelReason} onChange={setCancelReason} />
-                  </Form.Item>
-                </div>
-                <Space wrap>
-                  <Button disabled={selectedAuction.status !== 'DRAFT'} onClick={() => auctionAction('schedule')}>排期</Button>
-                  <Button disabled={selectedAuction.status !== 'SCHEDULED'} icon={<Play size={14} />} onClick={() => auctionAction('start')}>开拍</Button>
-                  <Button disabled={['SOLD', 'ENDED', 'CANCELLED'].includes(selectedAuction.status)} status="danger" icon={<Square size={14} />} onClick={() => {
-                    Modal.confirm({ title: '确认取消竞拍', content: selectedAuction.id, onOk: () => auctionAction('cancel') });
-                  }}>取消</Button>
-                  <Button disabled={selectedAuction.is_narrating || ['SOLD', 'ENDED', 'CANCELLED'].includes(selectedAuction.status)} onClick={() => auctionAction('narrate-start')}>开始讲解</Button>
-                  <Button disabled={!selectedAuction.is_narrating} onClick={() => auctionAction('narrate-stop')}>停止讲解</Button>
-                </Space>
-              </>
-            ) : <div className="empty-state">暂无可控制竞拍</div>}
-          </div>
-        </section>
-
-        <section className="band">
-          <Table
-            rowKey="id"
-            data={auctions}
-            pagination={false}
-            rowClassName={(record) => record.id === selectedAuction?.id ? 'selected-row' : ''}
-            onRow={(record) => ({ onClick: () => setSelectedAuctionID(record.id) })}
-            columns={[
-              { title: '商品', dataIndex: 'item', render: (_value, row) => <span>{row.item?.title ?? row.item_id}</span> },
-              { title: '状态', dataIndex: 'status', render: (value) => <Tag color={value === 'ACTIVE' ? 'green' : value === 'SOLD' ? 'orangered' : 'arcoblue'}>{value}</Tag> },
-              { title: '讲解', dataIndex: 'is_narrating', render: (value) => value ? <Tag color="green">ON</Tag> : <Tag>OFF</Tag> },
-              { title: '当前价', dataIndex: 'current_price_cents', render: formatCents },
-              { title: '领先', dataIndex: 'current_winner_id', render: maskUser },
-              { title: '结束', dataIndex: 'end_at', render: (value) => value ? new Date(String(value)).toLocaleTimeString() : '-' },
-              { title: '出价数', dataIndex: 'accepted_bid_count' }
-            ]}
+          <ItemCreatePanel
+            creating={creating}
+            itemDraft={itemDraft}
+            ruleValid={ruleValidation.valid}
+            onCreate={createItemAndAuction}
+            onFileChange={setItemImageFile}
+            onDraftChange={setItemDraft}
+          />
+          <AuctionCommandPanel
+            cancelReason={cancelReason}
+            scheduleStartAt={scheduleStartAt}
+            selectedAuction={selectedAuction}
+            onAction={auctionAction}
+            onCancelReasonChange={setCancelReason}
+            onScheduleStartAtChange={setScheduleStartAt}
           />
         </section>
 
+        <AuctionQueue auctions={auctions} selectedAuction={selectedAuction} onSelect={setSelectedAuctionID} />
+
         {selectedAuction && (
-          <section className="band control-summary" data-testid="auction-control-summary">
-            <div className="section-title">
-              <h2>当前竞拍控制面</h2>
-              <span><Wifi size={16} /> {connectionLabel(monitor, selectedAuction.room_id)}</span>
-            </div>
-            <div className="control-stats">
-              <div>
-                <span>当前价</span>
-                <strong>{formatCents(selectedAuction.current_price_cents)}</strong>
-              </div>
-              <div>
-                <span>领先者</span>
-                <strong>{maskUser(selectedAuction.current_winner_id)}</strong>
-              </div>
-              <div>
-                <span>服务端倒计时</span>
-                <strong><Clock3 size={15} /> {formatRemaining(selectedAuction.end_at, now)}</strong>
-              </div>
-              <div>
-                <span>出价 / 参与</span>
-                <strong>{selectedAuction.accepted_bid_count} / approx</strong>
-              </div>
-              <div>
-                <span>延时次数</span>
-                <strong>{selectedAuction.extend_count} / {selectedAuction.rule.max_extend_count}</strong>
-              </div>
-              <div>
-                <span>状态 / seq</span>
-                <strong>{selectedAuction.status} · {selectedAuction.seq}</strong>
-              </div>
-            </div>
-            <div className="recent-events" data-testid="recent-events">
-              <div className="recent-title">
-                <strong>最近事件</strong>
-                <a href={`/api/monitor/auctions/${encodeURIComponent(selectedAuction.id)}/flight-recorder?limit=50&timeline_limit=100`} target="_blank" rel="noreferrer">
-                  Flight recorder <ExternalLink size={13} />
-                </a>
-              </div>
-              {recentEvents.length === 0 ? (
-                <div className="empty-state compact-empty">暂无最近事件</div>
-              ) : recentEvents.map((event, index) => (
-                <div className="recent-event-row" key={`${String(event.kind ?? event.event_type ?? 'event')}-${index}`}>
-                  <Tag color={String(event.kind ?? event.event_type).includes('anomaly') ? 'red' : 'arcoblue'}>{String(event.kind ?? event.event_type ?? '-')}</Tag>
-                  <span>{String(event.event_type ?? event.status ?? event.result ?? '-')}</span>
-                  <code>{String(event.seq ?? event.trace_id ?? event.outbox_id ?? event.order_id ?? '-')}</code>
-                </div>
-              ))}
-            </div>
-          </section>
+          <AuctionControlSummary
+            monitor={monitor}
+            now={now}
+            recentEvents={recentEvents}
+            selectedAuction={selectedAuction}
+          />
         )}
 
         <section className="band two-column">
-          <div className="rule-panel">
-            <h2>规则 {selectedAuction ? selectedAuction.id : ''}</h2>
-            <Form layout="vertical">
-              <div className="rule-subgrid">
-                <NumberField label="起拍价" name="start-price-cents" value={rule.startPriceCents} min={0} onChange={(value) => updateRule({ startPriceCents: value })} />
-                <NumberField label="加价幅度" name="increment-cents" value={rule.incrementCents} min={1} onChange={(value) => updateRule({ incrementCents: value })} />
-              </div>
-              <Form.Item label="封顶价" validateStatus={ruleValidation.valid ? 'success' : 'error'} help={ruleValidation.message}>
-                <InputNumber aria-label="cap-price-cents" value={rule.capPriceCents} min={0} suffix="分" onChange={(value) => updateRule({ capPriceCents: Number(value) || 0 })} />
-              </Form.Item>
-              {backendRuleError && <div className="backend-rule-error" role="alert">{backendRuleError}</div>}
-              {ruleSaveState === 'saved' && <div className="rule-save-ok" role="status">规则已保存</div>}
-              {!ruleValidation.valid && ruleValidation.field !== 'cap' && <div className="backend-rule-error" role="alert">{ruleValidation.message}</div>}
-              {shownSuggestions.length > 0 && (
-                <div className="cap-suggestions" data-testid="cap-suggestions">
-                  {shownSuggestions.map((cap) => <button key={cap} type="button" onClick={() => updateRule({ capPriceCents: cap })}>{formatCents(cap)}</button>)}
-                </div>
-              )}
-              <div className="rule-subgrid">
-                <NumberField label="时长" name="duration-seconds" value={rule.durationSeconds} min={30} max={86400} onChange={(value) => updateRule({ durationSeconds: value })} />
-                <NumberField label="延时窗口" name="extend-window-seconds" value={rule.extendWindowSeconds} min={0} onChange={(value) => updateRule({ extendWindowSeconds: value })} />
-                <NumberField label="每次延时" name="extend-by-seconds" value={rule.extendBySeconds} min={0} onChange={(value) => updateRule({ extendBySeconds: value })} />
-                <NumberField label="最多延时" name="max-extend-count" value={rule.maxExtendCount} min={0} onChange={(value) => updateRule({ maxExtendCount: value })} />
-                <NumberField label="高额确认" name="fat-finger-threshold-cents" value={rule.fatFingerThresholdCents} min={rule.incrementCents + 1} onChange={(value) => updateRule({ fatFingerThresholdCents: value })} />
-                <NumberField label="保证金比例" name="deposit-bps" value={rule.depositBPS} min={0} max={10000} onChange={(value) => updateRule({ depositBPS: value })} />
-                <NumberField label="保证金下限" name="deposit-floor-cents" value={rule.depositFloorCents} min={0} onChange={(value) => updateRule({ depositFloorCents: value })} />
-                <NumberField label="保证金上限" name="deposit-cap-cents" value={rule.depositCapCents} min={0} onChange={(value) => updateRule({ depositCapCents: value })} />
-              </div>
-              <Button type="primary" disabled={!ruleValidation.valid || !selectedAuction || selectedAuction.status !== 'DRAFT'} loading={savingRule} onClick={saveRule}>保存规则</Button>
-            </Form>
-          </div>
-          <div className="rule-panel">
-            <h2>订单</h2>
-            {orders.length === 0 ? <div className="empty-state">暂无订单</div> : orders.map((order) => (
-              <div className="order-line" key={order.id}>
-                <span>{order.id}</span>
-                <Tag color={order.status === 'PAID' ? 'green' : 'orange'}>{order.status}</Tag>
-                <strong>{formatCents(order.amount_cents)}</strong>
-              </div>
-            ))}
-          </div>
+          <RuleEditor
+            backendRuleError={backendRuleError}
+            rule={rule}
+            ruleSaveState={ruleSaveState}
+            ruleValidation={ruleValidation}
+            savingRule={savingRule}
+            selectedAuction={selectedAuction}
+            shownSuggestions={shownSuggestions}
+            onRuleChange={updateRule}
+            onSave={saveRule}
+          />
+          <OrdersPanel orders={orders} />
         </section>
 
-        <section className="band diagnostics" data-testid="diagnostics">
-          <div className="section-title">
-            <h2>诊断</h2>
-            <span><Database size={16} /> API</span>
-          </div>
-          <div className="monitor-filter" aria-label="monitor-filter">
-            <select
-              aria-label="monitor-anomaly-type"
-              className="native-input"
-              value={monitorFilter.type}
-              onChange={(event) => setMonitorFilter((current) => ({ ...current, type: event.currentTarget.value }))}
-            >
-              <option value="">全部异常</option>
-              <option value="AUTH_SESSION_EXPIRED">AUTH_SESSION_EXPIRED</option>
-              <option value="ACL_FORBIDDEN">ACL_FORBIDDEN</option>
-              <option value="RATE_LIMIT_REDIS_DOWN">RATE_LIMIT_REDIS_DOWN</option>
-              <option value="BID_AUCTION_TOO_HOT">BID_AUCTION_TOO_HOT</option>
-              <option value="RATE_LIMITED">RATE_LIMITED</option>
-              <option value="PAYMENT_WEBHOOK_INVALID_SIGNATURE">PAYMENT_WEBHOOK_INVALID_SIGNATURE</option>
-              <option value="PAYMENT_RECONCILE_MISMATCH">PAYMENT_RECONCILE_MISMATCH</option>
-            </select>
-            <input aria-label="monitor-auction-id" data-testid="monitor-auction-id" className="native-input" placeholder="auction_id" value={monitorFilter.auctionID} onChange={(event) => setMonitorFilter((current) => ({ ...current, auctionID: event.currentTarget.value }))} />
-            <input aria-label="monitor-user-id" data-testid="monitor-user-id" className="native-input" placeholder="user_id" value={monitorFilter.userID} onChange={(event) => setMonitorFilter((current) => ({ ...current, userID: event.currentTarget.value }))} />
-            <input aria-label="monitor-trace-id" data-testid="monitor-trace-id" className="native-input" placeholder="trace_id" value={monitorFilter.traceID} onChange={(event) => setMonitorFilter((current) => ({ ...current, traceID: event.currentTarget.value }))} />
-          </div>
-          <Tabs defaultActiveTab="auctions">
-            <Tabs.TabPane key="auctions" title="Auctions"><MonitorTable payload={monitor.auctions} empty="暂无竞拍诊断数据" sourceKey="auction_id" /></Tabs.TabPane>
-            <Tabs.TabPane key="rejects" title="Rejects"><MonitorTable payload={monitor.rejects} empty="暂无拒绝出价" sourceKey="trace_id" icon={<AlertTriangle size={16} />} /></Tabs.TabPane>
-            <Tabs.TabPane key="recovery" title="Recovery"><MonitorTable payload={monitor.recovery} empty="暂无恢复数据" sourceKey="room_id" /></Tabs.TabPane>
-            <Tabs.TabPane key="anomalies" title="Anomalies"><MonitorTable payload={monitor.anomalies} empty="暂无异常" sourceKey="id" icon={<AlertTriangle size={16} />} /></Tabs.TabPane>
-            <Tabs.TabPane key="outbox" title="Outbox"><MonitorTable payload={monitor.outbox} empty="暂无 outbox 数据" sourceKey="outbox_id" /></Tabs.TabPane>
-            <Tabs.TabPane key="watermarks" title="Watermarks"><MonitorTable payload={monitor.outboxWatermarks} empty="暂无 outbox watermark" sourceKey="shard_id" /></Tabs.TabPane>
-            <Tabs.TabPane key="snapshots" title="Snapshots"><MonitorTable payload={monitor.snapshots} empty="暂无 snapshot 记录" sourceKey="request_id" /></Tabs.TabPane>
-            <Tabs.TabPane key="signals" title="Signals"><MonitorTable payload={monitor.signals} empty="暂无 control signal" sourceKey="id" /></Tabs.TabPane>
-            <Tabs.TabPane key="scheduler" title="Scheduler"><MonitorTable payload={monitor.scheduler} empty="暂无 scheduler 数据" sourceKey="job_id" /></Tabs.TabPane>
-          </Tabs>
-        </section>
+        <DiagnosticsPanel
+          monitor={monitor}
+          monitorFilter={monitorFilter}
+          onFilterChange={setMonitorFilter}
+        />
       </Layout.Content>
     </Layout>
+  );
+}
+
+function ConsoleNav() {
+  return (
+    <>
+      <div className="brand">Live Auction</div>
+      <nav>
+        <span><ClipboardList size={16} /> 拍品</span>
+        <span><RadioTower size={16} /> 竞拍</span>
+        <span><Activity size={16} /> 诊断</span>
+      </nav>
+    </>
+  );
+}
+
+function ConsoleToolbar({
+  loading,
+  roomID,
+  rooms,
+  onRefresh,
+  onRoomChange
+}: {
+  loading: boolean;
+  roomID: string;
+  rooms: Room[];
+  onRefresh: () => void;
+  onRoomChange: (roomID: string) => void;
+}) {
+  return (
+    <section className="toolbar">
+      <div>
+        <h1>主控台</h1>
+        <p>{roomID} · host_1</p>
+      </div>
+      <Space>
+        <select
+          aria-label="room-selector"
+          className="native-input"
+          value={roomID}
+          onChange={(event) => onRoomChange(event.currentTarget.value)}
+        >
+          {rooms.length === 0 ? <option value={roomID}>{roomID}</option> : rooms.map((room) => (
+            <option key={room.id} value={room.id}>{room.id}</option>
+          ))}
+        </select>
+        <Button type="primary" icon={<RefreshCw size={16} />} loading={loading} onClick={onRefresh}>刷新</Button>
+      </Space>
+    </section>
+  );
+}
+
+function ItemCreatePanel({
+  creating,
+  itemDraft,
+  ruleValid,
+  onCreate,
+  onDraftChange,
+  onFileChange
+}: {
+  creating: boolean;
+  itemDraft: { title: string; description: string; imageURL: string };
+  ruleValid: boolean;
+  onCreate: () => void;
+  onDraftChange: React.Dispatch<React.SetStateAction<{ title: string; description: string; imageURL: string }>>;
+  onFileChange: (file: File | null) => void;
+}) {
+  return (
+    <div className="rule-panel">
+      <h2>拍品上架</h2>
+      <Form layout="vertical">
+        <Form.Item label="标题">
+          <Input aria-label="item-title" value={itemDraft.title} onChange={(value) => onDraftChange((current) => ({ ...current, title: value }))} />
+        </Form.Item>
+        <Form.Item label="图片 URL">
+          <Input aria-label="item-image-url" value={itemDraft.imageURL} onChange={(value) => onDraftChange((current) => ({ ...current, imageURL: value }))} prefix={<Upload size={14} />} />
+        </Form.Item>
+        <Form.Item label="上传图片文件">
+          <input
+            aria-label="item-image-file"
+            className="native-input"
+            type="file"
+            accept="image/*"
+            onChange={(event) => onFileChange(event.currentTarget.files?.[0] ?? null)}
+          />
+        </Form.Item>
+        <Form.Item label="描述">
+          <Input.TextArea aria-label="item-description" value={itemDraft.description} onChange={(value) => onDraftChange((current) => ({ ...current, description: value }))} />
+        </Form.Item>
+        <Button type="primary" loading={creating} disabled={!itemDraft.title || !ruleValid} onClick={onCreate}>创建拍品和竞拍</Button>
+      </Form>
+    </div>
+  );
+}
+
+function AuctionCommandPanel({
+  cancelReason,
+  scheduleStartAt,
+  selectedAuction,
+  onAction,
+  onCancelReasonChange,
+  onScheduleStartAtChange
+}: {
+  cancelReason: string;
+  scheduleStartAt: string;
+  selectedAuction?: Auction;
+  onAction: (action: 'schedule' | 'unschedule' | 'start' | 'cancel' | 'narrate-start' | 'narrate-stop') => void;
+  onCancelReasonChange: (reason: string) => void;
+  onScheduleStartAtChange: (startAt: string) => void;
+}) {
+  return (
+    <div className="rule-panel">
+      <h2>竞拍控制</h2>
+      {selectedAuction ? (
+        <>
+          <div className="control-grid">
+            <Form.Item label="排期时间">
+              <input
+                aria-label="schedule-start-at"
+                className="native-input"
+                type="datetime-local"
+                value={scheduleStartAt}
+                onChange={(event) => onScheduleStartAtChange(event.currentTarget.value)}
+              />
+            </Form.Item>
+            <Form.Item label="取消原因">
+              <Input aria-label="cancel-reason" value={cancelReason} onChange={onCancelReasonChange} />
+            </Form.Item>
+          </div>
+          <Space wrap>
+            <Button disabled={selectedAuction.status !== 'DRAFT'} onClick={() => onAction('schedule')}>排期</Button>
+            <Button disabled={selectedAuction.status !== 'SCHEDULED'} icon={<Play size={14} />} onClick={() => onAction('start')}>开拍</Button>
+            <Button disabled={['SOLD', 'ENDED', 'CANCELLED'].includes(selectedAuction.status)} status="danger" icon={<Square size={14} />} onClick={() => {
+              Modal.confirm({ title: '确认取消竞拍', content: selectedAuction.id, onOk: () => onAction('cancel') });
+            }}>取消</Button>
+            <Button disabled={selectedAuction.is_narrating || ['SOLD', 'ENDED', 'CANCELLED'].includes(selectedAuction.status)} onClick={() => onAction('narrate-start')}>开始讲解</Button>
+            <Button disabled={!selectedAuction.is_narrating} onClick={() => onAction('narrate-stop')}>停止讲解</Button>
+          </Space>
+        </>
+      ) : <div className="empty-state">暂无可控制竞拍</div>}
+    </div>
+  );
+}
+
+function AuctionQueue({
+  auctions,
+  selectedAuction,
+  onSelect
+}: {
+  auctions: Auction[];
+  selectedAuction?: Auction;
+  onSelect: (auctionID: string) => void;
+}) {
+  return (
+    <section className="band">
+      <Table
+        rowKey="id"
+        data={auctions}
+        pagination={false}
+        rowClassName={(record) => record.id === selectedAuction?.id ? 'selected-row' : ''}
+        onRow={(record) => ({ onClick: () => onSelect(record.id) })}
+        columns={[
+          { title: '商品', dataIndex: 'item', render: (_value, row) => <span>{row.item?.title ?? row.item_id}</span> },
+          { title: '状态', dataIndex: 'status', render: (value) => <Tag color={value === 'ACTIVE' ? 'green' : value === 'SOLD' ? 'orangered' : 'arcoblue'}>{value}</Tag> },
+          { title: '讲解', dataIndex: 'is_narrating', render: (value) => value ? <Tag color="green">ON</Tag> : <Tag>OFF</Tag> },
+          { title: '当前价', dataIndex: 'current_price_cents', render: formatCents },
+          { title: '领先', dataIndex: 'current_winner_id', render: maskUser },
+          { title: '结束', dataIndex: 'end_at', render: (value) => value ? new Date(String(value)).toLocaleTimeString() : '-' },
+          { title: '出价数', dataIndex: 'accepted_bid_count' }
+        ]}
+      />
+    </section>
+  );
+}
+
+function AuctionControlSummary({
+  monitor,
+  now,
+  recentEvents,
+  selectedAuction
+}: {
+  monitor: Record<string, MonitorPayload>;
+  now: number;
+  recentEvents: Array<Record<string, unknown>>;
+  selectedAuction: Auction;
+}) {
+  return (
+    <section className="band control-summary" data-testid="auction-control-summary">
+      <div className="section-title">
+        <h2>当前竞拍控制面</h2>
+        <span><Wifi size={16} /> {connectionLabel(monitor, selectedAuction.room_id)}</span>
+      </div>
+      <div className="control-stats">
+        <div>
+          <span>当前价</span>
+          <strong>{formatCents(selectedAuction.current_price_cents)}</strong>
+        </div>
+        <div>
+          <span>领先者</span>
+          <strong>{maskUser(selectedAuction.current_winner_id)}</strong>
+        </div>
+        <div>
+          <span>服务端倒计时</span>
+          <strong><Clock3 size={15} /> {formatRemaining(selectedAuction.end_at, now)}</strong>
+        </div>
+        <div>
+          <span>出价 / 参与</span>
+          <strong>{selectedAuction.accepted_bid_count} / approx</strong>
+        </div>
+        <div>
+          <span>延时次数</span>
+          <strong>{selectedAuction.extend_count} / {selectedAuction.rule.max_extend_count}</strong>
+        </div>
+        <div>
+          <span>状态 / seq</span>
+          <strong>{selectedAuction.status} · {selectedAuction.seq}</strong>
+        </div>
+      </div>
+      <EventTimeline events={recentEvents} selectedAuction={selectedAuction} />
+    </section>
+  );
+}
+
+function EventTimeline({
+  events,
+  selectedAuction
+}: {
+  events: Array<Record<string, unknown>>;
+  selectedAuction: Auction;
+}) {
+  return (
+    <div className="recent-events" data-testid="recent-events">
+      <div className="recent-title">
+        <strong>最近事件</strong>
+        <a href={`/api/monitor/auctions/${encodeURIComponent(selectedAuction.id)}/flight-recorder?limit=50&timeline_limit=100`} target="_blank" rel="noreferrer">
+          Flight recorder <ExternalLink size={13} />
+        </a>
+      </div>
+      {events.length === 0 ? (
+        <div className="empty-state compact-empty">暂无最近事件</div>
+      ) : events.map((event, index) => (
+        <div className="recent-event-row" key={`${String(event.kind ?? event.event_type ?? 'event')}-${index}`}>
+          <Tag color={String(event.kind ?? event.event_type).includes('anomaly') ? 'red' : 'arcoblue'}>{String(event.kind ?? event.event_type ?? '-')}</Tag>
+          <span>{String(event.event_type ?? event.status ?? event.result ?? '-')}</span>
+          <code>{String(event.seq ?? event.trace_id ?? event.outbox_id ?? event.order_id ?? '-')}</code>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function RuleEditor({
+  backendRuleError,
+  rule,
+  ruleSaveState,
+  ruleValidation,
+  savingRule,
+  selectedAuction,
+  shownSuggestions,
+  onRuleChange,
+  onSave
+}: {
+  backendRuleError: string;
+  rule: RuleDraft;
+  ruleSaveState: 'idle' | 'saved' | 'error';
+  ruleValidation: ReturnType<typeof validateRule>;
+  savingRule: boolean;
+  selectedAuction?: Auction;
+  shownSuggestions: number[];
+  onRuleChange: (patch: Partial<RuleDraft>) => void;
+  onSave: () => void;
+}) {
+  return (
+    <div className="rule-panel">
+      <h2>规则 {selectedAuction ? selectedAuction.id : ''}</h2>
+      <Form layout="vertical">
+        <div className="rule-subgrid">
+          <NumberField label="起拍价" name="start-price-cents" value={rule.startPriceCents} min={0} onChange={(value) => onRuleChange({ startPriceCents: value })} />
+          <NumberField label="加价幅度" name="increment-cents" value={rule.incrementCents} min={1} onChange={(value) => onRuleChange({ incrementCents: value })} />
+        </div>
+        <Form.Item label="封顶价" validateStatus={ruleValidation.valid ? 'success' : 'error'} help={ruleValidation.message}>
+          <InputNumber aria-label="cap-price-cents" value={rule.capPriceCents} min={0} suffix="分" onChange={(value) => onRuleChange({ capPriceCents: Number(value) || 0 })} />
+        </Form.Item>
+        {backendRuleError && <div className="backend-rule-error" role="alert">{backendRuleError}</div>}
+        {ruleSaveState === 'saved' && <div className="rule-save-ok" role="status">规则已保存</div>}
+        {!ruleValidation.valid && ruleValidation.field !== 'cap' && <div className="backend-rule-error" role="alert">{ruleValidation.message}</div>}
+        {shownSuggestions.length > 0 && (
+          <div className="cap-suggestions" data-testid="cap-suggestions">
+            {shownSuggestions.map((cap) => <button key={cap} type="button" onClick={() => onRuleChange({ capPriceCents: cap })}>{formatCents(cap)}</button>)}
+          </div>
+        )}
+        <div className="rule-subgrid">
+          <NumberField label="时长" name="duration-seconds" value={rule.durationSeconds} min={30} max={86400} onChange={(value) => onRuleChange({ durationSeconds: value })} />
+          <NumberField label="延时窗口" name="extend-window-seconds" value={rule.extendWindowSeconds} min={0} onChange={(value) => onRuleChange({ extendWindowSeconds: value })} />
+          <NumberField label="每次延时" name="extend-by-seconds" value={rule.extendBySeconds} min={0} onChange={(value) => onRuleChange({ extendBySeconds: value })} />
+          <NumberField label="最多延时" name="max-extend-count" value={rule.maxExtendCount} min={0} onChange={(value) => onRuleChange({ maxExtendCount: value })} />
+          <NumberField label="高额确认" name="fat-finger-threshold-cents" value={rule.fatFingerThresholdCents} min={rule.incrementCents + 1} onChange={(value) => onRuleChange({ fatFingerThresholdCents: value })} />
+          <NumberField label="保证金比例" name="deposit-bps" value={rule.depositBPS} min={0} max={10000} onChange={(value) => onRuleChange({ depositBPS: value })} />
+          <NumberField label="保证金下限" name="deposit-floor-cents" value={rule.depositFloorCents} min={0} onChange={(value) => onRuleChange({ depositFloorCents: value })} />
+          <NumberField label="保证金上限" name="deposit-cap-cents" value={rule.depositCapCents} min={0} onChange={(value) => onRuleChange({ depositCapCents: value })} />
+        </div>
+        <Button type="primary" disabled={!ruleValidation.valid || !selectedAuction || selectedAuction.status !== 'DRAFT'} loading={savingRule} onClick={onSave}>保存规则</Button>
+      </Form>
+    </div>
+  );
+}
+
+function OrdersPanel({ orders }: { orders: Order[] }) {
+  return (
+    <div className="rule-panel">
+      <h2>订单</h2>
+      {orders.length === 0 ? <div className="empty-state">暂无订单</div> : orders.map((order) => (
+        <div className="order-line" key={order.id}>
+          <span>{order.id}</span>
+          <Tag color={order.status === 'PAID' ? 'green' : 'orange'}>{order.status}</Tag>
+          <strong>{formatCents(order.amount_cents)}</strong>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DiagnosticsPanel({
+  monitor,
+  monitorFilter,
+  onFilterChange
+}: {
+  monitor: Record<string, MonitorPayload>;
+  monitorFilter: { type: string; auctionID: string; userID: string; traceID: string };
+  onFilterChange: React.Dispatch<React.SetStateAction<{ type: string; auctionID: string; userID: string; traceID: string }>>;
+}) {
+  return (
+    <section className="band diagnostics" data-testid="diagnostics">
+      <div className="section-title">
+        <h2>诊断</h2>
+        <span><Database size={16} /> API</span>
+      </div>
+      <div className="monitor-filter" aria-label="monitor-filter">
+        <select
+          aria-label="monitor-anomaly-type"
+          className="native-input"
+          value={monitorFilter.type}
+          onChange={(event) => onFilterChange((current) => ({ ...current, type: event.currentTarget.value }))}
+        >
+          <option value="">全部异常</option>
+          <option value="AUTH_SESSION_EXPIRED">AUTH_SESSION_EXPIRED</option>
+          <option value="ACL_FORBIDDEN">ACL_FORBIDDEN</option>
+          <option value="RATE_LIMIT_REDIS_DOWN">RATE_LIMIT_REDIS_DOWN</option>
+          <option value="BID_AUCTION_TOO_HOT">BID_AUCTION_TOO_HOT</option>
+          <option value="RATE_LIMITED">RATE_LIMITED</option>
+          <option value="PAYMENT_WEBHOOK_INVALID_SIGNATURE">PAYMENT_WEBHOOK_INVALID_SIGNATURE</option>
+          <option value="PAYMENT_RECONCILE_MISMATCH">PAYMENT_RECONCILE_MISMATCH</option>
+        </select>
+        <input aria-label="monitor-auction-id" data-testid="monitor-auction-id" className="native-input" placeholder="auction_id" value={monitorFilter.auctionID} onChange={(event) => onFilterChange((current) => ({ ...current, auctionID: event.currentTarget.value }))} />
+        <input aria-label="monitor-user-id" data-testid="monitor-user-id" className="native-input" placeholder="user_id" value={monitorFilter.userID} onChange={(event) => onFilterChange((current) => ({ ...current, userID: event.currentTarget.value }))} />
+        <input aria-label="monitor-trace-id" data-testid="monitor-trace-id" className="native-input" placeholder="trace_id" value={monitorFilter.traceID} onChange={(event) => onFilterChange((current) => ({ ...current, traceID: event.currentTarget.value }))} />
+      </div>
+      <Tabs defaultActiveTab="auctions">
+        <Tabs.TabPane key="auctions" title="Auctions"><MonitorTable payload={monitor.auctions} empty="暂无竞拍诊断数据" sourceKey="auction_id" /></Tabs.TabPane>
+        <Tabs.TabPane key="rejects" title="Rejects"><MonitorTable payload={monitor.rejects} empty="暂无拒绝出价" sourceKey="trace_id" icon={<AlertTriangle size={16} />} /></Tabs.TabPane>
+        <Tabs.TabPane key="recovery" title="Recovery"><MonitorTable payload={monitor.recovery} empty="暂无恢复数据" sourceKey="room_id" /></Tabs.TabPane>
+        <Tabs.TabPane key="anomalies" title="Anomalies"><MonitorTable payload={monitor.anomalies} empty="暂无异常" sourceKey="id" icon={<AlertTriangle size={16} />} /></Tabs.TabPane>
+        <Tabs.TabPane key="outbox" title="Outbox"><MonitorTable payload={monitor.outbox} empty="暂无 outbox 数据" sourceKey="outbox_id" /></Tabs.TabPane>
+        <Tabs.TabPane key="watermarks" title="Watermarks"><MonitorTable payload={monitor.outboxWatermarks} empty="暂无 outbox watermark" sourceKey="shard_id" /></Tabs.TabPane>
+        <Tabs.TabPane key="snapshots" title="Snapshots"><MonitorTable payload={monitor.snapshots} empty="暂无 snapshot 记录" sourceKey="request_id" /></Tabs.TabPane>
+        <Tabs.TabPane key="signals" title="Signals"><MonitorTable payload={monitor.signals} empty="暂无 control signal" sourceKey="id" /></Tabs.TabPane>
+        <Tabs.TabPane key="scheduler" title="Scheduler"><MonitorTable payload={monitor.scheduler} empty="暂无 scheduler 数据" sourceKey="job_id" /></Tabs.TabPane>
+      </Tabs>
+    </section>
   );
 }
 

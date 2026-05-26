@@ -45,6 +45,11 @@ function runPlaywright() {
   return new Promise((resolve) => {
     const child = spawn(node, [playwrightCli, 'test', '--no-deps', '--workers=1', '--reporter=line'], {
       cwd: root,
+      env: {
+        ...process.env,
+        H5_PORT: '5173',
+        PC_PORT: '5174'
+      },
       stdio: 'inherit',
       windowsHide: true
     });
