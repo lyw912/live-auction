@@ -49,9 +49,21 @@ type BidPhase = 'idle' | 'pending' | 'accepted' | 'rejected' | 'confirm_required
 type PaymentPhase = 'idle' | 'pending' | 'paid' | 'failed' | 'expired';
 type RecoveryPhase = 'idle' | 'recovering';
 type ConnectionPhase = 'connecting' | 'connected' | 'recovering' | 'disconnected';
-type BottomSheetKey = 'products' | 'details' | 'leaderboard' | 'history' | 'orders';
+type BottomSheetKey = 'products' | 'details' | 'maxBid' | 'leaderboard' | 'history' | 'orders';
 type ResultSheetKind = 'winner' | 'loser' | 'unsold';
 type SoundCapability = 'ready' | 'unavailable' | 'blocked';
+type MaxBidPhase = 'idle' | 'pending' | 'canceling' | 'error';
+
+type MaxBidIntent = {
+  id: string;
+  auction_id: string;
+  user_id: string;
+  max_amount_cents: number;
+  status: 'ACTIVE' | 'CANCELLED' | 'EXHAUSTED' | 'TERMINAL';
+  source: 'MAX_BID' | 'PRE_BID';
+  last_applied_seq?: number;
+  version?: number;
+};
 
 type BidResponse = {
   result?: string;
@@ -106,6 +118,7 @@ type SnapshotResponse = {
   seq: number;
   source?: string;
   stale?: boolean;
+  max_bid_intent?: MaxBidIntent;
   payload?: {
     status?: string;
     current_price_cents?: number;
@@ -433,6 +446,37 @@ function rejectCopy(code?: string | null) {
   }
 }
 
+function maxBidStatusCopy(intent: MaxBidIntent) {
+  if (intent.status === 'ACTIVE') {
+    const applied = intent.last_applied_seq ? ` · 已代出价 seq ${intent.last_applied_seq}` : '';
+    return `Max Bid 已生效${applied}`;
+  }
+  if (intent.status === 'EXHAUSTED') return 'Max Bid 已被超越';
+  if (intent.status === 'CANCELLED') return 'Max Bid 已取消';
+  return '本场已结束，Max Bid 不再执行';
+}
+
+function maxBidErrorCopy(code?: string | null) {
+  switch (code) {
+    case 'MAX_BID_TOO_LOW':
+      return '最高价低于当前最低有效出价';
+    case 'MAX_BID_INCREMENT_MISMATCH':
+      return '最高价需要按加价幅度设置';
+    case 'MAX_BID_ABOVE_CAP':
+      return '最高价超过本场封顶价';
+    case 'PROCESSING_RETRY_LATER':
+      return '上一笔 Max Bid 仍在确认';
+    case 'AUCTION_NOT_ACTIVE':
+      return '当前拍品暂不能设置 Max Bid';
+    default:
+      return 'Max Bid 未确认，请重试';
+  }
+}
+
+function isDangerousActionDisabled(scenario: Scenario, connectionPhase: ConnectionPhase) {
+  return scenario.ctaDisabled || scenario.stale || scenario.sold || connectionPhase === 'recovering' || connectionPhase === 'disconnected';
+}
+
 function isTestMatrixEnabled() {
   return new URLSearchParams(window.location.search).get('stateMatrix') === '1';
 }
@@ -458,6 +502,10 @@ function App() {
   const [confirmToken, setConfirmToken] = useState('');
   const [confirmIdempotencyKey, setConfirmIdempotencyKey] = useState('');
   const [confirmAmountCents, setConfirmAmountCents] = useState(0);
+  const [maxBidIntent, setMaxBidIntent] = useState<MaxBidIntent | null>(null);
+  const [maxBidAmountCents, setMaxBidAmountCents] = useState(0);
+  const [maxBidPhase, setMaxBidPhase] = useState<MaxBidPhase>('idle');
+  const [maxBidFeedback, setMaxBidFeedback] = useState('仅自己可见，服务端按加价阶梯代出价');
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState('');
   const [bidHistory, setBidHistory] = useState<HistoryRow[]>([]);
@@ -501,6 +549,7 @@ function App() {
   const leaderMaskedRef = useRef(leaderMasked);
   const activeAuctionIDRef = useRef(activeAuctionID);
   const activeIncrementCentsRef = useRef(activeIncrementCents);
+  const maxBidAmountCentsRef = useRef(maxBidAmountCents);
   const auctionEndAtRef = useRef(auctionEndAt);
   const serverTimeMSRef = useRef(serverTimeMS);
   const currentUserIDRef = useRef(currentUserID);
@@ -531,6 +580,10 @@ function App() {
   useEffect(() => {
     activeIncrementCentsRef.current = activeIncrementCents;
   }, [activeIncrementCents]);
+
+  useEffect(() => {
+    maxBidAmountCentsRef.current = maxBidAmountCents;
+  }, [maxBidAmountCents]);
 
   useEffect(() => {
     auctionEndAtRef.current = auctionEndAt;
@@ -1003,6 +1056,15 @@ function App() {
     setCurrentPriceCents(price);
     setMinimumNextBidCents(price + increment);
     setNextBidCents(price + increment);
+    setMaxBidAmountCents((amount) => Math.max(amount || 0, price + increment));
+    if (snapshot.max_bid_intent) {
+      setMaxBidIntent(snapshot.max_bid_intent);
+      setMaxBidAmountCents(Math.max(snapshot.max_bid_intent.max_amount_cents, price + increment));
+      setMaxBidFeedback(maxBidStatusCopy(snapshot.max_bid_intent));
+    } else {
+      setMaxBidIntent(null);
+      setMaxBidFeedback('仅自己可见，服务端按加价阶梯代出价');
+    }
     setLastSeq(snapshot.seq);
     setLeaderMasked(snapshot.payload?.leader_user_masked ?? leaderMasked);
     setBidFeedback(`snapshot ${snapshot.source ?? 'db'} seq ${snapshot.seq}`);
@@ -1073,6 +1135,7 @@ function App() {
     setCurrentPriceCents(price);
     setMinimumNextBidCents(price + increment);
     setNextBidCents((prepared) => Math.max(price + increment, prepared));
+    setMaxBidAmountCents((amount) => Math.max(amount || 0, price + increment));
     setLastSeq(detail.seq);
     if (nextEndAt) setAuctionEndAt(nextEndAt);
     if (nextServerTimeMS) setServerTimeMS(nextServerTimeMS);
@@ -1405,6 +1468,87 @@ function App() {
     }
   };
 
+  const loadMaxBidIntent = async (auctionID = activeAuctionIDRef.current) => {
+    if (!auctionID) return;
+    try {
+      const response = await fetch(`/api/auctions/${auctionID}/max-bid-intent`);
+      if (response.status === 404) {
+        setMaxBidIntent(null);
+        setMaxBidFeedback('仅自己可见，服务端按加价阶梯代出价');
+        return;
+      }
+      const payload = await readJSON<MaxBidIntent>(response);
+      if (!response.ok || !payload) return;
+      setMaxBidIntent(payload);
+      setMaxBidAmountCents(Math.max(payload.max_amount_cents, minimumNextBidCents));
+      setMaxBidFeedback(maxBidStatusCopy(payload));
+    } catch {
+      setMaxBidFeedback('Max Bid 状态读取失败');
+    }
+  };
+
+  const submitMaxBidIntent = async () => {
+    const auctionID = activeAuctionIDRef.current;
+    if (!auctionID || maxBidPhase !== 'idle' || isDangerousActionDisabled(scenario, connectionPhase)) return;
+    const amount = Math.max(maxBidAmountCentsRef.current || 0, minimumNextBidCents);
+    setMaxBidPhase('pending');
+    setMaxBidFeedback('等待服务端确认 Max Bid');
+    try {
+      const key = createClientBidID();
+      const response = await fetch(`/api/auctions/${auctionID}/max-bid-intent`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': key
+        },
+        body: JSON.stringify({
+          max_amount_cents: amount,
+          client_seen_seq: lastSeq,
+          source: 'MAX_BID'
+        })
+      });
+      const payload = await readJSON<{ intent?: MaxBidIntent; code?: string; message?: string }>(response);
+      if (!response.ok || !payload?.intent) {
+        setMaxBidPhase('error');
+        setMaxBidFeedback(maxBidErrorCopy(payload?.code ?? payload?.message));
+        return;
+      }
+      setMaxBidIntent(payload.intent);
+      setMaxBidAmountCents(Math.max(payload.intent.max_amount_cents, minimumNextBidCents));
+      setMaxBidFeedback(maxBidStatusCopy(payload.intent));
+      setMaxBidPhase('idle');
+    } catch {
+      setMaxBidPhase('error');
+      setMaxBidFeedback('网络异常，Max Bid 未确认');
+    }
+  };
+
+  const cancelMaxBidIntent = async () => {
+    const auctionID = activeAuctionIDRef.current;
+    if (!auctionID || !maxBidIntent || maxBidPhase !== 'idle' || isDangerousActionDisabled(scenario, connectionPhase)) return;
+    setMaxBidPhase('canceling');
+    setMaxBidFeedback('等待服务端取消 Max Bid');
+    try {
+      const key = createClientBidID();
+      const response = await fetch(`/api/auctions/${auctionID}/max-bid-intent`, {
+        method: 'DELETE',
+        headers: { 'Idempotency-Key': key }
+      });
+      const payload = await readJSON<{ intent?: MaxBidIntent; code?: string; message?: string }>(response);
+      if (!response.ok || !payload?.intent) {
+        setMaxBidPhase('error');
+        setMaxBidFeedback(maxBidErrorCopy(payload?.code ?? payload?.message));
+        return;
+      }
+      setMaxBidIntent(payload.intent);
+      setMaxBidFeedback(maxBidStatusCopy(payload.intent));
+      setMaxBidPhase('idle');
+    } catch {
+      setMaxBidPhase('error');
+      setMaxBidFeedback('网络异常，Max Bid 未取消');
+    }
+  };
+
   const payOrder = async () => {
     if (selected !== 'sold_winner' || scenario.ctaDisabled || paymentInFlight.current || !payableOrderID) return;
     const idempotencyKey = createClientBidID();
@@ -1463,6 +1607,16 @@ function App() {
 
   const increaseBidAmount = () => {
     setNextBidCents((amount) => amount + activeIncrementCents);
+  };
+
+  const decreaseMaxBidAmount = () => {
+    setMaxBidPhase((phase) => phase === 'error' ? 'idle' : phase);
+    setMaxBidAmountCents((amount) => Math.max(minimumNextBidCents, amount - activeIncrementCents));
+  };
+
+  const increaseMaxBidAmount = () => {
+    setMaxBidPhase((phase) => phase === 'error' ? 'idle' : phase);
+    setMaxBidAmountCents((amount) => Math.max(minimumNextBidCents, amount + activeIncrementCents));
   };
 
   const loadHistory = async () => {
@@ -1567,13 +1721,24 @@ function App() {
           historyLoading={historyLoading}
           item={stageItem}
           leaderboard={leaderboard}
+          maxBidAmountCents={maxBidAmountCents}
+          maxBidFeedback={maxBidFeedback}
+          maxBidIntent={maxBidIntent}
+          maxBidPhase={maxBidPhase}
+          minimumNextBidCents={minimumNextBidCents}
           nextBidCents={nextBidCents}
           orderHistory={orderHistory}
           scenario={scenario}
+          connectionPhase={connectionPhase}
           onClose={() => setActiveSheet(null)}
+          onCancelMaxBid={cancelMaxBidIntent}
+          onDecreaseMaxBid={decreaseMaxBidAmount}
+          onIncreaseMaxBid={increaseMaxBidAmount}
           onOpenSheet={setActiveSheet}
           onRefreshHistory={loadHistory}
           onRefreshLeaderboard={() => void loadLeaderboard()}
+          onRefreshMaxBid={() => void loadMaxBidIntent()}
+          onSubmitMaxBid={submitMaxBidIntent}
         />
       )}
       <ResultSheet
@@ -1855,6 +2020,7 @@ function AuctionStatePanel({
       <div className="dock-shortcuts" aria-label="bid-dock-shortcuts">
         <button type="button" onClick={() => onOpenSheet('products')}>商品</button>
         <button type="button" onClick={() => onOpenSheet('details')}>规则</button>
+        <button type="button" onClick={() => onOpenSheet('maxBid')}>Max</button>
         <button type="button" onClick={() => onOpenSheet('leaderboard')}>榜单</button>
         <button type="button" onClick={() => onOpenSheet('history')}>历史</button>
         <button type="button" onClick={() => onOpenSheet('orders')}>订单</button>
@@ -1966,38 +2132,61 @@ function BottomSheet({
   activeSheet,
   auctions,
   bidHistory,
+  connectionPhase,
   historyError,
   historyLoading,
   item,
   leaderboard,
+  maxBidAmountCents,
+  maxBidFeedback,
+  maxBidIntent,
+  maxBidPhase,
+  minimumNextBidCents,
   nextBidCents,
   orderHistory,
   scenario,
+  onCancelMaxBid,
   onClose,
+  onDecreaseMaxBid,
+  onIncreaseMaxBid,
   onOpenSheet,
   onRefreshHistory,
-  onRefreshLeaderboard
+  onRefreshLeaderboard,
+  onRefreshMaxBid,
+  onSubmitMaxBid
 }: {
   activeAuctionID: string;
   activeSheet: BottomSheetKey | null;
   auctions: AuctionSummary[];
   bidHistory: HistoryRow[];
+  connectionPhase: ConnectionPhase;
   historyError: string;
   historyLoading: boolean;
   item: AuctionItem;
   leaderboard: LeaderboardPayload | null;
+  maxBidAmountCents: number;
+  maxBidFeedback: string;
+  maxBidIntent: MaxBidIntent | null;
+  maxBidPhase: MaxBidPhase;
+  minimumNextBidCents: number;
   nextBidCents: number;
   orderHistory: HistoryRow[];
   scenario: Scenario;
+  onCancelMaxBid: () => void;
   onClose: () => void;
+  onDecreaseMaxBid: () => void;
+  onIncreaseMaxBid: () => void;
   onOpenSheet: (sheet: BottomSheetKey) => void;
   onRefreshHistory: () => void;
   onRefreshLeaderboard: () => void;
+  onRefreshMaxBid: () => void;
+  onSubmitMaxBid: () => void;
 }) {
   if (!activeSheet) return null;
   const titleMap: Record<BottomSheetKey, string> = {
     products: '本场商品',
     details: '商品与规则',
+    maxBid: 'Max Bid',
     leaderboard: '实时榜单',
     history: '我的出价',
     orders: '我的订单'
@@ -2014,6 +2203,7 @@ function BottomSheet({
           {([
             ['products', '商品'],
             ['details', '规则'],
+            ['maxBid', 'Max'],
             ['leaderboard', '榜单'],
             ['history', '历史'],
             ['orders', '订单']
@@ -2024,6 +2214,22 @@ function BottomSheet({
         <div className="sheet-content">
           {activeSheet === 'products' && <ProductListSheet auctions={auctions} activeAuctionID={activeAuctionID} scenario={scenario} />}
           {activeSheet === 'details' && <ProductRuleSheet item={item} auction={auctions.find((row) => row.id === activeAuctionID)} scenario={scenario} />}
+          {activeSheet === 'maxBid' && (
+            <MaxBidSheet
+              amountCents={maxBidAmountCents}
+              connectionPhase={connectionPhase}
+              feedback={maxBidFeedback}
+              intent={maxBidIntent}
+              minimumNextBidCents={minimumNextBidCents}
+              phase={maxBidPhase}
+              scenario={scenario}
+              onCancel={onCancelMaxBid}
+              onDecrease={onDecreaseMaxBid}
+              onIncrease={onIncreaseMaxBid}
+              onRefresh={onRefreshMaxBid}
+              onSubmit={onSubmitMaxBid}
+            />
+          )}
           {activeSheet === 'leaderboard' && <LeaderboardSheet activeAuctionID={activeAuctionID} leaderboard={leaderboard} nextBidCents={nextBidCents} onRefresh={onRefreshLeaderboard} />}
           {activeSheet === 'history' && (
             <HistorySheet
@@ -2148,6 +2354,65 @@ function ProductRuleSheet({ auction, item, scenario }: { auction?: AuctionSummar
           <strong>售后口径</strong>
           <p>{item.return_policy ?? '成交后以订单支付状态和商家售后口径为准，保证金处理会在订单状态中体现。'}</p>
         </article>
+      </div>
+    </div>
+  );
+}
+
+function MaxBidSheet({
+  amountCents,
+  connectionPhase,
+  feedback,
+  intent,
+  minimumNextBidCents,
+  phase,
+  scenario,
+  onCancel,
+  onDecrease,
+  onIncrease,
+  onRefresh,
+  onSubmit
+}: {
+  amountCents: number;
+  connectionPhase: ConnectionPhase;
+  feedback: string;
+  intent: MaxBidIntent | null;
+  minimumNextBidCents: number;
+  phase: MaxBidPhase;
+  scenario: Scenario;
+  onCancel: () => void;
+  onDecrease: () => void;
+  onIncrease: () => void;
+  onRefresh: () => void;
+  onSubmit: () => void;
+}) {
+  const disabled = isDangerousActionDisabled(scenario, connectionPhase) || phase === 'pending' || phase === 'canceling';
+  const active = intent?.status === 'ACTIVE';
+  return (
+    <div className="max-bid-sheet" data-testid="max-bid-sheet">
+      <div className="max-bid-status">
+        <span>私密意图</span>
+        <strong>{active ? `${formatCents(intent.max_amount_cents)} · ${intent.source}` : '未启用'}</strong>
+        <em>{feedback}</em>
+      </div>
+      <div className="max-bid-stepper" aria-label="max-bid-amount">
+        <button type="button" aria-label="decrease-max-bid" disabled={disabled || amountCents <= minimumNextBidCents} onClick={onDecrease}>-</button>
+        <span>{formatCents(Math.max(amountCents, minimumNextBidCents))}</span>
+        <button type="button" aria-label="increase-max-bid" disabled={disabled} onClick={onIncrease}><ChevronUp size={18} /></button>
+      </div>
+      <div className="max-bid-rules">
+        <span>仅当前账号可见，不进入公开榜单或房间消息。</span>
+        <span>服务端只会按当前加价阶梯代出价，不会直接公开你的最高价。</span>
+        <span>弱网、恢复中、提交中或终局状态会暂停设置和取消。</span>
+      </div>
+      <div className="max-bid-actions">
+        <button type="button" onClick={onSubmit} disabled={disabled || Math.max(amountCents, minimumNextBidCents) < minimumNextBidCents}>
+          {phase === 'pending' ? '提交中' : active ? '更新 Max Bid' : '设置 Max Bid'}
+        </button>
+        <button type="button" onClick={onCancel} disabled={disabled || !active}>
+          {phase === 'canceling' ? '取消中' : '取消'}
+        </button>
+        <button type="button" onClick={onRefresh} disabled={phase === 'pending' || phase === 'canceling'}>刷新</button>
       </div>
     </div>
   );

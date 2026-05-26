@@ -77,6 +77,16 @@ test.beforeEach(async ({ page }) => {
         current_winner_id: 'user_2',
         end_at: '2099-05-22T14:00:00Z',
         server_time_ms: Date.parse('2099-05-22T13:58:45Z'),
+        max_bid_intent: {
+          id: 'mbi_existing',
+          auction_id: 'auc_live',
+          user_id: 'user_1',
+          max_amount_cents: 55000,
+          status: 'ACTIVE',
+          source: 'MAX_BID',
+          last_applied_seq: 40,
+          version: 1
+        },
         payload: {
           status: 'ACTIVE',
           current_price_cents: 35000,
@@ -852,6 +862,11 @@ test('H5 bottom sheets open close and keep the primary bid CTA singular', async 
   await expect(sheet.getByText('误触保护')).toBeVisible();
   await expect(page.getByTestId('bid-cta')).toHaveCount(1);
 
+  await sheet.getByRole('tab', { name: 'Max' }).click();
+  await expect(sheet.getByRole('heading', { name: 'Max Bid' })).toBeVisible();
+  await expect(sheet.getByTestId('max-bid-sheet')).toContainText('私密意图');
+  await expect(page.getByTestId('bid-cta')).toHaveCount(1);
+
   await sheet.getByRole('tab', { name: '榜单' }).click();
   await expect(sheet.getByRole('heading', { name: '实时榜单' })).toBeVisible();
   await expect(sheet.getByText('张**')).toBeVisible();
@@ -860,6 +875,97 @@ test('H5 bottom sheets open close and keep the primary bid CTA singular', async 
   await sheet.getByLabel('关闭面板').click();
   await expect(page.getByTestId('bottom-sheet')).toHaveCount(0);
   await expect(page.getByTestId('bid-cta')).toBeVisible();
+});
+
+test('H5 Max Bid sheet waits for committed API response and disables during recovery', async ({ page }) => {
+  let putSeen = false;
+  let cancelSeen = false;
+  await page.route('/api/auctions/auc_live/max-bid-intent', async (route, request) => {
+    if (request.method() === 'GET') {
+      await route.fulfill({
+        json: {
+          id: 'mbi_existing',
+          auction_id: 'auc_live',
+          user_id: 'user_1',
+          max_amount_cents: 55000,
+          status: 'ACTIVE',
+          source: 'MAX_BID',
+          last_applied_seq: 40,
+          version: 1
+        }
+      });
+      return;
+    }
+    if (request.method() === 'PUT') {
+      putSeen = true;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      await route.fulfill({
+        json: {
+          result: 'ACTIVE',
+          intent: {
+            id: 'mbi_existing',
+            auction_id: 'auc_live',
+            user_id: 'user_1',
+            max_amount_cents: 60000,
+            status: 'ACTIVE',
+            source: 'MAX_BID',
+            last_applied_seq: 43,
+            version: 2
+          }
+        }
+      });
+      return;
+    }
+    if (request.method() === 'DELETE') {
+      cancelSeen = true;
+      await route.fulfill({
+        json: {
+          result: 'CANCELLED',
+          intent: {
+            id: 'mbi_existing',
+            auction_id: 'auc_live',
+            user_id: 'user_1',
+            max_amount_cents: 60000,
+            status: 'CANCELLED',
+            source: 'MAX_BID',
+            version: 3
+          }
+        }
+      });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await page.goto('/');
+  await page.getByLabel('bid-dock-shortcuts').getByRole('button', { name: 'Max' }).click();
+  const sheet = page.getByTestId('max-bid-sheet');
+  await expect(sheet).toContainText('¥550.00');
+  await expect(sheet).toContainText('已代出价 seq 40');
+
+  await sheet.getByLabel('increase-max-bid').click();
+  await sheet.getByRole('button', { name: '更新 Max Bid' }).click();
+  await expect(sheet).toContainText('等待服务端确认 Max Bid');
+  await expect(sheet.getByRole('button', { name: '提交中' })).toBeDisabled();
+  await expect(sheet).not.toContainText('已代出价 seq 43');
+  await expect(sheet).toContainText('已代出价 seq 43');
+  expect(putSeen).toBe(true);
+
+  await sheet.getByRole('button', { name: '取消' }).click();
+  await expect(sheet).toContainText('Max Bid 已取消');
+  expect(cancelSeen).toBe(true);
+  await expect(page.getByTestId('bid-cta')).toHaveCount(1);
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('auction:event', {
+      detail: {
+        auction_id: 'auc_live',
+        event_type: 'outbox_gap_notice',
+        seq: 99
+      }
+    }));
+  });
+  await expect(sheet.getByRole('button', { name: /设置 Max Bid|更新 Max Bid/ })).toBeDisabled();
 });
 
 test('H5 bottom sheet history and orders use existing user APIs', async ({ page }) => {

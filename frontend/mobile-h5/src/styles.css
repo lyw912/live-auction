@@ -684,8 +684,8 @@ button {
   height: 32px;
   margin-top: 8px;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 7px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 5px;
 }
 
 .dock-shortcuts button {
@@ -695,6 +695,7 @@ button {
   color: var(--color-muted-strong);
   font-size: 12px;
   font-weight: 800;
+  white-space: nowrap;
 }
 
 .primary-cta:disabled {
@@ -1181,7 +1182,7 @@ button {
 .sheet-tabs {
   margin-top: 10px;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 6px;
 }
 
@@ -1209,9 +1210,108 @@ button {
 
 .product-card-list,
 .sheet-leaderboard,
-.sheet-history {
+.sheet-history,
+.max-bid-sheet {
   display: grid;
   gap: 8px;
+}
+
+.max-bid-status {
+  min-height: 72px;
+  border: 1px solid rgba(16, 79, 61, .16);
+  border-radius: var(--radius-md);
+  background: var(--color-trust-green-soft);
+  padding: 10px;
+  display: grid;
+  gap: 4px;
+}
+
+.max-bid-status span,
+.max-bid-status em {
+  color: var(--color-muted-strong);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.max-bid-status strong {
+  color: #103c2f;
+  font-family: var(--font-auction-tabular);
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.max-bid-stepper {
+  height: 48px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) 52px;
+  align-items: center;
+  background: var(--color-surface-0);
+}
+
+.max-bid-stepper button {
+  height: 48px;
+  border: 0;
+  background: var(--color-surface-1);
+  color: #1f3d33;
+  display: grid;
+  place-items: center;
+}
+
+.max-bid-stepper span {
+  text-align: center;
+  font-family: var(--font-auction-tabular);
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 900;
+}
+
+.max-bid-rules {
+  display: grid;
+  gap: 6px;
+}
+
+.max-bid-rules span {
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-1);
+  color: var(--color-muted-strong);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.36;
+  padding: 8px;
+}
+
+.max-bid-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 82px 66px;
+  gap: 8px;
+}
+
+.max-bid-actions button {
+  min-height: 40px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-0);
+  color: var(--color-muted-strong);
+  font-weight: 900;
+}
+
+.max-bid-actions button:first-child {
+  border: 0;
+  background: var(--color-trust-green-deep);
+  color: #fff;
+}
+
+.max-bid-actions button:disabled,
+.max-bid-stepper button:disabled {
+  background: #d7dedb;
+  color: #7d8c87;
 }
 
 .product-card {
@@ -1434,7 +1534,23 @@ button {
 
   .dock-shortcuts {
     height: 28px;
-    gap: 5px;
+    gap: 4px;
+  }
+
+  .dock-shortcuts button {
+    font-size: 11px;
+  }
+
+  .sheet-tabs {
+    gap: 4px;
+  }
+
+  .sheet-tabs button {
+    font-size: 11px;
+  }
+
+  .max-bid-actions {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .history-grid {

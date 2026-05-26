@@ -11,7 +11,7 @@
 | P9-S2 Verified Bidder UX Hooks | DONE | `docs/evidence/p9-02-verified-bidder-ux-states.md` |
 | P9-S3 Similar Auction Handoff | DONE | `docs/evidence/p9-03-similar-auction-handoff.md` |
 | P9-S4 Max Bid And Pre-Bid ADR | DONE | `docs/adr/p9-04-max-bid-pre-bid-decision.md`, `docs/evidence/p9-04-max-bid-pre-bid-adr.md` |
-| P9-S5 Max Bid/Pre-Bid Implementation Slice Set | IN_PROGRESS | `docs/evidence/p9-05-1-max-bid-intent-storage.md`, `docs/evidence/p9-05-2-max-bid-intent-api.md`, `docs/evidence/p9-05-3-max-bid-transaction-integration.md`, `docs/evidence/p9-05-4-max-bid-event-recovery-model.md` |
+| P9-S5 Max Bid/Pre-Bid Implementation Slice Set | IN_PROGRESS | `docs/evidence/p9-05-1-max-bid-intent-storage.md`, `docs/evidence/p9-05-2-max-bid-intent-api.md`, `docs/evidence/p9-05-3-max-bid-transaction-integration.md`, `docs/evidence/p9-05-4-max-bid-event-recovery-model.md`, `docs/evidence/p9-05-5-h5-max-bid-sheet.md` |
 | P9-S6 Risk And Abuse UX | TODO | - |
 
 ## Current Rules
@@ -25,4 +25,5 @@
 - P9-S5-2 exposes current-user intent APIs with idempotency and ACL. It still does not execute automatic bids or publish private realtime events.
 - P9-S5-3 executes automatic Max Bid/Pre-Bid settlement under the auction row lock and writes real bid/event/outbox/order truth rows. It still does not add private user events, H5 controls, PC audit UI, or fat-finger/churn abuse handling.
 - P9-S5-4 keeps public realtime/Redis snapshots free of private Max Bid data and exposes current-user intent state only through authenticated REST snapshot/read paths.
+- P9-S5-5 adds H5 Max Bid controls as a secondary sheet with committed API responses, privacy copy, recovery disabling, and no client-side proxy bidding.
 - Route-mocked PC tests remain UI contract coverage. No-mock demo evidence must use backend-created auctions and real monitor APIs.
