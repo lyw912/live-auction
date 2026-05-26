@@ -955,9 +955,12 @@ test('H5 renders realtime leaderboard and event atmosphere controls', async ({ p
   await page.goto('/?stateMatrix=1');
   await expect(page.getByLabel('auction-state').locator('h2')).toHaveText('¥350.00');
 
-  await expect(page.getByTestId('leaderboard-panel')).toContainText('实时排行榜');
+  await expect(page.getByTestId('leaderboard-panel')).toContainText('行动榜单');
   await expect(page.getByTestId('leaderboard-panel')).toContainText('第 2 名');
   await expect(page.getByTestId('leaderboard-panel')).toContainText('差 ¥50.00');
+  await expect(page.getByTestId('rank-strip')).toContainText('第 2 名 · 差 ¥50.00');
+  await expect(page.getByTestId('rank-strip')).toContainText('下一口 ¥400.00');
+  await expect(page.getByTestId('rank-strip')).toContainText('seq 42');
   await expect(page.getByTestId('leaderboard-panel')).toContainText('¥350.00');
   const leaderboardPayload = await page.evaluate(async () => {
     const response = await fetch('/api/auctions/auc_live/leaderboard?limit=5');
@@ -996,6 +999,19 @@ test('H5 renders realtime leaderboard and event atmosphere controls', async ({ p
   await expect(cue).toHaveAttribute('data-cause-seq', '42');
   await expect(cue).toHaveAttribute('data-event-type', 'bid_accepted');
   await expect(cue).toHaveAttribute('data-user-scope', 'self');
+});
+
+test('H5 leaderboard sheet shows action metrics without moving the bid CTA', async ({ page }) => {
+  await page.goto('/');
+  const ctaBefore = await page.getByTestId('bid-cta').boundingBox();
+  await page.getByLabel('bid-dock-shortcuts').getByRole('button', { name: '榜单' }).click();
+  await expect(page.getByTestId('leaderboard-sheet')).toContainText('第 2 名 · 差 ¥50.00');
+  await expect(page.getByTestId('leaderboard-sheet')).toContainText('下一口 ¥400.00');
+  await expect(page.getByTestId('leaderboard-sheet')).toContainText('近30秒 3 次');
+  const ctaAfter = await page.getByTestId('bid-cta').boundingBox();
+  expect(ctaBefore).not.toBeNull();
+  expect(ctaAfter).not.toBeNull();
+  expect(Math.abs((ctaAfter?.y ?? 0) - (ctaBefore?.y ?? 0))).toBeLessThan(2);
 });
 
 test('H5 event-driven visual effects stay nonblocking and respect reduced motion', async ({ page }) => {

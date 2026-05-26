@@ -4,7 +4,7 @@
   font-family: var(--font-auction-sans);
   color: var(--color-ink-900);
   background: var(--color-surface-1);
-  --h5-bid-dock-reserved-height: calc(312px + var(--safe-area-bottom));
+  --h5-bid-dock-reserved-height: calc(376px + var(--safe-area-bottom));
 }
 
 * {
@@ -31,6 +31,7 @@ button {
   min-height: 54vh;
   padding: 18px;
   color: #fff;
+  contain: layout paint;
   background:
     linear-gradient(180deg, rgba(8, 15, 12, .12), rgba(8, 15, 12, .74)),
     linear-gradient(110deg, #263b34 0%, #4d6b5f 48%, #18241f 100%);
@@ -372,12 +373,12 @@ button {
   bottom: 0;
   z-index: calc(var(--z-sheet) + 2);
   min-height: var(--h5-bid-dock-reserved-height);
+  contain: layout paint;
   margin-top: -24px;
   border-radius: var(--radius-md) var(--radius-md) 0 0;
   padding: 12px 14px calc(12px + var(--safe-area-bottom));
-  background: rgba(255, 255, 255, .98);
+  background: #fff;
   border-top: 1px solid var(--color-line);
-  backdrop-filter: blur(10px);
 }
 
 .bid-dock[data-dock-state="SELF_LEADING"] {
@@ -430,9 +431,49 @@ button {
   text-align: right;
 }
 
+.rank-strip {
+  min-height: 44px;
+  margin-top: 6px;
+  border: 1px solid rgba(16, 79, 61, .16);
+  border-radius: var(--radius-md);
+  background: #f4faf7;
+  contain: layout paint;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 8px;
+  align-items: center;
+  padding: 7px 9px;
+}
+
+.rank-strip span,
+.rank-strip strong,
+.rank-strip em {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.rank-strip span {
+  color: var(--color-muted-strong);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.rank-strip strong {
+  color: #103c2f;
+  font-size: 13px;
+  text-align: right;
+}
+
+.rank-strip em {
+  grid-column: 1 / -1;
+  color: var(--color-muted);
+  font-size: 11px;
+  font-style: normal;
+}
+
 .dock-feedback {
   min-height: 20px;
-  margin-top: 4px;
+  margin-top: 3px;
   color: var(--color-muted);
   font-size: 12px;
   font-weight: 800;
@@ -735,6 +776,10 @@ button {
   font-size: 12px;
 }
 
+.leaderboard-panel-rank-strip {
+  margin-top: 0;
+}
+
 .leaderboard-list {
   margin-top: 10px;
   padding: 6px 10px;
@@ -920,7 +965,7 @@ button {
 
 .sheet-backdrop {
   position: fixed;
-  inset: 0 0 var(--h5-bid-dock-reserved-height);
+  inset: 0 0 calc(var(--h5-bid-dock-reserved-height) + 8px);
   z-index: calc(var(--z-sheet) + 1);
   background: rgba(15, 23, 42, .28);
   display: flex;
@@ -929,7 +974,7 @@ button {
 
 .bottom-sheet {
   width: 100%;
-  max-height: min(58vh, 520px);
+  max-height: min(52vh, 460px);
   min-height: 34vh;
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   background: var(--color-surface-0);
@@ -1044,6 +1089,11 @@ button {
   gap: 12px;
 }
 
+.sheet-action-row strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .sheet-header h2 {
   margin: 0;
   font-size: 18px;
@@ -1057,6 +1107,28 @@ button {
   background: #fff;
   color: var(--color-muted-strong);
   font-weight: 800;
+}
+
+.leaderboard-action-card {
+  min-height: 52px;
+  margin-top: 10px;
+  border: 1px solid rgba(16, 79, 61, .16);
+  border-radius: var(--radius-md);
+  background: var(--color-trust-green-soft);
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+}
+
+.leaderboard-action-card span {
+  color: #103c2f;
+  font-weight: 900;
+}
+
+.leaderboard-action-card em {
+  color: var(--color-muted-strong);
+  font-size: 12px;
+  font-style: normal;
 }
 
 .sheet-tabs {
@@ -1218,7 +1290,7 @@ button {
 
 @media (max-width: 380px) {
   :root {
-    --h5-bid-dock-reserved-height: calc(312px + var(--safe-area-bottom));
+    --h5-bid-dock-reserved-height: calc(372px + var(--safe-area-bottom));
   }
 
   .app-shell {
@@ -1276,6 +1348,21 @@ button {
 
   .dock-rank-row {
     gap: 6px;
+  }
+
+  .rank-strip {
+    min-height: 40px;
+    padding: 6px 7px;
+    gap: 1px 6px;
+  }
+
+  .rank-strip span,
+  .rank-strip strong {
+    font-size: 11px;
+  }
+
+  .rank-strip em {
+    font-size: 10px;
   }
 
   .dock-feedback {

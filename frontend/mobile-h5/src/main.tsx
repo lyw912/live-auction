@@ -276,6 +276,36 @@ function leaderboardCopy(payload: LeaderboardPayload | null) {
   return `${payload.accepted_bidder_count} 人已有效出价`;
 }
 
+function leaderboardActionCopy(payload: LeaderboardPayload | null, fallbackBidCents: number) {
+  const nextBid = payload?.next_valid_bid_cents ?? fallbackBidCents;
+  if (!payload || !payload.entries?.length) {
+    return {
+      headline: '等待首个有效出价',
+      action: `下一口 ${formatCents(nextBid)}`,
+      freshness: '榜单等待服务端事件'
+    };
+  }
+  if (payload.my_rank === 1 || payload.state === 'LEADING') {
+    return {
+      headline: '第 1 名 · 正在领先',
+      action: `守住领先 · 下一口 ${formatCents(nextBid)}`,
+      freshness: `seq ${payload.seq ?? '-'} · ${payload.accepted_bidder_count} 人入局`
+    };
+  }
+  if (payload.my_rank && payload.gap_to_next_rank_cents != null) {
+    return {
+      headline: `第 ${payload.my_rank} 名 · 差 ${formatCents(payload.gap_to_next_rank_cents)}`,
+      action: `下一口 ${formatCents(nextBid)}`,
+      freshness: `seq ${payload.seq ?? '-'} · 近30秒 ${payload.accepted_bids_30s ?? 0} 次`
+    };
+  }
+  return {
+    headline: `${payload.accepted_bidder_count} 人已有效出价`,
+    action: `一步入局 ${formatCents(nextBid)}`,
+    freshness: `seq ${payload.seq ?? '-'} · 榜单已同步`
+  };
+}
+
 function vibrateOnce() {
   if ('vibrate' in navigator) {
     navigator.vibrate?.(32);
@@ -1393,6 +1423,7 @@ function App() {
           <LeaderboardPanel
             activeAuctionID={activeAuctionID}
             leaderboard={leaderboard}
+            nextBidCents={nextBidCents}
             onRefresh={() => void loadLeaderboard()}
           />
           <HistoryPanel
@@ -1413,6 +1444,7 @@ function App() {
           historyLoading={historyLoading}
           item={stageItem}
           leaderboard={leaderboard}
+          nextBidCents={nextBidCents}
           orderHistory={orderHistory}
           scenario={scenario}
           onClose={() => setActiveSheet(null)}
@@ -1636,6 +1668,7 @@ function AuctionStatePanel({
     : leaderboard?.my_rank === 1
       ? '当前领先'
       : scenario.feedback;
+  const rankAction = leaderboardActionCopy(leaderboard, nextBidCents);
 
   return (
     <section
@@ -1659,6 +1692,11 @@ function AuctionStatePanel({
         <span className="status-chip" data-state={scenario.status}>{scenario.status}</span>
         <span>{scenario.leader}</span>
         <strong>{rankCopy} · {gapCopy}</strong>
+      </div>
+      <div className="rank-strip" data-testid="rank-strip">
+        <span>{rankAction.headline}</span>
+        <strong>{rankAction.action}</strong>
+        <em>{rankAction.freshness}</em>
       </div>
       <div className="signal-row">
         {scenario.stale || connectionPhase === 'disconnected' ? <WifiOff size={16} /> : <Wifi size={16} />}
@@ -1784,6 +1822,7 @@ function BottomSheet({
   historyLoading,
   item,
   leaderboard,
+  nextBidCents,
   orderHistory,
   scenario,
   onClose,
@@ -1799,6 +1838,7 @@ function BottomSheet({
   historyLoading: boolean;
   item: AuctionItem;
   leaderboard: LeaderboardPayload | null;
+  nextBidCents: number;
   orderHistory: HistoryRow[];
   scenario: Scenario;
   onClose: () => void;
@@ -1836,7 +1876,7 @@ function BottomSheet({
         <div className="sheet-content">
           {activeSheet === 'products' && <ProductListSheet auctions={auctions} activeAuctionID={activeAuctionID} scenario={scenario} />}
           {activeSheet === 'details' && <ProductRuleSheet item={item} auction={auctions.find((row) => row.id === activeAuctionID)} scenario={scenario} />}
-          {activeSheet === 'leaderboard' && <LeaderboardSheet activeAuctionID={activeAuctionID} leaderboard={leaderboard} onRefresh={onRefreshLeaderboard} />}
+          {activeSheet === 'leaderboard' && <LeaderboardSheet activeAuctionID={activeAuctionID} leaderboard={leaderboard} nextBidCents={nextBidCents} onRefresh={onRefreshLeaderboard} />}
           {activeSheet === 'history' && (
             <HistorySheet
               title="出价历史"
@@ -1965,13 +2005,18 @@ function ProductRuleSheet({ auction, item, scenario }: { auction?: AuctionSummar
   );
 }
 
-function LeaderboardSheet({ activeAuctionID, leaderboard, onRefresh }: { activeAuctionID: string; leaderboard: LeaderboardPayload | null; onRefresh: () => void }) {
+function LeaderboardSheet({ activeAuctionID, leaderboard, nextBidCents, onRefresh }: { activeAuctionID: string; leaderboard: LeaderboardPayload | null; nextBidCents: number; onRefresh: () => void }) {
   const entries = leaderboard?.entries ?? [];
+  const actionCopy = leaderboardActionCopy(leaderboard, nextBidCents);
   return (
-    <div className="sheet-leaderboard">
+    <div className="sheet-leaderboard" data-testid="leaderboard-sheet">
       <div className="sheet-action-row">
-        <strong>{leaderboardCopy(leaderboard)}</strong>
+        <strong>{actionCopy.headline}</strong>
         <button type="button" onClick={onRefresh} disabled={!activeAuctionID}>刷新</button>
+      </div>
+      <div className="leaderboard-action-card">
+        <span>{actionCopy.action}</span>
+        <em>{actionCopy.freshness}</em>
       </div>
       {entries.length === 0 ? <p>暂无有效出价</p> : entries.map((entry) => (
         <div className={`leaderboard-row ${entry.is_current ? 'is-current' : ''}`} key={`${entry.rank}-${entry.user_id}`}>
@@ -2018,24 +2063,28 @@ function HistorySheet({
 function LeaderboardPanel({
   activeAuctionID,
   leaderboard,
+  nextBidCents,
   onRefresh
 }: {
   activeAuctionID: string;
   leaderboard: LeaderboardPayload | null;
+  nextBidCents: number;
   onRefresh: () => void;
 }) {
+  const actionCopy = leaderboardActionCopy(leaderboard, nextBidCents);
   return (
-    <section className="leaderboard-panel" data-testid="leaderboard-panel">
+    <section className="leaderboard-panel leaderboard-panel-compact" data-testid="leaderboard-panel">
       <div className="leaderboard-title">
-        <h2><Trophy size={16} /> 实时排行榜</h2>
+        <h2><Trophy size={16} /> 行动榜单</h2>
         <button type="button" onClick={onRefresh} disabled={!activeAuctionID}>
           <RefreshCw size={14} />
           刷新
         </button>
       </div>
-      <div className="my-rank-card">
-        <strong>{leaderboardCopy(leaderboard)}</strong>
-        <span>{leaderboard?.my_best_amount_cents != null ? `我的最高 ${formatCents(leaderboard.my_best_amount_cents)}` : '出价后显示我的位置'}</span>
+      <div className="my-rank-card rank-strip leaderboard-panel-rank-strip" data-testid="leaderboard-panel-rank-strip">
+        <strong>{actionCopy.headline}</strong>
+        <span>{actionCopy.action}</span>
+        <em>{actionCopy.freshness}</em>
       </div>
       <div className="leaderboard-list">
         {(leaderboard?.entries ?? []).length === 0 ? (
