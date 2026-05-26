@@ -104,13 +104,21 @@ test.beforeEach(async ({ page }) => {
     await route.fulfill({
       json: {
         auction_id: 'auc_live',
+        seq: 42,
+        server_time_ms: Date.parse('2099-05-22T13:58:45Z'),
         current_price_cents: 35000,
         current_winner_id: 'user_2',
         my_rank: 2,
         my_best_amount_cents: 30000,
         gap_to_leader_cents: 5000,
+        gap_to_next_rank_cents: 5000,
+        next_valid_bid_cents: 40000,
+        state: 'OUTBID',
         leader_amount_cents: 35000,
         accepted_bidder_count: 2,
+        active_bidders_30s: 2,
+        accepted_bids_30s: 3,
+        price_velocity_cents_per_min: 10000,
         entries: [
           { rank: 1, user_id: 'user_2', user_masked: '张**', amount_cents: 35000, bid_count: 2 },
           { rank: 2, user_id: 'user_1', user_masked: '我', amount_cents: 30000, bid_count: 1, is_current: true }
@@ -951,6 +959,19 @@ test('H5 renders realtime leaderboard and event atmosphere controls', async ({ p
   await expect(page.getByTestId('leaderboard-panel')).toContainText('第 2 名');
   await expect(page.getByTestId('leaderboard-panel')).toContainText('差 ¥50.00');
   await expect(page.getByTestId('leaderboard-panel')).toContainText('¥350.00');
+  const leaderboardPayload = await page.evaluate(async () => {
+    const response = await fetch('/api/auctions/auc_live/leaderboard?limit=5');
+    return response.json();
+  });
+  expect(leaderboardPayload).toMatchObject({
+    seq: 42,
+    gap_to_next_rank_cents: 5000,
+    next_valid_bid_cents: 40000,
+    state: 'OUTBID',
+    active_bidders_30s: 2,
+    accepted_bids_30s: 3,
+    price_velocity_cents_per_min: 10000
+  });
   await expect(page.getByRole('button', { name: '开启提示音' })).toBeVisible();
 
   await page.evaluate(() => {

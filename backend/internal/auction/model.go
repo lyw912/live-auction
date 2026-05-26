@@ -81,12 +81,20 @@ type LeaderboardEntry struct {
 
 type Leaderboard struct {
 	AuctionID           string             `json:"auction_id"`
+	Seq                 int64              `json:"seq"`
+	ServerTimeMS        int64              `json:"server_time_ms"`
 	CurrentPriceCents   int64              `json:"current_price_cents"`
 	CurrentWinnerID     *string            `json:"current_winner_id,omitempty"`
 	MyRank              *int               `json:"my_rank,omitempty"`
 	MyBestAmountCents   *int64             `json:"my_best_amount_cents,omitempty"`
 	GapToLeaderCents    *int64             `json:"gap_to_leader_cents,omitempty"`
+	GapToNextRankCents  *int64             `json:"gap_to_next_rank_cents,omitempty"`
+	NextValidBidCents   int64              `json:"next_valid_bid_cents"`
+	State               string             `json:"state"`
 	LeaderAmountCents   int64              `json:"leader_amount_cents"`
 	AcceptedBidderCount int64              `json:"accepted_bidder_count"`
+	ActiveBidders30s    int64              `json:"active_bidders_30s,omitempty"`
+	AcceptedBids30s     int64              `json:"accepted_bids_30s,omitempty"`
+	PriceVelocityCPM    int64              `json:"price_velocity_cents_per_min,omitempty"`
 	Entries             []LeaderboardEntry `json:"entries"`
 }

@@ -162,6 +162,68 @@ func TestRepositoryCancelStoresReasonInEvent(t *testing.T) {
 	}
 }
 
+func TestRepositoryLeaderboardActionMetrics(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	repo := NewRepository(db)
+	auction := createActiveAuction(t, repo, db, nil)
+	user2 := createTestUser(t, db)
+	user3 := createTestUser(t, db)
+
+	if _, err := repo.PlaceBid(ctx, auction.ID, user2, "lb-bid-1", BidInput{ClientBidID: "lb-bid-1", AmountCents: 15_000}, "tr_lb"); err != nil {
+		t.Fatalf("PlaceBid user2: %v", err)
+	}
+	if _, err := repo.PlaceBid(ctx, auction.ID, user3, "lb-bid-2", BidInput{ClientBidID: "lb-bid-2", AmountCents: 20_000}, "tr_lb"); err != nil {
+		t.Fatalf("PlaceBid user3: %v", err)
+	}
+	if _, err := repo.PlaceBid(ctx, auction.ID, "user_1", "lb-bid-3", BidInput{ClientBidID: "lb-bid-3", AmountCents: 25_000}, "tr_lb"); err != nil {
+		t.Fatalf("PlaceBid user1: %v", err)
+	}
+
+	board, err := repo.GetLeaderboard(ctx, auction.ID, user2, 5)
+	if err != nil {
+		t.Fatalf("GetLeaderboard: %v", err)
+	}
+	if board.Seq < 6 {
+		t.Fatalf("seq = %d, want latest auction seq after bids", board.Seq)
+	}
+	if board.ServerTimeMS <= 0 {
+		t.Fatalf("server_time_ms = %d, want positive server timestamp", board.ServerTimeMS)
+	}
+	if board.NextValidBidCents != 30_000 {
+		t.Fatalf("next_valid_bid_cents = %d, want 30000", board.NextValidBidCents)
+	}
+	if board.State != "OUTBID" {
+		t.Fatalf("state = %s, want OUTBID", board.State)
+	}
+	if board.MyRank == nil || *board.MyRank != 3 {
+		t.Fatalf("my_rank = %v, want 3", board.MyRank)
+	}
+	if board.GapToLeaderCents == nil || *board.GapToLeaderCents != 10_000 {
+		t.Fatalf("gap_to_leader = %v, want 10000", board.GapToLeaderCents)
+	}
+	if board.GapToNextRankCents == nil || *board.GapToNextRankCents != 5_000 {
+		t.Fatalf("gap_to_next_rank = %v, want 5000", board.GapToNextRankCents)
+	}
+	if board.AcceptedBidderCount != 3 || board.ActiveBidders30s != 3 || board.AcceptedBids30s != 3 {
+		t.Fatalf("stats mismatch: %#v", board)
+	}
+	if board.PriceVelocityCPM != 20_000 {
+		t.Fatalf("price_velocity_cents_per_min = %d, want 20000", board.PriceVelocityCPM)
+	}
+
+	leading, err := repo.GetLeaderboard(ctx, auction.ID, "user_1", 5)
+	if err != nil {
+		t.Fatalf("GetLeaderboard leading: %v", err)
+	}
+	if leading.State != "LEADING" {
+		t.Fatalf("leading state = %s, want LEADING", leading.State)
+	}
+	if leading.GapToLeaderCents == nil || *leading.GapToLeaderCents != 0 {
+		t.Fatalf("leading gap_to_leader = %v, want 0", leading.GapToLeaderCents)
+	}
+}
+
 func openIntegrationDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("DATABASE_URL")

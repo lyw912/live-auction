@@ -58,6 +58,7 @@
 | `docs/evidence/p6-05-h5-auction-result-sheets.md` | AUTHORITATIVE | P6-S5 H5 winner/loser/unsold result sheets add payment handoff, final gap/result explanation, next-item continuation, and disabled dangerous actions with H5 build, behavior, visual, and full e2e evidence. |
 | `docs/evidence/p7-01-h5-atmosphere-engine.md` | AUTHORITATIVE | P7-S1 H5 atmosphere engine normalizes event-driven cues, carries server-truth metadata, dedupes recovery replays, and tests priority ordering. |
 | `docs/evidence/p7-02-h5-event-driven-effects.md` | AUTHORITATIVE | P7-S2 H5 event effects add bounded price tick, leading ring, outbid edge flash, extension stretch, sold mark, reduced-motion fallback, CTA overlap checks, longtask gate, and visual regression evidence. |
+| `docs/evidence/p7-03-leaderboard-action-metrics.md` | AUTHORITATIVE | P7-S3 extends the leaderboard API with PostgreSQL-derived seq, server time, next valid bid, adjacent-rank gap, user state, and 30s action stats while preserving old fields. |
 | `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan.md` | AUTHORITATIVE | P3/P4 pressure protocol and admission-off policy. |
 | `docs/design-v2-industrial/18-p3-p4-roadmap-reset.md` | AUTHORITATIVE | Current P3/P4 execution order and decision gates. |
 | `docs/p3-decision-log.md` | AUTHORITATIVE | Current decisions, superseded evidence, and go/no-go gates. |

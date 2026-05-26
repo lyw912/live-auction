@@ -172,13 +172,21 @@ type LeaderboardEntry = {
 };
 type LeaderboardPayload = {
   auction_id: string;
+  seq?: number;
+  server_time_ms?: number;
   current_price_cents: number;
   current_winner_id?: string;
   my_rank?: number;
   my_best_amount_cents?: number;
   gap_to_leader_cents?: number;
+  gap_to_next_rank_cents?: number;
+  next_valid_bid_cents?: number;
+  state?: 'NOT_BID' | 'OUTBID' | 'LEADING';
   leader_amount_cents: number;
   accepted_bidder_count: number;
+  active_bidders_30s?: number;
+  accepted_bids_30s?: number;
+  price_velocity_cents_per_min?: number;
   entries?: LeaderboardEntry[];
 };
 type WSTicketResponse = {

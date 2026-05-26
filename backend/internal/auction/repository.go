@@ -118,13 +118,15 @@ func (r *Repository) GetLeaderboard(ctx context.Context, auctionID string, userI
 	var board Leaderboard
 	board.AuctionID = auctionID
 	err := r.db.QueryRow(ctx, `
-		SELECT current_price_cents, current_winner_id
+		SELECT current_price_cents, current_winner_id, seq, increment_cents
 		FROM auctions
 		WHERE id = $1
-	`, auctionID).Scan(&board.CurrentPriceCents, &board.CurrentWinnerID)
+	`, auctionID).Scan(&board.CurrentPriceCents, &board.CurrentWinnerID, &board.Seq, &board.NextValidBidCents)
 	if err != nil {
 		return Leaderboard{}, mapNotFound(err)
 	}
+	board.NextValidBidCents += board.CurrentPriceCents
+	board.State = "NOT_BID"
 
 	rows, err := r.db.Query(ctx, `
 		WITH best AS (
@@ -182,6 +184,17 @@ func (r *Repository) GetLeaderboard(ctx context.Context, auctionID string, userI
 				gap = 0
 			}
 			board.GapToLeaderCents = &gap
+			board.State = "OUTBID"
+			if board.MyRank != nil && *board.MyRank == 1 {
+				board.State = "LEADING"
+			}
+			if board.MyRank != nil && *board.MyRank > 1 {
+				if nextRankGap, err := r.gapToNextRank(ctx, auctionID, *board.MyRank, *board.MyBestAmountCents); err != nil {
+					return Leaderboard{}, err
+				} else {
+					board.GapToNextRankCents = &nextRankGap
+				}
+			}
 		}
 	}
 	if err := r.db.QueryRow(ctx, `
@@ -191,7 +204,54 @@ func (r *Repository) GetLeaderboard(ctx context.Context, auctionID string, userI
 	`, auctionID).Scan(&board.AcceptedBidderCount); err != nil {
 		return Leaderboard{}, err
 	}
+	if err := r.db.QueryRow(ctx, `
+		SELECT
+			COALESCE(count(DISTINCT user_id), 0),
+			COALESCE(count(*), 0),
+			COALESCE(max(amount_cents) - min(amount_cents), 0)
+		FROM bids
+		WHERE auction_id = $1
+		  AND status = 'ACCEPTED'
+		  AND created_at >= now() - interval '30 seconds'
+	`, auctionID).Scan(&board.ActiveBidders30s, &board.AcceptedBids30s, &board.PriceVelocityCPM); err != nil {
+		return Leaderboard{}, err
+	}
+	board.PriceVelocityCPM *= 2
+	if err := r.db.QueryRow(ctx, `SELECT floor(extract(epoch from clock_timestamp()) * 1000)::bigint`).Scan(&board.ServerTimeMS); err != nil {
+		return Leaderboard{}, err
+	}
 	return board, nil
+}
+
+func (r *Repository) gapToNextRank(ctx context.Context, auctionID string, myRank int, myBestAmount int64) (int64, error) {
+	var nextAmount int64
+	err := r.db.QueryRow(ctx, `
+		WITH best AS (
+			SELECT user_id, max(amount_cents) AS amount_cents, max(created_at) AS last_bid_at
+			FROM bids
+			WHERE auction_id = $1 AND status = 'ACCEPTED'
+			GROUP BY user_id
+		),
+		ranked AS (
+			SELECT amount_cents,
+			       row_number() OVER (ORDER BY amount_cents DESC, last_bid_at ASC, user_id ASC) AS rank
+			FROM best
+		)
+		SELECT amount_cents
+		FROM ranked
+		WHERE rank = $2
+	`, auctionID, myRank-1).Scan(&nextAmount)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	gap := nextAmount - myBestAmount
+	if gap < 0 {
+		gap = 0
+	}
+	return gap, nil
 }
 
 func (r *Repository) UpdateRules(ctx context.Context, auctionID string, input UpdateRulesInput, traceID string) (Auction, error) {
