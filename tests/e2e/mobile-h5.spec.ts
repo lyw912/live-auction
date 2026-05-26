@@ -31,10 +31,15 @@ test.beforeEach(async ({ page }) => {
           },
           item: {
             title: '青瓷手作茶盏',
+            description: '孤品手作，窑变釉面带自然开片，适合收藏与日用。',
             image_url: productImageDataURL,
             certificate: '中检证书',
             condition: '无冲线',
-            shipping: '顺丰保价'
+            shipping: '顺丰保价',
+            dimensions: '直径 9.2cm',
+            material: '景德镇高温瓷',
+            flaws: '口沿一处自然釉缩',
+            return_policy: '签收前可验货，证书不符支持售后复核。'
           }
         },
         {
@@ -81,10 +86,15 @@ test.beforeEach(async ({ page }) => {
           server_time_ms: Date.parse('2099-05-22T13:58:45Z'),
           item: {
             title: '青瓷手作茶盏',
+            description: '孤品手作，窑变釉面带自然开片，适合收藏与日用。',
             image_url: productImageDataURL,
             certificate: '中检证书',
             condition: '无冲线',
-            shipping: '顺丰保价'
+            shipping: '顺丰保价',
+            dimensions: '直径 9.2cm',
+            material: '景德镇高温瓷',
+            flaws: '口沿一处自然釉缩',
+            return_policy: '签收前可验货，证书不符支持售后复核。'
           }
         }
       }
@@ -615,8 +625,8 @@ test('H5 bottom sheets open close and keep the primary bid CTA singular', async 
 
   await sheet.getByRole('tab', { name: '规则' }).click();
   await expect(sheet.getByRole('heading', { name: '商品与规则' })).toBeVisible();
-  await expect(sheet.getByText('封顶价')).toBeVisible();
-  await expect(sheet.getByText('高额确认')).toBeVisible();
+  await expect(sheet.getByText('当前出价节奏')).toBeVisible();
+  await expect(sheet.getByText('误触保护')).toBeVisible();
   await expect(page.getByTestId('bid-cta')).toHaveCount(1);
 
   await sheet.getByRole('tab', { name: '榜单' }).click();
@@ -659,6 +669,27 @@ test('H5 bottom sheet history and orders use existing user APIs', async ({ page 
   await sheet.getByRole('tab', { name: '订单' }).click();
   await expect(sheet.getByText('ord_sheet_1')).toBeVisible();
   await expect(sheet.getByText('¥600.00 · ORDER_PENDING')).toBeVisible();
+  await expect(page.getByTestId('bid-cta')).toBeVisible();
+});
+
+test('H5 product trust sheet explains proof money and timing in user language', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 844 });
+  await page.goto('/');
+
+  await page.getByLabel('bid-dock-shortcuts').getByRole('button', { name: '规则' }).click();
+  const sheet = page.getByTestId('bottom-sheet');
+  await expect(sheet.getByRole('heading', { name: '商品与规则' })).toBeVisible();
+  await expect(sheet.getByText('商品信任详情')).toBeVisible();
+  await expect(sheet.getByText('孤品手作，窑变釉面带自然开片，适合收藏与日用。')).toBeVisible();
+  await expect(sheet.getByLabel('product-trust-proof').getByText('中检证书')).toBeVisible();
+  await expect(sheet.getByLabel('product-trust-proof').getByText('直径 9.2cm')).toBeVisible();
+  await expect(sheet.getByText('当前出价节奏')).toBeVisible();
+  await expect(sheet.getByText('价格到达 ¥1500.00 后不再继续抬价。')).toBeVisible();
+  await expect(sheet.getByText('本场要求保证金，最低 ¥500.00')).toBeVisible();
+  await expect(sheet.getByText('最后 10 秒内有有效出价，会自动延长 10 秒，最多 3 次')).toBeVisible();
+  await expect(sheet.getByText('单次高额跳价达到 ¥1000.00 会触发确认，防止误触。')).toBeVisible();
+  await expect(sheet.getByText('签收前可验货，证书不符支持售后复核。')).toBeVisible();
+  await expect(page.getByTestId('bid-cta')).toHaveCount(1);
   await expect(page.getByTestId('bid-cta')).toBeVisible();
 });
 

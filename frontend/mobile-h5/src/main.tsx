@@ -106,6 +106,7 @@ type SnapshotResponse = {
 
 type AuctionItem = {
   title?: string;
+  description?: string;
   image_url?: string;
   imageURL?: string;
   video_poster_url?: string;
@@ -113,6 +114,10 @@ type AuctionItem = {
   certificate?: string;
   condition?: string;
   shipping?: string;
+  dimensions?: string;
+  material?: string;
+  return_policy?: string;
+  flaws?: string;
 };
 
 type HistoryRow = Record<string, unknown>;
@@ -1672,17 +1677,70 @@ function ProductListSheet({
 }
 
 function ProductRuleSheet({ auction, item, scenario }: { auction?: AuctionSummary; item: AuctionItem; scenario: Scenario }) {
+  const mediaURL = item.video_poster_url ?? item.videoPosterURL ?? item.image_url ?? item.imageURL ?? '';
+  const depositFloor = auction?.rule?.deposit_floor_cents ?? 0;
+  const depositCap = auction?.rule?.deposit_cap_cents ?? 0;
+  const depositBps = auction?.rule?.deposit_bps ?? 0;
+  const depositCopy = depositFloor > 0 || depositBps > 0
+    ? `本场要求保证金，最低 ${formatCents(depositFloor)}${depositCap > 0 ? `，最高 ${formatCents(depositCap)}` : ''}。未拍中或订单完成后按支付链路处理。`
+    : '本场未展示固定保证金门槛；以服务端出价校验和订单状态为准。';
+  const extensionCopy = `最后 ${auction?.rule?.extend_window_seconds ?? 10} 秒内有有效出价，会自动延长 ${auction?.rule?.extend_by_seconds ?? 10} 秒${auction?.rule?.max_extend_count ? `，最多 ${auction.rule.max_extend_count} 次` : ''}，避免最后一秒抢拍。`;
+  const capCopy = auction?.cap_price_cents
+    ? `价格到达 ${formatCents(auction.cap_price_cents)} 后不再继续抬价。`
+    : '本场未设置展示封顶价，仍由服务端规则校验每次出价。';
+  const confirmationCopy = auction?.rule?.fat_finger_threshold_cents
+    ? `单次高额跳价达到 ${formatCents(auction.rule.fat_finger_threshold_cents)} 会触发确认，防止误触。`
+    : '高额确认由服务端按风险规则判断。';
+  const proofItems = [
+    ['证书', item.certificate ?? '证书待同步'],
+    ['品相', item.condition ?? '品相待同步'],
+    ['尺寸', item.dimensions ?? '尺寸待同步'],
+    ['材质', item.material ?? '材质待同步'],
+    ['瑕疵', item.flaws ?? '未登记明显瑕疵'],
+    ['运费', item.shipping ?? '运费以订单为准']
+  ];
+
   return (
     <div className="product-rule-sheet">
-      <h3>{item.title ?? scenario.title}</h3>
-      <p>{item.certificate ?? '证书待同步'} · {item.condition ?? '品相待同步'} · {item.shipping ?? '运费以订单为准'}</p>
-      <div className="rule-summary-grid">
-        <span>当前价 <strong>{scenario.price}</strong></span>
-        <span>加价幅度 <strong>{formatCents(auction?.increment_cents ?? 0)}</strong></span>
-        <span>封顶价 <strong>{auction?.cap_price_cents ? formatCents(auction.cap_price_cents) : '未设置'}</strong></span>
-        <span>延时规则 <strong>最后 {auction?.rule?.extend_window_seconds ?? 10}s 延 {auction?.rule?.extend_by_seconds ?? 10}s</strong></span>
-        <span>保证金 <strong>{formatCents(auction?.rule?.deposit_floor_cents ?? 0)} 起</strong></span>
-        <span>高额确认 <strong>{auction?.rule?.fat_finger_threshold_cents ? formatCents(auction.rule.fat_finger_threshold_cents) : '服务端判断'}</strong></span>
+      <div className="trust-hero">
+        <div className={`trust-media ${mediaURL ? 'has-media' : ''}`} style={mediaURL ? { '--trust-media-url': `url("${mediaURL}")` } as React.CSSProperties : undefined}>
+          {!mediaURL && <span>商品图待同步</span>}
+        </div>
+        <div>
+          <p className="eyebrow">商品信任详情</p>
+          <h3>{item.title ?? scenario.title}</h3>
+          <p>{item.description ?? '主播讲解与证据材料会随当前拍品同步，出价前请确认品相、保证金和延时规则。'}</p>
+        </div>
+      </div>
+      <div className="trust-proof-grid" aria-label="product-trust-proof">
+        {proofItems.map(([label, value]) => (
+          <span key={label}>
+            {label}
+            <strong>{value}</strong>
+          </span>
+        ))}
+      </div>
+      <div className="trust-rule-list">
+        <article>
+          <strong>当前出价节奏</strong>
+          <p>当前价 {scenario.price}，每次至少加 {formatCents(auction?.increment_cents ?? 0)}。{capCopy}</p>
+        </article>
+        <article>
+          <strong>保证金与支付</strong>
+          <p>{depositCopy}</p>
+        </article>
+        <article>
+          <strong>延时保护</strong>
+          <p>{extensionCopy}</p>
+        </article>
+        <article>
+          <strong>误触保护</strong>
+          <p>{confirmationCopy}</p>
+        </article>
+        <article>
+          <strong>售后口径</strong>
+          <p>{item.return_policy ?? '成交后以订单支付状态和商家售后口径为准，保证金处理会在订单状态中体现。'}</p>
+        </article>
       </div>
     </div>
   );
