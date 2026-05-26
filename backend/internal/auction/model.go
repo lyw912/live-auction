@@ -69,6 +69,43 @@ type Auction struct {
 	Rule              Rule       `json:"rule"`
 }
 
+type MaxBidIntentStatus string
+
+const (
+	MaxBidIntentStatusActive    MaxBidIntentStatus = "ACTIVE"
+	MaxBidIntentStatusCancelled MaxBidIntentStatus = "CANCELLED"
+	MaxBidIntentStatusExhausted MaxBidIntentStatus = "EXHAUSTED"
+	MaxBidIntentStatusTerminal  MaxBidIntentStatus = "TERMINAL"
+)
+
+type MaxBidIntentSource string
+
+const (
+	MaxBidIntentSourcePreBid MaxBidIntentSource = "PRE_BID"
+	MaxBidIntentSourceMaxBid MaxBidIntentSource = "MAX_BID"
+)
+
+type MaxBidIntent struct {
+	ID             string             `json:"id"`
+	AuctionID      string             `json:"auction_id"`
+	UserID         string             `json:"user_id"`
+	MaxAmountCents int64              `json:"max_amount_cents"`
+	Status         MaxBidIntentStatus `json:"status"`
+	Source         MaxBidIntentSource `json:"source"`
+	CreatedAt      time.Time          `json:"created_at"`
+	UpdatedAt      time.Time          `json:"updated_at"`
+	CancelledAt    *time.Time         `json:"cancelled_at,omitempty"`
+	ExhaustedAt    *time.Time         `json:"exhausted_at,omitempty"`
+	LastAppliedSeq *int64             `json:"last_applied_seq,omitempty"`
+	Version        int64              `json:"version"`
+}
+
+type MaxBidIntentInput struct {
+	MaxAmountCents int64              `json:"max_amount_cents"`
+	ClientSeenSeq  int64              `json:"client_seen_seq"`
+	Source         MaxBidIntentSource `json:"source"`
+}
+
 type LeaderboardEntry struct {
 	Rank        int       `json:"rank"`
 	UserID      string    `json:"user_id"`

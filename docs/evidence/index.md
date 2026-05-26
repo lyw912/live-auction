@@ -74,6 +74,7 @@
 | `docs/evidence/p9-03-similar-auction-handoff.md` | AUTHORITATIVE | P9-S3 adds H5 loser/unsold room-list handoff cards that show the next visible auction without claiming recommendations or reserved inventory. |
 | `docs/adr/p9-04-max-bid-pre-bid-decision.md` | AUTHORITATIVE | P9-S4 accepts Max Bid/Pre-Bid as private PostgreSQL intents with row-lock settlement, public/private event boundaries, and P9-S5 implementation gates. |
 | `docs/evidence/p9-04-max-bid-pre-bid-adr.md` | AUTHORITATIVE | P9-S4 evidence records the ADR review against PostgreSQL truth, idempotency, outbox, privacy, and docs-only validation. |
+| `docs/evidence/p9-05-1-max-bid-intent-storage.md` | AUTHORITATIVE | P9-S5-1 adds PostgreSQL private max-bid intent storage, repository validation, and explicit manual bid source without exposing APIs or automatic bidding. |
 | `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan.md` | AUTHORITATIVE | P3/P4 pressure protocol and admission-off policy. |
 | `docs/design-v2-industrial/18-p3-p4-roadmap-reset.md` | AUTHORITATIVE | Current P3/P4 execution order and decision gates. |
 | `docs/p3-decision-log.md` | AUTHORITATIVE | Current decisions, superseded evidence, and go/no-go gates, including P9-D01 reopening Max Bid/Pre-Bid through ADR only. |

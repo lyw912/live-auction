@@ -26,6 +26,9 @@ const (
 	BidResultAcceptedSold     = "ACCEPTED_SOLD"
 	BidResultRejected         = "REJECTED"
 
+	BidSourceManual     = "MANUAL"
+	BidSourceAutoMaxBid = "AUTO_MAX_BID"
+
 	IdempotencyStatusProcessing = "PROCESSING"
 	IdempotencyStatusCompleted  = "COMPLETED"
 
@@ -835,9 +838,9 @@ func createOrderForSoldAuction(ctx context.Context, tx pgx.Tx, a lockedAuction, 
 
 func insertBidRow(ctx context.Context, tx pgx.Tx, bidID string, auctionID string, userID string, input BidInput, seq int64, status string, rejectReason *string, requestHash string, responseJSON []byte, traceID string) error {
 	_, err := tx.Exec(ctx, `
-		INSERT INTO bids (id, auction_id, user_id, client_bid_id, amount_cents, seq, status, reject_reason, request_hash, response_json, trace_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-	`, bidID, auctionID, userID, input.ClientBidID, input.AmountCents, seq, status, rejectReason, requestHash, responseJSON, traceID)
+		INSERT INTO bids (id, auction_id, user_id, client_bid_id, amount_cents, seq, status, reject_reason, request_hash, response_json, trace_id, source)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+	`, bidID, auctionID, userID, input.ClientBidID, input.AmountCents, seq, status, rejectReason, requestHash, responseJSON, traceID, BidSourceManual)
 	return err
 }
 
