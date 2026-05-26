@@ -35,6 +35,25 @@ export default defineConfig({
         viewport: { width: 1440, height: 900 }
       },
       testMatch: /pc-console\.spec\.ts/
+    },
+    {
+      name: 'visual-mobile-h5',
+      use: {
+        ...devices['Pixel 5'],
+        baseURL: 'http://127.0.0.1:5173'
+      },
+      testMatch: /visual-regression\.spec\.ts/,
+      grep: /@visual-h5/
+    },
+    {
+      name: 'visual-pc-console',
+      use: {
+        ...devices['Desktop Chrome'],
+        baseURL: 'http://127.0.0.1:5174',
+        viewport: { width: 1440, height: 900 }
+      },
+      testMatch: /visual-regression\.spec\.ts/,
+      grep: /@visual-pc/
     }
   ]
 });

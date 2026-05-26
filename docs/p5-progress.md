@@ -5,7 +5,7 @@
 | Slice | Status | Evidence |
 |---|---|---|
 | P5-S1 | DONE | `docs/evidence/p5-01-design-tokens.md` |
-| P5-S2 | TODO | Visual regression harness pending |
+| P5-S2 | DONE | `docs/evidence/p5-02-visual-regression-gates.md` |
 | P5-S3 | TODO | H5 component boundary refactor pending |
 | P5-S4 | TODO | PC component boundary refactor pending |
 
@@ -13,3 +13,4 @@
 
 - P5 UI foundation does not change auction truth, bidding semantics, outbox, recovery, payment, or diagnostics data producers.
 - P5-S1 intentionally keeps existing layouts materially stable; later P6/P8 slices own major H5/PC redesign.
+- P5-S2 screenshot gates are route-mocked UI contract coverage; they guard visual/state regressions and do not replace live backend evidence.
