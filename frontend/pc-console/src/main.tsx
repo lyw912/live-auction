@@ -1450,6 +1450,13 @@ function RuleEditor({
             <NumberField label="保证金下限" name="deposit-floor-cents" value={rule.depositFloorCents} min={0} onChange={(value) => onRuleChange({ depositFloorCents: value })} />
             <NumberField label="保证金上限" name="deposit-cap-cents" value={rule.depositCapCents} min={0} onChange={(value) => onRuleChange({ depositCapCents: value })} />
           </div>
+          <div className="verified-bidder-placeholder" data-testid="verified-bidder-placeholder">
+            <div>
+              <strong>Verified bidder gate</strong>
+              <span>后端尚未提供强制验证规则字段；当前只展示买家端兼容状态，不写入竞拍规则。</span>
+            </div>
+            <Button disabled>启用验证门槛</Button>
+          </div>
         </section>
         <section className="wizard-section h5-rule-preview" data-testid="h5-rule-preview">
           <div className="wizard-section-title">

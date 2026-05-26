@@ -1088,6 +1088,31 @@ body {
   line-height: 1.45;
 }
 
+.verified-bidder-placeholder {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  border: 1px dashed var(--color-line);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-0);
+  padding: 10px;
+}
+
+.verified-bidder-placeholder div {
+  display: grid;
+  gap: 4px;
+}
+
+.verified-bidder-placeholder strong {
+  color: var(--color-ink-950);
+}
+
+.verified-bidder-placeholder span {
+  color: var(--color-muted);
+  line-height: 1.45;
+}
+
 @media (max-width: 900px) {
   .health-ribbon,
   .command-center {

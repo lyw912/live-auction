@@ -390,6 +390,8 @@ test('PC rule save targets selected draft auction and includes all money/rule fi
   await expect(page.getByLabel('seller-rule-wizard-steps').getByText('Time')).toBeVisible();
   await expect(page.getByLabel('seller-rule-wizard-steps').getByText('Trust')).toBeVisible();
   await expect(page.getByLabel('seller-rule-wizard-steps').getByText('Preview')).toBeVisible();
+  await expect(page.getByTestId('verified-bidder-placeholder').getByText('Verified bidder gate')).toBeVisible();
+  await expect(page.getByTestId('verified-bidder-placeholder').getByRole('button', { name: '启用验证门槛' })).toBeDisabled();
   await page.getByLabel('start-price-cents').fill('20000');
   await page.getByLabel('increment-cents').fill('10000');
   await page.getByLabel('cap-price-cents').fill('70000');

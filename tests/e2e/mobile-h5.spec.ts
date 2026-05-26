@@ -370,6 +370,83 @@ test('H5 rejected bid shows business copy and re-enables CTA', async ({ page }) 
   await expect(page.getByTestId('bid-cta')).toBeEnabled();
 });
 
+test('H5 verified bidder requirement disables bid CTA with clear copy', async ({ page }) => {
+  let bidRequests = 0;
+  await page.route('/api/rooms/room_main/auctions', async (route) => {
+    await route.fulfill({
+      json: [{
+        id: 'auc_live',
+        room_id: 'room_main',
+        status: 'ACTIVE',
+        current_price_cents: 35000,
+        increment_cents: 5000,
+        accepted_bid_count: 3,
+        seq: 41,
+        end_at: '2099-05-22T14:00:00Z',
+        bidder_requirement: {
+          verification_required: true,
+          deposit_required: true,
+          verified: false,
+          deposit_held: false,
+          reason: '高价值拍品需完成买家验证和保证金冻结'
+        },
+        item: { title: '高价值珠宝', image_url: productImageDataURL }
+      }]
+    });
+  });
+  await page.route('/api/auctions/auc_live', async (route) => {
+    await route.fulfill({
+      json: {
+        event_type: 'snapshot',
+        auction_id: 'auc_live',
+        id: 'auc_live',
+        status: 'ACTIVE',
+        seq: 41,
+        source: 'db',
+        stale: false,
+        current_price_cents: 35000,
+        increment_cents: 5000,
+        current_winner_id: 'user_2',
+        end_at: '2099-05-22T14:00:00Z',
+        server_time_ms: Date.parse('2099-05-22T13:58:45Z'),
+        bidder_requirement: {
+          verification_required: true,
+          deposit_required: true,
+          verified: false,
+          deposit_held: false,
+          reason: '高价值拍品需完成买家验证和保证金冻结'
+        },
+        payload: {
+          status: 'ACTIVE',
+          current_price_cents: 35000,
+          leader_user_masked: '张**',
+          current_winner_id: 'user_2',
+          end_at: '2099-05-22T14:00:00Z',
+          server_time_ms: Date.parse('2099-05-22T13:58:45Z'),
+          bidder_requirement: {
+            verification_required: true,
+            deposit_required: true,
+            verified: false,
+            deposit_held: false,
+            reason: '高价值拍品需完成买家验证和保证金冻结'
+          },
+          item: { title: '高价值珠宝', image_url: productImageDataURL }
+        }
+      }
+    });
+  });
+  await page.route('/api/auctions/auc_live/bids', async (route) => {
+    bidRequests += 1;
+    await route.fulfill({ status: 500, json: { code: 'SHOULD_NOT_BID' } });
+  });
+  await page.goto('/');
+  await expect(page.getByTestId('bid-cta')).toBeDisabled();
+  await expect(page.getByTestId('bid-cta')).toHaveText(/需完成验证/);
+  await expect(page.getByTestId('bid-hint')).toContainText('高价值拍品需完成买家验证和保证金冻结');
+  await page.getByTestId('bid-cta').click({ force: true });
+  expect(bidRequests).toBe(0);
+});
+
 test('H5 fat-finger confirm waits for confirm API before accepted UI', async ({ page }) => {
   let firstBidKey = '';
   await page.route('/api/auctions/auc_live/bids', async (route, request) => {

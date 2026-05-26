@@ -37,6 +37,14 @@ type Scenario = {
   sold?: boolean;
 };
 
+type BidderRequirement = {
+  verification_required?: boolean;
+  deposit_required?: boolean;
+  verified?: boolean;
+  deposit_held?: boolean;
+  reason?: string;
+};
+
 type BidPhase = 'idle' | 'pending' | 'accepted' | 'rejected' | 'confirm_required' | 'confirming';
 type PaymentPhase = 'idle' | 'pending' | 'paid' | 'failed' | 'expired';
 type RecoveryPhase = 'idle' | 'recovering';
@@ -110,8 +118,10 @@ type SnapshotResponse = {
     server_time_ms?: number;
     reason?: string;
     item?: AuctionItem;
+    bidder_requirement?: BidderRequirement;
   };
   item?: AuctionItem;
+  bidder_requirement?: BidderRequirement;
 };
 
 type AuctionItem = {
@@ -158,6 +168,7 @@ type AuctionSummary = {
   end_at?: string;
   server_time_ms?: number;
   item?: AuctionItem;
+  bidder_requirement?: BidderRequirement;
   rule?: {
     duration_seconds?: number;
     extend_window_seconds?: number;
@@ -481,6 +492,7 @@ function App() {
     condition: '品相待同步',
     shipping: '运费以订单为准'
   });
+  const [bidderRequirement, setBidderRequirement] = useState<BidderRequirement | null>(null);
   const paymentInFlight = useRef(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
@@ -740,6 +752,28 @@ function App() {
     if (selected !== 'active_bids') {
       return scenarios.find((item) => item.key === selected) ?? scenarios[0];
     }
+    const verificationBlocked = Boolean(
+      bidderRequirement &&
+      ((bidderRequirement.verification_required && !bidderRequirement.verified) ||
+        (bidderRequirement.deposit_required && !bidderRequirement.deposit_held))
+    );
+    if (verificationBlocked) {
+      const requiredLabels = [
+        bidderRequirement?.verification_required && !bidderRequirement?.verified ? '实名/买家验证' : '',
+        bidderRequirement?.deposit_required && !bidderRequirement?.deposit_held ? '保证金冻结' : ''
+      ].filter(Boolean).join(' + ');
+      return {
+        key: 'active_bids' as AuctionState,
+        title: '需完成验证',
+        status: 'ACTIVE',
+        price: formatCents(currentPriceCents),
+        leader: `${leaderMasked} 领先`,
+        feedback: bidderRequirement?.reason || `出价前需要完成 ${requiredLabels}`,
+        countdown: countdownCopy,
+        cta: '需完成验证',
+        ctaDisabled: true
+      };
+    }
     if (!activeAuctionID) {
       return {
         key: 'recovering',
@@ -861,7 +895,7 @@ function App() {
       cta: countdownExpired ? '同步中' : `出价 ${formatCents(nextBidCents)}`,
       ctaDisabled: countdownExpired
     };
-  }, [activeAuctionID, bidFeedback, bidPhase, confirmAmountCents, connectionPhase, countdownCopy, countdownExpired, currentPriceCents, lastSeq, leaderMasked, minimumNextBidCents, nextBidCents, payableOrderAmountCents, payableOrderID, paymentPhase, recoveryPhase, selected, terminalPriceCents, terminalWinnerID]);
+  }, [activeAuctionID, bidFeedback, bidderRequirement, bidPhase, confirmAmountCents, connectionPhase, countdownCopy, countdownExpired, currentPriceCents, lastSeq, leaderMasked, minimumNextBidCents, nextBidCents, payableOrderAmountCents, payableOrderID, paymentPhase, recoveryPhase, selected, terminalPriceCents, terminalWinnerID]);
   const resultSheetKind: ResultSheetKind | null = selected === 'sold_winner'
     ? 'winner'
     : selected === 'sold_loser'
@@ -962,6 +996,7 @@ function App() {
       setStageItem((current) => ({ ...current, ...snapshotItem }));
       if (snapshotItem.title) setLotTitle(snapshotItem.title);
     }
+    setBidderRequirement(snapshot.payload?.bidder_requirement ?? snapshot.bidder_requirement ?? null);
     if (snapshot.increment_cents != null) setActiveIncrementCents(increment);
     if (nextEndAt) setAuctionEndAt(nextEndAt);
     if (nextServerTimeMS) setServerTimeMS(nextServerTimeMS);
@@ -1149,6 +1184,7 @@ function App() {
           ...(selectedAuction.item ?? {}),
           title: selectedAuction.item?.title ?? current.title ?? selectedAuction.id
         }));
+        setBidderRequirement(selectedAuction.bidder_requirement ?? null);
         const price = selectedAuction.current_price_cents ?? currentPriceRef.current;
         const increment = selectedAuction.increment_cents ?? activeIncrementCents;
         setActiveIncrementCents(increment);
@@ -1766,6 +1802,7 @@ function AuctionStatePanel({
   const rankAction = leaderboardActionCopy(leaderboard, nextBidCents);
   const bidHint = (() => {
     if (scenario.stale || connectionPhase === 'recovering' || connectionPhase === 'disconnected') return '权威价格同步中，暂不提交出价';
+    if (scenario.title === '需完成验证') return scenario.feedback;
     if (scenario.ctaDisabled && !scenario.sold && scenario.leader.includes('你')) return '当前您已是最高价，等待其他用户出价';
     if (nextBidCents > minimumNextBidCents) return `高于当前价 ${formatCents(nextBidCents - currentPriceCents)} · 高于最低下一口 ${formatCents(nextBidCents - minimumNextBidCents)}`;
     return `最低有效出价 ${formatCents(minimumNextBidCents)} · 按 ${formatCents(Math.max(0, nextBidCents - currentPriceCents))} 加价`;
