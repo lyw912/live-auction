@@ -2,6 +2,7 @@ package auction
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -184,6 +185,133 @@ func TestPlaceBidCapSoldCreatesOrderAndPaymentIsIdempotent(t *testing.T) {
 	if orderPaidOutbox != 1 {
 		t.Fatalf("order_paid outbox = %d, want 1", orderPaidOutbox)
 	}
+}
+
+func TestPlaceBidTriggersAutoMaxBidWithinSameTransaction(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	repo := NewRepository(db)
+	auction := createActiveAuction(t, repo, db, nil)
+	autoUser := createTestUser(t, db)
+
+	intent, err := repo.UpsertMaxBidIntent(ctx, auction.ID, autoUser, MaxBidIntentInput{MaxAmountCents: 30_000})
+	if err != nil {
+		t.Fatalf("UpsertMaxBidIntent: %v", err)
+	}
+
+	input := BidInput{ClientBidID: "bid-auto-trigger-1", AmountCents: 15_000}
+	resp, err := repo.PlaceBid(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_auto")
+	if err != nil {
+		t.Fatalf("PlaceBid: %v", err)
+	}
+	if resp.Result != BidResultAccepted || resp.CurrentPriceCents != 20_000 || resp.CurrentWinnerID == nil || *resp.CurrentWinnerID != autoUser {
+		t.Fatalf("manual response did not reflect final auto state: %#v", resp)
+	}
+
+	assertAutoBidRow(t, db, auction.ID, autoUser, 20_000, BidSourceAutoMaxBid)
+	assertBidTruthRows(t, db, auction.ID, 2, 2, 2, 1)
+	assertMaxBidIntentApplied(t, db, intent.ID)
+	assertPublicAutoPayloadDoesNotLeakMax(t, db, auction.ID)
+
+	replay, err := repo.PlaceBid(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_auto_replay")
+	if err != nil {
+		t.Fatalf("PlaceBid replay: %v", err)
+	}
+	if replay.Seq != resp.Seq || replay.CurrentPriceCents != resp.CurrentPriceCents || replay.CurrentWinnerID == nil || *replay.CurrentWinnerID != autoUser {
+		t.Fatalf("idempotent replay mismatch: got %#v want %#v", replay, resp)
+	}
+	assertBidTruthRows(t, db, auction.ID, 2, 2, 2, 1)
+}
+
+func TestStartActivatesPreBidAutoMaxBid(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	repo := NewRepository(db)
+	auction := createScheduledAuction(t, repo, db, nil)
+	autoUser := createTestUser(t, db)
+
+	intent, err := repo.UpsertMaxBidIntent(ctx, auction.ID, autoUser, MaxBidIntentInput{
+		MaxAmountCents: 25_000,
+		Source:         MaxBidIntentSourcePreBid,
+	})
+	if err != nil {
+		t.Fatalf("UpsertMaxBidIntent: %v", err)
+	}
+
+	started, err := repo.Start(ctx, auction.ID, "tr_prebid_start")
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if started.Status != StatusActive || started.CurrentPriceCents != 15_000 || started.CurrentWinnerID == nil || *started.CurrentWinnerID != autoUser {
+		t.Fatalf("started auction missing pre-bid auto state: %#v", started)
+	}
+	assertAutoBidRow(t, db, auction.ID, autoUser, 15_000, BidSourceAutoMaxBid)
+	assertMaxBidIntentApplied(t, db, intent.ID)
+	assertPublicAutoPayloadDoesNotLeakMax(t, db, auction.ID)
+}
+
+func TestAutoMaxBidDefendsEqualMaxByEarlierIntent(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	repo := NewRepository(db)
+	auction := createActiveAuction(t, repo, db, nil)
+	firstUser := createTestUser(t, db)
+	secondUser := createTestUser(t, db)
+
+	first, err := repo.UpsertMaxBidIntent(ctx, auction.ID, firstUser, MaxBidIntentInput{MaxAmountCents: 25_000})
+	if err != nil {
+		t.Fatalf("first intent: %v", err)
+	}
+	if _, err := repo.UpsertMaxBidIntent(ctx, auction.ID, secondUser, MaxBidIntentInput{MaxAmountCents: 25_000}); err != nil {
+		t.Fatalf("second intent: %v", err)
+	}
+
+	input := BidInput{ClientBidID: "bid-equal-max-1", AmountCents: 15_000}
+	resp, err := repo.PlaceBid(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_equal_max")
+	if err != nil {
+		t.Fatalf("PlaceBid: %v", err)
+	}
+	if resp.CurrentPriceCents != 25_000 || resp.CurrentWinnerID == nil || *resp.CurrentWinnerID != firstUser {
+		t.Fatalf("equal max did not keep earlier intent as winner: %#v", resp)
+	}
+	assertMaxBidIntentApplied(t, db, first.ID)
+}
+
+func TestAutoMaxBidCapCreatesSingleSoldOrder(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	repo := NewRepository(db)
+	capPrice := int64(25_000)
+	auction := createActiveAuction(t, repo, db, &capPrice)
+	autoUser := createTestUser(t, db)
+
+	if _, err := repo.UpsertMaxBidIntent(ctx, auction.ID, autoUser, MaxBidIntentInput{MaxAmountCents: 25_000}); err != nil {
+		t.Fatalf("UpsertMaxBidIntent: %v", err)
+	}
+
+	input := BidInput{ClientBidID: "bid-auto-cap-1", AmountCents: 20_000}
+	resp, err := repo.PlaceBid(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_auto_cap")
+	if err != nil {
+		t.Fatalf("PlaceBid: %v", err)
+	}
+	if resp.Result != BidResultAcceptedSold || resp.CurrentPriceCents != 25_000 || resp.CurrentWinnerID == nil || *resp.CurrentWinnerID != autoUser {
+		t.Fatalf("auto cap response mismatch: %#v", resp)
+	}
+	var status Status
+	if err := db.QueryRow(ctx, `SELECT status FROM auctions WHERE id = $1`, auction.ID).Scan(&status); err != nil {
+		t.Fatalf("select status: %v", err)
+	}
+	if status != StatusSold {
+		t.Fatalf("status = %s, want SOLD", status)
+	}
+	var orders int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM orders WHERE auction_id = $1`, auction.ID).Scan(&orders); err != nil {
+		t.Fatalf("count orders: %v", err)
+	}
+	if orders != 1 {
+		t.Fatalf("orders = %d, want 1", orders)
+	}
+	assertAutoBidRow(t, db, auction.ID, autoUser, 25_000, BidSourceAutoMaxBid)
 }
 
 func TestListBidAndOrderHistoryRows(t *testing.T) {
@@ -381,6 +509,31 @@ func createActiveAuction(t *testing.T, repo *Repository, db *pgxpool.Pool, capPr
 	return createActiveAuctionWithRule(t, repo, db, capPrice, func(rule Rule) Rule { return rule })
 }
 
+func createScheduledAuction(t *testing.T, repo *Repository, db *pgxpool.Pool, capPrice *int64) Auction {
+	t.Helper()
+	roomID := createTestRoom(t, db)
+	item, err := repo.CreateItem(context.Background(), CreateItemInput{Title: "Scheduled Bid Item"})
+	if err != nil {
+		t.Fatalf("CreateItem: %v", err)
+	}
+	auction, err := repo.CreateAuction(context.Background(), CreateAuctionInput{
+		RoomID:          roomID,
+		ItemID:          item.ID,
+		StartPriceCents: 10_000,
+		IncrementCents:  5_000,
+		CapPriceCents:   capPrice,
+		Rule:            validRule(),
+	}, "tr_scheduled")
+	if err != nil {
+		t.Fatalf("CreateAuction: %v", err)
+	}
+	auction, err = repo.Schedule(context.Background(), auction.ID, nil, "tr_scheduled")
+	if err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	return auction
+}
+
 func createPendingOrder(t *testing.T, repo *Repository, db *pgxpool.Pool) (string, string) {
 	t.Helper()
 	ctx := context.Background()
@@ -498,5 +651,68 @@ func assertPaymentAnomalyCount(t *testing.T, db *pgxpool.Pool, auctionID string,
 	}
 	if count != want {
 		t.Fatalf("%s anomalies = %d, want %d", anomalyType, count, want)
+	}
+}
+
+func assertAutoBidRow(t *testing.T, db *pgxpool.Pool, auctionID string, userID string, amountCents int64, source string) {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(context.Background(), `
+		SELECT count(*)
+		FROM bids
+		WHERE auction_id = $1 AND user_id = $2 AND amount_cents = $3 AND source = $4 AND status = 'ACCEPTED'
+	`, auctionID, userID, amountCents, source).Scan(&count); err != nil {
+		t.Fatalf("count auto bid row: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("auto bid rows = %d, want 1", count)
+	}
+}
+
+func assertMaxBidIntentApplied(t *testing.T, db *pgxpool.Pool, intentID string) {
+	t.Helper()
+	var lastApplied *int64
+	if err := db.QueryRow(context.Background(), `SELECT last_applied_seq FROM max_bid_intents WHERE id = $1`, intentID).Scan(&lastApplied); err != nil {
+		t.Fatalf("select intent: %v", err)
+	}
+	if lastApplied == nil || *lastApplied <= 0 {
+		t.Fatalf("last_applied_seq = %v, want positive", lastApplied)
+	}
+}
+
+func assertPublicAutoPayloadDoesNotLeakMax(t *testing.T, db *pgxpool.Pool, auctionID string) {
+	t.Helper()
+	rows, err := db.Query(context.Background(), `
+		SELECT payload_json
+		FROM auction_events
+		WHERE auction_id = $1 AND payload_json->>'bid_source' = 'AUTO_MAX_BID'
+	`, auctionID)
+	if err != nil {
+		t.Fatalf("select auto payloads: %v", err)
+	}
+	defer rows.Close()
+	seen := false
+	for rows.Next() {
+		seen = true
+		var payload map[string]any
+		if err := rows.Scan(&payload); err != nil {
+			t.Fatalf("scan payload: %v", err)
+		}
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatalf("marshal payload: %v", err)
+		}
+		if _, ok := payload["max_amount_cents"]; ok {
+			t.Fatalf("auto public event leaked max_amount_cents: %s", raw)
+		}
+		if _, ok := payload["intent_id"]; ok {
+			t.Fatalf("auto public event leaked intent_id: %s", raw)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate payloads: %v", err)
+	}
+	if !seen {
+		t.Fatalf("no AUTO_MAX_BID public payload found")
 	}
 }

@@ -377,6 +377,13 @@ func (r *Repository) Start(ctx context.Context, auctionID string, traceID string
 	}); err != nil {
 		return Auction{}, err
 	}
+	locked, err := lockAuctionForBid(ctx, tx, auctionID)
+	if err != nil {
+		return Auction{}, err
+	}
+	if _, _, err := r.applyAutoMaxBid(ctx, tx, locked, traceID); err != nil {
+		return Auction{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return Auction{}, err
 	}

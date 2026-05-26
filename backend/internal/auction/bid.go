@@ -170,7 +170,7 @@ func (r *Repository) PlaceBid(ctx context.Context, auctionID string, userID stri
 	if err != nil {
 		return BidResponse{}, mapPGError(err)
 	}
-	response, bidStatus, rejectCode, err := r.evaluateAndApplyBid(ctx, tx, locked, userID, input, traceID, false)
+	response, bidStatus, rejectCode, lockedAfterBid, err := r.evaluateAndApplyBid(ctx, tx, locked, userID, input, traceID, false)
 	if err != nil {
 		return BidResponse{}, err
 	}
@@ -178,22 +178,38 @@ func (r *Repository) PlaceBid(ctx context.Context, auctionID string, userID stri
 	if rejectCode != nil {
 		reasonLabel = *rejectCode
 	}
-	responseJSON, err := json.Marshal(response)
+	bidRowResponseJSON, err := json.Marshal(response)
 	if err != nil {
 		return BidResponse{}, err
 	}
-	if err := completeIdempotency(ctx, tx, "bid", auctionID, userID, idempotencyKey, requestHash, http.StatusOK, response.Result, responseJSON); err != nil {
-		return BidResponse{}, err
-	}
 	if response.Result != string(apierrors.CodeFatFingerConfirmRequired) {
-		if err := insertBidRow(ctx, tx, response.BidID, auctionID, userID, input, response.Seq, bidStatus, rejectCode, requestHash, responseJSON, traceID); err != nil {
+		if err := insertBidRow(ctx, tx, response.BidID, auctionID, userID, input, response.Seq, bidStatus, rejectCode, requestHash, bidRowResponseJSON, traceID, BidSourceManual); err != nil {
 			return BidResponse{}, err
 		}
+	}
+	finalResponse := response
+	if bidStatus == "ACCEPTED" && response.Result != BidResultAcceptedSold {
+		if autoResponse, ok, err := r.applyAutoMaxBid(ctx, tx, lockedAfterBid, traceID); err != nil {
+			return BidResponse{}, err
+		} else if ok {
+			finalResponse.Result = autoResponse.Result
+			finalResponse.Seq = autoResponse.Seq
+			finalResponse.CurrentPriceCents = autoResponse.CurrentPriceCents
+			finalResponse.CurrentWinnerID = autoResponse.CurrentWinnerID
+			finalResponse.EndAt = autoResponse.EndAt
+		}
+	}
+	responseJSON, err := json.Marshal(finalResponse)
+	if err != nil {
+		return BidResponse{}, err
+	}
+	if err := completeIdempotency(ctx, tx, "bid", auctionID, userID, idempotencyKey, requestHash, http.StatusOK, finalResponse.Result, responseJSON); err != nil {
+		return BidResponse{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return BidResponse{}, err
 	}
-	return response, nil
+	return finalResponse, nil
 }
 
 func (r *Repository) ConfirmBid(ctx context.Context, auctionID string, userID string, idempotencyKey string, input ConfirmBidInput, traceID string) (BidResponse, error) {
@@ -253,24 +269,40 @@ func (r *Repository) ConfirmBid(ctx context.Context, auctionID string, userID st
 	if err != nil {
 		return BidResponse{}, mapPGError(err)
 	}
-	response, bidStatus, rejectCode, err := r.evaluateAndApplyBid(ctx, tx, locked, userID, bidInput, traceID, true)
+	response, bidStatus, rejectCode, lockedAfterBid, err := r.evaluateAndApplyBid(ctx, tx, locked, userID, bidInput, traceID, true)
 	if err != nil {
 		return BidResponse{}, err
 	}
-	responseJSON, err := json.Marshal(response)
+	bidRowResponseJSON, err := json.Marshal(response)
 	if err != nil {
 		return BidResponse{}, err
 	}
-	if err := completeIdempotency(ctx, tx, "bid", auctionID, userID, idempotencyKey, storedHash, http.StatusOK, response.Result, responseJSON); err != nil {
+	if err := insertBidRow(ctx, tx, response.BidID, auctionID, userID, bidInput, response.Seq, bidStatus, rejectCode, storedHash, bidRowResponseJSON, traceID, BidSourceManual); err != nil {
 		return BidResponse{}, err
 	}
-	if err := insertBidRow(ctx, tx, response.BidID, auctionID, userID, bidInput, response.Seq, bidStatus, rejectCode, storedHash, responseJSON, traceID); err != nil {
+	finalResponse := response
+	if bidStatus == "ACCEPTED" && response.Result != BidResultAcceptedSold {
+		if autoResponse, ok, err := r.applyAutoMaxBid(ctx, tx, lockedAfterBid, traceID); err != nil {
+			return BidResponse{}, err
+		} else if ok {
+			finalResponse.Result = autoResponse.Result
+			finalResponse.Seq = autoResponse.Seq
+			finalResponse.CurrentPriceCents = autoResponse.CurrentPriceCents
+			finalResponse.CurrentWinnerID = autoResponse.CurrentWinnerID
+			finalResponse.EndAt = autoResponse.EndAt
+		}
+	}
+	responseJSON, err := json.Marshal(finalResponse)
+	if err != nil {
+		return BidResponse{}, err
+	}
+	if err := completeIdempotency(ctx, tx, "bid", auctionID, userID, idempotencyKey, storedHash, http.StatusOK, finalResponse.Result, responseJSON); err != nil {
 		return BidResponse{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return BidResponse{}, err
 	}
-	return response, nil
+	return finalResponse, nil
 }
 
 func (r *Repository) PayMock(ctx context.Context, orderID string, userID string, idempotencyKey string, input PaymentInput, traceID string) (PaymentResponse, error) {
@@ -678,11 +710,11 @@ func lockAuctionForBid(ctx context.Context, tx pgx.Tx, auctionID string) (locked
 	return a, nil
 }
 
-func (r *Repository) evaluateAndApplyBid(ctx context.Context, tx pgx.Tx, a lockedAuction, userID string, input BidInput, traceID string, skipFatFinger bool) (BidResponse, string, *string, error) {
+func (r *Repository) evaluateAndApplyBid(ctx context.Context, tx pgx.Tx, a lockedAuction, userID string, input BidInput, traceID string, skipFatFinger bool) (BidResponse, string, *string, lockedAuction, error) {
 	bidID := "bid_" + uuid.NewString()
 	now := time.Now().UTC()
 	serverTimeMS := now.UnixMilli()
-	reject := func(code apierrors.Code) (BidResponse, string, *string, error) {
+	reject := func(code apierrors.Code) (BidResponse, string, *string, lockedAuction, error) {
 		reason := string(code)
 		seq, err := appendAuctionEventWithSeq(ctx, tx, a.ID, "bid_rejected", traceID, map[string]any{
 			"bid_id":       bidID,
@@ -691,7 +723,7 @@ func (r *Repository) evaluateAndApplyBid(ctx context.Context, tx pgx.Tx, a locke
 			"reason":       reason,
 		})
 		if err != nil {
-			return BidResponse{}, "", nil, err
+			return BidResponse{}, "", nil, a, err
 		}
 		resp := BidResponse{
 			Result:            BidResultRejected,
@@ -704,32 +736,32 @@ func (r *Repository) evaluateAndApplyBid(ctx context.Context, tx pgx.Tx, a locke
 			ServerTimeMS:      serverTimeMS,
 			RejectReason:      &reason,
 		}
-		return resp, "REJECTED", &reason, nil
+		return resp, "REJECTED", &reason, a, nil
 	}
 	if a.Status != StatusActive {
-		resp, status, reason, err := reject(apierrors.CodeAuctionNotActive)
-		return resp, status, reason, err
+		resp, status, reason, locked, err := reject(apierrors.CodeAuctionNotActive)
+		return resp, status, reason, locked, err
 	}
 	if now.After(a.EndAt) {
-		resp, status, reason, err := reject(apierrors.CodeAuctionEnded)
-		return resp, status, reason, err
+		resp, status, reason, locked, err := reject(apierrors.CodeAuctionEnded)
+		return resp, status, reason, locked, err
 	}
 	if a.CurrentWinnerID != nil && *a.CurrentWinnerID == userID {
-		resp, status, reason, err := reject(apierrors.CodeRejectedSelfLeading)
-		return resp, status, reason, err
+		resp, status, reason, locked, err := reject(apierrors.CodeRejectedSelfLeading)
+		return resp, status, reason, locked, err
 	}
 
 	class := ClassifyBidAmount(a.StartPriceCents, a.CurrentPriceCents, a.IncrementCents, a.CapPriceCents, input.AmountCents, a.AcceptedBidCount > 0)
 	switch class {
 	case BidClassTooLow:
-		resp, status, reason, err := reject(apierrors.CodeBidTooLow)
-		return resp, status, reason, err
+		resp, status, reason, locked, err := reject(apierrors.CodeBidTooLow)
+		return resp, status, reason, locked, err
 	case BidClassIncrementMismatch:
-		resp, status, reason, err := reject(apierrors.CodeBidIncrementMismatch)
-		return resp, status, reason, err
+		resp, status, reason, locked, err := reject(apierrors.CodeBidIncrementMismatch)
+		return resp, status, reason, locked, err
 	case BidClassAboveCap:
-		resp, status, reason, err := reject(apierrors.CodeBidAboveCap)
-		return resp, status, reason, err
+		resp, status, reason, locked, err := reject(apierrors.CodeBidAboveCap)
+		return resp, status, reason, locked, err
 	}
 	if !skipFatFinger && a.FatFingerThreshold != nil && *a.FatFingerThreshold > 0 {
 		basis := a.CurrentPriceCents
@@ -739,7 +771,7 @@ func (r *Repository) evaluateAndApplyBid(ctx context.Context, tx pgx.Tx, a locke
 		if input.AmountCents-basis >= *a.FatFingerThreshold {
 			var seq int64
 			if err := tx.QueryRow(ctx, `SELECT seq FROM auctions WHERE id = $1`, a.ID).Scan(&seq); err != nil {
-				return BidResponse{}, "", nil, err
+				return BidResponse{}, "", nil, a, err
 			}
 			expiresAt := now.Add(30 * time.Second)
 			return BidResponse{
@@ -755,10 +787,39 @@ func (r *Repository) evaluateAndApplyBid(ctx context.Context, tx pgx.Tx, a locke
 				ExpiresInMS:       30_000,
 				AmountCents:       input.AmountCents,
 				ConfirmExpiresAt:  &expiresAt,
-			}, "", nil, nil
+			}, "", nil, a, nil
 		}
 	}
 
+	updated, resp, err := applyAcceptedBid(ctx, tx, a, acceptedBidInput{
+		BidID:       bidID,
+		UserID:      userID,
+		AmountCents: input.AmountCents,
+		TraceID:     traceID,
+		Source:      BidSourceManual,
+		Now:         now,
+	})
+	if err != nil {
+		return BidResponse{}, "", nil, a, err
+	}
+	resp.ServerTimeMS = serverTimeMS
+	return resp, "ACCEPTED", nil, updated, nil
+}
+
+type acceptedBidInput struct {
+	BidID       string
+	UserID      string
+	AmountCents int64
+	TraceID     string
+	Source      string
+	Now         time.Time
+}
+
+func applyAcceptedBid(ctx context.Context, tx pgx.Tx, a lockedAuction, input acceptedBidInput) (lockedAuction, BidResponse, error) {
+	class := ClassifyBidAmount(a.StartPriceCents, a.CurrentPriceCents, a.IncrementCents, a.CapPriceCents, input.AmountCents, a.AcceptedBidCount > 0)
+	if class != BidClassAccepted && class != BidClassAcceptedSold {
+		return a, BidResponse{}, fmt.Errorf("accepted bid amount %d classified as %s", input.AmountCents, class)
+	}
 	result := BidResultAccepted
 	newStatus := a.Status
 	newEndAt := a.EndAt
@@ -767,7 +828,7 @@ func (r *Repository) evaluateAndApplyBid(ctx context.Context, tx pgx.Tx, a locke
 		result = BidResultAcceptedSold
 		newStatus = StatusSold
 	} else {
-		extended := CalculateExtension(a.EndAt.Unix(), now.Unix(), a.ExtendWindowSeconds, a.ExtendBySeconds, a.ExtendCount, a.MaxExtendCount)
+		extended := CalculateExtension(a.EndAt.Unix(), input.Now.Unix(), a.ExtendWindowSeconds, a.ExtendBySeconds, a.ExtendCount, a.MaxExtendCount)
 		if extended > a.EndAt.Unix() {
 			result = BidResultAcceptedExtended
 			newEndAt = time.Unix(extended, 0).UTC()
@@ -781,43 +842,240 @@ func (r *Repository) evaluateAndApplyBid(ctx context.Context, tx pgx.Tx, a locke
 		    end_at = $5, extend_count = $6, accepted_bid_count = accepted_bid_count + 1,
 		    updated_at = now()
 		WHERE id = $1
-	`, a.ID, newStatus, input.AmountCents, userID, newEndAt, newExtendCount)
+	`, a.ID, newStatus, input.AmountCents, input.UserID, newEndAt, newExtendCount)
 	if err != nil {
-		return BidResponse{}, "", nil, err
+		return a, BidResponse{}, err
 	}
 	eventType := "bid_accepted"
 	if result == BidResultAcceptedSold {
 		eventType = "auction_sold"
 	}
 	eventPayload := map[string]any{
-		"bid_id":              bidID,
-		"user_id":             userID,
+		"bid_id":              input.BidID,
+		"user_id":             input.UserID,
 		"amount_cents":        input.AmountCents,
 		"result":              result,
 		"current_price_cents": input.AmountCents,
 	}
+	if input.Source == BidSourceAutoMaxBid {
+		eventPayload["bid_source"] = BidSourceAutoMaxBid
+	}
 	if result == BidResultAcceptedSold {
-		orderID, err := createOrderForSoldAuction(ctx, tx, a, userID, input.AmountCents)
+		orderID, err := createOrderForSoldAuction(ctx, tx, a, input.UserID, input.AmountCents)
 		if err != nil {
-			return BidResponse{}, "", nil, err
+			return a, BidResponse{}, err
 		}
 		eventPayload["order_id"] = orderID
 	}
-	seq, err := appendAuctionEventWithSeq(ctx, tx, a.ID, eventType, traceID, eventPayload)
+	seq, err := appendAuctionEventWithSeq(ctx, tx, a.ID, eventType, input.TraceID, eventPayload)
 	if err != nil {
-		return BidResponse{}, "", nil, err
+		return a, BidResponse{}, err
 	}
+	winnerID := input.UserID
+	updated := a
+	updated.Status = newStatus
+	updated.CurrentPriceCents = input.AmountCents
+	updated.CurrentWinnerID = &winnerID
+	updated.EndAt = newEndAt
+	updated.ExtendCount = newExtendCount
+	updated.AcceptedBidCount++
 	resp := BidResponse{
 		Result:            result,
-		BidID:             bidID,
+		BidID:             input.BidID,
 		AuctionID:         a.ID,
 		Seq:               seq,
 		CurrentPriceCents: input.AmountCents,
-		CurrentWinnerID:   &userID,
+		CurrentWinnerID:   &winnerID,
 		EndAt:             &newEndAt,
-		ServerTimeMS:      serverTimeMS,
+		ServerTimeMS:      input.Now.UnixMilli(),
 	}
-	return resp, "ACCEPTED", nil, nil
+	return updated, resp, nil
+}
+
+func (r *Repository) applyAutoMaxBid(ctx context.Context, tx pgx.Tx, a lockedAuction, traceID string) (BidResponse, bool, error) {
+	var last BidResponse
+	applied := false
+	current := a
+	for attempts := 0; attempts < 100; attempts++ {
+		if current.Status != StatusActive {
+			if err := markActiveMaxBidIntentsTerminal(ctx, tx, current.ID); err != nil {
+				return BidResponse{}, false, err
+			}
+			return last, applied, nil
+		}
+		step, ok, err := r.nextAutoMaxBidStep(ctx, tx, current)
+		if err != nil {
+			return BidResponse{}, false, err
+		}
+		if !ok {
+			if err := exhaustUnaffordableMaxBidIntents(ctx, tx, current); err != nil {
+				return BidResponse{}, false, err
+			}
+			return last, applied, nil
+		}
+
+		amount := step.AmountCents
+		bidID := "bid_" + uuid.NewString()
+		now := time.Now().UTC()
+		updated, resp, err := applyAcceptedBid(ctx, tx, current, acceptedBidInput{
+			BidID:       bidID,
+			UserID:      step.Intent.UserID,
+			AmountCents: amount,
+			TraceID:     traceID,
+			Source:      BidSourceAutoMaxBid,
+			Now:         now,
+		})
+		if err != nil {
+			return BidResponse{}, false, err
+		}
+		resp.ServerTimeMS = now.UnixMilli()
+		clientBidID := fmt.Sprintf("auto:%s:%d", step.Intent.ID, resp.Seq)
+		requestHash := hashString(fmt.Sprintf("auto-max-bid:v1|%s|%s|%s|%d|%d", current.ID, step.Intent.ID, clientBidID, amount, resp.Seq))
+		responseJSON, err := json.Marshal(resp)
+		if err != nil {
+			return BidResponse{}, false, err
+		}
+		if err := insertBidRow(ctx, tx, resp.BidID, current.ID, step.Intent.UserID, BidInput{
+			ClientBidID:   clientBidID,
+			AmountCents:   amount,
+			ClientSeenSeq: resp.Seq - 1,
+		}, resp.Seq, "ACCEPTED", nil, requestHash, responseJSON, traceID, BidSourceAutoMaxBid); err != nil {
+			return BidResponse{}, false, err
+		}
+		if err := markMaxBidIntentApplied(ctx, tx, step.Intent.ID, resp.Seq); err != nil {
+			return BidResponse{}, false, err
+		}
+		if step.ExhaustedIntentID != "" {
+			if err := markMaxBidIntentExhausted(ctx, tx, step.ExhaustedIntentID); err != nil {
+				return BidResponse{}, false, err
+			}
+		}
+		current = updated
+		last = resp
+		applied = true
+	}
+	return BidResponse{}, false, apierrors.New(apierrors.CodeBidRetryLater, "max bid settlement exceeded bounded iteration limit", http.StatusConflict)
+}
+
+type autoMaxBidStep struct {
+	Intent            MaxBidIntent
+	AmountCents       int64
+	ExhaustedIntentID string
+}
+
+func (r *Repository) nextAutoMaxBidStep(ctx context.Context, tx pgx.Tx, a lockedAuction) (autoMaxBidStep, bool, error) {
+	intents, err := r.ListActiveMaxBidIntentsForAuction(ctx, tx, a.ID, 100)
+	if err != nil {
+		return autoMaxBidStep{}, false, err
+	}
+	if len(intents) == 0 {
+		return autoMaxBidStep{}, false, nil
+	}
+	minimum := nextExecutableBidAmount(a)
+	var defender *MaxBidIntent
+	for i := range intents {
+		if a.CurrentWinnerID != nil && intents[i].UserID == *a.CurrentWinnerID {
+			defender = &intents[i]
+			break
+		}
+	}
+	for _, intent := range intents {
+		if a.CurrentWinnerID != nil && intent.UserID == *a.CurrentWinnerID {
+			continue
+		}
+		if intent.MaxAmountCents < minimum {
+			if err := markMaxBidIntentExhausted(ctx, tx, intent.ID); err != nil {
+				return autoMaxBidStep{}, false, err
+			}
+			continue
+		}
+		if defender != nil && defenderBeatsOrTies(*defender, intent) {
+			amount := defendingBidAmount(*defender, intent, a)
+			if amount < minimum {
+				if err := markMaxBidIntentExhausted(ctx, tx, intent.ID); err != nil {
+					return autoMaxBidStep{}, false, err
+				}
+				continue
+			}
+			return autoMaxBidStep{Intent: *defender, AmountCents: amount, ExhaustedIntentID: intent.ID}, true, nil
+		}
+		return autoMaxBidStep{Intent: intent, AmountCents: minimum}, true, nil
+	}
+	return autoMaxBidStep{}, false, nil
+}
+
+func nextExecutableBidAmount(a lockedAuction) int64 {
+	return a.CurrentPriceCents + a.IncrementCents
+}
+
+func defenderBeatsOrTies(defender MaxBidIntent, challenger MaxBidIntent) bool {
+	if defender.MaxAmountCents != challenger.MaxAmountCents {
+		return defender.MaxAmountCents > challenger.MaxAmountCents
+	}
+	if !defender.CreatedAt.Equal(challenger.CreatedAt) {
+		return defender.CreatedAt.Before(challenger.CreatedAt)
+	}
+	return defender.ID < challenger.ID
+}
+
+func defendingBidAmount(defender MaxBidIntent, challenger MaxBidIntent, a lockedAuction) int64 {
+	amount := challenger.MaxAmountCents
+	if defender.MaxAmountCents > challenger.MaxAmountCents {
+		amount = challenger.MaxAmountCents + a.IncrementCents
+	}
+	if amount > defender.MaxAmountCents {
+		amount = defender.MaxAmountCents
+	}
+	if a.CapPriceCents != nil && amount > *a.CapPriceCents {
+		amount = *a.CapPriceCents
+	}
+	return amount
+}
+
+func markMaxBidIntentApplied(ctx context.Context, tx pgx.Tx, intentID string, seq int64) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE max_bid_intents
+		SET last_applied_seq = $2,
+		    updated_at = now(),
+		    version = version + 1
+		WHERE id = $1 AND status = 'ACTIVE'
+	`, intentID, seq)
+	return err
+}
+
+func markMaxBidIntentExhausted(ctx context.Context, tx pgx.Tx, intentID string) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE max_bid_intents
+		SET status = 'EXHAUSTED',
+		    exhausted_at = COALESCE(exhausted_at, now()),
+		    updated_at = now(),
+		    version = version + 1
+		WHERE id = $1 AND status = 'ACTIVE'
+	`, intentID)
+	return err
+}
+
+func exhaustUnaffordableMaxBidIntents(ctx context.Context, tx pgx.Tx, a lockedAuction) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE max_bid_intents
+		SET status = 'EXHAUSTED',
+		    exhausted_at = COALESCE(exhausted_at, now()),
+		    updated_at = now(),
+		    version = version + 1
+		WHERE auction_id = $1 AND status = 'ACTIVE' AND max_amount_cents < $2
+	`, a.ID, nextExecutableBidAmount(a))
+	return err
+}
+
+func markActiveMaxBidIntentsTerminal(ctx context.Context, tx pgx.Tx, auctionID string) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE max_bid_intents
+		SET status = 'TERMINAL',
+		    updated_at = now(),
+		    version = version + 1
+		WHERE auction_id = $1 AND status = 'ACTIVE'
+	`, auctionID)
+	return err
 }
 
 func createOrderForSoldAuction(ctx context.Context, tx pgx.Tx, a lockedAuction, winnerID string, amountCents int64) (string, error) {
@@ -836,11 +1094,11 @@ func createOrderForSoldAuction(ctx context.Context, tx pgx.Tx, a lockedAuction, 
 	return orderID, nil
 }
 
-func insertBidRow(ctx context.Context, tx pgx.Tx, bidID string, auctionID string, userID string, input BidInput, seq int64, status string, rejectReason *string, requestHash string, responseJSON []byte, traceID string) error {
+func insertBidRow(ctx context.Context, tx pgx.Tx, bidID string, auctionID string, userID string, input BidInput, seq int64, status string, rejectReason *string, requestHash string, responseJSON []byte, traceID string, source string) error {
 	_, err := tx.Exec(ctx, `
 		INSERT INTO bids (id, auction_id, user_id, client_bid_id, amount_cents, seq, status, reject_reason, request_hash, response_json, trace_id, source)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-	`, bidID, auctionID, userID, input.ClientBidID, input.AmountCents, seq, status, rejectReason, requestHash, responseJSON, traceID, BidSourceManual)
+	`, bidID, auctionID, userID, input.ClientBidID, input.AmountCents, seq, status, rejectReason, requestHash, responseJSON, traceID, source)
 	return err
 }
 
