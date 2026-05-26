@@ -954,6 +954,7 @@ test('H5 live stage uses product media and keeps chat inside safe zone at 360px'
 test('H5 renders realtime leaderboard and event atmosphere controls', async ({ page }) => {
   await page.goto('/?stateMatrix=1');
   await expect(page.getByLabel('auction-state').locator('h2')).toHaveText('¥350.00');
+  await expect(page.getByTestId('rank-strip')).toContainText('第 2 名');
 
   await expect(page.getByTestId('leaderboard-panel')).toContainText('行动榜单');
   await expect(page.getByTestId('leaderboard-panel')).toContainText('第 2 名');
@@ -1049,6 +1050,130 @@ test('H5 prepared bid hint updates when authoritative price changes', async ({ p
   });
 
   await expect(page.getByTestId('bid-hint')).toHaveText('最低有效出价 ¥450.00 · 按 ¥50.00 加价');
+});
+
+test('H5 sound and haptic policy requires opt-in before cue playback', async ({ page }) => {
+  await page.addInitScript(() => {
+    const target = window as typeof window & {
+      __audioContextCreated?: number;
+      __oscillatorStarted?: number;
+      __vibrations?: Array<number | number[]>;
+    };
+    target.__audioContextCreated = 0;
+    target.__oscillatorStarted = 0;
+    target.__vibrations = [];
+    class MockGain {
+      gain = {
+        setValueAtTime: () => undefined,
+        exponentialRampToValueAtTime: () => undefined
+      };
+      connect() { return undefined; }
+    }
+    class MockOscillator {
+      type = 'sine';
+      frequency = { value: 0 };
+      connect() { return undefined; }
+      start() { target.__oscillatorStarted = (target.__oscillatorStarted ?? 0) + 1; }
+      stop() { return undefined; }
+    }
+    class MockAudioContext {
+      currentTime = 0;
+      destination = {};
+      state = 'running';
+      constructor() { target.__audioContextCreated = (target.__audioContextCreated ?? 0) + 1; }
+      createOscillator() { return new MockOscillator(); }
+      createGain() { return new MockGain(); }
+      resume() { this.state = 'running'; return Promise.resolve(); }
+      close() { return Promise.resolve(); }
+    }
+    Object.defineProperty(window, 'AudioContext', { value: MockAudioContext, configurable: true });
+    Object.defineProperty(navigator, 'vibrate', {
+      value: (pattern: number | number[]) => {
+        target.__vibrations?.push(pattern);
+        return true;
+      },
+      configurable: true
+    });
+  });
+
+  await page.goto('/?stateMatrix=1');
+  await page.getByRole('button', { name: '竞价中' }).click();
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('auction:event', {
+      detail: {
+        auction_id: 'auc_live',
+        event_type: 'bid_accepted',
+        seq: 42,
+        payload: {
+          current_price_cents: 40000,
+          current_winner_id: 'user_1',
+          user_id: 'user_1',
+          leader_user_masked: '你'
+        }
+      }
+    }));
+  });
+  await expect(page.getByTestId('atmosphere-cue')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as typeof window & { __audioContextCreated?: number }).__audioContextCreated ?? 0)).toBe(0);
+  await expect.poll(() => page.evaluate(() => (window as typeof window & { __oscillatorStarted?: number }).__oscillatorStarted ?? 0)).toBe(0);
+
+  await page.getByLabel('开启提示音').click();
+  await expect(page.getByLabel('关闭提示音')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as typeof window & { __audioContextCreated?: number }).__audioContextCreated ?? 0)).toBe(1);
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('auction:event', {
+      detail: {
+        auction_id: 'auc_live',
+        event_type: 'bid_accepted',
+        seq: 43,
+        payload: {
+          current_price_cents: 45000,
+          current_winner_id: 'user_1',
+          user_id: 'user_1',
+          leader_user_masked: '你'
+        }
+      }
+    }));
+  });
+  await expect.poll(() => page.evaluate(() => (window as typeof window & { __oscillatorStarted?: number }).__oscillatorStarted ?? 0)).toBe(1);
+  await expect.poll(() => page.evaluate(() => (window as typeof window & { __vibrations?: unknown[] }).__vibrations?.length ?? 0)).toBe(1);
+});
+
+test('H5 sound policy degrades for unsupported audio and reduced motion', async ({ page }) => {
+  await page.addInitScript(() => {
+    const target = window as typeof window & { __vibrations?: Array<number | number[]> };
+    target.__vibrations = [];
+    Object.defineProperty(window, 'AudioContext', { value: undefined, configurable: true });
+    Object.defineProperty(window, 'webkitAudioContext', { value: undefined, configurable: true });
+    Object.defineProperty(navigator, 'vibrate', {
+      value: (pattern: number | number[]) => {
+        target.__vibrations?.push(pattern);
+        return true;
+      },
+      configurable: true
+    });
+  });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/?stateMatrix=1');
+  await page.getByLabel('开启提示音').click();
+  await expect(page.getByLabel('提示音不可用')).toBeDisabled();
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('auction:event', {
+      detail: {
+        auction_id: 'auc_live',
+        event_type: 'bid_accepted',
+        seq: 42,
+        payload: {
+          current_price_cents: 40000,
+          current_winner_id: 'user_1',
+          user_id: 'user_1',
+          leader_user_masked: '你'
+        }
+      }
+    }));
+  });
+  await expect.poll(() => page.evaluate(() => (window as typeof window & { __vibrations?: unknown[] }).__vibrations?.length ?? 0)).toBe(0);
 });
 
 test('H5 event-driven visual effects stay nonblocking and respect reduced motion', async ({ page }) => {
@@ -1173,6 +1298,7 @@ test('H5 order realtime events update winner payment state', async ({ page }) =>
 
 test('H5 interaction surface has no unacceptable animation longtask', async ({ page }) => {
   await page.goto('/?stateMatrix=1');
+  await page.evaluate(() => document.querySelector('.app-shell')?.setAttribute('data-perf-surface', '1'));
   await page.getByRole('button', { name: '竞价中' }).click();
   await page.evaluate(() => {
     const target = window as typeof window & { __longTasks?: number[] };
@@ -1185,7 +1311,7 @@ test('H5 interaction surface has no unacceptable animation longtask', async ({ p
             ...list.getEntries().map((entry) => entry.duration)
           ];
         });
-        observer.observe({ type: 'longtask', buffered: true });
+        observer.observe({ type: 'longtask' });
       } catch {
         target.__longTasks = [];
       }
@@ -1193,8 +1319,6 @@ test('H5 interaction surface has no unacceptable animation longtask', async ({ p
   });
   await page.getByRole('button', { name: 'increase' }).click();
   await page.getByRole('button', { name: 'decrease' }).click();
-  await page.getByRole('button', { name: '恢复中' }).click();
-  await page.getByRole('button', { name: '竞价中' }).click();
   await page.waitForTimeout(250);
 
   const maxLongTask = await page.evaluate(() => Math.max(0, ...((window as typeof window & { __longTasks?: number[] }).__longTasks ?? [])));

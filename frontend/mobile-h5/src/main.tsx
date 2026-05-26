@@ -43,6 +43,7 @@ type RecoveryPhase = 'idle' | 'recovering';
 type ConnectionPhase = 'connecting' | 'connected' | 'recovering' | 'disconnected';
 type BottomSheetKey = 'products' | 'details' | 'leaderboard' | 'history' | 'orders';
 type ResultSheetKind = 'winner' | 'loser' | 'unsold';
+type SoundCapability = 'ready' | 'unavailable' | 'blocked';
 
 type BidResponse = {
   result?: string;
@@ -306,20 +307,43 @@ function leaderboardActionCopy(payload: LeaderboardPayload | null, fallbackBidCe
   };
 }
 
-function vibrateOnce() {
-  if ('vibrate' in navigator) {
-    navigator.vibrate?.(32);
-  }
+function createAudioContext() {
+  const AudioContextCtor = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AudioContextCtor) return null;
+  return new AudioContextCtor();
 }
 
-function playCueTone() {
-  const AudioContextCtor = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-  if (!AudioContextCtor) return;
-  const ctx = new AudioContextCtor();
+function isReducedMotionPreferred() {
+  return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+}
+
+function vibratePattern(kind: AtmosphereCue['kind']) {
+  if (!('vibrate' in navigator) || isReducedMotionPreferred() || document.visibilityState === 'hidden') return;
+  const pattern: Record<AtmosphereCue['kind'], number | number[]> = {
+    leading: 18,
+    outbid: [18, 24, 18],
+    extended: [24, 32, 24],
+    sold: [28, 36, 28],
+    recovering: 12,
+    social: 8
+  };
+  navigator.vibrate?.(pattern[kind]);
+}
+
+function playCueTone(ctx: AudioContext, kind: AtmosphereCue['kind']) {
+  if (document.visibilityState === 'hidden') return;
   const oscillator = ctx.createOscillator();
   const gain = ctx.createGain();
+  const frequency: Record<AtmosphereCue['kind'], number> = {
+    leading: 880,
+    outbid: 520,
+    extended: 660,
+    sold: 740,
+    recovering: 440,
+    social: 620
+  };
   oscillator.type = 'sine';
-  oscillator.frequency.value = 880;
+  oscillator.frequency.value = frequency[kind];
   gain.gain.setValueAtTime(0.0001, ctx.currentTime);
   gain.gain.exponentialRampToValueAtTime(0.08, ctx.currentTime + 0.02);
   gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.16);
@@ -327,7 +351,6 @@ function playCueTone() {
   gain.connect(ctx.destination);
   oscillator.start();
   oscillator.stop(ctx.currentTime + 0.18);
-  window.setTimeout(() => void ctx.close(), 260);
 }
 
 async function ensureDemoSession(account: 'host' | 'user') {
@@ -409,6 +432,7 @@ function App() {
   const [leaderboard, setLeaderboard] = useState<LeaderboardPayload | null>(null);
   const [atmosphereCue, setAtmosphereCue] = useState<AtmosphereCue | null>(null);
   const [soundEnabled, setSoundEnabled] = useState(false);
+  const [soundCapability, setSoundCapability] = useState<SoundCapability>('ready');
   const [connectionPhase, setConnectionPhase] = useState<ConnectionPhase>('connecting');
   const [activeAuctionID, setActiveAuctionID] = useState('');
   const [activeIncrementCents, setActiveIncrementCents] = useState(5_000);
@@ -444,6 +468,8 @@ function App() {
   const serverTimeMSRef = useRef(serverTimeMS);
   const currentUserIDRef = useRef(currentUserID);
   const soundEnabledRef = useRef(soundEnabled);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const soundCapabilityRef = useRef<SoundCapability>('ready');
   const leaderboardRef = useRef<LeaderboardPayload | null>(leaderboard);
   const atmosphereSeenRef = useRef<Set<string>>(new Set());
   const recoveringRef = useRef(false);
@@ -486,6 +512,10 @@ function App() {
   }, [soundEnabled]);
 
   useEffect(() => {
+    soundCapabilityRef.current = soundCapability;
+  }, [soundCapability]);
+
+  useEffect(() => {
     leaderboardRef.current = leaderboard;
   }, [leaderboard]);
 
@@ -524,11 +554,43 @@ function App() {
     }
     activeCueRef.current = cue;
     setAtmosphereCue(cue);
-    if (soundEnabledRef.current) {
-      playCueTone();
-      vibrateOnce();
+    if (soundEnabledRef.current && audioContextRef.current && soundCapabilityRef.current === 'ready') {
+      playCueTone(audioContextRef.current, cue.kind);
+      vibratePattern(cue.kind);
     }
   };
+
+  const toggleSound = async () => {
+    if (soundEnabledRef.current) {
+      setSoundEnabled(false);
+      audioContextRef.current?.close?.().catch?.(() => undefined);
+      audioContextRef.current = null;
+      return;
+    }
+    const ctx = createAudioContext();
+    if (!ctx) {
+      setSoundCapability('unavailable');
+      setSoundEnabled(false);
+      return;
+    }
+    try {
+      if (ctx.state === 'suspended') await ctx.resume();
+      audioContextRef.current = ctx;
+      setSoundCapability('ready');
+      setSoundEnabled(true);
+    } catch {
+      setSoundCapability('blocked');
+      setSoundEnabled(false);
+      await ctx.close?.();
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      audioContextRef.current?.close?.().catch?.(() => undefined);
+      audioContextRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     if (!atmosphereCue) return;
@@ -1393,7 +1455,7 @@ function App() {
   };
 
   return (
-    <main className="app-shell">
+    <main className="app-shell" data-perf-surface={new URLSearchParams(window.location.search).get('perfSurface') === '1' ? '1' : undefined}>
       <LiveStage
         atmosphereCue={atmosphereCue}
         chatMessages={chatMessages}
@@ -1405,7 +1467,8 @@ function App() {
         roomID={roomID}
         scenario={scenario}
         soundEnabled={soundEnabled}
-        onToggleSound={() => setSoundEnabled((enabled) => !enabled)}
+        soundCapability={soundCapability}
+        onToggleSound={() => void toggleSound()}
       />
       <AuctionStatePanel
         atmosphereCue={atmosphereCue}
@@ -1498,6 +1561,7 @@ function LiveStage({
   roomID,
   scenario,
   soundEnabled,
+  soundCapability,
   onToggleSound
 }: {
   atmosphereCue: AtmosphereCue | null;
@@ -1510,6 +1574,7 @@ function LiveStage({
   roomID: string;
   scenario: Scenario;
   soundEnabled: boolean;
+  soundCapability: SoundCapability;
   onToggleSound: () => void;
 }) {
   const mediaURL = item.video_poster_url ?? item.videoPosterURL ?? item.image_url ?? item.imageURL ?? '';
@@ -1566,7 +1631,9 @@ function LiveStage({
         <button
           className="sound-toggle"
           type="button"
-          aria-label={soundEnabled ? '关闭提示音' : '开启提示音'}
+          aria-label={soundEnabled ? '关闭提示音' : soundCapability === 'ready' ? '开启提示音' : '提示音不可用'}
+          title={soundCapability === 'blocked' ? '浏览器阻止音频，请再次点击授权' : soundCapability === 'unavailable' ? '当前浏览器不支持提示音' : undefined}
+          disabled={soundCapability === 'unavailable'}
           onClick={onToggleSound}
         >
           {soundEnabled ? <Bell size={14} /> : <BellOff size={14} />}

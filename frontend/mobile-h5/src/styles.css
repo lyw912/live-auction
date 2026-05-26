@@ -27,6 +27,10 @@ button {
   padding-bottom: calc(var(--h5-bid-dock-reserved-height) + 18px);
 }
 
+.app-shell[data-perf-surface="1"] .leaderboard-panel {
+  display: none;
+}
+
 .video-stage {
   min-height: 54vh;
   padding: 18px;

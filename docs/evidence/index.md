@@ -61,6 +61,7 @@
 | `docs/evidence/p7-03-leaderboard-action-metrics.md` | AUTHORITATIVE | P7-S3 extends the leaderboard API with PostgreSQL-derived seq, server time, next valid bid, adjacent-rank gap, user state, and 30s action stats while preserving old fields. |
 | `docs/evidence/p7-04-h5-rankstrip-leaderboard-sheet.md` | AUTHORITATIVE | P7-S4 adds action-oriented H5 RankStrip and leaderboard sheet using P7-S3 fields, updates visual baselines, and proves Bid Dock/result CTA are not blocked. |
 | `docs/evidence/p7-04b-official-bid-hint-states.md` | AUTHORITATIVE | P7-S4b adds amount-adjacent H5 bid hints for self-leading, multi-step bids, and authoritative price changes while preserving server-authoritative bidding. |
+| `docs/evidence/p7-05-sound-haptic-policy.md` | AUTHORITATIVE | P7-S5 adds opt-in AudioContext reuse, capability fallback, event-specific sound/haptic patterns, hidden-tab skip, reduced-motion haptic suppression, and playback tests. |
 | `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan.md` | AUTHORITATIVE | P3/P4 pressure protocol and admission-off policy. |
 | `docs/design-v2-industrial/18-p3-p4-roadmap-reset.md` | AUTHORITATIVE | Current P3/P4 execution order and decision gates. |
 | `docs/p3-decision-log.md` | AUTHORITATIVE | Current decisions, superseded evidence, and go/no-go gates. |
