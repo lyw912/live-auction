@@ -472,19 +472,31 @@ button {
 }
 
 .dock-feedback {
-  min-height: 20px;
+  min-height: 24px;
   margin-top: 3px;
   color: var(--color-muted);
   font-size: 12px;
   font-weight: 800;
   overflow-wrap: anywhere;
+  display: flex;
+  align-items: center;
 }
 
-.bid-dock[data-dock-state="OUTBID"] .dock-feedback {
+.dock-feedback span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.dock-feedback strong {
+  color: var(--color-muted-strong);
+  font-size: inherit;
+}
+
+.bid-dock[data-dock-state="OUTBID"] .dock-feedback span {
   color: var(--color-danger-text);
 }
 
-.bid-dock[data-dock-state="RECOVERING"] .dock-feedback {
+.bid-dock[data-dock-state="RECOVERING"] .dock-feedback span {
   color: var(--color-risk-orange);
 }
 
@@ -648,7 +660,7 @@ button {
 .primary-cta {
   width: 100%;
   min-height: 52px;
-  margin-top: 12px;
+  margin-top: 8px;
   border: 0;
   border-radius: var(--radius-md);
   background: var(--color-trust-green-deep);

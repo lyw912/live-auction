@@ -391,6 +391,7 @@ function App() {
   const [paymentPhase, setPaymentPhase] = useState<PaymentPhase>('idle');
   const [recoveryPhase, setRecoveryPhase] = useState<RecoveryPhase>('idle');
   const [currentPriceCents, setCurrentPriceCents] = useState(35_000);
+  const [minimumNextBidCents, setMinimumNextBidCents] = useState(40_000);
   const [nextBidCents, setNextBidCents] = useState(40_000);
   const [lastSeq, setLastSeq] = useState(41);
   const [bidFeedback, setBidFeedback] = useState('下一口 ¥400.00');
@@ -773,7 +774,7 @@ function App() {
       cta: countdownExpired ? '同步中' : `出价 ${formatCents(nextBidCents)}`,
       ctaDisabled: countdownExpired
     };
-  }, [activeAuctionID, bidFeedback, bidPhase, confirmAmountCents, connectionPhase, countdownCopy, countdownExpired, currentPriceCents, lastSeq, leaderMasked, nextBidCents, payableOrderAmountCents, payableOrderID, paymentPhase, recoveryPhase, selected, terminalPriceCents, terminalWinnerID]);
+  }, [activeAuctionID, bidFeedback, bidPhase, confirmAmountCents, connectionPhase, countdownCopy, countdownExpired, currentPriceCents, lastSeq, leaderMasked, minimumNextBidCents, nextBidCents, payableOrderAmountCents, payableOrderID, paymentPhase, recoveryPhase, selected, terminalPriceCents, terminalWinnerID]);
   const resultSheetKind: ResultSheetKind | null = selected === 'sold_winner'
     ? 'winner'
     : selected === 'sold_loser'
@@ -789,6 +790,7 @@ function App() {
     const acceptedPrice = payload.current_price_cents ?? currentPriceCents;
     const acceptedWinnerID = payload.current_winner_id ?? '';
     setCurrentPriceCents(acceptedPrice);
+    setMinimumNextBidCents(acceptedPrice + activeIncrementCents);
     setNextBidCents(acceptedPrice + activeIncrementCents);
     setLastSeq(payload.seq ?? lastSeq);
     if (payload.end_at) setAuctionEndAt(payload.end_at);
@@ -877,6 +879,7 @@ function App() {
     if (nextEndAt) setAuctionEndAt(nextEndAt);
     if (nextServerTimeMS) setServerTimeMS(nextServerTimeMS);
     setCurrentPriceCents(price);
+    setMinimumNextBidCents(price + increment);
     setNextBidCents(price + increment);
     setLastSeq(snapshot.seq);
     setLeaderMasked(snapshot.payload?.leader_user_masked ?? leaderMasked);
@@ -945,7 +948,8 @@ function App() {
     const previousLeading = leaderboardRef.current?.my_rank === 1;
     const winnerID = detail.payload?.current_winner_id ?? detail.payload?.user_id ?? '';
     setCurrentPriceCents(price);
-    setNextBidCents(price + increment);
+    setMinimumNextBidCents(price + increment);
+    setNextBidCents((prepared) => Math.max(price + increment, prepared));
     setLastSeq(detail.seq);
     if (nextEndAt) setAuctionEndAt(nextEndAt);
     if (nextServerTimeMS) setServerTimeMS(nextServerTimeMS);
@@ -1061,6 +1065,7 @@ function App() {
         const increment = selectedAuction.increment_cents ?? activeIncrementCents;
         setActiveIncrementCents(increment);
         setCurrentPriceCents(price);
+        setMinimumNextBidCents(price + increment);
         setNextBidCents(price + increment);
         setLastSeq(selectedAuction.seq ?? lastSeqRef.current);
         setAuctionEndAt(selectedAuction.end_at ?? '');
@@ -1329,7 +1334,7 @@ function App() {
   };
 
   const decreaseBidAmount = () => {
-    setNextBidCents((amount) => Math.max(currentPriceCents + activeIncrementCents, amount - activeIncrementCents));
+    setNextBidCents((amount) => Math.max(minimumNextBidCents, amount - activeIncrementCents));
   };
 
   const increaseBidAmount = () => {
@@ -1406,8 +1411,10 @@ function App() {
         atmosphereCue={atmosphereCue}
         connectionPhase={connectionPhase}
         countdownCopy={countdownCopy}
+        currentPriceCents={currentPriceCents}
         extensionNotice={extensionNotice}
         leaderboard={leaderboard}
+        minimumNextBidCents={minimumNextBidCents}
         nextBidCents={nextBidCents}
         scenario={scenario}
         onDecreaseBid={decreaseBidAmount}
@@ -1419,21 +1426,12 @@ function App() {
         <StateMatrixTabs selected={selected} onSelect={setSelected} />
       )}
       {showStateMatrix ? (
-        <>
-          <LeaderboardPanel
-            activeAuctionID={activeAuctionID}
-            leaderboard={leaderboard}
-            nextBidCents={nextBidCents}
-            onRefresh={() => void loadLeaderboard()}
-          />
-          <HistoryPanel
-            bidHistory={bidHistory}
-            historyError={historyError}
-            historyLoading={historyLoading}
-            orderHistory={orderHistory}
-            onRefresh={loadHistory}
-          />
-        </>
+        <LeaderboardPanel
+          activeAuctionID={activeAuctionID}
+          leaderboard={leaderboard}
+          nextBidCents={nextBidCents}
+          onRefresh={() => void loadLeaderboard()}
+        />
       ) : (
         <BottomSheet
           activeAuctionID={activeAuctionID}
@@ -1626,8 +1624,10 @@ function AuctionStatePanel({
   atmosphereCue,
   connectionPhase,
   countdownCopy,
+  currentPriceCents,
   extensionNotice,
   leaderboard,
+  minimumNextBidCents,
   nextBidCents,
   scenario,
   onDecreaseBid,
@@ -1638,8 +1638,10 @@ function AuctionStatePanel({
   atmosphereCue: AtmosphereCue | null;
   connectionPhase: ConnectionPhase;
   countdownCopy: string;
+  currentPriceCents: number;
   extensionNotice: string;
   leaderboard: LeaderboardPayload | null;
+  minimumNextBidCents: number;
   nextBidCents: number;
   scenario: Scenario;
   onDecreaseBid: () => void;
@@ -1669,6 +1671,12 @@ function AuctionStatePanel({
       ? '当前领先'
       : scenario.feedback;
   const rankAction = leaderboardActionCopy(leaderboard, nextBidCents);
+  const bidHint = (() => {
+    if (scenario.stale || connectionPhase === 'recovering' || connectionPhase === 'disconnected') return '权威价格同步中，暂不提交出价';
+    if (scenario.ctaDisabled && !scenario.sold && scenario.leader.includes('你')) return '当前您已是最高价，等待其他用户出价';
+    if (nextBidCents > minimumNextBidCents) return `高于当前价 ${formatCents(nextBidCents - currentPriceCents)} · 高于最低下一口 ${formatCents(nextBidCents - minimumNextBidCents)}`;
+    return `最低有效出价 ${formatCents(minimumNextBidCents)} · 按 ${formatCents(Math.max(0, nextBidCents - currentPriceCents))} 加价`;
+  })();
 
   return (
     <section
@@ -1703,7 +1711,7 @@ function AuctionStatePanel({
         <span>{scenario.stale ? '状态可能已过期' : connectionPhase === 'connected' ? 'WebSocket 已连接 · 状态来自服务端事件' : 'WebSocket 连接中 · 状态来自服务端事件'}</span>
       </div>
       <div className="dock-feedback" aria-live={scenario.rejected || scenario.stale ? 'assertive' : 'polite'}>
-        {scenario.feedback}
+        <span>{scenario.feedback} · <strong data-testid="bid-hint">{bidHint}</strong></span>
       </div>
       <div className="bid-stepper">
         <button type="button" aria-label="decrease" onClick={onDecreaseBid}>-</button>

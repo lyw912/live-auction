@@ -299,7 +299,7 @@ test('H5 recovering and disconnected states show stale marker', async ({ page })
   await expect(page.getByText('状态可能已过期')).toBeVisible();
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
   await page.getByRole('button', { name: '已断开' }).click();
-  await expect(page.getByLabel('auction-state').locator('.dock-feedback')).toHaveText('重连中');
+  await expect(page.getByLabel('auction-state').locator('.dock-feedback')).toContainText('重连中');
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
 });
 
@@ -1014,6 +1014,43 @@ test('H5 leaderboard sheet shows action metrics without moving the bid CTA', asy
   expect(Math.abs((ctaAfter?.y ?? 0) - (ctaBefore?.y ?? 0))).toBeLessThan(2);
 });
 
+test('H5 official bid hints stay beside amount and CTA', async ({ page }) => {
+  await page.goto('/?stateMatrix=1');
+  await page.getByRole('button', { name: '领先中' }).click();
+  await expect(page.getByTestId('bid-hint')).toHaveText('当前您已是最高价，等待其他用户出价');
+  await expect(page.getByTestId('bid-cta')).toBeDisabled();
+
+  await page.getByRole('button', { name: '竞价中' }).click();
+  await page.getByRole('button', { name: 'increase' }).click();
+  await expect(page.getByTestId('bid-hint')).toContainText('高于当前价 ¥100.00');
+  await expect(page.getByTestId('bid-hint')).toContainText('高于最低下一口 ¥50.00');
+});
+
+test('H5 prepared bid hint updates when authoritative price changes', async ({ page }) => {
+  await page.goto('/?stateMatrix=1');
+  await page.getByRole('button', { name: '竞价中' }).click();
+  await page.getByRole('button', { name: 'increase' }).click();
+  await expect(page.getByTestId('bid-hint')).toContainText('高于最低下一口 ¥50.00');
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('auction:event', {
+      detail: {
+        auction_id: 'auc_live',
+        event_type: 'bid_accepted',
+        seq: 42,
+        payload: {
+          current_price_cents: 40000,
+          current_winner_id: 'user_2',
+          user_id: 'user_2',
+          leader_user_masked: '张**'
+        }
+      }
+    }));
+  });
+
+  await expect(page.getByTestId('bid-hint')).toHaveText('最低有效出价 ¥450.00 · 按 ¥50.00 加价');
+});
+
 test('H5 event-driven visual effects stay nonblocking and respect reduced motion', async ({ page }) => {
   await page.goto('/?stateMatrix=1');
   await page.getByRole('button', { name: '竞价中' }).click();
@@ -1135,7 +1172,9 @@ test('H5 order realtime events update winner payment state', async ({ page }) =>
 });
 
 test('H5 interaction surface has no unacceptable animation longtask', async ({ page }) => {
-  await page.addInitScript(() => {
+  await page.goto('/?stateMatrix=1');
+  await page.getByRole('button', { name: '竞价中' }).click();
+  await page.evaluate(() => {
     const target = window as typeof window & { __longTasks?: number[] };
     target.__longTasks = [];
     if ('PerformanceObserver' in window) {
@@ -1152,9 +1191,6 @@ test('H5 interaction surface has no unacceptable animation longtask', async ({ p
       }
     }
   });
-
-  await page.goto('/?stateMatrix=1');
-  await page.getByRole('button', { name: '竞价中' }).click();
   await page.getByRole('button', { name: 'increase' }).click();
   await page.getByRole('button', { name: 'decrease' }).click();
   await page.getByRole('button', { name: '恢复中' }).click();

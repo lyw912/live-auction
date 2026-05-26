@@ -60,6 +60,7 @@
 | `docs/evidence/p7-02-h5-event-driven-effects.md` | AUTHORITATIVE | P7-S2 H5 event effects add bounded price tick, leading ring, outbid edge flash, extension stretch, sold mark, reduced-motion fallback, CTA overlap checks, longtask gate, and visual regression evidence. |
 | `docs/evidence/p7-03-leaderboard-action-metrics.md` | AUTHORITATIVE | P7-S3 extends the leaderboard API with PostgreSQL-derived seq, server time, next valid bid, adjacent-rank gap, user state, and 30s action stats while preserving old fields. |
 | `docs/evidence/p7-04-h5-rankstrip-leaderboard-sheet.md` | AUTHORITATIVE | P7-S4 adds action-oriented H5 RankStrip and leaderboard sheet using P7-S3 fields, updates visual baselines, and proves Bid Dock/result CTA are not blocked. |
+| `docs/evidence/p7-04b-official-bid-hint-states.md` | AUTHORITATIVE | P7-S4b adds amount-adjacent H5 bid hints for self-leading, multi-step bids, and authoritative price changes while preserving server-authoritative bidding. |
 | `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan.md` | AUTHORITATIVE | P3/P4 pressure protocol and admission-off policy. |
 | `docs/design-v2-industrial/18-p3-p4-roadmap-reset.md` | AUTHORITATIVE | Current P3/P4 execution order and decision gates. |
 | `docs/p3-decision-log.md` | AUTHORITATIVE | Current decisions, superseded evidence, and go/no-go gates. |

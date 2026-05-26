@@ -11,7 +11,7 @@
 | P7-S2 Visual Effects | DONE | `docs/evidence/p7-02-h5-event-driven-effects.md` |
 | P7-S3 Leaderboard V2 API | DONE | `docs/evidence/p7-03-leaderboard-action-metrics.md` |
 | P7-S4 H5 RankStrip And Leaderboard Sheet | DONE | `docs/evidence/p7-04-h5-rankstrip-leaderboard-sheet.md` |
-| P7-S4b Official Bid Hint States | TODO | Pending |
+| P7-S4b Official Bid Hint States | DONE | `docs/evidence/p7-04b-official-bid-hint-states.md` |
 | P7-S5 Sound And Haptic Policy | TODO | Pending |
 | P7-S6 Countdown And Extension UX | TODO | Pending |
 
@@ -24,3 +24,4 @@
 - P7-S2 visual effects are CSS-only transform/opacity effects with reduced-motion fallback; they do not alter auction truth or CTA behavior.
 - P7-S3 leaderboard action fields are PostgreSQL-derived and backward-compatible; visible RankStrip changes remain P7-S4.
 - P7-S4 moves action ranking into the fixed Bid Dock and expanded sheet while preserving the singular CTA and updated visual baselines.
+- P7-S4b adds bid-adjacent official hints for self-leading, multi-step bid amount, and authoritative price changes without introducing local success.
