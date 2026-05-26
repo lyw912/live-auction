@@ -626,6 +626,65 @@ test('H5 stale snapshot keeps recovering CTA disabled', async ({ page }) => {
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
 });
 
+test('H5 atmosphere engine dedupes strong effects after recovery snapshot', async ({ page }) => {
+  await page.route('/api/auctions/auc_live', async (route) => {
+    await route.fulfill({
+      json: {
+        event_type: 'snapshot',
+        auction_id: 'auc_live',
+        seq: 45,
+        source: 'db',
+        stale: false,
+        current_price_cents: 45000,
+        increment_cents: 5000,
+        current_winner_id: 'user_2',
+        end_at: '2099-05-22T14:00:10Z',
+        server_time_ms: Date.parse('2099-05-22T13:59:50Z'),
+        payload: {
+          status: 'ACTIVE',
+          current_price_cents: 45000,
+          leader_user_masked: '王**',
+          current_winner_id: 'user_2',
+          end_at: '2099-05-22T14:00:10Z',
+          server_time_ms: Date.parse('2099-05-22T13:59:50Z')
+        }
+      }
+    });
+  });
+
+  await page.goto('/?stateMatrix=1');
+  await page.getByRole('button', { name: '竞价中' }).click();
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('auction:event', {
+      detail: {
+        auction_id: 'auc_live',
+        event_type: 'outbox_gap_notice',
+        seq: 45
+      }
+    }));
+  });
+  await expect(page.getByText('snapshot db seq 45')).toBeVisible();
+  await expect(page.getByTestId('atmosphere-cue')).toHaveCount(0);
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('auction:event', {
+      detail: {
+        auction_id: 'auc_live',
+        event_type: 'bid_accepted',
+        seq: 44,
+        payload: {
+          current_price_cents: 44000,
+          current_winner_id: 'user_1',
+          user_id: 'user_1',
+          leader_user_masked: '你'
+        }
+      }
+    }));
+  });
+  await expect(page.getByLabel('auction-state').locator('h2')).toHaveText('¥450.00');
+  await expect(page.getByTestId('atmosphere-cue')).toHaveCount(0);
+});
+
 test('H5 renders bid and order history from user APIs', async ({ page }) => {
   await page.route('/api/users/me/bids', async (route) => {
     await route.fulfill({
@@ -910,7 +969,12 @@ test('H5 renders realtime leaderboard and event atmosphere controls', async ({ p
     }));
   });
 
-  await expect(page.getByRole('status')).toContainText('领先！');
+  const cue = page.getByTestId('atmosphere-cue');
+  await expect(cue).toContainText('领先！');
+  await expect(cue).toHaveAttribute('data-auction-id', 'auc_live');
+  await expect(cue).toHaveAttribute('data-cause-seq', '42');
+  await expect(cue).toHaveAttribute('data-event-type', 'bid_accepted');
+  await expect(cue).toHaveAttribute('data-user-scope', 'self');
 });
 
 test('H5 order realtime events update winner payment state', async ({ page }) => {

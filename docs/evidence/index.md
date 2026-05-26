@@ -56,6 +56,7 @@
 | `docs/evidence/p6-03-h5-bottom-sheet-navigation.md` | AUTHORITATIVE | P6-S3 H5 bottom sheet navigation moves product/rules/leaderboard/history/orders into sheet tabs while keeping the fixed BidDock singular and visible, with H5 build, behavior, visual, and full e2e evidence. |
 | `docs/evidence/p6-04-h5-product-trust-sheet.md` | AUTHORITATIVE | P6-S4 H5 product trust sheet adds item media, proof details, deposit/payment, cap, extension, fat-finger, and after-sale explanations in bidder-facing language with H5 build, behavior, visual, and full e2e evidence. |
 | `docs/evidence/p6-05-h5-auction-result-sheets.md` | AUTHORITATIVE | P6-S5 H5 winner/loser/unsold result sheets add payment handoff, final gap/result explanation, next-item continuation, and disabled dangerous actions with H5 build, behavior, visual, and full e2e evidence. |
+| `docs/evidence/p7-01-h5-atmosphere-engine.md` | AUTHORITATIVE | P7-S1 H5 atmosphere engine normalizes event-driven cues, carries server-truth metadata, dedupes recovery replays, and tests priority ordering. |
 | `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan.md` | AUTHORITATIVE | P3/P4 pressure protocol and admission-off policy. |
 | `docs/design-v2-industrial/18-p3-p4-roadmap-reset.md` | AUTHORITATIVE | Current P3/P4 execution order and decision gates. |
 | `docs/p3-decision-log.md` | AUTHORITATIVE | Current decisions, superseded evidence, and go/no-go gates. |

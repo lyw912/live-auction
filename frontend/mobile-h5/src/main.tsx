@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AlertTriangle, BadgeCheck, Bell, BellOff, CheckCircle2, ChevronUp, Clock3, CreditCard, History, MessageCircle, PackageCheck, Radio, RefreshCw, Send, ShieldCheck, Truck, Trophy, Wifi, WifiOff } from 'lucide-react';
+import type { AtmosphereCue, AtmosphereInput } from './atmosphere';
+import { normalizeAtmosphere } from './atmosphere';
 import './styles.css';
 
 type AuctionState =
@@ -186,14 +188,6 @@ type WSTicketResponse = {
 type AuthUser = {
   ID: string;
   Role: string;
-};
-
-type AtmosphereKind = 'leading' | 'outbid' | 'extended' | 'sold';
-type AtmosphereCue = {
-  id: number;
-  kind: AtmosphereKind;
-  title: string;
-  detail: string;
 };
 
 const demoUserID = 'user_1';
@@ -412,6 +406,9 @@ function App() {
   const currentUserIDRef = useRef(currentUserID);
   const soundEnabledRef = useRef(soundEnabled);
   const leaderboardRef = useRef<LeaderboardPayload | null>(leaderboard);
+  const atmosphereSeenRef = useRef<Set<string>>(new Set());
+  const recoveringRef = useRef(false);
+  const activeCueRef = useRef<AtmosphereCue | null>(null);
 
   useEffect(() => {
     lastSeqRef.current = lastSeq;
@@ -454,6 +451,10 @@ function App() {
   }, [leaderboard]);
 
   useEffect(() => {
+    recoveringRef.current = recoveryPhase === 'recovering' || connectionPhase === 'recovering' || connectionPhase === 'disconnected';
+  }, [connectionPhase, recoveryPhase]);
+
+  useEffect(() => {
     const timer = window.setInterval(() => setNowMS(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, []);
@@ -470,8 +471,20 @@ function App() {
     isCountdownExpired(auctionEndAt, serverTimeMS, nowMS)
   ), [auctionEndAt, connectionPhase, nowMS, recoveryPhase, selected, serverTimeMS]);
 
-  const showAtmosphere = (kind: AtmosphereKind, title: string, detail: string) => {
-    setAtmosphereCue({ id: Date.now(), kind, title, detail });
+  const showAtmosphere = (input: AtmosphereInput) => {
+    if (recoveringRef.current) return;
+    const cue = normalizeAtmosphere(input, lastSeqRef.current);
+    if (!cue) return;
+    if (cue.cause_seq <= lastSeqRef.current && input.cause_seq == null) return;
+    const key = `${cue.auction_id}:${cue.event_type}:${cue.cause_seq}:${cue.user_scope}:${cue.kind}`;
+    if (atmosphereSeenRef.current.has(key)) return;
+    atmosphereSeenRef.current.add(key);
+    const activeCue = activeCueRef.current;
+    if (activeCue && activeCue.auction_id === cue.auction_id && activeCue.cause_seq === cue.cause_seq && activeCue.priority > cue.priority) {
+      return;
+    }
+    activeCueRef.current = cue;
+    setAtmosphereCue(cue);
     if (soundEnabledRef.current) {
       playCueTone();
       vibrateOnce();
@@ -481,7 +494,10 @@ function App() {
   useEffect(() => {
     if (!atmosphereCue) return;
     const timer = window.setTimeout(() => setAtmosphereCue(null), 1800);
-    return () => window.clearTimeout(timer);
+    return () => {
+      window.clearTimeout(timer);
+      if (activeCueRef.current?.id === atmosphereCue.id) activeCueRef.current = null;
+    };
   }, [atmosphereCue]);
 
   useEffect(() => {
@@ -742,7 +758,15 @@ function App() {
     if (payload.result === 'ACCEPTED_EXTENDED') {
       setExtensionNotice('服务端已延时');
       setBidFeedback(`服务端已延时 seq ${payload.seq ?? lastSeq}`);
-      showAtmosphere('extended', '已延时', '最后窗口出价，服务端延长竞拍');
+      showAtmosphere({
+        kind: 'extended',
+        title: '已延时',
+        detail: '最后窗口出价，服务端延长竞拍',
+        auction_id: payload.auction_id ?? activeAuctionIDRef.current,
+        cause_seq: payload.seq ?? lastSeqRef.current,
+        event_type: payload.result,
+        user_scope: 'global'
+      });
     }
     setConfirmToken('');
     setConfirmIdempotencyKey('');
@@ -751,14 +775,30 @@ function App() {
       setTerminalPriceCents(acceptedPrice);
       setTerminalWinnerID(payload.current_winner_id ?? '');
       setSelected(payload.current_winner_id === currentUserID ? 'sold_winner' : 'sold_loser');
-      showAtmosphere('sold', payload.current_winner_id === currentUserID ? '成交！' : '已成交', payload.current_winner_id === currentUserID ? '你已拍中，订单待支付' : '本场已落锤');
+      showAtmosphere({
+        kind: 'sold',
+        title: payload.current_winner_id === currentUserID ? '成交！' : '已成交',
+        detail: payload.current_winner_id === currentUserID ? '你已拍中，订单待支付' : '本场已落锤',
+        auction_id: payload.auction_id ?? activeAuctionIDRef.current,
+        cause_seq: payload.seq ?? lastSeqRef.current,
+        event_type: payload.result,
+        user_scope: payload.current_winner_id === currentUserID ? 'self' : 'other'
+      });
       setBidPhase('idle');
       void loadLeaderboard(payload.auction_id ?? activeAuctionIDRef.current);
       void loadPayableOrderForAuction(payload.auction_id ?? activeAuctionIDRef.current);
       return;
     }
     if (acceptedWinnerID === currentUserID) {
-      showAtmosphere('leading', '领先！', `${formatCents(acceptedPrice)} 服务端确认`);
+      showAtmosphere({
+        kind: 'leading',
+        title: '领先！',
+        detail: `${formatCents(acceptedPrice)} 服务端确认`,
+        auction_id: payload.auction_id ?? activeAuctionIDRef.current,
+        cause_seq: payload.seq ?? lastSeqRef.current,
+        event_type: payload.result ?? 'bid_accepted',
+        user_scope: 'self'
+      });
     }
     setBidPhase(acceptedWinnerID === currentUserID ? 'accepted' : 'idle');
     void loadLeaderboard(payload.auction_id ?? activeAuctionIDRef.current);
@@ -876,7 +916,15 @@ function App() {
     if (wasExtended) {
       setExtensionNotice('服务端已延时');
       setBidFeedback(`服务端已延时 seq ${detail.seq}`);
-      showAtmosphere('extended', '已延时', '最后窗口出价，竞拍继续');
+      showAtmosphere({
+        kind: 'extended',
+        title: '已延时',
+        detail: '最后窗口出价，竞拍继续',
+        auction_id: detail.auction_id,
+        cause_seq: detail.seq,
+        event_type: detail.event_type,
+        user_scope: 'global'
+      });
     } else {
       setBidFeedback(`event seq ${detail.seq}`);
     }
@@ -888,7 +936,15 @@ function App() {
         setPayableOrderAmountCents(price);
       }
       setSelected(winnerID === currentUserID ? 'sold_winner' : 'sold_loser');
-      showAtmosphere('sold', winnerID === currentUserID ? '成交！' : '已成交', winnerID === currentUserID ? '你已拍中，订单待支付' : '本场已落锤');
+      showAtmosphere({
+        kind: 'sold',
+        title: winnerID === currentUserID ? '成交！' : '已成交',
+        detail: winnerID === currentUserID ? '你已拍中，订单待支付' : '本场已落锤',
+        auction_id: detail.auction_id,
+        cause_seq: detail.seq,
+        event_type: detail.event_type,
+        user_scope: winnerID === currentUserID ? 'self' : 'other'
+      });
       setBidPhase('idle');
       if (winnerID === currentUserID) {
         void loadPayableOrderForAuction(detail.auction_id);
@@ -916,14 +972,30 @@ function App() {
       setBidFeedback('订单已超时');
     } else if (detail.payload?.user_id && detail.payload.user_id !== currentUserID) {
       if (previousLeading) {
-        showAtmosphere('outbid', '被超越！', `${detail.payload.leader_user_masked ?? '其他用户'} 已领先`);
+        showAtmosphere({
+          kind: 'outbid',
+          title: '被超越！',
+          detail: `${detail.payload.leader_user_masked ?? '其他用户'} 已领先`,
+          auction_id: detail.auction_id,
+          cause_seq: detail.seq,
+          event_type: detail.event_type,
+          user_scope: 'self'
+        });
       }
       setBidPhase('idle');
       setConfirmToken('');
       setConfirmIdempotencyKey('');
       setConfirmAmountCents(0);
     } else if (winnerID === currentUserIDRef.current || detail.payload?.current_winner_id === currentUserIDRef.current) {
-      showAtmosphere('leading', '领先！', `${formatCents(price)} 已同步`);
+      showAtmosphere({
+        kind: 'leading',
+        title: '领先！',
+        detail: `${formatCents(price)} 已同步`,
+        auction_id: detail.auction_id,
+        cause_seq: detail.seq,
+        event_type: detail.event_type,
+        user_scope: 'self'
+      });
     }
     void loadLeaderboard(detail.auction_id);
     setConnectionPhase('connected');
@@ -1425,7 +1497,17 @@ function LiveStage({
       style={mediaURL ? { '--stage-media-url': `url("${mediaURL}")` } as React.CSSProperties : undefined}
     >
       {atmosphereCue && (
-        <div className={`atmosphere-cue ${atmosphereCue.kind}`} role="status" aria-live="polite" key={atmosphereCue.id}>
+        <div
+          className={`atmosphere-cue ${atmosphereCue.kind}`}
+          role="status"
+          aria-live="polite"
+          key={atmosphereCue.id}
+          data-testid="atmosphere-cue"
+          data-auction-id={atmosphereCue.auction_id}
+          data-cause-seq={atmosphereCue.cause_seq}
+          data-event-type={atmosphereCue.event_type}
+          data-user-scope={atmosphereCue.user_scope}
+        >
           <strong>{atmosphereCue.title}</strong>
           <span>{atmosphereCue.detail}</span>
         </div>
