@@ -43,6 +43,7 @@ Decision states:
 | P3-D20 | P4-R2 auction flight recorder is the forensic surface for contested auctions. | ACCEPTED | `docs/evidence/p4-02-auction-flight-recorder-2026-05-26.md`. | Use the host-only flight recorder API to explain one auction's rules, bids, events, outbox, order/payment, snapshots, and anomalies after stress or abuse runs. |
 | P3-D21 | P4-R4 proxy bidding is deferred as a product-rule rewrite. | ACCEPTED | Official brief and `03-domain-model-and-rules.md` fixed-increment model. | Do not implement proxy/max-bid as an optimization. Reopen only through a separate product ADR with new rules and tests. |
 | P3-D22 | P4-R3 risk simulator is the post-optimization incident gate. | ACCEPTED | `docs/evidence/p4-03-risk-simulator-2026-05-26.md`. | After performance or architecture changes, run the P4 simulator to prove bid idempotency abuse, host-only diagnostics ACL, cap-SOLD order generation, payment double click, and scoped DB invariants still hold. |
+| P9-D01 | Max Bid/Pre-Bid is accepted only through the P9 product ADR, not as a hidden optimization. | ACCEPTED | `docs/adr/p9-04-max-bid-pre-bid-decision.md`, `docs/evidence/p9-04-max-bid-pre-bid-adr.md`. | This reopens P3-D21 under explicit new rules: private PostgreSQL intents, auction row-lock settlement, public/private event separation, and P9-S5 sub-slice gates. |
 
 ## Go / No-Go Gates
 
