@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test';
 
+const productImageDataURL = 'data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20600%20800%22%3E%3Crect%20width%3D%22600%22%20height%3D%22800%22%20fill%3D%22%23222f2b%22%2F%3E%3Ccircle%20cx%3D%22300%22%20cy%3D%22300%22%20r%3D%22142%22%20fill%3D%22%23e5f3ef%22%2F%3E%3Cellipse%20cx%3D%22300%22%20cy%3D%22320%22%20rx%3D%22164%22%20ry%3D%2286%22%20fill%3D%22%2310b981%22%2F%3E%3Cpath%20d%3D%22M170%20352c52%2068%20208%2068%20260%200%22%20stroke%3D%22%23d6a84f%22%20stroke-width%3D%2218%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%3Ctext%20x%3D%22300%22%20y%3D%22640%22%20text-anchor%3D%22middle%22%20font-size%3D%2248%22%20font-family%3D%22Arial%22%20fill%3D%22white%22%3ELOT%20A-102%3C%2Ftext%3E%3C%2Fsvg%3E';
+
 test.beforeEach(async ({ page }) => {
   await page.route('/api/auth/me', async (route) => {
     await route.fulfill({ json: { user: { ID: 'user_1', Role: 'user' } } });
@@ -19,7 +21,11 @@ test.beforeEach(async ({ page }) => {
           seq: 41,
           end_at: '2099-05-22T14:00:00Z',
           item: {
-            title: '青瓷手作茶盏'
+            title: '青瓷手作茶盏',
+            image_url: productImageDataURL,
+            certificate: '中检证书',
+            condition: '无冲线',
+            shipping: '顺丰保价'
           }
         }
       ]
@@ -46,7 +52,14 @@ test.beforeEach(async ({ page }) => {
           leader_user_masked: '张**',
           current_winner_id: 'user_2',
           end_at: '2099-05-22T14:00:00Z',
-          server_time_ms: Date.parse('2099-05-22T13:58:45Z')
+          server_time_ms: Date.parse('2099-05-22T13:58:45Z'),
+          item: {
+            title: '青瓷手作茶盏',
+            image_url: productImageDataURL,
+            certificate: '中检证书',
+            condition: '无冲线',
+            shipping: '顺丰保价'
+          }
         }
       }
     });
@@ -562,10 +575,10 @@ test('H5 chat reads seed messages and sends room chat API', async ({ page }) => 
   });
 
   await page.goto('/');
-  await expect(page.getByTestId('chat-panel').getByText('这个茶盏釉色不错')).toBeVisible();
+  await expect(page.getByTestId('stage-chat-overlay').getByText('这个茶盏釉色不错')).toBeVisible();
   await page.getByLabel('chat-input').fill('我跟一口');
   await page.getByRole('button', { name: 'send-chat' }).click();
-  await expect(page.getByTestId('chat-panel').getByText('我跟一口')).toBeVisible();
+  await expect(page.getByTestId('stage-chat-overlay').getByText('我跟一口')).toBeVisible();
   expect(chatBody?.body).toBe('我跟一口');
   expect(String(chatBody?.client_msg_id ?? '')).toBeTruthy();
 });
@@ -613,6 +626,29 @@ test('H5 live panel keeps server countdown visible with status connection and CT
   await expect(page.getByText('WebSocket 已连接 · 状态来自服务端事件')).toBeVisible();
   await expect(page.getByTestId('auction-countdown')).toHaveText(/剩余|延时后/);
   await expect(page.getByTestId('bid-cta')).toBeEnabled();
+});
+
+test('H5 live stage uses product media and keeps chat inside safe zone at 360px', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 844 });
+  await page.goto('/');
+
+  const stage = page.getByTestId('live-stage');
+  await expect(stage).toBeVisible();
+  await expect(stage).toHaveClass(/has-media/);
+  await expect(stage.getByText('中检证书')).toBeVisible();
+  await expect(stage.getByText('无冲线')).toBeVisible();
+  await expect(stage.getByText('顺丰保价')).toBeVisible();
+  await expect(page.getByTestId('stage-chat-overlay').getByText('这个茶盏釉色不错')).toBeVisible();
+
+  const stageBox = await stage.boundingBox();
+  const chatBox = await page.getByTestId('stage-chat-overlay').boundingBox();
+  const ctaBox = await page.getByTestId('bid-cta').boundingBox();
+  expect(stageBox).toBeTruthy();
+  expect(chatBox).toBeTruthy();
+  expect(ctaBox).toBeTruthy();
+  expect(chatBox!.y + chatBox!.height).toBeLessThanOrEqual(stageBox!.y + stageBox!.height);
+  expect(chatBox!.y + chatBox!.height).toBeLessThan(ctaBox!.y);
+  await expect(page.getByTestId('bid-cta')).toBeVisible();
 });
 
 test('H5 renders realtime leaderboard and event atmosphere controls', async ({ page }) => {

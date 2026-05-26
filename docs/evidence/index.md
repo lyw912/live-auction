@@ -51,6 +51,7 @@
 | `docs/evidence/p5-02-visual-regression-gates.md` | AUTHORITATIVE | P5-S2 route-mocked H5/PC visual regression harness added with committed Playwright screenshot baselines and passing targeted visual run. |
 | `docs/evidence/p5-03-h5-component-boundaries.md` | AUTHORITATIVE | P5-S3 H5 rendering split into LiveStage, AuctionStatePanel, LeaderboardPanel, HistoryPanel, and ChatPanel boundaries with build, H5 e2e, visual, and full e2e evidence. |
 | `docs/evidence/p5-04-pc-component-boundaries.md` | AUTHORITATIVE | P5-S4 PC console rendering split into AuctionCommandPanel, AuctionQueue, RuleEditor, OrdersPanel, DiagnosticsPanel, and EventTimeline boundaries with PC typecheck, E2E, and visual evidence. |
+| `docs/evidence/p6-01-h5-live-stage-product-visuals.md` | AUTHORITATIVE | P6-S1 H5 live stage now uses item media/proof metadata, top live bar, and bounded stage chat overlay with H5 build, behavior, 360px safe-zone, and visual evidence. |
 | `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan.md` | AUTHORITATIVE | P3/P4 pressure protocol and admission-off policy. |
 | `docs/design-v2-industrial/18-p3-p4-roadmap-reset.md` | AUTHORITATIVE | Current P3/P4 execution order and decision gates. |
 | `docs/p3-decision-log.md` | AUTHORITATIVE | Current decisions, superseded evidence, and go/no-go gates. |

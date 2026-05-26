@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { AlertTriangle, Bell, BellOff, CheckCircle2, ChevronUp, Clock3, CreditCard, History, MessageCircle, Radio, RefreshCw, Send, Trophy, Wifi, WifiOff } from 'lucide-react';
+import { AlertTriangle, BadgeCheck, Bell, BellOff, CheckCircle2, ChevronUp, Clock3, CreditCard, History, MessageCircle, PackageCheck, Radio, RefreshCw, Send, ShieldCheck, Truck, Trophy, Wifi, WifiOff } from 'lucide-react';
 import './styles.css';
 
 type AuctionState =
@@ -98,7 +98,20 @@ type SnapshotResponse = {
     end_at?: string;
     server_time_ms?: number;
     reason?: string;
+    item?: AuctionItem;
   };
+  item?: AuctionItem;
+};
+
+type AuctionItem = {
+  title?: string;
+  image_url?: string;
+  imageURL?: string;
+  video_poster_url?: string;
+  videoPosterURL?: string;
+  certificate?: string;
+  condition?: string;
+  shipping?: string;
 };
 
 type HistoryRow = Record<string, unknown>;
@@ -125,9 +138,7 @@ type AuctionSummary = {
   seq?: number;
   end_at?: string;
   server_time_ms?: number;
-  item?: {
-    title?: string;
-  };
+  item?: AuctionItem;
 };
 type LeaderboardEntry = {
   rank: number;
@@ -359,6 +370,13 @@ function App() {
   const [currentUserID, setCurrentUserID] = useState(demoUserID);
   const [sessionReady, setSessionReady] = useState(false);
   const [lotTitle, setLotTitle] = useState('青瓷手作茶盏');
+  const [stageItem, setStageItem] = useState<AuctionItem>({
+    title: '青瓷手作茶盏',
+    image_url: '',
+    certificate: '证书待同步',
+    condition: '品相待同步',
+    shipping: '运费以订单为准'
+  });
   const paymentInFlight = useRef(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
@@ -740,6 +758,11 @@ function App() {
     const nextEndAt = snapshot.payload?.end_at ?? snapshot.end_at;
     const nextServerTimeMS = snapshot.payload?.server_time_ms ?? snapshot.server_time_ms;
     if (snapshotAuctionID) setActiveAuctionID(snapshotAuctionID);
+    const snapshotItem = snapshot.payload?.item ?? snapshot.item;
+    if (snapshotItem) {
+      setStageItem((current) => ({ ...current, ...snapshotItem }));
+      if (snapshotItem.title) setLotTitle(snapshotItem.title);
+    }
     if (snapshot.increment_cents != null) setActiveIncrementCents(increment);
     if (nextEndAt) setAuctionEndAt(nextEndAt);
     if (nextServerTimeMS) setServerTimeMS(nextServerTimeMS);
@@ -886,6 +909,11 @@ function App() {
         if (!response.ok || !selectedAuction || cancelled) return;
         setActiveAuctionID(selectedAuction.id);
         setLotTitle(selectedAuction.item?.title ?? selectedAuction.id);
+        setStageItem((current) => ({
+          ...current,
+          ...(selectedAuction.item ?? {}),
+          title: selectedAuction.item?.title ?? current.title ?? selectedAuction.id
+        }));
         const price = selectedAuction.current_price_cents ?? currentPriceRef.current;
         const increment = selectedAuction.increment_cents ?? activeIncrementCents;
         setActiveIncrementCents(increment);
@@ -1220,7 +1248,11 @@ function App() {
     <main className="app-shell">
       <LiveStage
         atmosphereCue={atmosphereCue}
+        chatMessages={chatMessages}
+        connectionPhase={connectionPhase}
         countdownCopy={countdownCopy}
+        currentUserID={currentUserID}
+        item={stageItem}
         lotTitle={lotTitle}
         roomID={roomID}
         scenario={scenario}
@@ -1252,21 +1284,35 @@ function App() {
         orderHistory={orderHistory}
         onRefresh={loadHistory}
       />
-      <ChatPanel
+      {showStateMatrix && (
+        <ChatPanel
+          chatDraft={chatDraft}
+          chatMessages={chatMessages}
+          chatSending={chatSending}
+          currentUserID={currentUserID}
+          onDraftChange={setChatDraft}
+          onSend={sendChat}
+        />
+      )}
+      {!showStateMatrix && (
+        <ChatComposer
         chatDraft={chatDraft}
-        chatMessages={chatMessages}
         chatSending={chatSending}
-        currentUserID={currentUserID}
         onDraftChange={setChatDraft}
         onSend={sendChat}
-      />
+        />
+      )}
     </main>
   );
 }
 
 function LiveStage({
   atmosphereCue,
+  chatMessages,
+  connectionPhase,
   countdownCopy,
+  currentUserID,
+  item,
   lotTitle,
   roomID,
   scenario,
@@ -1274,15 +1320,40 @@ function LiveStage({
   onToggleSound
 }: {
   atmosphereCue: AtmosphereCue | null;
+  chatMessages: ChatMessage[];
+  connectionPhase: ConnectionPhase;
   countdownCopy: string;
+  currentUserID: string;
+  item: AuctionItem;
   lotTitle: string;
   roomID: string;
   scenario: Scenario;
   soundEnabled: boolean;
   onToggleSound: () => void;
 }) {
+  const mediaURL = item.video_poster_url ?? item.videoPosterURL ?? item.image_url ?? item.imageURL ?? '';
+  const proofChips = [
+    { icon: <BadgeCheck size={13} />, label: item.certificate ?? '证书可查' },
+    { icon: <PackageCheck size={13} />, label: item.condition ?? '品相已验' },
+    { icon: <Truck size={13} />, label: item.shipping ?? '包邮保价' },
+    { icon: <ShieldCheck size={13} />, label: '保证金锁定' }
+  ];
+  const visibleChat = chatMessages.slice(-3);
+  const connectionCopy = connectionPhase === 'connected'
+    ? '已连接'
+    : connectionPhase === 'recovering'
+      ? '同步中'
+      : connectionPhase === 'connecting'
+        ? '连接中'
+        : '已断开';
+
   return (
-    <section className="video-stage" aria-label="live-stage">
+    <section
+      className={`video-stage ${mediaURL ? 'has-media' : 'no-media'}`}
+      aria-label="live-stage"
+      data-testid="live-stage"
+      style={mediaURL ? { '--stage-media-url': `url("${mediaURL}")` } as React.CSSProperties : undefined}
+    >
       {atmosphereCue && (
         <div className={`atmosphere-cue ${atmosphereCue.kind}`} role="status" aria-live="polite" key={atmosphereCue.id}>
           <strong>{atmosphereCue.title}</strong>
@@ -1292,7 +1363,7 @@ function LiveStage({
       <div className="video-topbar">
         <span className="live-pill"><Radio size={14} /> LIVE</span>
         <span className="viewer-count">{roomID}</span>
-        <span className="viewer-count">12,486 watching</span>
+        <span className="viewer-count"><Wifi size={13} /> {connectionCopy}</span>
         <button
           className="sound-toggle"
           type="button"
@@ -1302,9 +1373,49 @@ function LiveStage({
           {soundEnabled ? <Bell size={14} /> : <BellOff size={14} />}
         </button>
       </div>
-      <div className="focus-copy">
-        <h1>{lotTitle}</h1>
-        <p>Lot A-102 · {scenario.countdown ?? countdownCopy}</p>
+      <div className="stage-safe-zone">
+        <div className="proof-chip-row" aria-label="product-proof">
+          {proofChips.map((chip) => (
+            <span className="proof-chip" key={chip.label}>{chip.icon}{chip.label}</span>
+          ))}
+        </div>
+        <div className="stage-chat-overlay" data-testid="stage-chat-overlay" aria-label="live-chat-overlay">
+          {visibleChat.length === 0 ? (
+            <span className="stage-chat-empty">等待实时弹幕</span>
+          ) : visibleChat.map((message) => (
+            <span className="stage-chat-line" key={message.id}>
+              <strong>{message.user_id === currentUserID ? '我' : `${message.user_id.slice(0, 2)}**`}</strong>
+              {message.body}
+            </span>
+          ))}
+        </div>
+        <div className="focus-copy">
+          <h1>{lotTitle}</h1>
+          <p>Lot A-102 · {scenario.countdown ?? countdownCopy}</p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ChatComposer({
+  chatDraft,
+  chatSending,
+  onDraftChange,
+  onSend
+}: {
+  chatDraft: string;
+  chatSending: boolean;
+  onDraftChange: (value: string) => void;
+  onSend: () => void;
+}) {
+  return (
+    <section className="chat-composer" data-testid="chat-panel">
+      <div className="chat-input-row">
+        <input aria-label="chat-input" value={chatDraft} onChange={(event) => onDraftChange(event.currentTarget.value)} placeholder="和主播互动" />
+        <button type="button" aria-label="send-chat" disabled={chatSending || !chatDraft.trim()} onClick={onSend}>
+          <Send size={16} />
+        </button>
       </div>
     </section>
   );

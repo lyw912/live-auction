@@ -1,5 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
+const productImageDataURL = 'data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20600%20800%22%3E%3Crect%20width%3D%22600%22%20height%3D%22800%22%20fill%3D%22%231f2f2a%22%2F%3E%3Ccircle%20cx%3D%22300%22%20cy%3D%22288%22%20r%3D%22136%22%20fill%3D%22%23e5f3ef%22%2F%3E%3Cellipse%20cx%3D%22300%22%20cy%3D%22318%22%20rx%3D%22166%22%20ry%3D%2288%22%20fill%3D%22%2310b981%22%2F%3E%3Cpath%20d%3D%22M172%20352c54%2064%20202%2064%20256%200%22%20stroke%3D%22%23d6a84f%22%20stroke-width%3D%2218%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%3Ctext%20x%3D%22300%22%20y%3D%22640%22%20text-anchor%3D%22middle%22%20font-size%3D%2248%22%20font-family%3D%22Arial%22%20fill%3D%22white%22%3ELIVE%20LOT%3C%2Ftext%3E%3C%2Fsvg%3E';
+
 const auctionLive = {
   id: 'auc_live',
   room_id: 'room_main',
@@ -15,7 +17,7 @@ const auctionLive = {
   accepted_bid_count: 18,
   extend_count: 1,
   end_at: '2099-05-22T14:00:00Z',
-  item: { id: 'item_live', title: '青瓷手作茶盏', description: 'visual gate' },
+  item: { id: 'item_live', title: '青瓷手作茶盏', description: 'visual gate', image_url: productImageDataURL, certificate: '中检证书', condition: '无冲线', shipping: '顺丰保价' },
   rule: {
     duration_seconds: 600,
     extend_window_seconds: 10,
@@ -66,7 +68,7 @@ async function mockH5(page: Page) {
           seq: 41,
           end_at: '2099-05-22T14:00:00Z',
           server_time_ms: Date.parse('2099-05-22T13:58:45Z'),
-          item: { title: '青瓷手作茶盏' }
+          item: { title: '青瓷手作茶盏', image_url: productImageDataURL, certificate: '中检证书', condition: '无冲线', shipping: '顺丰保价' }
         }
       ]
     });
@@ -92,7 +94,8 @@ async function mockH5(page: Page) {
           leader_user_masked: '张**',
           current_winner_id: 'user_2',
           end_at: '2099-05-22T14:00:00Z',
-          server_time_ms: Date.parse('2099-05-22T13:58:45Z')
+          server_time_ms: Date.parse('2099-05-22T13:58:45Z'),
+          item: { title: '青瓷手作茶盏', image_url: productImageDataURL, certificate: '中检证书', condition: '无冲线', shipping: '顺丰保价' }
         }
       }
     });

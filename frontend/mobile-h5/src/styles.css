@@ -23,18 +23,16 @@ button {
   background: var(--color-surface-2);
   display: flex;
   flex-direction: column;
+  padding-bottom: var(--safe-area-bottom);
 }
 
 .video-stage {
-  min-height: 44vh;
+  min-height: 54vh;
   padding: 18px;
   color: #fff;
   background:
     linear-gradient(180deg, rgba(8, 15, 12, .12), rgba(8, 15, 12, .74)),
-    radial-gradient(ellipse at 32% 30%, rgba(222, 245, 236, .34) 0 8%, transparent 9%),
-    radial-gradient(ellipse at 47% 44%, rgba(28, 73, 57, .92) 0 12%, transparent 13%),
-    radial-gradient(ellipse at 49% 52%, rgba(12, 36, 30, .95) 0 10%, transparent 11%),
-    linear-gradient(110deg, #233b34 0%, #5a786d 48%, #18241f 100%);
+    linear-gradient(110deg, #263b34 0%, #4d6b5f 48%, #18241f 100%);
   background-size: cover, 180px 120px, 280px 180px, 100% 100%;
   background-position: center;
   display: flex;
@@ -44,7 +42,25 @@ button {
   overflow: hidden;
 }
 
-.video-stage::after {
+.video-stage.has-media {
+  background:
+    linear-gradient(180deg, rgba(5, 10, 9, .18) 0%, rgba(5, 10, 9, .36) 42%, rgba(5, 10, 9, .82) 100%),
+    var(--stage-media-url);
+  background-size: cover;
+  background-position: center;
+}
+
+.video-stage.has-media::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(0, 0, 0, .48), transparent 42%),
+    linear-gradient(0deg, rgba(0, 0, 0, .58), transparent 42%);
+  pointer-events: none;
+}
+
+.video-stage.no-media::after {
   content: "";
   position: absolute;
   right: 22px;
@@ -78,6 +94,7 @@ button {
 .video-topbar {
   justify-content: flex-start;
   flex-wrap: wrap;
+  padding-top: var(--safe-area-top);
 }
 
 .live-pill,
@@ -103,6 +120,65 @@ button {
 
 .viewer-count {
   font-weight: 500;
+}
+
+.stage-safe-zone {
+  min-height: 260px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.proof-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  max-width: min(100%, 360px);
+}
+
+.proof-chip {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: var(--radius-md);
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, .16);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  backdrop-filter: blur(10px);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .34);
+}
+
+.stage-chat-overlay {
+  width: min(100%, 330px);
+  max-height: 102px;
+  display: grid;
+  gap: 6px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.stage-chat-empty,
+.stage-chat-line {
+  width: fit-content;
+  max-width: 100%;
+  min-height: 28px;
+  border-radius: var(--radius-md);
+  padding: 5px 9px;
+  background: rgba(0, 0, 0, .42);
+  color: #fff;
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+  backdrop-filter: blur(8px);
+}
+
+.stage-chat-line strong {
+  margin-right: 6px;
+  color: var(--color-live-cyan);
 }
 
 .atmosphere-cue {
@@ -167,8 +243,11 @@ button {
 
 .focus-copy h1 {
   margin: 0;
+  max-width: 92%;
   font-size: 28px;
   letter-spacing: 0;
+  overflow-wrap: anywhere;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, .42);
 }
 
 .focus-copy p,
@@ -187,6 +266,10 @@ button {
 
 .auction-panel.is-stale {
   border-top: 4px solid var(--color-risk-orange);
+}
+
+.chat-composer {
+  padding: 0 12px 18px;
 }
 
 .state-row h2 {
@@ -573,4 +656,40 @@ button {
 
 .chat-input-row button:disabled {
   background: #aeb9b5;
+}
+
+@media (max-width: 380px) {
+  .video-stage {
+    min-height: 52vh;
+    padding: 14px;
+  }
+
+  .stage-safe-zone {
+    min-height: 232px;
+    gap: 9px;
+  }
+
+  .proof-chip-row {
+    gap: 5px;
+  }
+
+  .proof-chip,
+  .live-pill,
+  .viewer-count,
+  .status-chip,
+  .sound-toggle {
+    font-size: 11px;
+  }
+
+  .stage-chat-overlay {
+    max-height: 82px;
+  }
+
+  .focus-copy h1 {
+    font-size: 24px;
+  }
+
+  .history-grid {
+    grid-template-columns: 1fr;
+  }
 }
