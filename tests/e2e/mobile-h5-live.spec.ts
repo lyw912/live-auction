@@ -27,6 +27,7 @@ test('H5 covers live backend REST, fat-finger confirm, cap SOLD order, payment, 
 
   await expect(page.getByText('WebSocket 已连接 · 状态来自服务端事件')).toBeVisible();
   await expect(page.getByText('¥350.00')).toBeVisible();
+  await expect(page.getByTestId('auction-countdown')).toBeVisible();
   await expect(page.getByTestId('chat-panel').getByText('这件拍品状态不错')).toBeVisible();
   await page.getByLabel('chat-input').fill('live smoke chat');
   await page.getByRole('button', { name: 'send-chat' }).click();

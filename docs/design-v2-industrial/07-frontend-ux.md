@@ -76,6 +76,8 @@ Display:
 - connection state
 - recent events
 
+The PC control surface must keep these fields visible for the selected auction, not only inside the list table. Recent events should be sourced from the host-only flight recorder or an equivalent DB-backed monitor timeline.
+
 Actions:
 
 - start
@@ -105,6 +107,8 @@ Panels:
 - reconnect/snapshot source mix
 
 Every row must link to source data.
+
+For auction-scoped rows, the preferred drilldown is `/api/monitor/auctions/{auction_id}/flight-recorder`, because it ties rules, bids/rejects, auction events, outbox delivery, orders/payment, snapshots and anomalies into one forensic timeline.
 
 ## H5 Room
 
@@ -153,6 +157,13 @@ Every row must link to source data.
 - During recovering, CTA disabled.
 - Snapshot applied removes stale marker.
 - If server returns stale snapshot, keep recovering state and retry after delay.
+
+### Server Time Countdown
+
+- H5 countdown is rendered beside price/status/connection/CTA and is derived from authoritative `end_at` plus `server_time_ms` from snapshot or auction event. If an older detail endpoint lacks `server_time_ms`, the client may use the HTTP `Date` response header as the server-time fallback; it must not use browser wall clock as authority.
+- The local timer may only age the displayed remaining time from the last server timestamp. It must never decide winner, SOLD, ENDED, or CANCELLED.
+- If local display reaches zero before a terminal server event, H5 disables bid CTA, marks syncing/recovering, and fetches a fresh snapshot.
+- Extension copy must come from a server response/event with a later `end_at`; the UI may show an extension pulse/toast but must not invent extension.
 
 ### Chat And Social
 

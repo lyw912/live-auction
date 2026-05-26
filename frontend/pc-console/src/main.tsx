@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Button, Form, Input, InputNumber, Layout, Message, Modal, Space, Table, Tabs, Tag } from '@arco-design/web-react';
 import '@arco-design/web-react/dist/css/arco.css';
-import { Activity, AlertTriangle, ClipboardList, Database, Play, RadioTower, RefreshCw, Square, Upload } from 'lucide-react';
+import { Activity, AlertTriangle, ClipboardList, Clock3, Database, ExternalLink, Play, RadioTower, RefreshCw, Square, Upload, Wifi } from 'lucide-react';
 import './styles.css';
 
 type Room = {
@@ -78,6 +78,10 @@ type MonitorPayload = {
   items: Array<Record<string, unknown>>;
 };
 
+type FlightRecorderPayload = {
+  timeline?: Array<Record<string, unknown>>;
+};
+
 type RuleAPIError = {
   code?: string;
   message?: string;
@@ -99,6 +103,36 @@ function formatCents(cents?: number) {
 function maskUser(userID?: string) {
   if (!userID) return '-';
   return `${userID.slice(0, 2)}**`;
+}
+
+function formatRemaining(endAt?: string, now = Date.now()) {
+  if (!endAt) return '-';
+  const endAtMS = Date.parse(endAt);
+  if (!Number.isFinite(endAtMS)) return '-';
+  const totalSeconds = Math.max(0, Math.ceil((endAtMS - now) / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+function connectionLabel(monitor: Record<string, MonitorPayload>, roomID: string) {
+  const row = monitor.recovery?.items?.find((item) => String(item.room_id ?? '') === roomID) ?? monitor.recovery?.items?.[0];
+  if (!row) return '恢复数据未上报';
+  const reconnects = Number(row.reconnect_count_recent ?? 0);
+  const stale = Number(row.snapshot_stale ?? 0);
+  const slow = Number(row.slow_consumer_disconnects ?? 0);
+  if (slow > 0) return `慢客户端断开 ${slow}`;
+  if (stale > 0) return `snapshot stale ${stale}`;
+  if (reconnects > 0) return `近期重连 ${reconnects}`;
+  return '恢复链路正常';
+}
+
+function rowSourceURL(sourceKey: string, record: Record<string, unknown>) {
+  const auctionID = String(record.auction_id ?? record.aggregate_id ?? record.target_id ?? '');
+  if (auctionID && (sourceKey === 'auction_id' || sourceKey === 'trace_id' || sourceKey === 'outbox_id' || sourceKey === 'job_id' || sourceKey === 'request_id' || sourceKey === 'id')) {
+    return `/api/monitor/auctions/${encodeURIComponent(auctionID)}/flight-recorder?limit=50&timeline_limit=100`;
+  }
+  return '';
 }
 
 function createRuleDraft(auction?: Auction): RuleDraft {
@@ -186,6 +220,7 @@ function App() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [selectedAuctionID, setSelectedAuctionID] = useState('');
   const [monitor, setMonitor] = useState<Record<string, MonitorPayload>>({});
+  const [recentEvents, setRecentEvents] = useState<Array<Record<string, unknown>>>([]);
   const [monitorFilter, setMonitorFilter] = useState({ type: '', auctionID: '', userID: '', traceID: '' });
   const [loading, setLoading] = useState(false);
   const [savingRule, setSavingRule] = useState(false);
@@ -199,6 +234,7 @@ function App() {
   const [cancelReason, setCancelReason] = useState('主播异常取消');
   const [rule, setRule] = useState<RuleDraft>(createRuleDraft());
   const [sessionReady, setSessionReady] = useState(false);
+  const [now, setNow] = useState(Date.now());
   const selectedAuction = useMemo(() => auctions.find((auction) => auction.id === selectedAuctionID) ?? auctions[0], [auctions, selectedAuctionID]);
   const ruleValidation = validateRule(rule);
   const shownSuggestions = ruleValidation.valid ? backendSuggestions : ruleValidation.suggestions;
@@ -264,6 +300,34 @@ function App() {
       setBackendSuggestions([]);
     }
   }, [selectedAuction?.id]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadFlightRecorder = async () => {
+      if (!sessionReady || !selectedAuction?.id) {
+        setRecentEvents([]);
+        return;
+      }
+      try {
+        const response = await fetch(`/api/monitor/auctions/${selectedAuction.id}/flight-recorder?limit=20&timeline_limit=20`);
+        const payload = await readJSON<FlightRecorderPayload>(response);
+        if (!cancelled) {
+          setRecentEvents(response.ok ? (payload.timeline ?? []).slice(0, 6) : []);
+        }
+      } catch {
+        if (!cancelled) setRecentEvents([]);
+      }
+    };
+    void loadFlightRecorder();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedAuction?.id, sessionReady, loading]);
 
   const updateRule = (patch: Partial<RuleDraft>) => {
     setRule((current) => ({ ...current, ...patch }));
@@ -497,6 +561,58 @@ function App() {
           />
         </section>
 
+        {selectedAuction && (
+          <section className="band control-summary" data-testid="auction-control-summary">
+            <div className="section-title">
+              <h2>当前竞拍控制面</h2>
+              <span><Wifi size={16} /> {connectionLabel(monitor, selectedAuction.room_id)}</span>
+            </div>
+            <div className="control-stats">
+              <div>
+                <span>当前价</span>
+                <strong>{formatCents(selectedAuction.current_price_cents)}</strong>
+              </div>
+              <div>
+                <span>领先者</span>
+                <strong>{maskUser(selectedAuction.current_winner_id)}</strong>
+              </div>
+              <div>
+                <span>服务端倒计时</span>
+                <strong><Clock3 size={15} /> {formatRemaining(selectedAuction.end_at, now)}</strong>
+              </div>
+              <div>
+                <span>出价 / 参与</span>
+                <strong>{selectedAuction.accepted_bid_count} / approx</strong>
+              </div>
+              <div>
+                <span>延时次数</span>
+                <strong>{selectedAuction.extend_count} / {selectedAuction.rule.max_extend_count}</strong>
+              </div>
+              <div>
+                <span>状态 / seq</span>
+                <strong>{selectedAuction.status} · {selectedAuction.seq}</strong>
+              </div>
+            </div>
+            <div className="recent-events" data-testid="recent-events">
+              <div className="recent-title">
+                <strong>最近事件</strong>
+                <a href={`/api/monitor/auctions/${encodeURIComponent(selectedAuction.id)}/flight-recorder?limit=50&timeline_limit=100`} target="_blank" rel="noreferrer">
+                  Flight recorder <ExternalLink size={13} />
+                </a>
+              </div>
+              {recentEvents.length === 0 ? (
+                <div className="empty-state compact-empty">暂无最近事件</div>
+              ) : recentEvents.map((event, index) => (
+                <div className="recent-event-row" key={`${String(event.kind ?? event.event_type ?? 'event')}-${index}`}>
+                  <Tag color={String(event.kind ?? event.event_type).includes('anomaly') ? 'red' : 'arcoblue'}>{String(event.kind ?? event.event_type ?? '-')}</Tag>
+                  <span>{String(event.event_type ?? event.status ?? event.result ?? '-')}</span>
+                  <code>{String(event.seq ?? event.trace_id ?? event.outbox_id ?? event.order_id ?? '-')}</code>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
         <section className="band two-column">
           <div className="rule-panel">
             <h2>规则 {selectedAuction ? selectedAuction.id : ''}</h2>
@@ -636,7 +752,15 @@ function MonitorTable({ payload, empty, icon, sourceKey }: { payload?: MonitorPa
         {
           title: 'source',
           dataIndex: sourceKey,
-          render: (value) => <Tag color="arcoblue">{String(value ?? '-')}</Tag>
+          render: (value, record) => {
+            const sourceURL = rowSourceURL(sourceKey, record);
+            return sourceURL ? (
+              <a className="source-link" href={sourceURL} target="_blank" rel="noreferrer">
+                <Tag color="arcoblue">{String(value ?? '-')}</Tag>
+                <ExternalLink size={13} />
+              </a>
+            ) : <Tag color="arcoblue">{String(value ?? '-')}</Tag>;
+          }
         },
         ...keys.filter((key) => key !== sourceKey).map((key) => ({
           title: key,

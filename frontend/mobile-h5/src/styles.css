@@ -154,6 +154,32 @@ button {
   font-size: 13px;
 }
 
+.countdown-row {
+  min-height: 38px;
+  margin-top: 8px;
+  border: 1px solid #d7e0dd;
+  border-radius: 8px;
+  background: #f8fbfa;
+  color: #233b34;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  font-weight: 800;
+}
+
+.countdown-row span {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow-wrap: anywhere;
+}
+
+.countdown-row strong {
+  flex: 0 0 auto;
+  color: #a44905;
+  font-size: 12px;
+}
+
 .bid-stepper {
   height: 48px;
   margin-top: 10px;

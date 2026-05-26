@@ -4,6 +4,8 @@ test('PC console covers live backend host workflow and diagnostics', async ({ pa
   await page.goto('/');
   await expect(page.locator('.arco-table').first().getByText('P0 Live Smoke Item')).toBeVisible();
   await expect(page.getByTestId('diagnostics')).toBeVisible();
+  await expect(page.getByTestId('auction-control-summary')).toBeVisible();
+  await expect(page.getByTestId('recent-events')).toBeVisible();
   await page.getByLabel('room-selector').selectOption('room_side');
   await expect(page.locator('.arco-table').first().getByText('Side Room Smoke Item')).toBeVisible();
 

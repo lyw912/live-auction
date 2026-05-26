@@ -67,6 +67,15 @@ test.beforeEach(async ({ page }) => {
   await page.route('/api/monitor/outbox', async (route) => route.fulfill({
     json: { items: [{ outbox_id: 7, aggregate_id: 'auc_live', status: 'PENDING', attempts: 0, lag_ms: 1200 }] }
   }));
+  await page.route('/api/monitor/outbox/watermarks', async (route) => route.fulfill({
+    json: { items: [{ shard_id: 0, ack_pending_count: 1, oldest_ready_age_ms: 1200 }] }
+  }));
+  await page.route('/api/monitor/snapshots', async (route) => route.fulfill({
+    json: { items: [{ request_id: 'snap_1', auction_id: 'auc_live', source: 'db', status: 'COMPLETED', stale: false }] }
+  }));
+  await page.route('/api/monitor/signals', async (route) => route.fulfill({
+    json: { items: [{ id: 1, signal_type: 'force_snapshot_rebuild', target_type: 'auction', target_id: 'auc_live', status: 'SUCCEEDED' }] }
+  }));
   await page.route('/api/monitor/scheduler', async (route) => route.fulfill({
     json: { items: [{ job_id: 'job_1', job_type: 'END_AUCTION', target_id: 'auc_live', status: 'PENDING' }] }
   }));
@@ -75,6 +84,17 @@ test.beforeEach(async ({ page }) => {
   }));
   await page.route('/api/monitor/recovery', async (route) => route.fulfill({
     json: { items: [{ room_id: 'room_main', reconnect_count_recent: 3, history_recovered: 2, snapshot_recovered: 1, snapshot_from_db: 1, snapshot_stale: 0, slow_consumer_disconnects: 0 }] }
+  }));
+  await page.route('/api/monitor/auctions/auc_live/flight-recorder?limit=20&timeline_limit=20', async (route) => route.fulfill({
+    json: {
+      timeline: [
+        { kind: 'auction_event', event_type: 'bid_accepted', seq: 42, trace_id: 'tr_bid_42' },
+        { kind: 'outbox', status: 'PUBLISHED', outbox_id: 7, seq: 42 }
+      ]
+    }
+  }));
+  await page.route('/api/monitor/auctions/auc_next/flight-recorder?limit=20&timeline_limit=20', async (route) => route.fulfill({
+    json: { timeline: [] }
   }));
 });
 
@@ -85,10 +105,18 @@ test('PC console renders live API auctions, orders, and expanded diagnostic pane
   await expect(page.getByText('ord_pending')).toBeVisible();
   await expect(page.getByTestId('diagnostics')).toBeVisible();
   await expect(page.getByLabel('monitor-anomaly-type')).toBeVisible();
+  await expect(page.getByTestId('auction-control-summary')).toBeVisible();
+  await expect(page.getByTestId('auction-control-summary').getByText('当前价')).toBeVisible();
+  await expect(page.getByTestId('auction-control-summary').getByText(/服务端倒计时/)).toBeVisible();
+  await expect(page.getByTestId('auction-control-summary').getByText('延时次数')).toBeVisible();
+  await expect(page.getByTestId('auction-control-summary').getByText(/近期重连 3/)).toBeVisible();
+  await expect(page.getByTestId('recent-events').getByText('bid_accepted')).toBeVisible();
+  await expect(page.getByRole('link', { name: /Flight recorder/ })).toHaveAttribute('href', /flight-recorder/);
 
   await page.getByRole('tab', { name: 'Rejects' }).click();
   await expect(page.getByText('BID_TOO_LOW')).toBeVisible();
   await expect(page.getByText('tr_reject')).toBeVisible();
+  await expect(page.getByLabel('Rejects').getByRole('link').first()).toHaveAttribute('href', /flight-recorder/);
 
   await page.getByRole('tab', { name: 'Recovery' }).click();
   await expect(page.getByLabel('Recovery').getByText('room_main')).toBeVisible();

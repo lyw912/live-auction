@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { AlertTriangle, CheckCircle2, ChevronUp, CreditCard, History, MessageCircle, Radio, RefreshCw, Send, Wifi, WifiOff } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronUp, Clock3, CreditCard, History, MessageCircle, Radio, RefreshCw, Send, Wifi, WifiOff } from 'lucide-react';
 import './styles.css';
 
 type AuctionState =
@@ -27,6 +27,7 @@ type Scenario = {
   feedback: string;
   cta: string;
   ctaDisabled: boolean;
+  countdown?: string;
   stale?: boolean;
   pending?: boolean;
   rejected?: boolean;
@@ -45,6 +46,8 @@ type BidResponse = {
   seq?: number;
   current_price_cents?: number;
   current_winner_id?: string;
+  end_at?: string;
+  server_time_ms?: number;
   reject_reason?: string | null;
   code?: string;
   confirm_token?: string;
@@ -56,10 +59,14 @@ type AuctionRealtimeEvent = {
   auction_id: string;
   event_type: string;
   seq?: number;
+  end_at?: string;
+  server_time_ms?: number;
   payload?: {
     status?: string;
     current_price_cents?: number;
     amount_cents?: number;
+    end_at?: string;
+    server_time_ms?: number;
     order_id?: string;
     leader_user_masked?: string;
     current_winner_id?: string;
@@ -77,6 +84,8 @@ type SnapshotResponse = {
   current_price_cents?: number;
   current_winner_id?: string;
   increment_cents?: number;
+  end_at?: string;
+  server_time_ms?: number;
   event_type?: string;
   seq: number;
   source?: string;
@@ -86,6 +95,8 @@ type SnapshotResponse = {
     current_price_cents?: number;
     current_winner_id?: string;
     leader_user_masked?: string;
+    end_at?: string;
+    server_time_ms?: number;
     reason?: string;
   };
 };
@@ -112,6 +123,8 @@ type AuctionSummary = {
   current_winner_id?: string;
   increment_cents?: number;
   seq?: number;
+  end_at?: string;
+  server_time_ms?: number;
   item?: {
     title?: string;
   };
@@ -128,23 +141,48 @@ type AuthUser = {
 const demoUserID = 'user_1';
 
 const scenarios: Scenario[] = [
-  { key: 'scheduled', title: '即将开拍', status: 'SCHEDULED', price: '¥100.00', leader: '暂无领先', feedback: '19:58 开始', cta: '等待开拍', ctaDisabled: true },
-  { key: 'active_empty', title: '首拍', status: 'ACTIVE', price: '¥100.00', leader: '暂无领先', feedback: '最低 ¥150.00', cta: '出价 ¥150.00', ctaDisabled: false },
-  { key: 'active_bids', title: '竞价中', status: 'ACTIVE', price: '¥350.00', leader: '张** 领先', feedback: '下一口 ¥400.00', cta: '出价 ¥400.00', ctaDisabled: false },
-  { key: 'self_leading', title: '领先中', status: 'ACTIVE', price: '¥400.00', leader: '你已领先', feedback: '等待其他用户出价', cta: '已领先', ctaDisabled: true },
-  { key: 'pending', title: '提交中', status: 'ACTIVE', price: '¥400.00', leader: '李** 领先', feedback: '等待服务端确认', cta: '确认中', ctaDisabled: true, pending: true },
-  { key: 'rejected', title: '被拒绝', status: 'ACTIVE', price: '¥400.00', leader: '李** 领先', feedback: '请按加价幅度出价', cta: '出价 ¥450.00', ctaDisabled: false, rejected: true },
-  { key: 'extended', title: '已延时', status: 'ACTIVE', price: '¥450.00', leader: '王** 领先', feedback: '已延时 10 秒', cta: '出价 ¥500.00', ctaDisabled: false },
-  { key: 'recovering', title: '恢复中', status: 'RECOVERING', price: '¥450.00', leader: '同步中', feedback: '正在同步权威状态', cta: '同步中', ctaDisabled: true, stale: true },
-  { key: 'disconnected', title: '已断开', status: 'DISCONNECTED', price: '¥450.00', leader: '离线', feedback: '重连中', cta: '重连中', ctaDisabled: true, stale: true },
-  { key: 'sold_winner', title: '成交', status: 'SOLD', price: '¥600.00', leader: '你已拍中', feedback: '订单待支付', cta: '去支付', ctaDisabled: false, winner: true, sold: true },
-  { key: 'sold_loser', title: '已成交', status: 'SOLD', price: '¥600.00', leader: '赵** 拍中', feedback: '本场已结束', cta: '已结束', ctaDisabled: true, sold: true },
-  { key: 'ended', title: '流拍', status: 'ENDED', price: '¥100.00', leader: '无成交', feedback: '无人出价', cta: '已结束', ctaDisabled: true },
-  { key: 'cancelled', title: '已取消', status: 'CANCELLED', price: '¥350.00', leader: '取消前价格', feedback: '主播已取消', cta: '已取消', ctaDisabled: true }
+  { key: 'scheduled', title: '即将开拍', status: 'SCHEDULED', price: '¥100.00', leader: '暂无领先', feedback: '19:58 开始', countdown: '距开拍 12:00', cta: '等待开拍', ctaDisabled: true },
+  { key: 'active_empty', title: '首拍', status: 'ACTIVE', price: '¥100.00', leader: '暂无领先', feedback: '最低 ¥150.00', countdown: '剩余 10:00', cta: '出价 ¥150.00', ctaDisabled: false },
+  { key: 'active_bids', title: '竞价中', status: 'ACTIVE', price: '¥350.00', leader: '张** 领先', feedback: '下一口 ¥400.00', countdown: '剩余 02:34', cta: '出价 ¥400.00', ctaDisabled: false },
+  { key: 'self_leading', title: '领先中', status: 'ACTIVE', price: '¥400.00', leader: '你已领先', feedback: '等待其他用户出价', countdown: '剩余 01:18', cta: '已领先', ctaDisabled: true },
+  { key: 'pending', title: '提交中', status: 'ACTIVE', price: '¥400.00', leader: '李** 领先', feedback: '等待服务端确认', countdown: '剩余 01:08', cta: '确认中', ctaDisabled: true, pending: true },
+  { key: 'rejected', title: '被拒绝', status: 'ACTIVE', price: '¥400.00', leader: '李** 领先', feedback: '请按加价幅度出价', countdown: '剩余 00:58', cta: '出价 ¥450.00', ctaDisabled: false, rejected: true },
+  { key: 'extended', title: '已延时', status: 'ACTIVE', price: '¥450.00', leader: '王** 领先', feedback: '已延时 10 秒', countdown: '延时后 00:20', cta: '出价 ¥500.00', ctaDisabled: false },
+  { key: 'recovering', title: '恢复中', status: 'RECOVERING', price: '¥450.00', leader: '同步中', feedback: '正在同步权威状态', countdown: '剩余时间待同步', cta: '同步中', ctaDisabled: true, stale: true },
+  { key: 'disconnected', title: '已断开', status: 'DISCONNECTED', price: '¥450.00', leader: '离线', feedback: '重连中', countdown: '剩余时间已过期', cta: '重连中', ctaDisabled: true, stale: true },
+  { key: 'sold_winner', title: '成交', status: 'SOLD', price: '¥600.00', leader: '你已拍中', feedback: '订单待支付', countdown: '支付倒计时同步中', cta: '去支付', ctaDisabled: false, winner: true, sold: true },
+  { key: 'sold_loser', title: '已成交', status: 'SOLD', price: '¥600.00', leader: '赵** 拍中', feedback: '本场已结束', countdown: '已落锤', cta: '已结束', ctaDisabled: true, sold: true },
+  { key: 'ended', title: '流拍', status: 'ENDED', price: '¥100.00', leader: '无成交', feedback: '无人出价', countdown: '已结束', cta: '已结束', ctaDisabled: true },
+  { key: 'cancelled', title: '已取消', status: 'CANCELLED', price: '¥350.00', leader: '取消前价格', feedback: '主播已取消', countdown: '已取消', cta: '已取消', ctaDisabled: true }
 ];
 
 function formatCents(cents: number) {
   return `¥${(cents / 100).toFixed(2)}`;
+}
+
+function formatRemaining(ms: number) {
+  const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+function deriveCountdown(endAt: string, serverTimeMS: number, nowMS: number, terminal: boolean, stale: boolean, extended: boolean) {
+  if (terminal) return '已结束';
+  if (!endAt || serverTimeMS <= 0) return stale ? '剩余时间待同步' : '等待服务端时间';
+  const endAtMS = Date.parse(endAt);
+  if (!Number.isFinite(endAtMS)) return '等待服务端时间';
+  const elapsed = Math.max(0, nowMS - serverTimeMS);
+  const remaining = endAtMS - serverTimeMS - elapsed;
+  if (remaining <= 0) return stale ? '本地到零，正在同步' : '到点同步中';
+  return `${extended ? '延时后' : '剩余'} ${formatRemaining(remaining)}`;
+}
+
+function isCountdownExpired(endAt: string, serverTimeMS: number, nowMS: number) {
+  if (!endAt || serverTimeMS <= 0) return false;
+  const endAtMS = Date.parse(endAt);
+  if (!Number.isFinite(endAtMS)) return false;
+  return endAtMS - serverTimeMS - Math.max(0, nowMS - serverTimeMS) <= 0;
 }
 
 function createClientBidID() {
@@ -160,6 +198,13 @@ async function readJSON<T>(response: Response): Promise<T | null> {
   } catch {
     return null;
   }
+}
+
+function responseServerTimeMS(response: Response) {
+  const dateHeader = response.headers.get('date');
+  if (!dateHeader) return 0;
+  const parsed = Date.parse(dateHeader);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 async function ensureDemoSession(account: 'host' | 'user') {
@@ -244,6 +289,10 @@ function App() {
   const [payableOrderAmountCents, setPayableOrderAmountCents] = useState(0);
   const [terminalPriceCents, setTerminalPriceCents] = useState(0);
   const [terminalWinnerID, setTerminalWinnerID] = useState('');
+  const [auctionEndAt, setAuctionEndAt] = useState('');
+  const [serverTimeMS, setServerTimeMS] = useState(0);
+  const [nowMS, setNowMS] = useState(Date.now());
+  const [extensionNotice, setExtensionNotice] = useState('');
   const [currentUserID, setCurrentUserID] = useState(demoUserID);
   const [sessionReady, setSessionReady] = useState(false);
   const [lotTitle, setLotTitle] = useState('青瓷手作茶盏');
@@ -255,6 +304,8 @@ function App() {
   const leaderMaskedRef = useRef(leaderMasked);
   const activeAuctionIDRef = useRef(activeAuctionID);
   const activeIncrementCentsRef = useRef(activeIncrementCents);
+  const auctionEndAtRef = useRef(auctionEndAt);
+  const serverTimeMSRef = useRef(serverTimeMS);
 
   useEffect(() => {
     lastSeqRef.current = lastSeq;
@@ -275,6 +326,31 @@ function App() {
   useEffect(() => {
     activeIncrementCentsRef.current = activeIncrementCents;
   }, [activeIncrementCents]);
+
+  useEffect(() => {
+    auctionEndAtRef.current = auctionEndAt;
+  }, [auctionEndAt]);
+
+  useEffect(() => {
+    serverTimeMSRef.current = serverTimeMS;
+  }, [serverTimeMS]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMS(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const countdownCopy = useMemo(() => {
+    const stale = connectionPhase === 'disconnected' || recoveryPhase === 'recovering' || !activeAuctionID;
+    const terminal = selected === 'sold_winner' || selected === 'sold_loser' || selected === 'ended' || selected === 'cancelled';
+    return deriveCountdown(auctionEndAt, serverTimeMS, nowMS, terminal, stale, Boolean(extensionNotice));
+  }, [activeAuctionID, auctionEndAt, connectionPhase, extensionNotice, nowMS, recoveryPhase, selected, serverTimeMS]);
+  const countdownExpired = useMemo(() => (
+    selected === 'active_bids' &&
+    connectionPhase === 'connected' &&
+    recoveryPhase === 'idle' &&
+    isCountdownExpired(auctionEndAt, serverTimeMS, nowMS)
+  ), [auctionEndAt, connectionPhase, nowMS, recoveryPhase, selected, serverTimeMS]);
 
   useEffect(() => {
     let cancelled = false;
@@ -307,6 +383,7 @@ function App() {
           price: soldPrice,
           leader: '你已拍中',
           feedback: '等待服务端确认支付',
+          countdown: '支付确认中',
           cta: '支付中',
           ctaDisabled: true,
           winner: true,
@@ -321,6 +398,7 @@ function App() {
           price: soldPrice,
           leader: '订单已支付',
           feedback: '保证金已处理',
+          countdown: '已支付',
           cta: '已支付',
           ctaDisabled: true,
           winner: true,
@@ -335,6 +413,7 @@ function App() {
           price: soldPrice,
           leader: '你已拍中',
           feedback: '支付未确认，请重试',
+          countdown: '订单仍待支付',
           cta: '重新支付',
           ctaDisabled: false,
           winner: true,
@@ -349,6 +428,7 @@ function App() {
           price: soldPrice,
           leader: '支付窗口关闭',
           feedback: '订单已超时',
+          countdown: '订单已超时',
           cta: '已超时',
           ctaDisabled: true,
           winner: true,
@@ -362,6 +442,7 @@ function App() {
         price: soldPrice,
         leader: '你已拍中',
         feedback: payableOrderID ? '订单待支付' : '正在同步订单',
+        countdown: payableOrderID ? '支付倒计时以订单为准' : '订单同步中',
         cta: payableOrderID ? '去支付' : '同步订单中',
         ctaDisabled: !payableOrderID,
         winner: true,
@@ -376,6 +457,7 @@ function App() {
         price: formatCents(terminalPriceCents || currentPriceCents),
         leader: terminalWinnerID ? `${terminalWinnerID.slice(0, 2)}** 拍中` : '已拍出',
         feedback: '本场已结束',
+        countdown: '已落锤',
         cta: '已结束',
         ctaDisabled: true,
         sold: true
@@ -392,6 +474,7 @@ function App() {
         price: formatCents(currentPriceCents),
         leader: '同步中',
         feedback: '正在读取当前拍卖',
+        countdown: '剩余时间待同步',
         cta: '同步中',
         ctaDisabled: true,
         stale: true
@@ -405,6 +488,7 @@ function App() {
         price: formatCents(currentPriceCents),
         leader: '重连中',
         feedback: '正在重新连接',
+        countdown: countdownCopy,
         cta: '重连中',
         ctaDisabled: true,
         stale: true
@@ -418,6 +502,7 @@ function App() {
         price: formatCents(currentPriceCents),
         leader: '同步中',
         feedback: '正在同步权威状态',
+        countdown: countdownCopy,
         cta: '同步中',
         ctaDisabled: true,
         stale: true
@@ -431,6 +516,7 @@ function App() {
         price: formatCents(currentPriceCents),
         leader: `${leaderMasked} 领先`,
         feedback: '等待服务端确认',
+        countdown: countdownCopy,
         cta: '确认中',
         ctaDisabled: true,
         pending: true
@@ -444,6 +530,7 @@ function App() {
         price: formatCents(currentPriceCents),
         leader: `${leaderMasked} 领先`,
         feedback: '等待服务端确认高额出价',
+        countdown: countdownCopy,
         cta: '确认中',
         ctaDisabled: true,
         pending: true
@@ -457,6 +544,7 @@ function App() {
         price: formatCents(currentPriceCents),
         leader: `${leaderMasked} 领先`,
         feedback: `确认 ${formatCents(confirmAmountCents)} 出价`,
+        countdown: countdownCopy,
         cta: '确认高额出价',
         ctaDisabled: false
       };
@@ -469,6 +557,7 @@ function App() {
         price: formatCents(currentPriceCents),
         leader: '你已领先',
         feedback: `服务端确认 seq ${lastSeq}`,
+        countdown: countdownCopy,
         cta: '已领先',
         ctaDisabled: true
       };
@@ -480,9 +569,10 @@ function App() {
         status: 'ACTIVE',
         price: formatCents(currentPriceCents),
         leader: `${leaderMasked} 领先`,
-        feedback: bidFeedback,
-        cta: `出价 ${formatCents(nextBidCents)}`,
-        ctaDisabled: false,
+        feedback: countdownExpired ? '到点同步服务端结果' : bidFeedback,
+        countdown: countdownCopy,
+        cta: countdownExpired ? '同步中' : `出价 ${formatCents(nextBidCents)}`,
+        ctaDisabled: countdownExpired,
         rejected: true
       };
     }
@@ -492,17 +582,24 @@ function App() {
       status: 'ACTIVE',
       price: formatCents(currentPriceCents),
       leader: `${leaderMasked} 领先`,
-      feedback: bidFeedback,
-      cta: `出价 ${formatCents(nextBidCents)}`,
-      ctaDisabled: false
+      feedback: countdownExpired ? '到点同步服务端结果' : bidFeedback,
+      countdown: countdownCopy,
+      cta: countdownExpired ? '同步中' : `出价 ${formatCents(nextBidCents)}`,
+      ctaDisabled: countdownExpired
     };
-  }, [activeAuctionID, bidFeedback, bidPhase, confirmAmountCents, connectionPhase, currentPriceCents, lastSeq, leaderMasked, nextBidCents, payableOrderAmountCents, payableOrderID, paymentPhase, recoveryPhase, selected, terminalPriceCents, terminalWinnerID]);
+  }, [activeAuctionID, bidFeedback, bidPhase, confirmAmountCents, connectionPhase, countdownCopy, countdownExpired, currentPriceCents, lastSeq, leaderMasked, nextBidCents, payableOrderAmountCents, payableOrderID, paymentPhase, recoveryPhase, selected, terminalPriceCents, terminalWinnerID]);
 
   const applyAcceptedBid = (payload: BidResponse) => {
     const acceptedPrice = payload.current_price_cents ?? currentPriceCents;
     setCurrentPriceCents(acceptedPrice);
     setNextBidCents(acceptedPrice + activeIncrementCents);
     setLastSeq(payload.seq ?? lastSeq);
+    if (payload.end_at) setAuctionEndAt(payload.end_at);
+    if (payload.server_time_ms) setServerTimeMS(payload.server_time_ms);
+    if (payload.result === 'ACCEPTED_EXTENDED') {
+      setExtensionNotice('服务端已延时');
+      setBidFeedback(`服务端已延时 seq ${payload.seq ?? lastSeq}`);
+    }
     setConfirmToken('');
     setConfirmIdempotencyKey('');
     setConfirmAmountCents(0);
@@ -540,8 +637,12 @@ function App() {
     const price = snapshot.payload?.current_price_cents ?? snapshot.current_price_cents ?? currentPriceCents;
     const increment = snapshot.increment_cents ?? activeIncrementCents;
     const snapshotAuctionID = snapshot.auction_id ?? snapshot.id;
+    const nextEndAt = snapshot.payload?.end_at ?? snapshot.end_at;
+    const nextServerTimeMS = snapshot.payload?.server_time_ms ?? snapshot.server_time_ms;
     if (snapshotAuctionID) setActiveAuctionID(snapshotAuctionID);
     if (snapshot.increment_cents != null) setActiveIncrementCents(increment);
+    if (nextEndAt) setAuctionEndAt(nextEndAt);
+    if (nextServerTimeMS) setServerTimeMS(nextServerTimeMS);
     setCurrentPriceCents(price);
     setNextBidCents(price + increment);
     setLastSeq(snapshot.seq);
@@ -578,6 +679,9 @@ function App() {
         setBidFeedback('snapshot stale，继续同步');
         return;
       }
+      if (!snapshot.server_time_ms && !snapshot.payload?.server_time_ms) {
+        snapshot.server_time_ms = responseServerTimeMS(response);
+      }
       applySnapshot(snapshot);
       setRecoveryPhase('idle');
       setConnectionPhase('connected');
@@ -585,6 +689,12 @@ function App() {
       setBidFeedback('snapshot unavailable，继续同步');
     }
   };
+
+  useEffect(() => {
+    if (!countdownExpired) return;
+    setBidFeedback('本地倒计时到零，正在同步服务端结果');
+    void recoverFromSnapshot();
+  }, [countdownExpired]);
 
   const handleRealtimeEvent = (detail: AuctionRealtimeEvent) => {
     if (!detail || detail.auction_id !== activeAuctionIDRef.current) return;
@@ -596,11 +706,21 @@ function App() {
     if (detail.seq == null || detail.seq <= currentSeq) return;
     const price = detail.payload?.current_price_cents ?? detail.payload?.amount_cents ?? currentPriceRef.current;
     const increment = activeIncrementCentsRef.current;
+    const nextEndAt = detail.payload?.end_at ?? detail.end_at;
+    const nextServerTimeMS = detail.payload?.server_time_ms ?? detail.server_time_ms;
     setCurrentPriceCents(price);
     setNextBidCents(price + increment);
     setLastSeq(detail.seq);
+    if (nextEndAt) setAuctionEndAt(nextEndAt);
+    if (nextServerTimeMS) setServerTimeMS(nextServerTimeMS);
     setLeaderMasked(detail.payload?.leader_user_masked ?? leaderMaskedRef.current);
-    setBidFeedback(`event seq ${detail.seq}`);
+    const wasExtended = Boolean(nextEndAt && auctionEndAtRef.current && Date.parse(nextEndAt) > Date.parse(auctionEndAtRef.current));
+    if (wasExtended) {
+      setExtensionNotice('服务端已延时');
+      setBidFeedback(`服务端已延时 seq ${detail.seq}`);
+    } else {
+      setBidFeedback(`event seq ${detail.seq}`);
+    }
     if (detail.event_type === 'auction_sold') {
       const winnerID = detail.payload?.current_winner_id ?? detail.payload?.user_id ?? '';
       setTerminalPriceCents(price);
@@ -662,7 +782,21 @@ function App() {
         setCurrentPriceCents(price);
         setNextBidCents(price + increment);
         setLastSeq(selectedAuction.seq ?? lastSeqRef.current);
+        setAuctionEndAt(selectedAuction.end_at ?? '');
+        setServerTimeMS(selectedAuction.server_time_ms ?? 0);
         setBidFeedback(`auction ${selectedAuction.id}`);
+        try {
+          const snapshotResponse = await fetch(`/api/auctions/${selectedAuction.id}`);
+          const snapshot = await readJSON<SnapshotResponse>(snapshotResponse);
+          if (snapshotResponse.ok && snapshot && !snapshot.stale) {
+            if (!snapshot.server_time_ms && !snapshot.payload?.server_time_ms) {
+              snapshot.server_time_ms = responseServerTimeMS(snapshotResponse);
+            }
+            applySnapshot(snapshot);
+          }
+        } catch {
+          setBidFeedback(`auction ${selectedAuction.id}`);
+        }
       } catch {
         setBidFeedback('auction list unavailable');
       }
@@ -967,7 +1101,7 @@ function App() {
         </div>
         <div className="focus-copy">
           <h1>{lotTitle}</h1>
-          <p>Lot A-102 · 22:00 结束</p>
+          <p>Lot A-102 · {scenario.countdown ?? countdownCopy}</p>
         </div>
       </section>
 
@@ -986,6 +1120,11 @@ function App() {
         <div className="signal-row">
           {scenario.stale || connectionPhase === 'disconnected' ? <WifiOff size={16} /> : <Wifi size={16} />}
           <span>{scenario.stale ? '状态可能已过期' : connectionPhase === 'connected' ? 'WebSocket 已连接 · 状态来自服务端事件' : 'WebSocket 连接中 · 状态来自服务端事件'}</span>
+        </div>
+        <div className="countdown-row" data-testid="auction-countdown">
+          <Clock3 size={16} />
+          <span>{scenario.countdown ?? countdownCopy}</span>
+          {extensionNotice && !scenario.sold && <strong>{extensionNotice}</strong>}
         </div>
         <div className="bid-stepper">
           <button type="button" aria-label="decrease" onClick={decreaseBidAmount}>-</button>

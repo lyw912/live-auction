@@ -17,11 +17,38 @@ test.beforeEach(async ({ page }) => {
           current_price_cents: 35000,
           increment_cents: 5000,
           seq: 41,
+          end_at: '2099-05-22T14:00:00Z',
           item: {
             title: '青瓷手作茶盏'
           }
         }
       ]
+    });
+  });
+  await page.route('/api/auctions/auc_live', async (route) => {
+    await route.fulfill({
+      json: {
+        event_type: 'snapshot',
+        auction_id: 'auc_live',
+        id: 'auc_live',
+        status: 'ACTIVE',
+        seq: 41,
+        source: 'db',
+        stale: false,
+        current_price_cents: 35000,
+        increment_cents: 5000,
+        current_winner_id: 'user_2',
+        end_at: '2099-05-22T14:00:00Z',
+        server_time_ms: Date.parse('2099-05-22T13:58:45Z'),
+        payload: {
+          status: 'ACTIVE',
+          current_price_cents: 35000,
+          leader_user_masked: '张**',
+          current_winner_id: 'user_2',
+          end_at: '2099-05-22T14:00:00Z',
+          server_time_ms: Date.parse('2099-05-22T13:58:45Z')
+        }
+      }
     });
   });
   await page.route('/api/users/me/orders', async (route) => {
@@ -131,6 +158,7 @@ test('H5 disables bid CTA for unsafe states and keeps text inside controls', asy
   await page.getByRole('button', { name: '提交中' }).click();
   await expect(page.getByText('等待服务端确认')).toBeVisible();
   await expect(page.getByText('状态来自服务端事件')).toBeVisible();
+  await expect(page.getByTestId('auction-countdown')).toBeVisible();
 
   const buttons = await page.locator('button').all();
   for (const button of buttons) {
@@ -219,6 +247,8 @@ test('H5 bid stays pending until authoritative accepted response', async ({ page
           seq: 42,
           current_price_cents: 40000,
           current_winner_id: 'user_1',
+          end_at: '2099-05-22T14:00:00Z',
+          server_time_ms: Date.parse('2099-05-22T13:59:00Z'),
           reject_reason: null
         }
       });
@@ -298,6 +328,8 @@ test('H5 fat-finger confirm waits for confirm API before accepted UI', async ({ 
           seq: 42,
           current_price_cents: 90000,
           current_winner_id: 'user_1',
+          end_at: '2099-05-22T14:00:00Z',
+          server_time_ms: Date.parse('2099-05-22T13:59:00Z'),
           reject_reason: null
         }
       });
@@ -383,11 +415,15 @@ test('H5 seq gap enters recovering and resumes from fresh snapshot', async ({ pa
           event_type: 'snapshot',
           auction_id: 'auc_live',
           seq: 44,
+          end_at: '2099-05-22T14:00:10Z',
+          server_time_ms: Date.parse('2099-05-22T13:59:50Z'),
           source: 'db',
           stale: false,
           payload: {
             current_price_cents: 45000,
-            leader_user_masked: '王**'
+            leader_user_masked: '王**',
+            end_at: '2099-05-22T14:00:10Z',
+            server_time_ms: Date.parse('2099-05-22T13:59:50Z')
           }
         }
       });
@@ -402,9 +438,13 @@ test('H5 seq gap enters recovering and resumes from fresh snapshot', async ({ pa
         auction_id: 'auc_live',
         event_type: 'bid_accepted',
         seq: 44,
+        end_at: '2099-05-22T14:00:10Z',
+        server_time_ms: Date.parse('2099-05-22T13:59:50Z'),
         payload: {
           current_price_cents: 45000,
-          leader_user_masked: '王**'
+          leader_user_masked: '王**',
+          end_at: '2099-05-22T14:00:10Z',
+          server_time_ms: Date.parse('2099-05-22T13:59:50Z')
         }
       }
     }));
@@ -419,6 +459,7 @@ test('H5 seq gap enters recovering and resumes from fresh snapshot', async ({ pa
   await expect(page.getByText('snapshot db seq 44')).toBeVisible();
   await expect(page.getByText('¥450.00')).toBeVisible();
   await expect(page.getByText('王** 领先')).toBeVisible();
+  await expect(page.getByTestId('auction-countdown')).toHaveText(/延时后|剩余/);
   await expect(page.getByTestId('bid-cta')).toBeEnabled();
 });
 
@@ -544,6 +585,16 @@ test('H5 server terminal events drive sold, ended, and cancelled states', async 
   });
   await expect(page.getByLabel('auction-state').locator('.eyebrow')).toHaveText('已取消');
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
+});
+
+test('H5 live panel keeps server countdown visible with status connection and CTA', async ({ page }) => {
+  await page.goto('/?stateMatrix=1');
+  await page.getByRole('button', { name: '竞价中' }).click();
+
+  await expect(page.getByLabel('auction-state').getByText('ACTIVE')).toBeVisible();
+  await expect(page.getByText('WebSocket 已连接 · 状态来自服务端事件')).toBeVisible();
+  await expect(page.getByTestId('auction-countdown')).toHaveText(/剩余|延时后/);
+  await expect(page.getByTestId('bid-cta')).toBeEnabled();
 });
 
 test('H5 order realtime events update winner payment state', async ({ page }) => {
