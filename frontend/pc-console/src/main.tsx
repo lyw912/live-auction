@@ -82,6 +82,29 @@ type FlightRecorderPayload = {
   timeline?: Array<Record<string, unknown>>;
 };
 
+type HostPrompt = {
+  id: string;
+  type: string;
+  severity: string;
+  title: string;
+  body: string;
+  action: string;
+  source: string;
+  auction_id: string;
+  room_id: string;
+  event_seq?: number;
+  generated_at: string;
+  window_seconds: number;
+  metric_value?: number;
+  metric_label?: string;
+  reference_price_cents?: number;
+  expires_at?: string;
+};
+
+type HostPromptsPayload = {
+  prompts?: HostPrompt[];
+};
+
 type RuleAPIError = {
   code?: string;
   message?: string;
@@ -247,6 +270,11 @@ async function readJSON<T>(response: Response): Promise<T> {
   return await response.json() as T;
 }
 
+function promptSeverityClass(severity?: string) {
+  const normalized = (severity || 'info').toLowerCase().replace(/[^a-z0-9_-]/g, '');
+  return normalized || 'info';
+}
+
 async function ensureDemoSession(account: 'host' | 'user') {
   const me = await fetch('/api/auth/me');
   if (me.ok) {
@@ -277,6 +305,9 @@ function App() {
   const [selectedAuctionID, setSelectedAuctionID] = useState('');
   const [monitor, setMonitor] = useState<Record<string, MonitorPayload>>({});
   const [recentEvents, setRecentEvents] = useState<Array<Record<string, unknown>>>([]);
+  const [hostPrompts, setHostPrompts] = useState<HostPrompt[]>([]);
+  const [dismissedPromptIDs, setDismissedPromptIDs] = useState<string[]>([]);
+  const [promptsLoading, setPromptsLoading] = useState(false);
   const [monitorFilter, setMonitorFilter] = useState({ type: '', auctionID: '', userID: '', traceID: '' });
   const [loading, setLoading] = useState(false);
   const [savingRule, setSavingRule] = useState(false);
@@ -382,6 +413,32 @@ function App() {
       }
     };
     void loadFlightRecorder();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedAuction?.id, sessionReady, loading]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadHostPrompts = async () => {
+      if (!sessionReady || !selectedAuction?.id) {
+        setHostPrompts([]);
+        return;
+      }
+      setPromptsLoading(true);
+      try {
+        const response = await fetch(`/api/host/auctions/${selectedAuction.id}/prompts`);
+        const payload = await readJSON<HostPromptsPayload>(response);
+        if (!cancelled) {
+          setHostPrompts(response.ok ? (payload.prompts ?? []) : []);
+        }
+      } catch {
+        if (!cancelled) setHostPrompts([]);
+      } finally {
+        if (!cancelled) setPromptsLoading(false);
+      }
+    };
+    void loadHostPrompts();
     return () => {
       cancelled = true;
     };
@@ -556,7 +613,15 @@ function App() {
               />
             </AuctionControlSummary>
           ) : <div className="command-panel"><div className="empty-state">暂无可控制竞拍</div></div>}
-          <LiveAssistRail monitor={monitor} recentEvents={recentEvents} selectedAuction={selectedAuction} />
+          <LiveAssistRail
+            dismissedPromptIDs={dismissedPromptIDs}
+            monitor={monitor}
+            prompts={hostPrompts}
+            promptsLoading={promptsLoading}
+            recentEvents={recentEvents}
+            selectedAuction={selectedAuction}
+            onDismissPrompt={(promptID) => setDismissedPromptIDs((current) => Array.from(new Set([...current, promptID])))}
+          />
         </section>
 
         <section className="band two-column secondary-workspace" data-testid="secondary-workspace">
@@ -987,13 +1052,21 @@ function AuctionControlSummary({
 }
 
 function LiveAssistRail({
+  dismissedPromptIDs,
   monitor,
+  prompts,
+  promptsLoading,
   recentEvents,
-  selectedAuction
+  selectedAuction,
+  onDismissPrompt
 }: {
+  dismissedPromptIDs: string[];
   monitor: Record<string, MonitorPayload>;
+  prompts: HostPrompt[];
+  promptsLoading: boolean;
   recentEvents: Array<Record<string, unknown>>;
   selectedAuction?: Auction;
+  onDismissPrompt: (promptID: string) => void;
 }) {
   if (!selectedAuction) {
     return (
@@ -1008,19 +1081,40 @@ function LiveAssistRail({
   }
   const recovery = connectionLabel(monitor, selectedAuction.room_id);
   const hasAnomaly = monitorCount(monitor.anomalies) > 0;
-  const nextBidSummary = selectedAuction.status === 'ACTIVE'
-    ? `当前价 ${formatCents(selectedAuction.current_price_cents)} · 加价幅度 ${formatCents(selectedAuction.increment_cents)}`
-    : `${selectedAuction.status} · ${selectedAuction.accepted_bid_count} accepted bids`;
+  const visiblePrompts = prompts.filter((prompt) => prompt.id && !dismissedPromptIDs.includes(prompt.id)).slice(0, 3);
+  const topPrompt = visiblePrompts[0];
   return (
     <aside className="assist-rail" data-testid="live-assist-rail">
       <div className="panel-heading">
         <h2>Live Assist</h2>
-        <span>event-backed</span>
+        <span>{promptsLoading ? 'loading' : `${prompts.length} prompts`}</span>
       </div>
-      <div className="assist-card pending">
-        <span>Prompter pending</span>
-        <strong>{nextBidSummary}</strong>
-        <small>P8-S3 接入 host-only prompts API 前，本栏不生成主播话术，也不自动发送系统弹幕。</small>
+      <div className="prompter-stack" data-testid="prompter-cards">
+        {visiblePrompts.length === 0 ? (
+          <div className="assist-card pending">
+            <span>{promptsLoading ? 'Prompter loading' : 'Prompter clear'}</span>
+            <strong>{promptsLoading ? '正在读取 host-only prompts API' : '暂无主播提示'}</strong>
+            <small>提示仅来自后端真实竞拍数据；不会自动修改竞拍或发送弹幕。</small>
+          </div>
+        ) : visiblePrompts.map((prompt) => (
+          <div className={`assist-card prompt severity-${promptSeverityClass(prompt.severity)}`} key={prompt.id}>
+            <span>{prompt.type} · {prompt.source}</span>
+            <strong>{prompt.title}</strong>
+            <small>{prompt.body}</small>
+            <div className="prompt-meta">
+              {prompt.reference_price_cents !== undefined ? <em>参考下一口 {formatCents(prompt.reference_price_cents)}</em> : null}
+              {prompt.metric_label ? <em>{prompt.metric_label}: {prompt.metric_value ?? 0}</em> : null}
+              {prompt.event_seq !== undefined ? <em>seq {prompt.event_seq}</em> : null}
+            </div>
+            <Button size="mini" onClick={() => onDismissPrompt(prompt.id)}>本场隐藏</Button>
+          </div>
+        ))}
+      </div>
+      <div className="talk-points" data-testid="talk-points">
+        <span>Talk Points</span>
+        <button type="button">证书/瑕疵</button>
+        <button type="button">封顶/保证金</button>
+        <button type="button">延时规则</button>
       </div>
       <div className="assist-grid">
         <div>
@@ -1040,6 +1134,12 @@ function LiveAssistRail({
           <strong>{hasAnomaly ? `${monitorCount(monitor.anomalies)} anomalies` : 'clear'}</strong>
         </div>
       </div>
+      <div className="system-chat-disabled" data-testid="system-chat-disabled">
+        <strong>系统弹幕模板</strong>
+        <span>当前 chat API 只支持用户消息，本场不启用主播一键系统弹幕。</span>
+        <Button disabled>发送模板</Button>
+      </div>
+      {topPrompt ? <div className="risk-hint" data-testid="risk-hint">优先处理：{topPrompt.title}</div> : null}
       <EventTimeline events={recentEvents} selectedAuction={selectedAuction} />
     </aside>
   );

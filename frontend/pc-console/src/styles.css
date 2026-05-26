@@ -568,9 +568,48 @@ body {
   background: var(--color-surface-0);
 }
 
+.prompter-stack {
+  display: grid;
+  gap: 8px;
+}
+
 .assist-card.pending {
   border-color: var(--color-line);
   background: var(--color-live-cyan-soft);
+}
+
+.assist-card.prompt {
+  min-height: 124px;
+}
+
+.assist-card.severity-high,
+.assist-card.severity-critical {
+  border-color: #f9b47d;
+  background: var(--color-risk-orange-soft);
+}
+
+.assist-card.severity-med {
+  border-color: #efd99e;
+  background: var(--color-auction-gold-soft);
+}
+
+.prompt-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.prompt-meta em {
+  min-height: 22px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--radius-sm);
+  background: #fff;
+  color: var(--color-muted-strong);
+  padding: 0 7px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
 }
 
 .assist-card span,
@@ -614,6 +653,58 @@ body {
 .assist-grid .risk {
   border-color: #f9b47d;
   background: var(--color-risk-orange-soft);
+}
+
+.talk-points,
+.system-chat-disabled,
+.risk-hint {
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: #fff;
+  padding: 10px;
+}
+
+.talk-points {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.talk-points span {
+  width: 100%;
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.talk-points button {
+  min-height: 28px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-0);
+  color: var(--color-muted-strong);
+  font-weight: 800;
+  cursor: default;
+}
+
+.system-chat-disabled {
+  display: grid;
+  gap: 8px;
+}
+
+.system-chat-disabled strong {
+  color: var(--color-ink-900);
+}
+
+.system-chat-disabled span {
+  color: var(--color-muted);
+  line-height: 1.4;
+}
+
+.risk-hint {
+  background: var(--color-risk-orange-soft);
+  color: var(--color-danger-text);
+  font-weight: 800;
 }
 
 .workspace-note {

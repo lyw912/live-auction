@@ -106,11 +106,43 @@ test.beforeEach(async ({ page }) => {
       ]
     }
   }));
+  await page.route('/api/host/auctions/auc_live/prompts', async (route) => route.fulfill({
+    json: {
+      auction_id: 'auc_live',
+      room_id: 'room_main',
+      generated_at: '2026-05-22T13:59:50Z',
+      prompts: [
+        {
+          id: 'auc_live:last_10_seconds',
+          type: 'last_10_seconds',
+          severity: 'HIGH',
+          title: '最后窗口',
+          body: '竞拍进入最后 10 秒，建议提醒下一口有效价和延时规则。',
+          action: 'highlight_countdown',
+          source: 'auction',
+          auction_id: 'auc_live',
+          room_id: 'room_main',
+          event_seq: 42,
+          generated_at: '2026-05-22T13:59:50Z',
+          window_seconds: 10,
+          metric_value: 8,
+          metric_label: 'seconds_remaining',
+          reference_price_cents: 50000
+        }
+      ]
+    }
+  }));
   await page.route('/api/monitor/auctions/auc_next/flight-recorder?limit=20&timeline_limit=20', async (route) => route.fulfill({
     json: { timeline: [] }
   }));
+  await page.route('/api/host/auctions/auc_next/prompts', async (route) => route.fulfill({
+    json: { auction_id: 'auc_next', room_id: 'room_main', prompts: [] }
+  }));
   await page.route('/api/monitor/auctions/auc_scheduled/flight-recorder?limit=20&timeline_limit=20', async (route) => route.fulfill({
     json: { timeline: [] }
+  }));
+  await page.route('/api/host/auctions/auc_scheduled/prompts', async (route) => route.fulfill({
+    json: { auction_id: 'auc_scheduled', room_id: 'room_main', prompts: [] }
   }));
 });
 
@@ -135,7 +167,10 @@ test('PC console renders live API auctions, orders, and expanded diagnostic pane
   await expect(page.getByTestId('auction-control-summary').getByText(/近期重连 3/)).toBeVisible();
   await expect(page.getByTestId('auction-control-summary').getByRole('button', { name: '取消' })).toBeVisible();
   await expect(page.getByTestId('auction-control-summary').getByRole('button', { name: '停止讲解' })).toBeVisible();
-  await expect(page.getByTestId('live-assist-rail').getByText(/Prompter pending/)).toBeVisible();
+  await expect(page.getByTestId('prompter-cards').getByText('最后窗口')).toBeVisible();
+  await expect(page.getByTestId('prompter-cards').getByText(/参考下一口 ¥500.00/)).toBeVisible();
+  await expect(page.getByTestId('talk-points').getByText('封顶/保证金')).toBeVisible();
+  await expect(page.getByTestId('system-chat-disabled').getByRole('button', { name: '发送模板' })).toBeDisabled();
   await expect(page.getByTestId('recent-events').getByText('bid_accepted')).toBeVisible();
   await expect(page.getByRole('link', { name: /Flight recorder/ })).toHaveAttribute('href', /flight-recorder/);
 
@@ -147,6 +182,21 @@ test('PC console renders live API auctions, orders, and expanded diagnostic pane
   await page.getByRole('tab', { name: 'Recovery' }).click();
   await expect(page.getByLabel('Recovery').getByText('room_main')).toBeVisible();
   await expect(page.getByText('snapshot_from_db')).toBeVisible();
+});
+
+test('PC host live assist renders API prompts and dismisses locally without mutating auction state', async ({ page }) => {
+  const mutationRequests: string[] = [];
+  page.on('request', (request) => {
+    if (request.method() !== 'GET' && request.url().includes('/api/host/auctions/auc_live/prompts')) {
+      mutationRequests.push(`${request.method()} ${request.url()}`);
+    }
+  });
+  await page.goto('/');
+  await expect(page.getByTestId('prompter-cards').getByText('最后窗口')).toBeVisible();
+  await page.getByTestId('prompter-cards').getByRole('button', { name: '本场隐藏' }).click();
+  await expect(page.getByTestId('prompter-cards').getByText('最后窗口')).not.toBeVisible();
+  await expect(page.getByTestId('prompter-cards').getByText('暂无主播提示')).toBeVisible();
+  expect(mutationRequests).toEqual([]);
 });
 
 test('PC auction queue pins active auction and explains active and narrating constraints', async ({ page }) => {

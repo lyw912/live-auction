@@ -237,8 +237,37 @@ async function mockPC(page: Page) {
       ]
     }
   }));
+  await page.route('/api/host/auctions/auc_live/prompts', async (route) => route.fulfill({
+    json: {
+      auction_id: 'auc_live',
+      room_id: 'room_main',
+      generated_at: '2026-05-22T13:59:50Z',
+      prompts: [
+        {
+          id: 'auc_live:last_10_seconds',
+          type: 'last_10_seconds',
+          severity: 'HIGH',
+          title: '最后窗口',
+          body: '竞拍进入最后 10 秒，建议提醒下一口有效价和延时规则。',
+          action: 'highlight_countdown',
+          source: 'auction',
+          auction_id: 'auc_live',
+          room_id: 'room_main',
+          event_seq: 42,
+          generated_at: '2026-05-22T13:59:50Z',
+          window_seconds: 10,
+          metric_value: 8,
+          metric_label: 'seconds_remaining',
+          reference_price_cents: 50000
+        }
+      ]
+    }
+  }));
   await page.route('/api/monitor/auctions/auc_next/flight-recorder?limit=20&timeline_limit=20', async (route) => route.fulfill({
     json: { timeline: [] }
+  }));
+  await page.route('/api/host/auctions/auc_next/prompts', async (route) => route.fulfill({
+    json: { auction_id: 'auc_next', room_id: 'room_main', prompts: [] }
   }));
 }
 
