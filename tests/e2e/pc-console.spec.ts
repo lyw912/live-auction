@@ -100,9 +100,13 @@ test.beforeEach(async ({ page }) => {
 
 test('PC console renders live API auctions, orders, and expanded diagnostic panels', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByText('青瓷手作茶盏')).toBeVisible();
-  await expect(page.getByText('紫砂壶')).toBeVisible();
+  await expect(page.getByTestId('auction-queue').getByText('青瓷手作茶盏')).toBeVisible();
+  await expect(page.getByTestId('auction-queue').getByText('紫砂壶')).toBeVisible();
   await expect(page.getByText('ord_pending')).toBeVisible();
+  await expect(page.getByTestId('health-ribbon')).toBeVisible();
+  await expect(page.getByTestId('pc-command-center')).toBeVisible();
+  await expect(page.getByTestId('auction-queue')).toBeVisible();
+  await expect(page.getByTestId('live-assist-rail')).toBeVisible();
   await expect(page.getByTestId('diagnostics')).toBeVisible();
   await expect(page.getByLabel('monitor-anomaly-type')).toBeVisible();
   await expect(page.getByTestId('auction-control-summary')).toBeVisible();
@@ -110,6 +114,9 @@ test('PC console renders live API auctions, orders, and expanded diagnostic pane
   await expect(page.getByTestId('auction-control-summary').getByText(/服务端倒计时/)).toBeVisible();
   await expect(page.getByTestId('auction-control-summary').getByText('延时次数')).toBeVisible();
   await expect(page.getByTestId('auction-control-summary').getByText(/近期重连 3/)).toBeVisible();
+  await expect(page.getByTestId('auction-control-summary').getByRole('button', { name: '取消' })).toBeVisible();
+  await expect(page.getByTestId('auction-control-summary').getByRole('button', { name: '停止讲解' })).toBeVisible();
+  await expect(page.getByTestId('live-assist-rail').getByText(/Prompter pending/)).toBeVisible();
   await expect(page.getByTestId('recent-events').getByText('bid_accepted')).toBeVisible();
   await expect(page.getByRole('link', { name: /Flight recorder/ })).toHaveAttribute('href', /flight-recorder/);
 

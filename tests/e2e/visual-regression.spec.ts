@@ -300,6 +300,8 @@ test.describe('PC visual states @visual-pc', () => {
   test('captures PC command and diagnostics initial state', async ({ page }) => {
     await page.goto('/');
     await stabilize(page);
+    await expect(page.getByTestId('pc-command-center')).toBeVisible();
+    await expect(page.getByTestId('health-ribbon')).toBeVisible();
     await expect(page.getByTestId('auction-control-summary')).toBeVisible();
     await expect(page.getByTestId('diagnostics')).toBeVisible();
     await expect(page.locator('.console-shell')).toHaveScreenshot('pc-command-diagnostics.png', {

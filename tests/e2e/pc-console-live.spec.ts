@@ -2,12 +2,12 @@ import { expect, test } from '@playwright/test';
 
 test('PC console covers live backend host workflow and diagnostics', async ({ page }) => {
   await page.goto('/');
-  await expect(page.locator('.arco-table').first().getByText('P0 Live Smoke Item')).toBeVisible();
+  await expect(page.getByTestId('auction-queue').getByText('P0 Live Smoke Item')).toBeVisible();
   await expect(page.getByTestId('diagnostics')).toBeVisible();
   await expect(page.getByTestId('auction-control-summary')).toBeVisible();
   await expect(page.getByTestId('recent-events')).toBeVisible();
   await page.getByLabel('room-selector').selectOption('room_side');
-  await expect(page.locator('.arco-table').first().getByText('Side Room Smoke Item')).toBeVisible();
+  await expect(page.getByTestId('auction-queue').getByText('Side Room Smoke Item')).toBeVisible();
 
   const suffix = Date.now();
   await page.getByLabel('item-title').fill(`Live PC Item ${suffix}`);

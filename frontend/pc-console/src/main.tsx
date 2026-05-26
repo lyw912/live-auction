@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Button, Form, Input, InputNumber, Layout, Message, Modal, Space, Table, Tabs, Tag } from '@arco-design/web-react';
 import '@arco-design/web-react/dist/css/arco.css';
-import { Activity, AlertTriangle, ClipboardList, Clock3, Database, ExternalLink, Play, RadioTower, RefreshCw, Square, Upload, Wifi } from 'lucide-react';
+import { Activity, AlertTriangle, ClipboardList, Clock3, Database, ExternalLink, Gavel, ImageIcon, Play, RadioTower, RefreshCw, Square, Upload, Wifi } from 'lucide-react';
 import './styles.css';
 
 type Room = {
@@ -110,9 +110,51 @@ function formatRemaining(endAt?: string, now = Date.now()) {
   const endAtMS = Date.parse(endAt);
   if (!Number.isFinite(endAtMS)) return '-';
   const totalSeconds = Math.max(0, Math.ceil((endAtMS - now) / 1000));
+  if (totalSeconds >= 86400) {
+    const days = Math.floor(totalSeconds / 86400);
+    if (days > 99) return '>99d';
+    const hours = Math.floor((totalSeconds % 86400) / 3600);
+    return `${days}d ${hours}h`;
+  }
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+function statusTagColor(status: string) {
+  if (status === 'ACTIVE') return 'green';
+  if (status === 'SCHEDULED') return 'arcoblue';
+  if (status === 'DRAFT') return 'gray';
+  if (status === 'SOLD') return 'orangered';
+  if (status === 'CANCELLED' || status === 'ENDED') return 'red';
+  return 'arcoblue';
+}
+
+function terminalStatus(status: string) {
+  return ['SOLD', 'ENDED', 'CANCELLED'].includes(status);
+}
+
+function queuePriority(status: string) {
+  if (status === 'ACTIVE') return 0;
+  if (status === 'SCHEDULED') return 1;
+  if (status === 'DRAFT') return 2;
+  return 3;
+}
+
+function sortedAuctions(auctions: Auction[]) {
+  return [...auctions].sort((left, right) => {
+    const priority = queuePriority(left.status) - queuePriority(right.status);
+    if (priority !== 0) return priority;
+    return (left.start_at ?? left.end_at ?? left.id).localeCompare(right.start_at ?? right.end_at ?? right.id);
+  });
+}
+
+function activeAuction(auctions: Auction[]) {
+  return auctions.find((auction) => auction.status === 'ACTIVE');
+}
+
+function monitorCount(payload?: MonitorPayload) {
+  return payload?.items?.length ?? 0;
 }
 
 function connectionLabel(monitor: Record<string, MonitorPayload>, roomID: string) {
@@ -236,6 +278,7 @@ function App() {
   const [sessionReady, setSessionReady] = useState(false);
   const [now, setNow] = useState(Date.now());
   const selectedAuction = useMemo(() => auctions.find((auction) => auction.id === selectedAuctionID) ?? auctions[0], [auctions, selectedAuctionID]);
+  const pinnedActiveAuction = useMemo(() => activeAuction(auctions), [auctions]);
   const ruleValidation = validateRule(rule);
   const shownSuggestions = ruleValidation.valid ? backendSuggestions : ruleValidation.suggestions;
 
@@ -457,8 +500,11 @@ function App() {
         <ConsoleNav />
       </Layout.Sider>
       <Layout.Content className="content">
-        <ConsoleToolbar
+        <HealthRibbon
+          active={pinnedActiveAuction ?? selectedAuction}
           loading={loading}
+          monitor={monitor}
+          now={now}
           roomID={roomID}
           rooms={rooms}
           onRefresh={loadAll}
@@ -468,7 +514,29 @@ function App() {
           }}
         />
 
-        <section className="band two-column">
+        <section className="command-center" data-testid="pc-command-center">
+          <AuctionQueue auctions={auctions} selectedAuction={selectedAuction} onSelect={setSelectedAuctionID} />
+          {selectedAuction ? (
+            <AuctionControlSummary
+              monitor={monitor}
+              now={now}
+              recentEvents={recentEvents}
+              selectedAuction={selectedAuction}
+            >
+              <AuctionCommandPanel
+                cancelReason={cancelReason}
+                scheduleStartAt={scheduleStartAt}
+                selectedAuction={selectedAuction}
+                onAction={auctionAction}
+                onCancelReasonChange={setCancelReason}
+                onScheduleStartAtChange={setScheduleStartAt}
+              />
+            </AuctionControlSummary>
+          ) : <div className="command-panel"><div className="empty-state">暂无可控制竞拍</div></div>}
+          <LiveAssistRail monitor={monitor} recentEvents={recentEvents} selectedAuction={selectedAuction} />
+        </section>
+
+        <section className="band two-column secondary-workspace" data-testid="secondary-workspace">
           <ItemCreatePanel
             creating={creating}
             itemDraft={itemDraft}
@@ -477,28 +545,6 @@ function App() {
             onFileChange={setItemImageFile}
             onDraftChange={setItemDraft}
           />
-          <AuctionCommandPanel
-            cancelReason={cancelReason}
-            scheduleStartAt={scheduleStartAt}
-            selectedAuction={selectedAuction}
-            onAction={auctionAction}
-            onCancelReasonChange={setCancelReason}
-            onScheduleStartAtChange={setScheduleStartAt}
-          />
-        </section>
-
-        <AuctionQueue auctions={auctions} selectedAuction={selectedAuction} onSelect={setSelectedAuctionID} />
-
-        {selectedAuction && (
-          <AuctionControlSummary
-            monitor={monitor}
-            now={now}
-            recentEvents={recentEvents}
-            selectedAuction={selectedAuction}
-          />
-        )}
-
-        <section className="band two-column">
           <RuleEditor
             backendRuleError={backendRuleError}
             rule={rule}
@@ -510,7 +556,15 @@ function App() {
             onRuleChange={updateRule}
             onSave={saveRule}
           />
+        </section>
+
+        <section className="band two-column secondary-workspace">
           <OrdersPanel orders={orders} />
+          <div className="workspace-note">
+            <h2>Command Center Notes</h2>
+            <p>ACTIVE 操作在上方主控区完成；规则、订单、诊断保留在二级工作区，所有数据仍来自后端 API。</p>
+            <p>下一步 P8-S2 会细化队列 pinning 和讲解/ACTIVE 约束展示。</p>
+          </div>
         </section>
 
         <DiagnosticsPanel
@@ -536,29 +590,44 @@ function ConsoleNav() {
   );
 }
 
-function ConsoleToolbar({
+function HealthRibbon({
+  active,
   loading,
+  monitor,
+  now,
   roomID,
   rooms,
   onRefresh,
   onRoomChange
 }: {
+  active?: Auction;
   loading: boolean;
+  monitor: Record<string, MonitorPayload>;
+  now: number;
   roomID: string;
   rooms: Room[];
   onRefresh: () => void;
   onRoomChange: (roomID: string) => void;
 }) {
+  const outboxRows = monitor.outbox?.items ?? [];
+  const retryAgeMS = Math.max(0, ...outboxRows.map((row) => Number(row.oldest_retry_age_ms ?? row.lag_ms ?? 0)));
+  const recoveryLabel = active ? connectionLabel(monitor, active.room_id) : connectionLabel(monitor, roomID);
   return (
-    <section className="toolbar">
-      <div>
-        <h1>主控台</h1>
-        <p>{roomID} · host_1</p>
+    <section className="health-ribbon" data-testid="health-ribbon">
+      <div className="ribbon-room">
+        <strong>{roomID}</strong>
+        <span>Server clock {new Date(now).toLocaleTimeString()}</span>
+      </div>
+      <div className="ribbon-metrics">
+        <span><Wifi size={15} /> {recoveryLabel}</span>
+        <span><Database size={15} /> Outbox {monitorCount(monitor.outbox)} · oldest {retryAgeMS}ms</span>
+        <span><Clock3 size={15} /> Scheduler {monitorCount(monitor.scheduler)}</span>
+        <span><AlertTriangle size={15} /> Anomalies {monitorCount(monitor.anomalies)}</span>
       </div>
       <Space>
         <select
           aria-label="room-selector"
-          className="native-input"
+          className="native-input ribbon-select"
           value={roomID}
           onChange={(event) => onRoomChange(event.currentTarget.value)}
         >
@@ -630,8 +699,9 @@ function AuctionCommandPanel({
   onCancelReasonChange: (reason: string) => void;
   onScheduleStartAtChange: (startAt: string) => void;
 }) {
+  const isTerminal = selectedAuction ? terminalStatus(selectedAuction.status) : true;
   return (
-    <div className="rule-panel">
+    <div className="rule-panel command-actions">
       <h2>竞拍控制</h2>
       {selectedAuction ? (
         <>
@@ -652,12 +722,18 @@ function AuctionCommandPanel({
           <Space wrap>
             <Button disabled={selectedAuction.status !== 'DRAFT'} onClick={() => onAction('schedule')}>排期</Button>
             <Button disabled={selectedAuction.status !== 'SCHEDULED'} icon={<Play size={14} />} onClick={() => onAction('start')}>开拍</Button>
-            <Button disabled={['SOLD', 'ENDED', 'CANCELLED'].includes(selectedAuction.status)} status="danger" icon={<Square size={14} />} onClick={() => {
+            <Button disabled={isTerminal} status="danger" icon={<Square size={14} />} onClick={() => {
               Modal.confirm({ title: '确认取消竞拍', content: selectedAuction.id, onOk: () => onAction('cancel') });
             }}>取消</Button>
-            <Button disabled={selectedAuction.is_narrating || ['SOLD', 'ENDED', 'CANCELLED'].includes(selectedAuction.status)} onClick={() => onAction('narrate-start')}>开始讲解</Button>
+            <Button disabled={selectedAuction.is_narrating || isTerminal} onClick={() => onAction('narrate-start')}>开始讲解</Button>
             <Button disabled={!selectedAuction.is_narrating} onClick={() => onAction('narrate-stop')}>停止讲解</Button>
           </Space>
+          <div className="action-guardrail">
+            {selectedAuction.status === 'DRAFT' && 'DRAFT 可编辑规则并排期；开拍后价格规则冻结。'}
+            {selectedAuction.status === 'SCHEDULED' && 'SCHEDULED 已冻结价格规则，可开拍或取消。'}
+            {selectedAuction.status === 'ACTIVE' && 'ACTIVE 仅允许讲解切换和带原因取消，不能修改价格真源。'}
+            {isTerminal && '终态竞拍不可再操作，订单和诊断保留可追溯记录。'}
+          </div>
         </>
       ) : <div className="empty-state">暂无可控制竞拍</div>}
     </div>
@@ -673,24 +749,38 @@ function AuctionQueue({
   selectedAuction?: Auction;
   onSelect: (auctionID: string) => void;
 }) {
+  const rows = sortedAuctions(auctions);
   return (
-    <section className="band">
-      <Table
-        rowKey="id"
-        data={auctions}
-        pagination={false}
-        rowClassName={(record) => record.id === selectedAuction?.id ? 'selected-row' : ''}
-        onRow={(record) => ({ onClick: () => onSelect(record.id) })}
-        columns={[
-          { title: '商品', dataIndex: 'item', render: (_value, row) => <span>{row.item?.title ?? row.item_id}</span> },
-          { title: '状态', dataIndex: 'status', render: (value) => <Tag color={value === 'ACTIVE' ? 'green' : value === 'SOLD' ? 'orangered' : 'arcoblue'}>{value}</Tag> },
-          { title: '讲解', dataIndex: 'is_narrating', render: (value) => value ? <Tag color="green">ON</Tag> : <Tag>OFF</Tag> },
-          { title: '当前价', dataIndex: 'current_price_cents', render: formatCents },
-          { title: '领先', dataIndex: 'current_winner_id', render: maskUser },
-          { title: '结束', dataIndex: 'end_at', render: (value) => value ? new Date(String(value)).toLocaleTimeString() : '-' },
-          { title: '出价数', dataIndex: 'accepted_bid_count' }
-        ]}
-      />
+    <section className="queue-panel" data-testid="auction-queue">
+      <div className="panel-heading">
+        <h2>竞拍队列</h2>
+        <span>{rows.length} lots</span>
+      </div>
+      {rows.length === 0 ? <div className="empty-state compact-empty">暂无竞拍</div> : rows.map((auction) => (
+        <button
+          type="button"
+          className={`queue-card ${auction.id === selectedAuction?.id ? 'is-selected' : ''} ${auction.status === 'ACTIVE' ? 'is-active' : ''}`}
+          key={auction.id}
+          onClick={() => onSelect(auction.id)}
+        >
+          <span className="thumb">
+            {auction.item?.image_url ? <img src={auction.item.image_url} alt="" /> : <ImageIcon size={18} />}
+          </span>
+          <span className="queue-main">
+            <span className="queue-title">{auction.item?.title ?? auction.item_id}</span>
+            <span className="queue-meta">
+              <Tag color={statusTagColor(auction.status)}>{auction.status}</Tag>
+              {auction.is_narrating ? <Tag color="green">讲解中</Tag> : <Tag>未讲解</Tag>}
+            </span>
+            <span className="queue-rules">
+              起 {formatCents(auction.start_price_cents)} · 加 {formatCents(auction.increment_cents)} · 封 {formatCents(auction.cap_price_cents)}
+            </span>
+            <span className="queue-rules">
+              当前/成交 {formatCents(auction.current_price_cents)} · {auction.accepted_bid_count} bids · {auction.end_at ? formatRemaining(auction.end_at) : '-'}
+            </span>
+          </span>
+        </button>
+      ))}
     </section>
   );
 }
@@ -699,18 +789,38 @@ function AuctionControlSummary({
   monitor,
   now,
   recentEvents,
-  selectedAuction
+  selectedAuction,
+  children
 }: {
   monitor: Record<string, MonitorPayload>;
   now: number;
   recentEvents: Array<Record<string, unknown>>;
   selectedAuction: Auction;
+  children?: React.ReactNode;
 }) {
   return (
-    <section className="band control-summary" data-testid="auction-control-summary">
-      <div className="section-title">
-        <h2>当前竞拍控制面</h2>
-        <span><Wifi size={16} /> {connectionLabel(monitor, selectedAuction.room_id)}</span>
+    <section className={`command-panel status-${selectedAuction.status.toLowerCase()}`} data-testid="auction-control-summary">
+      <div className="command-hero">
+        <div className="command-media">
+          {selectedAuction.item?.image_url ? <img src={selectedAuction.item.image_url} alt="" /> : <Gavel size={42} />}
+        </div>
+        <div className="command-copy">
+          <div className="command-kicker">
+            <Tag color={statusTagColor(selectedAuction.status)}>{selectedAuction.status}</Tag>
+            {selectedAuction.is_narrating ? <Tag color="green">讲解中</Tag> : <Tag>未讲解</Tag>}
+            <span><Wifi size={15} /> {connectionLabel(monitor, selectedAuction.room_id)}</span>
+          </div>
+          <h2>{selectedAuction.item?.title ?? selectedAuction.item_id}</h2>
+          <div className="command-price">
+            <strong>{formatCents(selectedAuction.current_price_cents)}</strong>
+            <span><Clock3 size={18} /> {formatRemaining(selectedAuction.end_at, now)}</span>
+          </div>
+          <div className="command-subline">
+            <span>Leader {maskUser(selectedAuction.current_winner_id)}</span>
+            <span>Seq {selectedAuction.seq}</span>
+            <span>{selectedAuction.accepted_bid_count} accepted bids</span>
+          </div>
+        </div>
       </div>
       <div className="control-stats">
         <div>
@@ -738,8 +848,67 @@ function AuctionControlSummary({
           <strong>{selectedAuction.status} · {selectedAuction.seq}</strong>
         </div>
       </div>
-      <EventTimeline events={recentEvents} selectedAuction={selectedAuction} />
+      {children}
     </section>
+  );
+}
+
+function LiveAssistRail({
+  monitor,
+  recentEvents,
+  selectedAuction
+}: {
+  monitor: Record<string, MonitorPayload>;
+  recentEvents: Array<Record<string, unknown>>;
+  selectedAuction?: Auction;
+}) {
+  if (!selectedAuction) {
+    return (
+      <aside className="assist-rail">
+        <div className="panel-heading">
+          <h2>Live Assist</h2>
+          <span>idle</span>
+        </div>
+        <div className="empty-state compact-empty">选择竞拍后显示事件和控场状态</div>
+      </aside>
+    );
+  }
+  const recovery = connectionLabel(monitor, selectedAuction.room_id);
+  const hasAnomaly = monitorCount(monitor.anomalies) > 0;
+  const nextBidSummary = selectedAuction.status === 'ACTIVE'
+    ? `当前价 ${formatCents(selectedAuction.current_price_cents)} · 加价幅度 ${formatCents(selectedAuction.increment_cents)}`
+    : `${selectedAuction.status} · ${selectedAuction.accepted_bid_count} accepted bids`;
+  return (
+    <aside className="assist-rail" data-testid="live-assist-rail">
+      <div className="panel-heading">
+        <h2>Live Assist</h2>
+        <span>event-backed</span>
+      </div>
+      <div className="assist-card pending">
+        <span>Prompter pending</span>
+        <strong>{nextBidSummary}</strong>
+        <small>P8-S3 接入 host-only prompts API 前，本栏不生成主播话术，也不自动发送系统弹幕。</small>
+      </div>
+      <div className="assist-grid">
+        <div>
+          <span>Recovery</span>
+          <strong>{recovery}</strong>
+        </div>
+        <div>
+          <span>Outbox</span>
+          <strong>{monitorCount(monitor.outbox)}</strong>
+        </div>
+        <div>
+          <span>Rejects</span>
+          <strong>{monitorCount(monitor.rejects)}</strong>
+        </div>
+        <div className={hasAnomaly ? 'risk' : ''}>
+          <span>Risk</span>
+          <strong>{hasAnomaly ? `${monitorCount(monitor.anomalies)} anomalies` : 'clear'}</strong>
+        </div>
+      </div>
+      <EventTimeline events={recentEvents} selectedAuction={selectedAuction} />
+    </aside>
   );
 }
 
