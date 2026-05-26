@@ -33,6 +33,11 @@ type uploadURLRequest struct {
 	ContentType string `json:"content_type"`
 }
 
+type currentUserAuctionSnapshot struct {
+	auction.Auction
+	MaxBidIntent *auction.MaxBidIntent `json:"max_bid_intent,omitempty"`
+}
+
 type roomSummary struct {
 	ID     string `json:"id"`
 	HostID string `json:"host_id"`
@@ -313,7 +318,21 @@ func (h AuctionHandler) GetAuction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := h.Repo.GetAuction(r.Context(), auctionID)
-	writeResult(w, r, http.StatusOK, result, err)
+	if err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	snapshot := currentUserAuctionSnapshot{Auction: result}
+	intent, err := h.Repo.GetMaxBidIntent(r.Context(), auctionID, user.ID)
+	if err != nil {
+		if !hasAPIErrorCode(err, apierrors.CodeAuctionNotFound) {
+			writeResult(w, r, http.StatusOK, nil, err)
+			return
+		}
+	} else {
+		snapshot.MaxBidIntent = &intent
+	}
+	writeResult(w, r, http.StatusOK, snapshot, nil)
 }
 
 func (h AuctionHandler) PlaceBid(w http.ResponseWriter, r *http.Request) {
@@ -595,6 +614,11 @@ func (h AuctionHandler) requireRoomListAccess(r *http.Request, user AuthUser, ro
 func decodeJSON(r *http.Request, target any) error {
 	defer r.Body.Close()
 	return json.NewDecoder(r.Body).Decode(target)
+}
+
+func hasAPIErrorCode(err error, code apierrors.Code) bool {
+	var apiErr apierrors.APIError
+	return errors.As(err, &apiErr) && apiErr.Code == code
 }
 
 func writeResult(w http.ResponseWriter, r *http.Request, status int, payload any, err error) {

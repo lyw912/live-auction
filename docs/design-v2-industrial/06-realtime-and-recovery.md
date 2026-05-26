@@ -156,6 +156,17 @@ Semaphore full:
 - else return `503 Retry-After: 1`;
 - client remains recovering.
 
+## Max Bid Private Recovery
+
+Public room WebSocket events and Redis snapshots must not carry a bidder's private `max_amount_cents` or max-bid intent ID.
+
+For Max Bid/Pre-Bid recovery:
+
+- public automatic price changes are represented as ordinary `bid_accepted` or `auction_sold` events and may include only `bid_source = "AUTO_MAX_BID"`;
+- the current user's private intent state is recovered through the authenticated `GET /api/auctions/{id}` or `GET /api/auctions/{id}/max-bid-intent` REST path;
+- another user's auction snapshot and public auction lists must omit `max_bid_intent`;
+- a dedicated private WebSocket channel requires a separate transport design and must not reuse the public room broadcast.
+
 ## WebSocket Auth
 
 Browser-compatible:

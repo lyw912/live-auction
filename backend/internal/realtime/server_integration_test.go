@@ -1,6 +1,7 @@
 package realtime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -196,6 +197,30 @@ func TestServeWSReceivesOutboxFanoutWhileConnected(t *testing.T) {
 		t.Fatalf("expected one outbox event")
 	}
 	assertWSMessageType(t, conn, "bid_accepted")
+}
+
+func TestDBSnapshotDoesNotExposePrivateMaxBidIntent(t *testing.T) {
+	db := openDBForRealtime(t)
+	rdb := openRedisForRealtime(t)
+	ctx := context.Background()
+	repo := auction.NewRepository(db)
+	auctionRow := createActiveAuctionForRealtime(t, repo, db)
+	userID := "user_snapshot_max_" + uuid.NewString()
+	if _, err := db.Exec(ctx, `INSERT INTO users (id, role, display_name) VALUES ($1, 'user', $1)`, userID); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	if _, err := repo.UpsertMaxBidIntent(ctx, auctionRow.ID, userID, auction.MaxBidIntentInput{MaxAmountCents: 25_000}); err != nil {
+		t.Fatalf("UpsertMaxBidIntent: %v", err)
+	}
+
+	rt := NewServer(db, rdb)
+	payload, err := rt.rebuildSnapshotFromDB(ctx, auctionRow.ID)
+	if err != nil {
+		t.Fatalf("rebuildSnapshotFromDB: %v", err)
+	}
+	if bytes.Contains(payload, []byte("max_bid_intent")) || bytes.Contains(payload, []byte("max_amount_cents")) {
+		t.Fatalf("DB realtime snapshot leaked private max bid intent: %s", payload)
+	}
 }
 
 func TestServeWSAdmissionRejectsWhenConnectSaturated(t *testing.T) {

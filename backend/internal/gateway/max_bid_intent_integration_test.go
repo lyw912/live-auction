@@ -124,6 +124,64 @@ func TestMaxBidIntentRoutesRequireMembershipAndIdempotencyKey(t *testing.T) {
 	assertAPIErrorCode(t, missingKey, apierrors.CodeInvalidArgument)
 }
 
+func TestAuctionSnapshotCarriesOnlyCurrentUserMaxBidIntent(t *testing.T) {
+	db := openMonitorDB(t)
+	rdb := openMonitorRedis(t)
+	router := NewRouter(testConfig(), &storage.Dependencies{Postgres: db, Redis: rdb}, slog.Default())
+	repo := auction.NewRepository(db)
+	row := createACLAuction(t, repo, db, "room_max_bid_snapshot_"+uuid.NewString(), "host_1", "user_1", "ACTIVE")
+	if _, err := db.Exec(context.Background(), `
+		INSERT INTO users (id, role, display_name) VALUES ('user_other_snapshot', 'user', 'Other Snapshot User')
+		ON CONFLICT DO NOTHING
+	`); err != nil {
+		t.Fatalf("insert other user: %v", err)
+	}
+	if _, err := db.Exec(context.Background(), `
+		INSERT INTO room_memberships (room_id, user_id, role, status)
+		VALUES ($1, 'user_other_snapshot', 'viewer', 'ACTIVE')
+		ON CONFLICT (room_id, user_id)
+		DO UPDATE SET role = EXCLUDED.role, status = EXCLUDED.status, left_at = NULL
+	`, row.RoomID); err != nil {
+		t.Fatalf("insert other membership: %v", err)
+	}
+
+	if _, err := repo.UpsertMaxBidIntent(context.Background(), row.ID, "user_1", auction.MaxBidIntentInput{MaxAmountCents: 25_000}); err != nil {
+		t.Fatalf("UpsertMaxBidIntent: %v", err)
+	}
+
+	owner := performAuctionGet(router, row.ID, "user_1")
+	if owner.Code != http.StatusOK {
+		t.Fatalf("owner snapshot status = %d body=%s", owner.Code, owner.Body.String())
+	}
+	var ownerPayload map[string]any
+	if err := json.Unmarshal(owner.Body.Bytes(), &ownerPayload); err != nil {
+		t.Fatalf("decode owner snapshot: %v", err)
+	}
+	intent, ok := ownerPayload["max_bid_intent"].(map[string]any)
+	if !ok {
+		t.Fatalf("owner snapshot missing max_bid_intent: %#v", ownerPayload)
+	}
+	if intent["user_id"] != "user_1" || intent["max_amount_cents"].(float64) != 25_000 {
+		t.Fatalf("unexpected owner intent: %#v", intent)
+	}
+
+	other := performAuctionGet(router, row.ID, "user_other_snapshot")
+	if other.Code != http.StatusOK {
+		t.Fatalf("other snapshot status = %d body=%s", other.Code, other.Body.String())
+	}
+	if bytes.Contains(other.Body.Bytes(), []byte("max_bid_intent")) || bytes.Contains(other.Body.Bytes(), []byte("max_amount_cents")) {
+		t.Fatalf("other user snapshot leaked private intent: %s", other.Body.String())
+	}
+
+	list := performAuctionList(router, row.RoomID, "user_1")
+	if list.Code != http.StatusOK {
+		t.Fatalf("list status = %d body=%s", list.Code, list.Body.String())
+	}
+	if bytes.Contains(list.Body.Bytes(), []byte("max_bid_intent")) || bytes.Contains(list.Body.Bytes(), []byte("max_amount_cents")) {
+		t.Fatalf("public auction list leaked private intent: %s", list.Body.String())
+	}
+}
+
 func performMaxBidIntent(router http.Handler, method string, auctionID string, body string, key string, userID string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, "/api/auctions/"+auctionID+"/max-bid-intent", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -132,6 +190,24 @@ func performMaxBidIntent(router http.Handler, method string, auctionID string, b
 	if key != "" {
 		req.Header.Set("Idempotency-Key", key)
 	}
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	return rec
+}
+
+func performAuctionGet(router http.Handler, auctionID string, userID string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodGet, "/api/auctions/"+auctionID, nil)
+	req.Header.Set("X-Mock-Role", "user")
+	req.Header.Set("X-Mock-User-Id", userID)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	return rec
+}
+
+func performAuctionList(router http.Handler, roomID string, userID string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodGet, "/api/auctions?room_id="+roomID, nil)
+	req.Header.Set("X-Mock-Role", "user")
+	req.Header.Set("X-Mock-User-Id", userID)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	return rec

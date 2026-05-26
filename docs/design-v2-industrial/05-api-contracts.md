@@ -163,6 +163,25 @@ Response result is `CANCELLED`.
 
 `GET /api/auctions/{id}/max-bid-intent` returns only the authenticated user's private intent. Hosts and other bidders do not get another user's max amount through this endpoint.
 
+`GET /api/auctions/{id}` is the recovery snapshot for H5. It may include the authenticated user's own private intent as:
+
+```json
+{
+  "max_bid_intent": {
+    "id": "mbi_123",
+    "auction_id": "a_123",
+    "user_id": "u_1",
+    "max_amount_cents": 90000,
+    "status": "ACTIVE",
+    "source": "MAX_BID",
+    "last_applied_seq": 42,
+    "version": 2
+  }
+}
+```
+
+This field is user-scoped and must not appear in auction lists, public WebSocket events, Redis public snapshots, or another user's `GET /api/auctions/{id}` response.
+
 ## Payment Mock
 
 ```text
