@@ -49,6 +49,7 @@
 | `docs/evidence/p4-03-risk-simulator-2026-05-26.md` | AUTHORITATIVE | P4-R3 risk simulator implemented: repeatable real-backend scenarios for bid idempotency abuse, flight-recorder ACL, cap SOLD order/payment double click, and per-scenario scoped invariants. |
 | `docs/evidence/p5-01-design-tokens.md` | AUTHORITATIVE | P5-S1 shared Auction Studio design tokens added and wired into H5/PC style entries with `pnpm build` evidence. |
 | `docs/evidence/p5-02-visual-regression-gates.md` | AUTHORITATIVE | P5-S2 route-mocked H5/PC visual regression harness added with committed Playwright screenshot baselines and passing targeted visual run. |
+| `docs/evidence/p5-03-h5-component-boundaries.md` | AUTHORITATIVE | P5-S3 H5 rendering split into LiveStage, AuctionStatePanel, LeaderboardPanel, HistoryPanel, and ChatPanel boundaries with build, H5 e2e, visual, and full e2e evidence. |
 | `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan.md` | AUTHORITATIVE | P3/P4 pressure protocol and admission-off policy. |
 | `docs/design-v2-industrial/18-p3-p4-roadmap-reset.md` | AUTHORITATIVE | Current P3/P4 execution order and decision gates. |
 | `docs/p3-decision-log.md` | AUTHORITATIVE | Current decisions, superseded evidence, and go/no-go gates. |

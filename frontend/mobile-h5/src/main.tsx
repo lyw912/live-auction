@@ -1218,161 +1218,300 @@ function App() {
 
   return (
     <main className="app-shell">
-      <section className="video-stage" aria-label="live-stage">
-        {atmosphereCue && (
-          <div className={`atmosphere-cue ${atmosphereCue.kind}`} role="status" aria-live="polite" key={atmosphereCue.id}>
-            <strong>{atmosphereCue.title}</strong>
-            <span>{atmosphereCue.detail}</span>
-          </div>
-        )}
-        <div className="video-topbar">
-          <span className="live-pill"><Radio size={14} /> LIVE</span>
-          <span className="viewer-count">{roomID}</span>
-          <span className="viewer-count">12,486 watching</span>
-          <button
-            className="sound-toggle"
-            type="button"
-            aria-label={soundEnabled ? '关闭提示音' : '开启提示音'}
-            onClick={() => setSoundEnabled((enabled) => !enabled)}
-          >
-            {soundEnabled ? <Bell size={14} /> : <BellOff size={14} />}
-          </button>
-        </div>
-        <div className="focus-copy">
-          <h1>{lotTitle}</h1>
-          <p>Lot A-102 · {scenario.countdown ?? countdownCopy}</p>
-        </div>
-      </section>
-
-      <section className={`auction-panel ${scenario.stale ? 'is-stale' : ''}`} aria-label="auction-state">
-        <div className="state-row">
-          <div>
-            <p className="eyebrow">{scenario.title}</p>
-            <h2>{scenario.price}</h2>
-          </div>
-          <span className="status-chip" data-state={scenario.status}>{scenario.status}</span>
-        </div>
-        <div className="leader-row">
-          <span>{scenario.leader}</span>
-          <strong>{scenario.feedback}</strong>
-        </div>
-        <div className="signal-row">
-          {scenario.stale || connectionPhase === 'disconnected' ? <WifiOff size={16} /> : <Wifi size={16} />}
-          <span>{scenario.stale ? '状态可能已过期' : connectionPhase === 'connected' ? 'WebSocket 已连接 · 状态来自服务端事件' : 'WebSocket 连接中 · 状态来自服务端事件'}</span>
-        </div>
-        <div className="countdown-row" data-testid="auction-countdown">
-          <Clock3 size={16} />
-          <span>{scenario.countdown ?? countdownCopy}</span>
-          {extensionNotice && !scenario.sold && <strong>{extensionNotice}</strong>}
-        </div>
-        <div className="bid-stepper">
-          <button type="button" aria-label="decrease" onClick={decreaseBidAmount}>-</button>
-          <span>{scenario.sold ? 'ORDER' : formatCents(nextBidCents)}</span>
-          <button type="button" aria-label="increase" onClick={increaseBidAmount}><ChevronUp size={18} /></button>
-        </div>
-        <button className="primary-cta" data-testid="bid-cta" disabled={scenario.ctaDisabled} onClick={handlePrimaryAction}>
-          {scenario.winner ? <CreditCard size={18} /> : scenario.rejected ? <AlertTriangle size={18} /> : <CheckCircle2 size={18} />}
-          {scenario.cta}
-        </button>
-      </section>
-
-      <section className="leaderboard-panel" data-testid="leaderboard-panel">
-        <div className="leaderboard-title">
-          <h2><Trophy size={16} /> 实时排行榜</h2>
-          <button type="button" onClick={() => void loadLeaderboard()} disabled={!activeAuctionID}>
-            <RefreshCw size={14} />
-            刷新
-          </button>
-        </div>
-        <div className="my-rank-card">
-          <strong>{leaderboardCopy(leaderboard)}</strong>
-          <span>{leaderboard?.my_best_amount_cents != null ? `我的最高 ${formatCents(leaderboard.my_best_amount_cents)}` : '出价后显示我的位置'}</span>
-        </div>
-        <div className="leaderboard-list">
-          {(leaderboard?.entries ?? []).length === 0 ? (
-            <p>暂无有效出价</p>
-          ) : (
-            leaderboard?.entries?.map((entry) => (
-              <div className={`leaderboard-row ${entry.is_current ? 'is-current' : ''}`} key={`${entry.rank}-${entry.user_id}`}>
-                <span>#{entry.rank}</span>
-                <strong>{entry.is_current ? '我' : entry.user_masked}</strong>
-                <em>{formatCents(entry.amount_cents)}</em>
-              </div>
-            ))
-          )}
-        </div>
-      </section>
-
+      <LiveStage
+        atmosphereCue={atmosphereCue}
+        countdownCopy={countdownCopy}
+        lotTitle={lotTitle}
+        roomID={roomID}
+        scenario={scenario}
+        soundEnabled={soundEnabled}
+        onToggleSound={() => setSoundEnabled((enabled) => !enabled)}
+      />
+      <AuctionStatePanel
+        connectionPhase={connectionPhase}
+        countdownCopy={countdownCopy}
+        extensionNotice={extensionNotice}
+        nextBidCents={nextBidCents}
+        scenario={scenario}
+        onDecreaseBid={decreaseBidAmount}
+        onIncreaseBid={increaseBidAmount}
+        onPrimaryAction={handlePrimaryAction}
+      />
+      <LeaderboardPanel
+        activeAuctionID={activeAuctionID}
+        leaderboard={leaderboard}
+        onRefresh={() => void loadLeaderboard()}
+      />
       {showStateMatrix && (
-        <nav className="state-tabs" aria-label="state-matrix">
-          {scenarios.map((item) => (
-            <button
-              key={item.key}
-              className={item.key === selected ? 'active' : ''}
-              type="button"
-              onClick={() => setSelected(item.key)}
-            >
-              {item.title}
-            </button>
-          ))}
-        </nav>
+        <StateMatrixTabs selected={selected} onSelect={setSelected} />
       )}
-
-      <section className="history-panel" data-testid="history-panel">
-        <div className="history-title">
-          <h2><History size={16} /> 我的历史</h2>
-          <button type="button" onClick={loadHistory} disabled={historyLoading}>
-            <RefreshCw size={14} />
-            {historyLoading ? '刷新中' : '刷新'}
-          </button>
-        </div>
-        {historyError && <div className="history-error" role="alert">{historyError}</div>}
-        <div className="history-grid">
-          <HistoryList
-            title="出价"
-            empty="暂无出价"
-            rows={bidHistory}
-            getPrimary={(row) => String(row.auction_id ?? row.bid_id ?? '-')}
-            getSecondary={(row) => `${formatCents(Number(row.amount_cents ?? 0))} · ${String(row.result ?? row.status ?? '-')}`}
-          />
-          <HistoryList
-            title="订单"
-            empty="暂无订单"
-            rows={orderHistory}
-            getPrimary={(row) => String(row.order_id ?? row.auction_id ?? '-')}
-            getSecondary={(row) => `${formatCents(Number(row.amount_cents ?? 0))} · ${String(row.order_status ?? '-')}`}
-          />
-        </div>
-      </section>
-
-      <section className="chat-panel" data-testid="chat-panel">
-        <div className="history-title">
-          <h2><MessageCircle size={16} /> 弹幕</h2>
-        </div>
-        <div className="chat-list">
-          {chatMessages.length === 0 ? <p>暂无弹幕</p> : chatMessages.map((message) => (
-            <div className="chat-row" key={message.id}>
-              <strong>{message.user_id === currentUserID ? '我' : `${message.user_id.slice(0, 2)}**`}</strong>
-              <span>{message.body}</span>
-            </div>
-          ))}
-        </div>
-        <div className="chat-input-row">
-          <input
-            aria-label="chat-input"
-            maxLength={80}
-            value={chatDraft}
-            onChange={(event) => setChatDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') void sendChat();
-            }}
-          />
-          <button type="button" aria-label="send-chat" disabled={!chatDraft.trim() || chatSending} onClick={sendChat}>
-            <Send size={15} />
-          </button>
-        </div>
-      </section>
+      <HistoryPanel
+        bidHistory={bidHistory}
+        historyError={historyError}
+        historyLoading={historyLoading}
+        orderHistory={orderHistory}
+        onRefresh={loadHistory}
+      />
+      <ChatPanel
+        chatDraft={chatDraft}
+        chatMessages={chatMessages}
+        chatSending={chatSending}
+        currentUserID={currentUserID}
+        onDraftChange={setChatDraft}
+        onSend={sendChat}
+      />
     </main>
+  );
+}
+
+function LiveStage({
+  atmosphereCue,
+  countdownCopy,
+  lotTitle,
+  roomID,
+  scenario,
+  soundEnabled,
+  onToggleSound
+}: {
+  atmosphereCue: AtmosphereCue | null;
+  countdownCopy: string;
+  lotTitle: string;
+  roomID: string;
+  scenario: Scenario;
+  soundEnabled: boolean;
+  onToggleSound: () => void;
+}) {
+  return (
+    <section className="video-stage" aria-label="live-stage">
+      {atmosphereCue && (
+        <div className={`atmosphere-cue ${atmosphereCue.kind}`} role="status" aria-live="polite" key={atmosphereCue.id}>
+          <strong>{atmosphereCue.title}</strong>
+          <span>{atmosphereCue.detail}</span>
+        </div>
+      )}
+      <div className="video-topbar">
+        <span className="live-pill"><Radio size={14} /> LIVE</span>
+        <span className="viewer-count">{roomID}</span>
+        <span className="viewer-count">12,486 watching</span>
+        <button
+          className="sound-toggle"
+          type="button"
+          aria-label={soundEnabled ? '关闭提示音' : '开启提示音'}
+          onClick={onToggleSound}
+        >
+          {soundEnabled ? <Bell size={14} /> : <BellOff size={14} />}
+        </button>
+      </div>
+      <div className="focus-copy">
+        <h1>{lotTitle}</h1>
+        <p>Lot A-102 · {scenario.countdown ?? countdownCopy}</p>
+      </div>
+    </section>
+  );
+}
+
+function AuctionStatePanel({
+  connectionPhase,
+  countdownCopy,
+  extensionNotice,
+  nextBidCents,
+  scenario,
+  onDecreaseBid,
+  onIncreaseBid,
+  onPrimaryAction
+}: {
+  connectionPhase: ConnectionPhase;
+  countdownCopy: string;
+  extensionNotice: string;
+  nextBidCents: number;
+  scenario: Scenario;
+  onDecreaseBid: () => void;
+  onIncreaseBid: () => void;
+  onPrimaryAction: () => void;
+}) {
+  return (
+    <section className={`auction-panel ${scenario.stale ? 'is-stale' : ''}`} aria-label="auction-state">
+      <div className="state-row">
+        <div>
+          <p className="eyebrow">{scenario.title}</p>
+          <h2>{scenario.price}</h2>
+        </div>
+        <span className="status-chip" data-state={scenario.status}>{scenario.status}</span>
+      </div>
+      <div className="leader-row">
+        <span>{scenario.leader}</span>
+        <strong>{scenario.feedback}</strong>
+      </div>
+      <div className="signal-row">
+        {scenario.stale || connectionPhase === 'disconnected' ? <WifiOff size={16} /> : <Wifi size={16} />}
+        <span>{scenario.stale ? '状态可能已过期' : connectionPhase === 'connected' ? 'WebSocket 已连接 · 状态来自服务端事件' : 'WebSocket 连接中 · 状态来自服务端事件'}</span>
+      </div>
+      <div className="countdown-row" data-testid="auction-countdown">
+        <Clock3 size={16} />
+        <span>{scenario.countdown ?? countdownCopy}</span>
+        {extensionNotice && !scenario.sold && <strong>{extensionNotice}</strong>}
+      </div>
+      <div className="bid-stepper">
+        <button type="button" aria-label="decrease" onClick={onDecreaseBid}>-</button>
+        <span>{scenario.sold ? 'ORDER' : formatCents(nextBidCents)}</span>
+        <button type="button" aria-label="increase" onClick={onIncreaseBid}><ChevronUp size={18} /></button>
+      </div>
+      <button className="primary-cta" data-testid="bid-cta" disabled={scenario.ctaDisabled} onClick={onPrimaryAction}>
+        {scenario.winner ? <CreditCard size={18} /> : scenario.rejected ? <AlertTriangle size={18} /> : <CheckCircle2 size={18} />}
+        {scenario.cta}
+      </button>
+    </section>
+  );
+}
+
+function LeaderboardPanel({
+  activeAuctionID,
+  leaderboard,
+  onRefresh
+}: {
+  activeAuctionID: string;
+  leaderboard: LeaderboardPayload | null;
+  onRefresh: () => void;
+}) {
+  return (
+    <section className="leaderboard-panel" data-testid="leaderboard-panel">
+      <div className="leaderboard-title">
+        <h2><Trophy size={16} /> 实时排行榜</h2>
+        <button type="button" onClick={onRefresh} disabled={!activeAuctionID}>
+          <RefreshCw size={14} />
+          刷新
+        </button>
+      </div>
+      <div className="my-rank-card">
+        <strong>{leaderboardCopy(leaderboard)}</strong>
+        <span>{leaderboard?.my_best_amount_cents != null ? `我的最高 ${formatCents(leaderboard.my_best_amount_cents)}` : '出价后显示我的位置'}</span>
+      </div>
+      <div className="leaderboard-list">
+        {(leaderboard?.entries ?? []).length === 0 ? (
+          <p>暂无有效出价</p>
+        ) : (
+          leaderboard?.entries?.map((entry) => (
+            <div className={`leaderboard-row ${entry.is_current ? 'is-current' : ''}`} key={`${entry.rank}-${entry.user_id}`}>
+              <span>#{entry.rank}</span>
+              <strong>{entry.is_current ? '我' : entry.user_masked}</strong>
+              <em>{formatCents(entry.amount_cents)}</em>
+            </div>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
+function StateMatrixTabs({
+  selected,
+  onSelect
+}: {
+  selected: AuctionState;
+  onSelect: (state: AuctionState) => void;
+}) {
+  return (
+    <nav className="state-tabs" aria-label="state-matrix">
+      {scenarios.map((item) => (
+        <button
+          key={item.key}
+          className={item.key === selected ? 'active' : ''}
+          type="button"
+          onClick={() => onSelect(item.key)}
+        >
+          {item.title}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+function HistoryPanel({
+  bidHistory,
+  historyError,
+  historyLoading,
+  orderHistory,
+  onRefresh
+}: {
+  bidHistory: HistoryRow[];
+  historyError: string;
+  historyLoading: boolean;
+  orderHistory: HistoryRow[];
+  onRefresh: () => void;
+}) {
+  return (
+    <section className="history-panel" data-testid="history-panel">
+      <div className="history-title">
+        <h2><History size={16} /> 我的历史</h2>
+        <button type="button" onClick={onRefresh} disabled={historyLoading}>
+          <RefreshCw size={14} />
+          {historyLoading ? '刷新中' : '刷新'}
+        </button>
+      </div>
+      {historyError && <div className="history-error" role="alert">{historyError}</div>}
+      <div className="history-grid">
+        <HistoryList
+          title="出价"
+          empty="暂无出价"
+          rows={bidHistory}
+          getPrimary={(row) => String(row.auction_id ?? row.bid_id ?? '-')}
+          getSecondary={(row) => `${formatCents(Number(row.amount_cents ?? 0))} · ${String(row.result ?? row.status ?? '-')}`}
+        />
+        <HistoryList
+          title="订单"
+          empty="暂无订单"
+          rows={orderHistory}
+          getPrimary={(row) => String(row.order_id ?? row.auction_id ?? '-')}
+          getSecondary={(row) => `${formatCents(Number(row.amount_cents ?? 0))} · ${String(row.order_status ?? '-')}`}
+        />
+      </div>
+    </section>
+  );
+}
+
+function ChatPanel({
+  chatDraft,
+  chatMessages,
+  chatSending,
+  currentUserID,
+  onDraftChange,
+  onSend
+}: {
+  chatDraft: string;
+  chatMessages: ChatMessage[];
+  chatSending: boolean;
+  currentUserID: string;
+  onDraftChange: (draft: string) => void;
+  onSend: () => void;
+}) {
+  return (
+    <section className="chat-panel" data-testid="chat-panel">
+      <div className="history-title">
+        <h2><MessageCircle size={16} /> 弹幕</h2>
+      </div>
+      <div className="chat-list">
+        {chatMessages.length === 0 ? <p>暂无弹幕</p> : chatMessages.map((message) => (
+          <div className="chat-row" key={message.id}>
+            <strong>{message.user_id === currentUserID ? '我' : `${message.user_id.slice(0, 2)}**`}</strong>
+            <span>{message.body}</span>
+          </div>
+        ))}
+      </div>
+      <div className="chat-input-row">
+        <input
+          aria-label="chat-input"
+          maxLength={80}
+          value={chatDraft}
+          onChange={(event) => onDraftChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') void onSend();
+          }}
+        />
+        <button type="button" aria-label="send-chat" disabled={!chatDraft.trim() || chatSending} onClick={onSend}>
+          <Send size={15} />
+        </button>
+      </div>
+    </section>
   );
 }
 

@@ -6,7 +6,7 @@
 |---|---|---|
 | P5-S1 | DONE | `docs/evidence/p5-01-design-tokens.md` |
 | P5-S2 | DONE | `docs/evidence/p5-02-visual-regression-gates.md` |
-| P5-S3 | TODO | H5 component boundary refactor pending |
+| P5-S3 | DONE | `docs/evidence/p5-03-h5-component-boundaries.md` |
 | P5-S4 | TODO | PC component boundary refactor pending |
 
 ## Notes
