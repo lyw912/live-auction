@@ -1263,6 +1263,7 @@ function App() {
         connectionPhase={connectionPhase}
         countdownCopy={countdownCopy}
         extensionNotice={extensionNotice}
+        leaderboard={leaderboard}
         nextBidCents={nextBidCents}
         scenario={scenario}
         onDecreaseBid={decreaseBidAmount}
@@ -1425,6 +1426,7 @@ function AuctionStatePanel({
   connectionPhase,
   countdownCopy,
   extensionNotice,
+  leaderboard,
   nextBidCents,
   scenario,
   onDecreaseBid,
@@ -1434,33 +1436,59 @@ function AuctionStatePanel({
   connectionPhase: ConnectionPhase;
   countdownCopy: string;
   extensionNotice: string;
+  leaderboard: LeaderboardPayload | null;
   nextBidCents: number;
   scenario: Scenario;
   onDecreaseBid: () => void;
   onIncreaseBid: () => void;
   onPrimaryAction: () => void;
 }) {
+  const dockState = scenario.pending
+    ? 'PENDING'
+    : scenario.stale || connectionPhase === 'disconnected' || connectionPhase === 'recovering'
+      ? 'RECOVERING'
+      : scenario.winner
+        ? 'SOLD_WINNER'
+        : scenario.sold
+          ? 'SOLD_LOSER'
+          : scenario.rejected
+            ? 'OUTBID'
+            : scenario.ctaDisabled
+              ? 'SELF_LEADING'
+              : 'ACTIVE';
+  const rankCopy = leaderboard?.my_rank != null
+    ? `我的排名 #${leaderboard.my_rank}`
+    : '出价后显示排名';
+  const gapCopy = leaderboard?.gap_to_leader_cents != null && leaderboard.gap_to_leader_cents > 0
+    ? `差 ${formatCents(leaderboard.gap_to_leader_cents)}`
+    : leaderboard?.my_rank === 1
+      ? '当前领先'
+      : scenario.feedback;
+
   return (
-    <section className={`auction-panel ${scenario.stale ? 'is-stale' : ''}`} aria-label="auction-state">
-      <div className="state-row">
+    <section className={`auction-panel bid-dock ${scenario.stale ? 'is-stale' : ''}`} aria-label="auction-state" data-dock-state={dockState}>
+      <div className="dock-price-row">
         <div>
           <p className="eyebrow">{scenario.title}</p>
           <h2>{scenario.price}</h2>
         </div>
-        <span className="status-chip" data-state={scenario.status}>{scenario.status}</span>
+        <div className="countdown-row" data-testid="auction-countdown">
+          <Clock3 size={16} />
+          <span>{scenario.countdown ?? countdownCopy}</span>
+          {extensionNotice && !scenario.sold && <strong>{extensionNotice}</strong>}
+        </div>
       </div>
-      <div className="leader-row">
+      <div className="dock-rank-row">
+        <span className="status-chip" data-state={scenario.status}>{scenario.status}</span>
         <span>{scenario.leader}</span>
-        <strong>{scenario.feedback}</strong>
+        <strong>{rankCopy} · {gapCopy}</strong>
       </div>
       <div className="signal-row">
         {scenario.stale || connectionPhase === 'disconnected' ? <WifiOff size={16} /> : <Wifi size={16} />}
         <span>{scenario.stale ? '状态可能已过期' : connectionPhase === 'connected' ? 'WebSocket 已连接 · 状态来自服务端事件' : 'WebSocket 连接中 · 状态来自服务端事件'}</span>
       </div>
-      <div className="countdown-row" data-testid="auction-countdown">
-        <Clock3 size={16} />
-        <span>{scenario.countdown ?? countdownCopy}</span>
-        {extensionNotice && !scenario.sold && <strong>{extensionNotice}</strong>}
+      <div className="dock-feedback" aria-live={scenario.rejected || scenario.stale ? 'assertive' : 'polite'}>
+        {scenario.feedback}
       </div>
       <div className="bid-stepper">
         <button type="button" aria-label="decrease" onClick={onDecreaseBid}>-</button>
@@ -1471,6 +1499,12 @@ function AuctionStatePanel({
         {scenario.winner ? <CreditCard size={18} /> : scenario.rejected ? <AlertTriangle size={18} /> : <CheckCircle2 size={18} />}
         {scenario.cta}
       </button>
+      <div className="dock-shortcuts" aria-label="bid-dock-shortcuts">
+        <button type="button">规则</button>
+        <button type="button">榜单</button>
+        <button type="button">历史</button>
+        <button type="button">订单</button>
+      </div>
     </section>
   );
 }

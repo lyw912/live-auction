@@ -255,7 +255,7 @@ test('H5 recovering and disconnected states show stale marker', async ({ page })
   await expect(page.getByText('状态可能已过期')).toBeVisible();
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
   await page.getByRole('button', { name: '已断开' }).click();
-  await expect(page.getByLabel('auction-state').locator('.leader-row strong')).toHaveText('重连中');
+  await expect(page.getByLabel('auction-state').locator('.dock-feedback')).toHaveText('重连中');
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
 });
 
@@ -627,6 +627,42 @@ test('H5 live panel keeps server countdown visible with status connection and CT
   await expect(page.getByTestId('auction-countdown')).toHaveText(/剩余|延时后/);
   await expect(page.getByTestId('bid-cta')).toBeEnabled();
 });
+
+for (const viewport of [
+  { width: 390, height: 844 },
+  { width: 360, height: 844 }
+]) {
+  test(`H5 sticky bid dock keeps price countdown rank and CTA visible at ${viewport.width}px`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.goto('/');
+
+    const stage = page.getByTestId('live-stage');
+    const dock = page.getByLabel('auction-state');
+    const price = dock.locator('h2');
+    const countdown = page.getByTestId('auction-countdown');
+    const cta = page.getByTestId('bid-cta');
+    await expect(stage).toBeVisible();
+    await expect(dock).toBeVisible();
+    await expect(price).toBeVisible();
+    await expect(countdown).toBeVisible();
+    await expect(dock.getByText(/我的排名|出价后显示排名/)).toBeVisible();
+    await expect(cta).toBeVisible();
+
+    const viewportHeight = viewport.height;
+    for (const locator of [stage, price, countdown, cta]) {
+      const box = await locator.boundingBox();
+      expect(box).toBeTruthy();
+      expect(box!.y).toBeGreaterThanOrEqual(0);
+      expect(box!.y + box!.height).toBeLessThanOrEqual(viewportHeight);
+    }
+    const ctaBox = await cta.boundingBox();
+    const dockBox = await dock.boundingBox();
+    expect(ctaBox).toBeTruthy();
+    expect(dockBox).toBeTruthy();
+    expect(ctaBox!.x).toBeGreaterThanOrEqual(dockBox!.x);
+    expect(ctaBox!.x + ctaBox!.width).toBeLessThanOrEqual(dockBox!.x + dockBox!.width);
+  });
+}
 
 test('H5 live stage uses product media and keeps chat inside safe zone at 360px', async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 844 });

@@ -23,7 +23,7 @@ button {
   background: var(--color-surface-2);
   display: flex;
   flex-direction: column;
-  padding-bottom: var(--safe-area-bottom);
+  padding-bottom: calc(222px + var(--safe-area-bottom));
 }
 
 .video-stage {
@@ -264,6 +264,86 @@ button {
   box-shadow: var(--shadow-panel);
 }
 
+.bid-dock {
+  position: sticky;
+  bottom: 0;
+  z-index: var(--z-sheet);
+  min-height: calc(204px + var(--safe-area-bottom));
+  margin-top: -24px;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  padding: 12px 14px calc(12px + var(--safe-area-bottom));
+  background: rgba(255, 255, 255, .98);
+  border-top: 1px solid var(--color-line);
+  backdrop-filter: blur(10px);
+}
+
+.bid-dock[data-dock-state="SELF_LEADING"] {
+  border-top-color: var(--color-auction-gold);
+}
+
+.bid-dock[data-dock-state="OUTBID"] {
+  border-left: 5px solid var(--color-bid-red);
+}
+
+.bid-dock[data-dock-state="RECOVERING"] {
+  filter: saturate(.72);
+}
+
+.bid-dock[data-dock-state="SOLD_WINNER"] {
+  border-top-color: var(--color-trust-green);
+}
+
+.dock-price-row,
+.dock-rank-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.dock-price-row h2 {
+  margin: 2px 0 0;
+  font-size: 30px;
+  letter-spacing: 0;
+  font-family: var(--font-auction-tabular);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.dock-rank-row {
+  min-height: 30px;
+  margin-top: 6px;
+  color: var(--color-muted-strong);
+  font-size: 12px;
+}
+
+.dock-rank-row > span:not(.status-chip),
+.dock-rank-row strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.dock-rank-row strong {
+  text-align: right;
+}
+
+.dock-feedback {
+  min-height: 20px;
+  margin-top: 4px;
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.bid-dock[data-dock-state="OUTBID"] .dock-feedback {
+  color: var(--color-danger-text);
+}
+
+.bid-dock[data-dock-state="RECOVERING"] .dock-feedback {
+  color: var(--color-risk-orange);
+}
+
 .auction-panel.is-stale {
   border-top: 4px solid var(--color-risk-orange);
 }
@@ -313,7 +393,7 @@ button {
 
 .countdown-row {
   min-height: 38px;
-  margin-top: 8px;
+  margin-top: 0;
   border: 1px solid var(--color-line);
   border-radius: var(--radius-md);
   background: var(--color-surface-0);
@@ -323,6 +403,7 @@ button {
   gap: 8px;
   padding: 0 10px;
   font-weight: 800;
+  min-width: 142px;
 }
 
 .countdown-row span {
@@ -339,7 +420,7 @@ button {
 
 .bid-stepper {
   height: 48px;
-  margin-top: 10px;
+  margin-top: 8px;
   border: 1px solid var(--color-line);
   border-radius: var(--radius-md);
   overflow: hidden;
@@ -374,6 +455,23 @@ button {
   align-items: center;
   justify-content: center;
   gap: 8px;
+}
+
+.dock-shortcuts {
+  height: 32px;
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.dock-shortcuts button {
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-0);
+  color: var(--color-muted-strong);
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .primary-cta:disabled {
@@ -659,6 +757,10 @@ button {
 }
 
 @media (max-width: 380px) {
+  .app-shell {
+    padding-bottom: calc(188px + var(--safe-area-bottom));
+  }
+
   .video-stage {
     min-height: 52vh;
     padding: 14px;
@@ -687,6 +789,55 @@ button {
 
   .focus-copy h1 {
     font-size: 24px;
+  }
+
+  .bid-dock {
+    min-height: calc(180px + var(--safe-area-bottom));
+    padding: 10px 10px calc(10px + var(--safe-area-bottom));
+  }
+
+  .dock-price-row {
+    gap: 7px;
+  }
+
+  .dock-price-row h2 {
+    font-size: 25px;
+  }
+
+  .countdown-row {
+    min-width: 126px;
+    min-height: 34px;
+    padding: 0 8px;
+    font-size: 12px;
+  }
+
+  .dock-rank-row {
+    gap: 6px;
+  }
+
+  .dock-feedback {
+    min-height: 18px;
+    margin-top: 2px;
+    font-size: 11px;
+  }
+
+  .bid-stepper {
+    height: 42px;
+  }
+
+  .bid-stepper button {
+    width: 46px;
+    height: 42px;
+  }
+
+  .primary-cta {
+    min-height: 46px;
+    margin-top: 8px;
+  }
+
+  .dock-shortcuts {
+    height: 28px;
+    gap: 5px;
   }
 
   .history-grid {
