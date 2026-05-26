@@ -102,6 +102,7 @@ func NewRouterWithRealtime(cfg config.Config, deps *storage.Dependencies, log *s
 			r.With(requireHost).Post("/auctions/{id}/narrate-stop", auctionHandler.NarrateStop)
 			r.Post("/auctions/{id}/bids", auctionHandler.PlaceBid)
 			r.Post("/auctions/{id}/bids/confirm", auctionHandler.ConfirmBid)
+			r.Get("/auctions/{id}/leaderboard", auctionHandler.GetLeaderboard)
 			r.Get("/orders", auctionHandler.ListOrders)
 			r.Get("/users/me/bids", auctionHandler.ListBidHistory)
 			r.Get("/users/me/orders", auctionHandler.ListUserOrders)

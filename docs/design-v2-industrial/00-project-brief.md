@@ -49,6 +49,8 @@
 | 商品详情 | 图片、描述、规则解释、当前状态 |
 | 出价 | 手动出价、pending、reject、fat-finger confirm |
 | 实时状态 | 领先/被超越、延时、截拍、成交、取消 |
+| 实时排行榜 | Top N、我的排名、与领先者差距，数据来自服务端 accepted bid 聚合 |
+| 竞价氛围 | 领先、被超越、延时、成交事件驱动短动画；提示音/震动默认静音可开关 |
 | 断线恢复 | 恢复中状态、禁用危险 CTA、snapshot 后恢复 |
 | 订单 | 我是赢家时 mock 支付，非赢家看结果 |
 | 历史 | 我的出价、成交/失败结果、订单状态 |
@@ -73,9 +75,28 @@
 - server-authoritative time。
 - auction seq 连续且客户端可检测 gap。
 - outbox commit 后崩溃可恢复投递。
-- WS 断线/重连/慢客户端/背景页。
+- WS 显式 ping/pong 心跳、断线/重连/慢客户端/背景页。
 - snapshot fallback 有防击穿。
 - UI 不做乐观成交，不从本地倒计时裁判。
+
+## 加分项路径
+
+### 极致竞价氛围体验
+
+必须基于服务端事件，不允许前端伪造成功或插入假出价：
+
+- 事件动画：`bid_accepted` 后展示“领先”；当前用户被其他有效出价超过时展示“被超越”；延时和成交分别展示短反馈。
+- 实时排行榜：H5 展示服务端 Top N、我的排名、我的最高出价、与领先者差距。
+- 紧张感细节：倒计时展示服务端时间推导结果；提示音和震动默认关闭，可由用户主动开启；效果必须短、非阻塞，并通过 longtask 测试约束。
+- 可恢复一致性：排行榜和动画只作为体验层，成交、领先者、订单仍以 PostgreSQL 竞拍真源和 outbox/WS 事件为准。
+
+### 高并发架构硬核优化
+
+继续保持现有证据纪律：
+
+- PostgreSQL 行锁与幂等记录保证竞拍真源；Redis/WebSocket 只做投影和投递。
+- Redis history/snapshot、transactional outbox、slow-consumer 断开、admission control、诊断/flight recorder 必须有测试或证据。
+- 未经原生环境基线验证，不宣传 QPS、P99 或 1000+ 在线容量。
 
 ## 评分短词展开
 
@@ -86,7 +107,7 @@
 | 数据治理 | schema、枚举、trace_id、幂等、ordering、replay 边界 |
 | 后端服务 | rule validation、row lock、state machine、outbox、scheduler |
 | 接口网关 | auth、ACL、schema、rate limit、idempotency、错误码 |
-| 前端交互 | H5 状态矩阵、PC 控制台、弱网/pending/disabled |
+| 前端交互 | H5 状态矩阵、PC 控制台、弱网/pending/disabled、排行榜、事件氛围反馈 |
 | 系统可用性 | 重启恢复、Redis down、DB lock timeout、outbox poison |
 | 性能 | load model、benchmark、raw output、瓶颈定位 |
 | 稳定性 | backpressure、snapshot 防击穿、hot table 观测 |
@@ -100,7 +121,7 @@
 2. **可恢复实时链路**：transactional outbox、分片保序 relay、Redis history、snapshot fallback、WS 背压。
 3. **失败可见可诊断**：异常 producer、诊断页 drilldown、failure gates。
 4. **证据纪律**：所有性能数字来自可复现 baseline。
-5. **事件驱动 H5 体验**：领先、被超越、延时、落锤、恢复中都绑定真实服务端事件。
+5. **事件驱动 H5 体验**：领先、被超越、延时、落锤、恢复中、排行榜都绑定真实服务端事件/查询。
 
 ## 非目标
 

@@ -108,6 +108,92 @@ func (r *Repository) CreateAuction(ctx context.Context, input CreateAuctionInput
 	return r.GetAuction(ctx, auctionID)
 }
 
+func (r *Repository) GetLeaderboard(ctx context.Context, auctionID string, userID string, limit int) (Leaderboard, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+	if limit > 20 {
+		limit = 20
+	}
+	var board Leaderboard
+	board.AuctionID = auctionID
+	err := r.db.QueryRow(ctx, `
+		SELECT current_price_cents, current_winner_id
+		FROM auctions
+		WHERE id = $1
+	`, auctionID).Scan(&board.CurrentPriceCents, &board.CurrentWinnerID)
+	if err != nil {
+		return Leaderboard{}, mapNotFound(err)
+	}
+
+	rows, err := r.db.Query(ctx, `
+		WITH best AS (
+			SELECT user_id, max(amount_cents) AS amount_cents, count(*) AS bid_count, max(created_at) AS last_bid_at
+			FROM bids
+			WHERE auction_id = $1 AND status = 'ACCEPTED'
+			GROUP BY user_id
+		),
+		ranked AS (
+			SELECT user_id, amount_cents, bid_count, last_bid_at,
+			       row_number() OVER (ORDER BY amount_cents DESC, last_bid_at ASC, user_id ASC) AS rank
+			FROM best
+		),
+		selected AS (
+			SELECT * FROM ranked WHERE rank <= $2
+			UNION
+			SELECT * FROM ranked WHERE user_id = $3
+		)
+		SELECT rank, user_id, amount_cents, bid_count, last_bid_at
+		FROM selected
+		ORDER BY rank
+	`, auctionID, limit, userID)
+	if err != nil {
+		return Leaderboard{}, err
+	}
+	defer rows.Close()
+
+	entries := make([]LeaderboardEntry, 0, limit)
+	for rows.Next() {
+		var entry LeaderboardEntry
+		if err := rows.Scan(&entry.Rank, &entry.UserID, &entry.AmountCents, &entry.BidCount, &entry.LastBidAt); err != nil {
+			return Leaderboard{}, err
+		}
+		entry.UserMasked = maskUserID(entry.UserID)
+		entry.IsCurrent = entry.UserID == userID
+		if entry.IsCurrent {
+			rank := entry.Rank
+			amount := entry.AmountCents
+			board.MyRank = &rank
+			board.MyBestAmountCents = &amount
+		}
+		if entry.Rank <= limit {
+			entries = append(entries, entry)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return Leaderboard{}, err
+	}
+	board.Entries = entries
+	if len(entries) > 0 {
+		board.LeaderAmountCents = entries[0].AmountCents
+		if board.MyBestAmountCents != nil {
+			gap := entries[0].AmountCents - *board.MyBestAmountCents
+			if gap < 0 {
+				gap = 0
+			}
+			board.GapToLeaderCents = &gap
+		}
+	}
+	if err := r.db.QueryRow(ctx, `
+		SELECT count(DISTINCT user_id)
+		FROM bids
+		WHERE auction_id = $1 AND status = 'ACCEPTED'
+	`, auctionID).Scan(&board.AcceptedBidderCount); err != nil {
+		return Leaderboard{}, err
+	}
+	return board, nil
+}
+
 func (r *Repository) UpdateRules(ctx context.Context, auctionID string, input UpdateRulesInput, traceID string) (Auction, error) {
 	tx, err := r.beginTx(ctx)
 	if err != nil {
@@ -635,4 +721,15 @@ func coalesceInt64(value int64, fallback int64) int64 {
 		return fallback
 	}
 	return value
+}
+
+func maskUserID(userID string) string {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return "匿名用户"
+	}
+	if len(userID) <= 2 {
+		return userID + "**"
+	}
+	return userID[:2] + "**"
 }

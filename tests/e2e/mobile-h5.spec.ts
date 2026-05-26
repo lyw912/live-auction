@@ -51,6 +51,24 @@ test.beforeEach(async ({ page }) => {
       }
     });
   });
+  await page.route('/api/auctions/auc_live/leaderboard?limit=5', async (route) => {
+    await route.fulfill({
+      json: {
+        auction_id: 'auc_live',
+        current_price_cents: 35000,
+        current_winner_id: 'user_2',
+        my_rank: 2,
+        my_best_amount_cents: 30000,
+        gap_to_leader_cents: 5000,
+        leader_amount_cents: 35000,
+        accepted_bidder_count: 2,
+        entries: [
+          { rank: 1, user_id: 'user_2', user_masked: '张**', amount_cents: 35000, bid_count: 2 },
+          { rank: 2, user_id: 'user_1', user_masked: '我', amount_cents: 30000, bid_count: 1, is_current: true }
+        ]
+      }
+    });
+  });
   await page.route('/api/users/me/orders', async (route) => {
     await route.fulfill({
       json: {
@@ -214,7 +232,7 @@ test('H5 opens browser WebSocket with ticket subprotocol and consumes authoritat
   });
 
   await expect(page.getByText('event seq 42')).toBeVisible();
-  await expect(page.getByText('¥400.00')).toBeVisible();
+  await expect(page.getByLabel('auction-state').locator('h2')).toHaveText('¥400.00');
   await expect(page.getByText('陈** 领先')).toBeVisible();
 });
 
@@ -261,7 +279,7 @@ test('H5 bid stays pending until authoritative accepted response', async ({ page
   const bidRequest = await bidArrived;
 
   await expect(page.getByText('等待服务端确认')).toBeVisible();
-  await expect(page.getByText('¥350.00')).toBeVisible();
+  await expect(page.getByLabel('auction-state').locator('h2')).toHaveText('¥350.00');
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
   expect(bidRequest.idempotencyKey).toBe(bidRequest.body.client_bid_id);
   expect(bidRequest.body.amount_cents).toBe(40000);
@@ -269,7 +287,7 @@ test('H5 bid stays pending until authoritative accepted response', async ({ page
 
   releaseBid();
   await expect(page.getByText('服务端确认 seq 42')).toBeVisible();
-  await expect(page.getByText('¥400.00')).toBeVisible();
+  await expect(page.getByLabel('auction-state').locator('h2')).toHaveText('¥400.00');
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
 });
 
@@ -291,7 +309,7 @@ test('H5 rejected bid shows business copy and re-enables CTA', async ({ page }) 
   await page.getByTestId('bid-cta').click();
 
   await expect(page.getByText('请按加价幅度出价')).toBeVisible();
-  await expect(page.getByText('¥350.00')).toBeVisible();
+  await expect(page.getByLabel('auction-state').locator('h2')).toHaveText('¥350.00');
   await expect(page.getByTestId('bid-cta')).toBeEnabled();
 });
 
@@ -340,13 +358,13 @@ test('H5 fat-finger confirm waits for confirm API before accepted UI', async ({ 
   await page.getByRole('button', { name: '竞价中' }).click();
   await page.getByTestId('bid-cta').click();
   await expect(page.getByText('确认 ¥900.00 出价')).toBeVisible();
-  await expect(page.getByText('¥350.00')).toBeVisible();
+  await expect(page.getByLabel('auction-state').locator('h2')).toHaveText('¥350.00');
   await expect(page.getByTestId('bid-cta')).toHaveText(/确认高额出价/);
 
   await page.getByTestId('bid-cta').click();
   const confirmRequest = await confirmArrived;
   await expect(page.getByText('等待服务端确认高额出价')).toBeVisible();
-  await expect(page.getByText('¥350.00')).toBeVisible();
+  await expect(page.getByLabel('auction-state').locator('h2')).toHaveText('¥350.00');
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
   expect(confirmRequest.idempotencyKey).toBe(firstBidKey);
   expect(confirmRequest.body.confirm_token).toBe('ft_test');
@@ -354,7 +372,7 @@ test('H5 fat-finger confirm waits for confirm API before accepted UI', async ({ 
 
   releaseConfirm();
   await expect(page.getByText('服务端确认 seq 42')).toBeVisible();
-  await expect(page.getByText('¥900.00')).toBeVisible();
+  await expect(page.getByLabel('auction-state').locator('h2')).toHaveText('¥900.00');
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
 });
 
@@ -595,6 +613,35 @@ test('H5 live panel keeps server countdown visible with status connection and CT
   await expect(page.getByText('WebSocket 已连接 · 状态来自服务端事件')).toBeVisible();
   await expect(page.getByTestId('auction-countdown')).toHaveText(/剩余|延时后/);
   await expect(page.getByTestId('bid-cta')).toBeEnabled();
+});
+
+test('H5 renders realtime leaderboard and event atmosphere controls', async ({ page }) => {
+  await page.goto('/?stateMatrix=1');
+  await expect(page.getByLabel('auction-state').locator('h2')).toHaveText('¥350.00');
+
+  await expect(page.getByTestId('leaderboard-panel')).toContainText('实时排行榜');
+  await expect(page.getByTestId('leaderboard-panel')).toContainText('第 2 名');
+  await expect(page.getByTestId('leaderboard-panel')).toContainText('差 ¥50.00');
+  await expect(page.getByTestId('leaderboard-panel')).toContainText('¥350.00');
+  await expect(page.getByRole('button', { name: '开启提示音' })).toBeVisible();
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('auction:event', {
+      detail: {
+        auction_id: 'auc_live',
+        event_type: 'bid_accepted',
+        seq: 42,
+        payload: {
+          current_price_cents: 40000,
+          current_winner_id: 'user_1',
+          user_id: 'user_1',
+          leader_user_masked: '你'
+        }
+      }
+    }));
+  });
+
+  await expect(page.getByRole('status')).toContainText('领先！');
 });
 
 test('H5 order realtime events update winner payment state', async ({ page }) => {

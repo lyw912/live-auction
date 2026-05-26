@@ -48,7 +48,7 @@ test('H5 covers live backend REST, fat-finger confirm, cap SOLD order, payment, 
   await expect(page.getByText('¥350.00')).toBeVisible();
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
   await expect(page.getByLabel('auction-state').locator('.eyebrow')).toHaveText('成交');
-  await expect(page.getByText('¥600.00')).toBeVisible();
+  await expect(page.getByLabel('auction-state').getByRole('heading', { name: '¥600.00' })).toBeVisible();
   await expect(page.getByTestId('bid-cta')).toHaveText(/去支付/);
   await expect(page.getByTestId('bid-cta')).toBeEnabled();
 
@@ -91,6 +91,6 @@ test('H5 route isolates two room contexts', async ({ page }) => {
     })
   ]));
   await expect(page.getByText('auc_live')).not.toBeVisible();
-  await expect(page.getByText('Side Room Smoke Item')).toBeVisible();
+  await expect(page.getByLabel('live-stage').getByText('room_side')).toBeVisible();
   await expect(page.getByTestId('chat-panel').getByText('侧房间独立弹幕')).toBeVisible();
 });

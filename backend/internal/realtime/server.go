@@ -40,6 +40,8 @@ type Options struct {
 	SnapshotTTL           time.Duration
 	StreamEpochTTL        time.Duration
 	RecoveryReadChunkSize int64
+	HeartbeatInterval     time.Duration
+	HeartbeatTimeout      time.Duration
 }
 
 func defaultOptions() Options {
@@ -52,6 +54,8 @@ func defaultOptions() Options {
 		SnapshotTTL:           30 * time.Minute,
 		StreamEpochTTL:        24 * time.Hour,
 		RecoveryReadChunkSize: 256,
+		HeartbeatInterval:     20 * time.Second,
+		HeartbeatTimeout:      5 * time.Second,
 	}
 }
 
@@ -117,6 +121,12 @@ func normalizeOptions(options Options) Options {
 	}
 	if options.RecoveryReadChunkSize > options.RecoveryMaxEvents {
 		options.RecoveryReadChunkSize = options.RecoveryMaxEvents
+	}
+	if options.HeartbeatInterval <= 0 {
+		options.HeartbeatInterval = defaults.HeartbeatInterval
+	}
+	if options.HeartbeatTimeout <= 0 {
+		options.HeartbeatTimeout = defaults.HeartbeatTimeout
 	}
 	return options
 }
@@ -230,14 +240,8 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close(websocket.StatusNormalClosure, "")
 	connCtx, cancelConn := context.WithCancel(r.Context())
 	defer cancelConn()
-	go func() {
-		defer cancelConn()
-		for {
-			if _, _, err := conn.Read(connCtx); err != nil {
-				return
-			}
-		}
-	}()
+	writeMu := &sync.Mutex{}
+	go s.keepAlive(connCtx, conn, roomID, auctionID, ticket.UserID)
 
 	slow := make(chan SlowConsumerInfo, 1)
 	var closeSlow sync.Once
@@ -265,7 +269,7 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 		"source": recoverySource,
 	})
 	for _, message := range messages {
-		if err := conn.Write(writeCtx, websocket.MessageText, message); err != nil {
+		if err := writeWS(writeCtx, conn, writeMu, websocket.MessageText, message); err != nil {
 			observability.Inc("auction_ws_slow_consumer_disconnect_total", nil)
 			_ = s.recordWSActivity(ctx, roomID, auctionID, ticket.UserID, "ws_slow_consumer_closed", map[string]any{
 				"phase": "recovery",
@@ -288,7 +292,7 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 			}
 			message := queued.data
 			ctx, cancel := context.WithTimeout(connCtx, 5*time.Second)
-			err := conn.Write(ctx, websocket.MessageText, message)
+			err := writeWS(ctx, conn, writeMu, websocket.MessageText, message)
 			cancel()
 			sub.Ack(queued)
 			if err != nil {
@@ -319,6 +323,37 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+func (s *Server) keepAlive(ctx context.Context, conn *websocket.Conn, roomID string, auctionID string, userID string) {
+	ticker := time.NewTicker(s.options.HeartbeatInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			pingCtx, cancel := context.WithTimeout(ctx, s.options.HeartbeatTimeout)
+			err := conn.Ping(pingCtx)
+			cancel()
+			if err != nil {
+				observability.Inc("auction_ws_heartbeat_timeout_total", nil)
+				_ = s.recordWSActivity(context.Background(), roomID, auctionID, userID, "ws_heartbeat_timeout", map[string]any{
+					"interval_ms": int64(s.options.HeartbeatInterval / time.Millisecond),
+					"timeout_ms":  int64(s.options.HeartbeatTimeout / time.Millisecond),
+				})
+				_ = conn.Close(websocket.StatusPolicyViolation, "heartbeat timeout")
+				return
+			}
+			observability.Inc("auction_ws_heartbeat_ping_total", nil)
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func writeWS(ctx context.Context, conn *websocket.Conn, writeMu *sync.Mutex, typ websocket.MessageType, data []byte) error {
+	writeMu.Lock()
+	defer writeMu.Unlock()
+	return conn.Write(ctx, typ, data)
 }
 
 func (s *Server) PublishAuctionEvent(ctx context.Context, auctionID string, payload []byte) {

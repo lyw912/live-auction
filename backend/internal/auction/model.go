@@ -68,3 +68,25 @@ type Auction struct {
 	Item              Item       `json:"item"`
 	Rule              Rule       `json:"rule"`
 }
+
+type LeaderboardEntry struct {
+	Rank        int       `json:"rank"`
+	UserID      string    `json:"user_id"`
+	UserMasked  string    `json:"user_masked"`
+	AmountCents int64     `json:"amount_cents"`
+	BidCount    int64     `json:"bid_count"`
+	LastBidAt   time.Time `json:"last_bid_at"`
+	IsCurrent   bool      `json:"is_current"`
+}
+
+type Leaderboard struct {
+	AuctionID           string             `json:"auction_id"`
+	CurrentPriceCents   int64              `json:"current_price_cents"`
+	CurrentWinnerID     *string            `json:"current_winner_id,omitempty"`
+	MyRank              *int               `json:"my_rank,omitempty"`
+	MyBestAmountCents   *int64             `json:"my_best_amount_cents,omitempty"`
+	GapToLeaderCents    *int64             `json:"gap_to_leader_cents,omitempty"`
+	LeaderAmountCents   int64              `json:"leader_amount_cents"`
+	AcceptedBidderCount int64              `json:"accepted_bidder_count"`
+	Entries             []LeaderboardEntry `json:"entries"`
+}

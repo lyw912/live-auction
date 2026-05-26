@@ -496,7 +496,7 @@ func (r *Repository) ReconcileProviderPayments(ctx context.Context, limit int, g
 		FROM orders
 		WHERE status = 'PAYMENT_INITIATED'
 		  AND provider_payment_id IS NOT NULL
-		ORDER BY payment_initiated_at NULLS FIRST, created_at
+		ORDER BY payment_initiated_at DESC NULLS LAST, created_at DESC
 		LIMIT $1
 	`, limit)
 	if err != nil {

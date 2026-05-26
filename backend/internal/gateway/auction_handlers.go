@@ -372,6 +372,22 @@ func (h AuctionHandler) ConfirmBid(w http.ResponseWriter, r *http.Request) {
 	writeResult(w, r, http.StatusOK, result, err)
 }
 
+func (h AuctionHandler) GetLeaderboard(w http.ResponseWriter, r *http.Request) {
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	auctionID := chi.URLParam(r, "id")
+	if _, err := h.ACL.requireActiveMembershipForAuction(r.Context(), user, auctionID, traceID(r.Context())); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	result, err := h.Repo.GetLeaderboard(r.Context(), auctionID, user.ID, limit)
+	writeResult(w, r, http.StatusOK, result, err)
+}
+
 func (h AuctionHandler) PayMock(w http.ResponseWriter, r *http.Request) {
 	user, ok := currentUser(r)
 	if !ok {

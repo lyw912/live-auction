@@ -34,7 +34,7 @@ test('PC console covers live backend host workflow and diagnostics', async ({ pa
   await page.getByRole('tab', { name: 'Auctions' }).click();
   await expect(page.getByLabel('Auctions').getByText('ACTIVE').first()).toBeVisible();
   await page.getByRole('tab', { name: 'Outbox' }).click();
-  await expect(page.getByLabel('Outbox').getByText(/auction_/).first()).toBeVisible();
+  await expect(page.getByLabel('Outbox').getByText(/outbox:\d+/).first()).toBeVisible();
 
   await page.getByLabel('cancel-reason').fill('live pc smoke cleanup');
   await page.getByRole('button', { name: '取消' }).click();

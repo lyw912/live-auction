@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { AlertTriangle, CheckCircle2, ChevronUp, Clock3, CreditCard, History, MessageCircle, Radio, RefreshCw, Send, Wifi, WifiOff } from 'lucide-react';
+import { AlertTriangle, Bell, BellOff, CheckCircle2, ChevronUp, Clock3, CreditCard, History, MessageCircle, Radio, RefreshCw, Send, Trophy, Wifi, WifiOff } from 'lucide-react';
 import './styles.css';
 
 type AuctionState =
@@ -129,6 +129,25 @@ type AuctionSummary = {
     title?: string;
   };
 };
+type LeaderboardEntry = {
+  rank: number;
+  user_id: string;
+  user_masked: string;
+  amount_cents: number;
+  bid_count: number;
+  is_current?: boolean;
+};
+type LeaderboardPayload = {
+  auction_id: string;
+  current_price_cents: number;
+  current_winner_id?: string;
+  my_rank?: number;
+  my_best_amount_cents?: number;
+  gap_to_leader_cents?: number;
+  leader_amount_cents: number;
+  accepted_bidder_count: number;
+  entries?: LeaderboardEntry[];
+};
 type WSTicketResponse = {
   ticket?: string;
   expires_in_ms?: number;
@@ -136,6 +155,14 @@ type WSTicketResponse = {
 type AuthUser = {
   ID: string;
   Role: string;
+};
+
+type AtmosphereKind = 'leading' | 'outbid' | 'extended' | 'sold';
+type AtmosphereCue = {
+  id: number;
+  kind: AtmosphereKind;
+  title: string;
+  detail: string;
 };
 
 const demoUserID = 'user_1';
@@ -205,6 +232,39 @@ function responseServerTimeMS(response: Response) {
   if (!dateHeader) return 0;
   const parsed = Date.parse(dateHeader);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function leaderboardCopy(payload: LeaderboardPayload | null) {
+  if (!payload || !payload.entries?.length) return '等待首个有效出价';
+  if (payload.my_rank === 1) return '你正在领先';
+  if (payload.my_rank && payload.gap_to_leader_cents != null) {
+    return `第 ${payload.my_rank} 名 · 差 ${formatCents(payload.gap_to_leader_cents)}`;
+  }
+  return `${payload.accepted_bidder_count} 人已有效出价`;
+}
+
+function vibrateOnce() {
+  if ('vibrate' in navigator) {
+    navigator.vibrate?.(32);
+  }
+}
+
+function playCueTone() {
+  const AudioContextCtor = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AudioContextCtor) return;
+  const ctx = new AudioContextCtor();
+  const oscillator = ctx.createOscillator();
+  const gain = ctx.createGain();
+  oscillator.type = 'sine';
+  oscillator.frequency.value = 880;
+  gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.08, ctx.currentTime + 0.02);
+  gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.16);
+  oscillator.connect(gain);
+  gain.connect(ctx.destination);
+  oscillator.start();
+  oscillator.stop(ctx.currentTime + 0.18);
+  window.setTimeout(() => void ctx.close(), 260);
 }
 
 async function ensureDemoSession(account: 'host' | 'user') {
@@ -282,6 +342,9 @@ function App() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatDraft, setChatDraft] = useState('');
   const [chatSending, setChatSending] = useState(false);
+  const [leaderboard, setLeaderboard] = useState<LeaderboardPayload | null>(null);
+  const [atmosphereCue, setAtmosphereCue] = useState<AtmosphereCue | null>(null);
+  const [soundEnabled, setSoundEnabled] = useState(false);
   const [connectionPhase, setConnectionPhase] = useState<ConnectionPhase>('connecting');
   const [activeAuctionID, setActiveAuctionID] = useState('');
   const [activeIncrementCents, setActiveIncrementCents] = useState(5_000);
@@ -306,6 +369,9 @@ function App() {
   const activeIncrementCentsRef = useRef(activeIncrementCents);
   const auctionEndAtRef = useRef(auctionEndAt);
   const serverTimeMSRef = useRef(serverTimeMS);
+  const currentUserIDRef = useRef(currentUserID);
+  const soundEnabledRef = useRef(soundEnabled);
+  const leaderboardRef = useRef<LeaderboardPayload | null>(leaderboard);
 
   useEffect(() => {
     lastSeqRef.current = lastSeq;
@@ -336,6 +402,18 @@ function App() {
   }, [serverTimeMS]);
 
   useEffect(() => {
+    currentUserIDRef.current = currentUserID;
+  }, [currentUserID]);
+
+  useEffect(() => {
+    soundEnabledRef.current = soundEnabled;
+  }, [soundEnabled]);
+
+  useEffect(() => {
+    leaderboardRef.current = leaderboard;
+  }, [leaderboard]);
+
+  useEffect(() => {
     const timer = window.setInterval(() => setNowMS(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, []);
@@ -351,6 +429,20 @@ function App() {
     recoveryPhase === 'idle' &&
     isCountdownExpired(auctionEndAt, serverTimeMS, nowMS)
   ), [auctionEndAt, connectionPhase, nowMS, recoveryPhase, selected, serverTimeMS]);
+
+  const showAtmosphere = (kind: AtmosphereKind, title: string, detail: string) => {
+    setAtmosphereCue({ id: Date.now(), kind, title, detail });
+    if (soundEnabledRef.current) {
+      playCueTone();
+      vibrateOnce();
+    }
+  };
+
+  useEffect(() => {
+    if (!atmosphereCue) return;
+    const timer = window.setTimeout(() => setAtmosphereCue(null), 1800);
+    return () => window.clearTimeout(timer);
+  }, [atmosphereCue]);
 
   useEffect(() => {
     let cancelled = false;
@@ -591,6 +683,7 @@ function App() {
 
   const applyAcceptedBid = (payload: BidResponse) => {
     const acceptedPrice = payload.current_price_cents ?? currentPriceCents;
+    const acceptedWinnerID = payload.current_winner_id ?? '';
     setCurrentPriceCents(acceptedPrice);
     setNextBidCents(acceptedPrice + activeIncrementCents);
     setLastSeq(payload.seq ?? lastSeq);
@@ -599,6 +692,7 @@ function App() {
     if (payload.result === 'ACCEPTED_EXTENDED') {
       setExtensionNotice('服务端已延时');
       setBidFeedback(`服务端已延时 seq ${payload.seq ?? lastSeq}`);
+      showAtmosphere('extended', '已延时', '最后窗口出价，服务端延长竞拍');
     }
     setConfirmToken('');
     setConfirmIdempotencyKey('');
@@ -607,11 +701,17 @@ function App() {
       setTerminalPriceCents(acceptedPrice);
       setTerminalWinnerID(payload.current_winner_id ?? '');
       setSelected(payload.current_winner_id === currentUserID ? 'sold_winner' : 'sold_loser');
+      showAtmosphere('sold', payload.current_winner_id === currentUserID ? '成交！' : '已成交', payload.current_winner_id === currentUserID ? '你已拍中，订单待支付' : '本场已落锤');
       setBidPhase('idle');
+      void loadLeaderboard(payload.auction_id ?? activeAuctionIDRef.current);
       void loadPayableOrderForAuction(payload.auction_id ?? activeAuctionIDRef.current);
       return;
     }
-    setBidPhase(payload.current_winner_id === currentUserID ? 'accepted' : 'idle');
+    if (acceptedWinnerID === currentUserID) {
+      showAtmosphere('leading', '领先！', `${formatCents(acceptedPrice)} 服务端确认`);
+    }
+    setBidPhase(acceptedWinnerID === currentUserID ? 'accepted' : 'idle');
+    void loadLeaderboard(payload.auction_id ?? activeAuctionIDRef.current);
   };
 
   const loadPayableOrderForAuction = async (auctionID: string) => {
@@ -664,6 +764,7 @@ function App() {
       setSelected('cancelled');
       setBidFeedback(snapshot.payload?.reason ?? '主播已取消');
     }
+    void loadLeaderboard(snapshotAuctionID ?? activeAuctionIDRef.current);
   };
 
   const recoverFromSnapshot = async () => {
@@ -708,6 +809,8 @@ function App() {
     const increment = activeIncrementCentsRef.current;
     const nextEndAt = detail.payload?.end_at ?? detail.end_at;
     const nextServerTimeMS = detail.payload?.server_time_ms ?? detail.server_time_ms;
+    const previousLeading = leaderboardRef.current?.my_rank === 1;
+    const winnerID = detail.payload?.current_winner_id ?? detail.payload?.user_id ?? '';
     setCurrentPriceCents(price);
     setNextBidCents(price + increment);
     setLastSeq(detail.seq);
@@ -718,11 +821,11 @@ function App() {
     if (wasExtended) {
       setExtensionNotice('服务端已延时');
       setBidFeedback(`服务端已延时 seq ${detail.seq}`);
+      showAtmosphere('extended', '已延时', '最后窗口出价，竞拍继续');
     } else {
       setBidFeedback(`event seq ${detail.seq}`);
     }
     if (detail.event_type === 'auction_sold') {
-      const winnerID = detail.payload?.current_winner_id ?? detail.payload?.user_id ?? '';
       setTerminalPriceCents(price);
       setTerminalWinnerID(winnerID);
       if (detail.payload?.order_id && winnerID === currentUserID) {
@@ -730,6 +833,7 @@ function App() {
         setPayableOrderAmountCents(price);
       }
       setSelected(winnerID === currentUserID ? 'sold_winner' : 'sold_loser');
+      showAtmosphere('sold', winnerID === currentUserID ? '成交！' : '已成交', winnerID === currentUserID ? '你已拍中，订单待支付' : '本场已落锤');
       setBidPhase('idle');
       if (winnerID === currentUserID) {
         void loadPayableOrderForAuction(detail.auction_id);
@@ -756,11 +860,17 @@ function App() {
       }
       setBidFeedback('订单已超时');
     } else if (detail.payload?.user_id && detail.payload.user_id !== currentUserID) {
+      if (previousLeading) {
+        showAtmosphere('outbid', '被超越！', `${detail.payload.leader_user_masked ?? '其他用户'} 已领先`);
+      }
       setBidPhase('idle');
       setConfirmToken('');
       setConfirmIdempotencyKey('');
       setConfirmAmountCents(0);
+    } else if (winnerID === currentUserIDRef.current || detail.payload?.current_winner_id === currentUserIDRef.current) {
+      showAtmosphere('leading', '领先！', `${formatCents(price)} 已同步`);
     }
+    void loadLeaderboard(detail.auction_id);
     setConnectionPhase('connected');
   };
 
@@ -785,6 +895,7 @@ function App() {
         setAuctionEndAt(selectedAuction.end_at ?? '');
         setServerTimeMS(selectedAuction.server_time_ms ?? 0);
         setBidFeedback(`auction ${selectedAuction.id}`);
+        void loadLeaderboard(selectedAuction.id);
         try {
           const snapshotResponse = await fetch(`/api/auctions/${selectedAuction.id}`);
           const snapshot = await readJSON<SnapshotResponse>(snapshotResponse);
@@ -916,6 +1027,7 @@ function App() {
 
     if (sessionReady && activeAuctionID) {
       void connectWebSocket();
+      void loadLeaderboard(activeAuctionID);
     }
     return () => {
       cancelled = true;
@@ -1020,6 +1132,19 @@ function App() {
     }
   };
 
+  const loadLeaderboard = async (auctionID = activeAuctionIDRef.current) => {
+    if (!auctionID) return;
+    try {
+      const response = await fetch(`/api/auctions/${auctionID}/leaderboard?limit=5`);
+      const payload = await readJSON<LeaderboardPayload>(response);
+      if (response.ok && payload) {
+        setLeaderboard(payload);
+      }
+    } catch {
+      setLeaderboard(null);
+    }
+  };
+
   const handlePrimaryAction = () => {
     if (selected === 'sold_winner') {
       void payOrder();
@@ -1094,10 +1219,24 @@ function App() {
   return (
     <main className="app-shell">
       <section className="video-stage" aria-label="live-stage">
+        {atmosphereCue && (
+          <div className={`atmosphere-cue ${atmosphereCue.kind}`} role="status" aria-live="polite" key={atmosphereCue.id}>
+            <strong>{atmosphereCue.title}</strong>
+            <span>{atmosphereCue.detail}</span>
+          </div>
+        )}
         <div className="video-topbar">
           <span className="live-pill"><Radio size={14} /> LIVE</span>
           <span className="viewer-count">{roomID}</span>
           <span className="viewer-count">12,486 watching</span>
+          <button
+            className="sound-toggle"
+            type="button"
+            aria-label={soundEnabled ? '关闭提示音' : '开启提示音'}
+            onClick={() => setSoundEnabled((enabled) => !enabled)}
+          >
+            {soundEnabled ? <Bell size={14} /> : <BellOff size={14} />}
+          </button>
         </div>
         <div className="focus-copy">
           <h1>{lotTitle}</h1>
@@ -1135,6 +1274,33 @@ function App() {
           {scenario.winner ? <CreditCard size={18} /> : scenario.rejected ? <AlertTriangle size={18} /> : <CheckCircle2 size={18} />}
           {scenario.cta}
         </button>
+      </section>
+
+      <section className="leaderboard-panel" data-testid="leaderboard-panel">
+        <div className="leaderboard-title">
+          <h2><Trophy size={16} /> 实时排行榜</h2>
+          <button type="button" onClick={() => void loadLeaderboard()} disabled={!activeAuctionID}>
+            <RefreshCw size={14} />
+            刷新
+          </button>
+        </div>
+        <div className="my-rank-card">
+          <strong>{leaderboardCopy(leaderboard)}</strong>
+          <span>{leaderboard?.my_best_amount_cents != null ? `我的最高 ${formatCents(leaderboard.my_best_amount_cents)}` : '出价后显示我的位置'}</span>
+        </div>
+        <div className="leaderboard-list">
+          {(leaderboard?.entries ?? []).length === 0 ? (
+            <p>暂无有效出价</p>
+          ) : (
+            leaderboard?.entries?.map((entry) => (
+              <div className={`leaderboard-row ${entry.is_current ? 'is-current' : ''}`} key={`${entry.rank}-${entry.user_id}`}>
+                <span>#{entry.rank}</span>
+                <strong>{entry.is_current ? '我' : entry.user_masked}</strong>
+                <em>{formatCents(entry.amount_cents)}</em>
+              </div>
+            ))
+          )}
+        </div>
       </section>
 
       {showStateMatrix && (

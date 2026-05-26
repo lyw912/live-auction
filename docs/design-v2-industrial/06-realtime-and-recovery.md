@@ -194,6 +194,19 @@ Per connection:
 
 All socket writes use deadlines. Slow client must not pin goroutine or memory.
 
+## Heartbeat
+
+Server WebSocket connections send explicit protocol ping frames on a fixed interval and require pong completion before the heartbeat timeout. Heartbeat failure closes the connection and records a `ws_heartbeat_timeout` user activity event plus `auction_ws_heartbeat_timeout_total`.
+
+Defaults:
+
+```text
+interval = 20s
+timeout = 5s
+```
+
+The heartbeat is a transport liveness signal only. It does not replace `auction_id + seq` recovery, snapshot fallback, or slow-consumer queue limits.
+
 ## Reconnect Backoff
 
 Client:
