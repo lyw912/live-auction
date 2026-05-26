@@ -43,6 +43,7 @@
 
 | 标杆/规范 | 观察 | 对本项目的启发 |
 |---|---|---|
+| 官方宣讲版图片 | PC 图展示商品列表、状态、价格、出价次数、讲解/取消/下架操作；H5 图展示直播间商品半屏列表、出价半屏面板、未成交禁用态、赢家支付弹窗、落槌结果弹窗和直播底部 mini 商品卡。 | 官方最低期望不是单页竞拍，而是“直播间 + 商品列表/半屏面板 + 状态化出价 + 结果/支付弹窗”。我们的重构应保留这些行为，并用 Bid Dock/Bottom Sheet/Command Center 提升清晰度和工业完整度。 |
 | TikTok Shop / TikTok LIVE | 购物入口天然在短视频和 LIVE 内，商品链接、购物袋、产品卡要降低离开直播的成本。 | H5 首屏必须像直播产品，不像后台页面；商品卡和出价 CTA 要贴近视频观看动线。 |
 | Whatnot | 直播竞拍核心操作是 Swipe/Click to bid、Custom Bid、Max Bid、Pre-bid；用户在实时视频、聊天、商品和出价之间高速切换。 | 出价 CTA 必须是底部稳定主操作；Custom/Max Bid 放二级入口；聊天不能挡商品和 CTA。 |
 | eBay Live | 实时直播、聊天、卖家问答、短拍卖；最后几秒出价会延长时间。 | 延时、灰置按钮、错误原因必须清晰解释；直播竞拍 UI 要把规则可视化，减少“为什么又延时”的疑惑。 |
@@ -53,6 +54,7 @@
 
 参考链接：
 
+- Official brief images: `docs/references/official-brief-images/`
 - TikTok Shop and Showcase: https://ads.tiktok.com/help/article/tiktok-shopping-and-showcase
 - TikTok Shop Tab: https://newsroom.tiktok.com/all-you-need-to-know-about-the-tiktok-shop-tab
 - Whatnot livestream bidding: https://help.whatnot.com/hc/en-us/articles/11429967449869-Bidding-on-an-Auction-During-a-Livestream
@@ -70,6 +72,21 @@
 - NN/g usability heuristics: https://www.nngroup.com/articles/ten-usability-heuristics/
 
 ## 当前 UI 问题诊断
+
+## 官方图片参考解读
+
+官方宣讲版的 6 张截图已经下载到 `docs/references/official-brief-images/`。它们应作为 UI/UX 的官方语义参考，但不应成为照抄限制。
+
+| 图片 | 官方隐含要求 | 在本方案中的升级 |
+|---|---|---|
+| PC 商品列表 | 商家/主播端要能搜索筛选、添加商品、查看起拍价/加价/封顶/当前价或成交价/出价次数，且有讲解、取消讲解、下架、竞拍中/已成交状态。 | P8 的 PC Command Center 保留密集运营能力，但把 ACTIVE 控制面从列表中提升为主战情室。 |
+| H5 商品半屏列表 | 用户在直播间内浏览多个竞拍商品，状态包括竞拍中、即将开拍、未成交、已结束、截拍中。 | P6 的 Bottom Sheet 系统保留商品列表/详情浏览，并增加 Bid Dock 保证主竞拍动作不被列表挤走。 |
+| H5 出价面板 | 半屏面板集中展示倒计时、商品、当前价、领先者、我的出价、stepper、加价幅度和出价 CTA。 | P6 的 Bid Dock 将这些关键信息常驻底部，避免每次都依赖弹层；Product/Leaderboard sheet 作为扩展。 |
+| 出价边界提示 | 高于当前价、自己已最高价等状态要在按钮附近明确提示。 | P7 的 RankStrip/Atmosphere Engine 将提示升级为 action copy：差多少、下一口多少、为何不能重复出价。 |
+| 未成交结束态 | 结束未成交时 CTA 禁用，并提示 5 秒后返回直播间。 | P6-S5 拆 Winner/Loser/Unsold result sheet，终态解释和下一步承接更清晰。 |
+| 成交/支付弹窗 | 中奖支付弹窗、保证金退回说明、支付倒计时、落槌结果弹窗、直播背景和 mini 商品卡仍可见。 | P6-S5 保留直播上下文中的结果 sheet，增加支付状态、订单锁定、输家承接和诊断可追溯。 |
+
+结论：官方图像强调“半屏面板 + 状态化商品列表 + 结果弹窗 + 直播上下文”。本设计仍坚持全新 UI/UX，但必须覆盖这些官方语义，不能只做一个孤立的单拍品页面。
 
 ### H5
 

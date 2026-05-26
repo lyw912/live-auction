@@ -9,6 +9,7 @@ P0-P4 proved correctness, realtime recovery, diagnostics, and performance discip
 
 - `19-extreme-bidding-atmosphere.md`: event-driven bidding atmosphere, action-oriented ranking, host prompter, heat, trust, and advanced auction engagement.
 - `20-ui-ux-redesign.md`: full UI/UX redesign across Viewer H5, Host Live Assist, Seller Studio, and Ops Diagnostics.
+- `docs/references/official-brief-images/`: official brief screenshots that clarify expected PC product management, H5 live product list, bid panel, ended state, winner payment, and hammer result flows.
 
 The roadmap is intentionally slice-based. Each slice has a small behavioral surface, a validation gate, and a suggested commit message. Follow the order unless a slice is explicitly independent.
 
@@ -22,6 +23,7 @@ The roadmap is intentionally slice-based. Each slice has a small behavioral surf
 6. Sound/haptic are opt-in and must degrade cleanly.
 7. Visual polish requires screenshot/longtask/text-fit gates, not manual taste alone.
 8. PC host/seller UX must remain operationally efficient, not become a decorative dashboard.
+9. Official screenshot semantics must be preserved or deliberately superseded with a stronger documented UX: product list half sheet, bid panel, self-leading hint, ended/unsold state, winner payment, hammer result, PC narrating and bid count controls.
 
 ## Phase Map
 
@@ -73,10 +75,12 @@ style: add auction studio design tokens
 Reference:
 
 - `20-ui-ux-redesign.md` → `Visual Regression System`, `测试门禁`.
+- `docs/references/official-brief-images/` → official PC/H5 state screenshots.
 
 Scope:
 
 - Add Playwright screenshot fixtures for H5 key states: active, self-leading, outbid, recovering, sold winner, sold loser.
+- Add official-alignment screenshot cases: product list sheet, bid sheet, unsold ended state, winner payment/result state.
 - Add PC screenshot fixtures for command panel/diagnostics initial state.
 - Store screenshots under a predictable evidence or test snapshot path.
 - Do not redesign UI yet; create gates first.
@@ -204,11 +208,13 @@ feat: add sticky H5 bid dock
 Reference:
 
 - `20-ui-ux-redesign.md` → `Bottom Sheet 系统`.
+- `docs/references/official-brief-images/official-brief-image-02.png` and `official-brief-image-03.png`.
 
 Scope:
 
 - Add reusable bottom sheet component.
 - Move product detail, rules, leaderboard, history, orders into sheets or sheet tabs.
+- Add product list sheet behavior matching the official live-room expectation: bidding/upcoming/ended/sold/cutoff cards with state-specific CTA.
 - Keep primary bid CTA singular and stable.
 
 Validation:
@@ -251,11 +257,13 @@ Reference:
 
 - `19-extreme-bidding-atmosphere.md` → `成交/输家承接`.
 - `20-ui-ux-redesign.md` → `支付与成交 UX`.
+- `docs/references/official-brief-images/official-brief-image-05.png` and `official-brief-image-06.png`.
 
 Scope:
 
 - Winner sheet: sold price, order lock countdown, payment CTA, deposit/payment status.
 - Loser sheet: final gap, winner masked, next/similar auction placeholder.
+- Unsold/ended sheet: disabled bid CTA, explanation, return-to-live or next-item countdown.
 - Keep payment mock path intact.
 
 Validation:
@@ -377,6 +385,32 @@ Commit:
 feat: add action-oriented H5 rank strip
 ```
 
+### P7-S4b · Official Bid Hint States
+
+Reference:
+
+- `19-extreme-bidding-atmosphere.md` → `Official. 官方图片状态补齐`.
+- `docs/references/official-brief-images/official-brief-image-04.png`.
+
+Scope:
+
+- Add explicit bid-adjacent hints for:
+  - one-step/multi-step amount above current price;
+  - self-leading guardrail;
+  - stale price changed while user prepared to bid.
+- Hints must be near the amount/CTA, not hidden in toast.
+
+Validation:
+
+- H5 e2e: self-leading state disables or changes CTA with clear copy.
+- H5 e2e: multi-step bid hint shows how much above current price.
+
+Commit:
+
+```text
+feat: add official bid hint states
+```
+
 ### P7-S5 · Sound And Haptic Policy
 
 Reference:
@@ -435,6 +469,7 @@ Goal: make PC useful for live operation, not just CRUD and diagnostics.
 Reference:
 
 - `20-ui-ux-redesign.md` → `PC 全新界面蓝图`, `PC Command Center`.
+- `docs/references/official-brief-images/official-brief-image-01.png`.
 
 Scope:
 
@@ -445,6 +480,7 @@ Scope:
   - right live assist/event rail
   - secondary workspace for rules/orders/diagnostics
 - Keep all existing PC workflows.
+- Preserve official PC list semantics: product thumbnail, tags, start price, increment, cap price, current/sold price, bid count, narrating state, auction status, countdown, cancel/off-shelf actions.
 
 Validation:
 

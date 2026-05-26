@@ -19,6 +19,7 @@
 
 | 标杆/研究 | 可借鉴点 | 对本项目的启发 |
 |---|---|---|
+| 官方宣讲版图片 | H5 图里明确有竞拍中、即将开拍、未成交、已结束、截拍中、赢家支付、落槌成交等多状态；PC 图里有讲解中、竞价中倒计时、出价次数和成交结果。 | 极致氛围必须覆盖完整状态叙事，不只覆盖 active bid；尤其要处理未成交、截拍中、讲解中、支付倒计时和下一件商品承接。 |
 | Whatnot live auctions | 实时倒计时、短拍卖、Swipe to bid、Custom/Max Bid、Pre-bid、Outbid 后继续出价、成交后自动支付；卖家侧可设置起拍价、竞拍时间、最后 10 秒 counter bid reset、Sudden death，并实时看到 bid count/current winner。 | 直播竞拍要把“低摩擦出价 + 高速反馈 + 主播控场 + 严肃履约”组合起来；只做按钮和价格刷新不够。 |
 | eBay auctions / eBay Live | 自动出价按 increment 保持领先、被超越通知、部分品类 extended bidding、eBay Live 即时自动支付、出价是 binding contract、错误出价撤回和卖家取消都有严格条件。 | 极致氛围必须配套承诺感、错误保护、自动加价/代理出价、反操纵规则；否则刺激感会损害信任。 |
 | TikTok Shop LIVE Shopping Ads | 目标是让用户发现并观看 LIVE，同时在直播中浏览和购买商品；指标包含 LIVE views、10-second LIVE views、LIVE product clicks、checkout 等。 | 竞价氛围要面向短视频流转化漏斗设计：停下来、看满 10 秒、点商品、出价、支付，而不是只服务已在房间里的用户。 |
@@ -28,6 +29,7 @@
 
 参考链接：
 
+- Official brief images: `docs/references/official-brief-images/`
 - Whatnot bidding: https://help.whatnot.com/hc/en-us/articles/14932924544141-How-to-bid-in-an-auction
 - Whatnot seller auction controls: https://help.whatnot.com/hc/en-us/articles/9779931101837-Start-an-auction-during-a-show
 - Whatnot pre-bid/max bid: https://help.whatnot.com/hc/en-us/articles/14933026908301-Bidding-on-an-Item-Before-It-Goes-Up-For-Auction
@@ -119,6 +121,23 @@ Auction Event / Social Event / Timer Signal
 - 所有效果可测试、可降级、可 A/B。
 
 ## 功能方案
+
+### Official. 官方图片状态补齐
+
+官方图像比文字多给出了几个必须被氛围方案吸收的状态：
+
+| 状态 | 官方图像表现 | 氛围升级 |
+|---|---|---|
+| 讲解中 | PC 和 H5 商品卡上有讲解中标识。 | 主播控场面板将讲解态作为直播节奏信号，H5 显示“主播正在讲本件”。 |
+| 即将开拍 | H5 商品列表按钮“去看看”，价格文案为起拍价。 | 预热态支持提醒、pre-bid/Max Bid P2 入口、开拍倒计时。 |
+| 竞拍中 | 商品卡展示当前最高价、立即出价。 | Bid Dock + RankStrip 常驻，强调下一口和差距。 |
+| 自己已领先 | 官方提示“当前您已是最高价”。 | CTA 降级为守住领先，不允许重复出价，减少无效请求。 |
+| 一次加多笔 | 官方提示“高于当前价 100 元”。 | Custom Bid/加多口时明确超过当前价多少，并触发 fat-finger 保护。 |
+| 未成交结束 | 官方显示当前商品竞拍已结束，5s 后自动返回直播间。 | Unsold result sheet + 自动回到商品列表/下一件，但不伪造成交。 |
+| 成交支付 | 官方显示恭喜竞拍成功、支付 CTA、保证金退回、支付倒计时。 | Winner sheet 绑定订单状态、支付倒计时和保证金状态。 |
+| 落槌成交 | 官方显示赢家遮罩、轮次、最终成交价。 | Sold moment 显示轮次、赢家、成交价，同时保留直播上下文。 |
+
+这部分是官方最低期望。后续实现不能只做 active 状态的领先/被超越，而要让每个状态都有对应氛围、行动和恢复策略。
 
 ### A. 3 秒停留钩子：让短视频用户愿意停下
 
