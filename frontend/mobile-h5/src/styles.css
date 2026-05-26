@@ -182,6 +182,64 @@ button {
   color: var(--color-live-cyan);
 }
 
+.atmosphere-effect-layer {
+  position: absolute;
+  inset: 0;
+  z-index: calc(var(--z-overlay) - 1);
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.effect-leading-ring,
+.effect-outbid-edge,
+.effect-hammer-mark {
+  display: none;
+  position: absolute;
+  pointer-events: none;
+}
+
+.video-stage[data-atmosphere-kind="leading"] .effect-leading-ring {
+  display: block;
+  left: 18px;
+  right: 18px;
+  bottom: 130px;
+  height: 82px;
+  border: 2px solid rgba(247, 200, 93, .86);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .28), 0 0 28px rgba(247, 200, 93, .42);
+  animation: leading-ring 1.45s ease-out both;
+}
+
+.video-stage[data-atmosphere-kind="outbid"] .effect-outbid-edge {
+  display: block;
+  inset: 0;
+  border: 3px solid rgba(230, 74, 58, .72);
+  box-shadow: inset 0 0 32px rgba(230, 74, 58, .38);
+  animation: outbid-edge 980ms ease-out both;
+}
+
+.video-stage[data-atmosphere-kind="sold"] .effect-hammer-mark {
+  display: grid;
+  place-items: center;
+  right: 24px;
+  top: 92px;
+  width: 74px;
+  height: 74px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, .8);
+  background: rgba(18, 28, 35, .76);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, .28);
+  animation: hammer-mark 1.45s cubic-bezier(.2, .8, .2, 1) both;
+}
+
+.video-stage[data-atmosphere-kind="sold"] .effect-hammer-mark::before {
+  content: "SOLD";
+}
+
 .atmosphere-cue {
   position: absolute;
   left: 18px;
@@ -191,10 +249,12 @@ button {
   min-height: 58px;
   border-radius: var(--radius-md);
   padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, .18);
   color: #fff;
   background: rgba(12, 36, 30, .82);
   box-shadow: 0 16px 28px rgba(0, 0, 0, .24);
-  animation: cue-pop 1.7s ease both;
+  pointer-events: none;
+  animation: cue-slide 1.7s ease both;
 }
 
 .atmosphere-cue strong,
@@ -212,33 +272,73 @@ button {
 }
 
 .atmosphere-cue.leading {
-  background: rgba(14, 94, 66, .88);
+  background: linear-gradient(135deg, rgba(11, 70, 51, .94), rgba(118, 89, 18, .9));
+  box-shadow: 0 16px 30px rgba(0, 0, 0, .24), 0 0 0 1px rgba(247, 200, 93, .26);
 }
 
 .atmosphere-cue.outbid {
-  background: rgba(143, 57, 31, .9);
+  background: linear-gradient(135deg, rgba(111, 31, 32, .95), rgba(190, 62, 43, .9));
 }
 
 .atmosphere-cue.extended {
-  background: rgba(137, 85, 13, .9);
+  background: linear-gradient(135deg, rgba(109, 66, 10, .95), rgba(24, 97, 91, .9));
 }
 
 .atmosphere-cue.sold {
-  background: rgba(53, 68, 92, .9);
+  background: linear-gradient(135deg, rgba(30, 37, 52, .96), rgba(92, 64, 35, .9));
 }
 
-@keyframes cue-pop {
+@keyframes cue-slide {
   0% {
-    transform: translateY(-10px) scale(.98);
+    transform: translate3d(0, -10px, 0) scale(.98);
     opacity: 0;
   }
   16%, 82% {
-    transform: translateY(0) scale(1);
+    transform: translate3d(0, 0, 0) scale(1);
     opacity: 1;
   }
   100% {
-    transform: translateY(-6px) scale(.99);
+    transform: translate3d(0, -6px, 0) scale(.99);
     opacity: 0;
+  }
+}
+
+@keyframes leading-ring {
+  0% {
+    opacity: 0;
+    transform: scale(.96);
+  }
+  22%, 70% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.03);
+  }
+}
+
+@keyframes outbid-edge {
+  0%, 100% {
+    opacity: 0;
+  }
+  18%, 46% {
+    opacity: 1;
+  }
+}
+
+@keyframes hammer-mark {
+  0% {
+    opacity: 0;
+    transform: translate3d(16px, -18px, 0) rotate(-12deg) scale(.82);
+  }
+  28%, 72% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) rotate(-8deg) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(0, -8px, 0) rotate(-8deg) scale(.98);
   }
 }
 
@@ -407,6 +507,65 @@ button {
   padding: 0 10px;
   font-weight: 800;
   min-width: 142px;
+}
+
+.bid-dock[data-atmosphere-kind="leading"] .dock-price-row h2 {
+  animation: price-tick 720ms ease-out both;
+}
+
+.countdown-row[data-effect="extension-stretch"] {
+  animation: countdown-stretch 920ms ease-out both;
+}
+
+@keyframes price-tick {
+  0% {
+    color: #1d352d;
+    transform: translate3d(0, 0, 0);
+  }
+  35% {
+    color: var(--color-auction-gold);
+    transform: translate3d(0, -2px, 0);
+  }
+  100% {
+    color: var(--color-ink-900);
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes countdown-stretch {
+  0% {
+    transform: scaleX(1);
+    border-color: var(--color-line);
+  }
+  34% {
+    transform: scaleX(1.018);
+    border-color: var(--color-risk-orange);
+  }
+  100% {
+    transform: scaleX(1);
+    border-color: var(--color-line);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .atmosphere-cue,
+  .effect-leading-ring,
+  .effect-outbid-edge,
+  .effect-hammer-mark,
+  .bid-dock[data-atmosphere-kind="leading"] .dock-price-row h2,
+  .countdown-row[data-effect="extension-stretch"] {
+    animation: none;
+  }
+
+  .atmosphere-cue {
+    opacity: 1;
+  }
+
+  .effect-leading-ring,
+  .effect-outbid-edge,
+  .effect-hammer-mark {
+    display: none;
+  }
 }
 
 .countdown-row span {

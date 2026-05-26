@@ -1365,6 +1365,7 @@ function App() {
         onToggleSound={() => setSoundEnabled((enabled) => !enabled)}
       />
       <AuctionStatePanel
+        atmosphereCue={atmosphereCue}
         connectionPhase={connectionPhase}
         countdownCopy={countdownCopy}
         extensionNotice={extensionNotice}
@@ -1494,8 +1495,16 @@ function LiveStage({
       className={`video-stage ${mediaURL ? 'has-media' : 'no-media'}`}
       aria-label="live-stage"
       data-testid="live-stage"
+      data-atmosphere-kind={atmosphereCue?.kind ?? 'none'}
       style={mediaURL ? { '--stage-media-url': `url("${mediaURL}")` } as React.CSSProperties : undefined}
     >
+      {atmosphereCue && (
+        <div className="atmosphere-effect-layer" aria-hidden="true">
+          <span className="effect-leading-ring" />
+          <span className="effect-outbid-edge" />
+          <span className="effect-hammer-mark" />
+        </div>
+      )}
       {atmosphereCue && (
         <div
           className={`atmosphere-cue ${atmosphereCue.kind}`}
@@ -1574,6 +1583,7 @@ function ChatComposer({
 }
 
 function AuctionStatePanel({
+  atmosphereCue,
   connectionPhase,
   countdownCopy,
   extensionNotice,
@@ -1585,6 +1595,7 @@ function AuctionStatePanel({
   onOpenSheet,
   onPrimaryAction
 }: {
+  atmosphereCue: AtmosphereCue | null;
   connectionPhase: ConnectionPhase;
   countdownCopy: string;
   extensionNotice: string;
@@ -1619,13 +1630,18 @@ function AuctionStatePanel({
       : scenario.feedback;
 
   return (
-    <section className={`auction-panel bid-dock ${scenario.stale ? 'is-stale' : ''}`} aria-label="auction-state" data-dock-state={dockState}>
+    <section
+      className={`auction-panel bid-dock ${scenario.stale ? 'is-stale' : ''}`}
+      aria-label="auction-state"
+      data-dock-state={dockState}
+      data-atmosphere-kind={atmosphereCue?.kind ?? 'none'}
+    >
       <div className="dock-price-row">
         <div>
           <p className="eyebrow">{scenario.title}</p>
-          <h2>{scenario.price}</h2>
+          <h2 data-testid="auction-price">{scenario.price}</h2>
         </div>
-        <div className="countdown-row" data-testid="auction-countdown">
+        <div className="countdown-row" data-testid="auction-countdown" data-effect={atmosphereCue?.kind === 'extended' ? 'extension-stretch' : 'none'}>
           <Clock3 size={16} />
           <span>{scenario.countdown ?? countdownCopy}</span>
           {extensionNotice && !scenario.sold && <strong>{extensionNotice}</strong>}

@@ -977,6 +977,84 @@ test('H5 renders realtime leaderboard and event atmosphere controls', async ({ p
   await expect(cue).toHaveAttribute('data-user-scope', 'self');
 });
 
+test('H5 event-driven visual effects stay nonblocking and respect reduced motion', async ({ page }) => {
+  await page.goto('/?stateMatrix=1');
+  await page.getByRole('button', { name: '竞价中' }).click();
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('auction:event', {
+      detail: {
+        auction_id: 'auc_live',
+        event_type: 'bid_accepted',
+        seq: 42,
+        payload: {
+          current_price_cents: 40000,
+          current_winner_id: 'user_1',
+          user_id: 'user_1',
+          leader_user_masked: '你'
+        }
+      }
+    }));
+  });
+
+  await expect(page.getByTestId('live-stage')).toHaveAttribute('data-atmosphere-kind', 'leading');
+  await expect(page.getByLabel('auction-state')).toHaveAttribute('data-atmosphere-kind', 'leading');
+  await expect(page.getByTestId('auction-price')).toHaveCSS('animation-name', 'price-tick');
+
+  const ctaBox = await page.getByTestId('bid-cta').boundingBox();
+  const cueBox = await page.getByTestId('atmosphere-cue').boundingBox();
+  expect(ctaBox).not.toBeNull();
+  expect(cueBox).not.toBeNull();
+  expect((cueBox?.y ?? 0) + (cueBox?.height ?? 0)).toBeLessThan(ctaBox?.y ?? 0);
+
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(page.getByTestId('auction-price')).toHaveCSS('animation-name', 'none');
+});
+
+test('H5 extension and sold visual effects use bounded nonblocking motion layers', async ({ page }) => {
+  await page.goto('/?stateMatrix=1');
+  await page.getByRole('button', { name: '竞价中' }).click();
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('auction:event', {
+      detail: {
+        auction_id: 'auc_live',
+        event_type: 'bid_accepted',
+        seq: 42,
+        payload: {
+          current_price_cents: 40000,
+          current_winner_id: 'user_2',
+          user_id: 'user_2',
+          leader_user_masked: '张**',
+          end_at: '2099-05-22T14:00:20Z',
+          server_time_ms: Date.parse('2099-05-22T13:59:50Z')
+        }
+      }
+    }));
+  });
+
+  await expect(page.getByTestId('live-stage')).toHaveAttribute('data-atmosphere-kind', 'extended');
+  await expect(page.getByTestId('auction-countdown')).toHaveAttribute('data-effect', 'extension-stretch');
+  await expect(page.getByTestId('auction-countdown')).toHaveCSS('animation-name', 'countdown-stretch');
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('auction:event', {
+      detail: {
+        auction_id: 'auc_live',
+        event_type: 'auction_sold',
+        seq: 43,
+        payload: {
+          current_price_cents: 40000,
+          current_winner_id: 'user_2',
+          leader_user_masked: '张**'
+        }
+      }
+    }));
+  });
+
+  await expect(page.getByTestId('live-stage')).toHaveAttribute('data-atmosphere-kind', 'sold');
+  await expect(page.getByTestId('atmosphere-cue')).toHaveAttribute('data-event-type', 'auction_sold');
+  await expect(page.getByTestId('bid-cta')).toBeDisabled();
+});
+
 test('H5 order realtime events update winner payment state', async ({ page }) => {
   await page.goto('/?stateMatrix=1');
   await page.getByRole('button', { name: '成交', exact: true }).click();
