@@ -2015,7 +2015,7 @@ function AuctionStatePanel({
       <div className="dock-price-row">
         <div>
           <p className="eyebrow">{scenario.title}</p>
-          <h2 data-testid="auction-price">{scenario.price}</h2>
+          <h2 data-testid="auction-price" aria-live="polite" aria-atomic="true">{scenario.price}</h2>
         </div>
         <div className="countdown-row" data-testid="auction-countdown" data-effect={atmosphereCue?.kind === 'extended' ? 'extension-stretch' : 'none'}>
           <Clock3 size={16} />
@@ -2220,7 +2220,6 @@ function BottomSheet({
   onRefreshMaxBid: () => void;
   onSubmitMaxBid: () => void;
 }) {
-  if (!activeSheet) return null;
   const titleMap: Record<BottomSheetKey, string> = {
     products: '本场商品',
     details: '商品与规则',
@@ -2229,9 +2228,19 @@ function BottomSheet({
     history: '我的出价',
     orders: '我的订单'
   };
+  useEffect(() => {
+    if (!activeSheet) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [activeSheet, onClose]);
+
+  if (!activeSheet) return null;
   return (
     <div className="sheet-backdrop" data-testid="bottom-sheet-backdrop" onClick={onClose}>
-      <section className="bottom-sheet" data-testid="bottom-sheet" aria-label={titleMap[activeSheet]} onClick={(event) => event.stopPropagation()}>
+      <section className="bottom-sheet" data-testid="bottom-sheet" role="dialog" aria-modal="true" aria-label={titleMap[activeSheet]} onClick={(event) => event.stopPropagation()}>
         <div className="sheet-handle" aria-hidden="true" />
         <div className="sheet-header">
           <h2>{titleMap[activeSheet]}</h2>

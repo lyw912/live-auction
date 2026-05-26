@@ -965,7 +965,7 @@ function HealthRibbon({
         <strong>{roomID}</strong>
         <span>Server clock {new Date(now).toLocaleTimeString()}</span>
       </div>
-      <div className="ribbon-metrics">
+      <div className="ribbon-metrics" data-testid="health-ribbon-status" role="status" aria-live="polite">
         <span><Wifi size={15} /> {recoveryLabel}</span>
         <span><Database size={15} /> Outbox {monitorCount(monitor.outbox)} · oldest {retryAgeMS}ms</span>
         <span><Clock3 size={15} /> Scheduler {monitorCount(monitor.scheduler)}</span>
@@ -1444,7 +1444,7 @@ function LiveAssistRail({
           <strong>{hasAnomaly ? `${monitorCount(monitor.anomalies)} anomalies` : 'clear'}</strong>
         </div>
       </div>
-      <div className="risk-queue" data-testid="risk-queue">
+      <div className="risk-queue" data-testid="risk-queue" role="status" aria-live="polite">
         <div className="heat-summary-head">
           <span>Risk queue</span>
           <strong>{risks.length ? `${risks.length} real signals` : 'clear'}</strong>

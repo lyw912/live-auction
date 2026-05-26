@@ -329,6 +329,27 @@ test('PC console renders live API auctions, orders, and expanded diagnostic pane
   await expect(page.getByText('snapshot_from_db')).toBeVisible();
 });
 
+test('PC accessibility gate exposes live diagnostic state and named controls', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByTestId('health-ribbon-status')).toHaveAttribute('role', 'status');
+  await expect(page.getByTestId('health-ribbon-status')).toHaveAttribute('aria-live', 'polite');
+  await expect(page.getByTestId('health-ribbon-status')).toContainText('Outbox');
+  await expect(page.getByLabel('room-selector')).toBeVisible();
+  await expect(page.getByRole('button', { name: '刷新' })).toBeVisible();
+
+  const riskQueue = page.getByTestId('risk-queue');
+  await expect(riskQueue).toHaveAttribute('role', 'status');
+  await expect(riskQueue).toHaveAttribute('aria-live', 'polite');
+  await expect(riskQueue.getByText('Bid pressure throttle')).toBeVisible();
+  await expect(riskQueue.locator('em').getByText('bids', { exact: true })).toBeVisible();
+
+  await page.getByRole('tab', { name: 'Rejects' }).click();
+  await expect(page.getByLabel('Rejects').getByRole('button', { name: /tr_reject/ })).toBeVisible();
+  await expect(page.getByLabel('monitor-auction-id')).toBeVisible();
+  await expect(page.getByLabel('monitor-user-id')).toBeVisible();
+  await expect(page.getByLabel('monitor-trace-id')).toBeVisible();
+});
+
 test('PC host live assist renders API prompts and dismisses locally without mutating auction state', async ({ page }) => {
   const mutationRequests: string[] = [];
   page.on('request', (request) => {

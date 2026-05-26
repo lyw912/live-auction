@@ -82,6 +82,7 @@
 | `docs/evidence/p9-05-6-pc-max-bid-readiness-audit.md` | AUTHORITATIVE | P9-S5-6 adds a host-only PC Max Bid readiness aggregate and flight recorder source metadata without exposing private ceilings or ranking bidders by max amount. |
 | `docs/evidence/p9-05-7-max-bid-abuse-boundaries.md` | AUTHORITATIVE | P9-S5-7 hardens Max Bid idempotency identity and proves unsafe amount, terminal state, stuck processing, churn, and H5 reject recovery boundaries. |
 | `docs/evidence/p9-06-risk-and-abuse-ux.md` | AUTHORITATIVE | P9-S6 adds H5 actionable abuse/reject guidance and a PC host risk queue sourced only from real rejects, anomalies, and recovery diagnostics. |
+| `docs/evidence/p10-01-accessibility-reduced-motion.md` | AUTHORITATIVE | P10-S1 adds targeted H5/PC accessibility and reduced-motion gates for live regions, non-color state cues, touch targets, dialog semantics, and status regions. |
 | `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan.md` | AUTHORITATIVE | P3/P4 pressure protocol and admission-off policy. |
 | `docs/design-v2-industrial/18-p3-p4-roadmap-reset.md` | AUTHORITATIVE | Current P3/P4 execution order and decision gates. |
 | `docs/p3-decision-log.md` | AUTHORITATIVE | Current decisions, superseded evidence, and go/no-go gates, including P9-D01 reopening Max Bid/Pre-Bid through ADR only. |

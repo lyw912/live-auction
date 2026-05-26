@@ -628,6 +628,9 @@ button {
   .effect-leading-ring,
   .effect-outbid-edge,
   .effect-hammer-mark,
+  .video-stage[data-atmosphere-kind="leading"] .effect-leading-ring,
+  .video-stage[data-atmosphere-kind="outbid"] .effect-outbid-edge,
+  .video-stage[data-atmosphere-kind="sold"] .effect-hammer-mark,
   .bid-dock[data-atmosphere-kind="leading"] .dock-price-row h2,
   .countdown-row[data-effect="extension-stretch"] {
     animation: none;
@@ -1538,12 +1541,12 @@ button {
   }
 
   .bid-stepper {
-    height: 42px;
+    height: 44px;
   }
 
   .bid-stepper button {
     width: 46px;
-    height: 42px;
+    height: 44px;
   }
 
   .primary-cta {
@@ -1552,7 +1555,7 @@ button {
   }
 
   .dock-shortcuts {
-    height: 28px;
+    height: 40px;
     gap: 4px;
   }
 

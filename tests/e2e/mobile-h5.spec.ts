@@ -1491,7 +1491,73 @@ test('H5 event-driven visual effects stay nonblocking and respect reduced motion
   expect((cueBox?.y ?? 0) + (cueBox?.height ?? 0)).toBeLessThan(ctaBox?.y ?? 0);
 
   await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('auction:event', {
+      detail: {
+        auction_id: 'auc_live',
+        event_type: 'bid_accepted',
+        seq: 43,
+        payload: {
+          current_price_cents: 45000,
+          current_winner_id: 'user_1',
+          user_id: 'user_1',
+          leader_user_masked: '你'
+        }
+      }
+    }));
+  });
   await expect(page.getByTestId('auction-price')).toHaveCSS('animation-name', 'none');
+  await expect(page.getByTestId('atmosphere-cue')).toHaveCSS('animation-name', 'none');
+  await expect(page.locator('.effect-leading-ring')).toHaveCSS('animation-name', 'none');
+});
+
+test('H5 accessibility gate exposes live cues labels and practical touch targets', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 844 });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/?stateMatrix=1');
+  await page.getByRole('button', { name: '竞价中' }).click();
+
+  const state = page.getByLabel('auction-state');
+  await expect(state.getByTestId('auction-price')).toHaveAttribute('aria-live', 'polite');
+  await expect(state.locator('.dock-feedback')).toHaveAttribute('aria-live', 'polite');
+  await expect(state.locator('.status-chip')).toHaveText('ACTIVE');
+  await expect(page.getByText('WebSocket 已连接 · 状态来自服务端事件')).toBeVisible();
+
+  await expect(page.getByTestId('rank-strip')).toContainText('差 ¥50.00');
+
+  for (const locator of [
+    page.getByTestId('bid-cta'),
+    page.getByRole('button', { name: 'increase' }),
+    page.getByRole('button', { name: 'decrease' }),
+    page.getByLabel('bid-dock-shortcuts').getByRole('button', { name: '规则' })
+  ]) {
+    const box = await locator.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.width).toBeGreaterThanOrEqual(40);
+    expect(box!.height).toBeGreaterThanOrEqual(40);
+  }
+});
+
+test('H5 bottom sheet is dialog-labelled and keyboard dismissible without moving bid CTA', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 844 });
+  await page.goto('/');
+  const ctaBefore = await page.getByTestId('bid-cta').boundingBox();
+
+  await page.getByLabel('bid-dock-shortcuts').getByRole('button', { name: '规则' }).click();
+  const sheet = page.getByRole('dialog', { name: '商品与规则' });
+  await expect(sheet).toBeVisible();
+  await expect(sheet.getByRole('button', { name: '关闭面板' })).toBeVisible();
+  await expect(sheet.getByRole('tab', { name: '规则' })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByTestId('bid-cta')).toBeVisible();
+
+  const ctaDuring = await page.getByTestId('bid-cta').boundingBox();
+  expect(ctaBefore).not.toBeNull();
+  expect(ctaDuring).not.toBeNull();
+  expect(Math.abs((ctaDuring?.y ?? 0) - (ctaBefore?.y ?? 0))).toBeLessThan(2);
+
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('bottom-sheet')).toHaveCount(0);
+  await expect(page.getByTestId('bid-cta')).toBeVisible();
 });
 
 test('H5 extension and sold visual effects use bounded nonblocking motion layers', async ({ page }) => {
