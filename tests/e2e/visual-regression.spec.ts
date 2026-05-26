@@ -263,11 +263,43 @@ async function mockPC(page: Page) {
       ]
     }
   }));
+  await page.route('/api/host/auctions/auc_live/heat-summary', async (route) => route.fulfill({
+    json: {
+      auction_id: 'auc_live',
+      room_id: 'room_main',
+      status: 'ACTIVE',
+      generated_at: '2026-05-22T13:59:50Z',
+      window_seconds: 30,
+      active_bidders_30s: 2,
+      accepted_bids_30s: 3,
+      rejected_bids_30s: 1,
+      chat_messages_30s: 4,
+      recovery_events_30s: 1,
+      watcher_count_available: false,
+      source: 'postgres:bids,chat_messages,user_activity_events'
+    }
+  }));
   await page.route('/api/monitor/auctions/auc_next/flight-recorder?limit=20&timeline_limit=20', async (route) => route.fulfill({
     json: { timeline: [] }
   }));
   await page.route('/api/host/auctions/auc_next/prompts', async (route) => route.fulfill({
     json: { auction_id: 'auc_next', room_id: 'room_main', prompts: [] }
+  }));
+  await page.route('/api/host/auctions/auc_next/heat-summary', async (route) => route.fulfill({
+    json: {
+      auction_id: 'auc_next',
+      room_id: 'room_main',
+      status: 'DRAFT',
+      generated_at: '2026-05-22T13:59:50Z',
+      window_seconds: 30,
+      active_bidders_30s: 0,
+      accepted_bids_30s: 0,
+      rejected_bids_30s: 0,
+      chat_messages_30s: 0,
+      recovery_events_30s: 0,
+      watcher_count_available: false,
+      source: 'postgres:bids,chat_messages,user_activity_events'
+    }
   }));
 }
 

@@ -787,6 +787,7 @@ body {
 }
 
 .talk-points,
+.heat-summary,
 .system-chat-disabled,
 .risk-hint {
   border: 1px solid var(--color-line);
@@ -816,6 +817,61 @@ body {
   color: var(--color-muted-strong);
   font-weight: 800;
   cursor: default;
+}
+
+.heat-summary {
+  display: grid;
+  gap: 9px;
+}
+
+.heat-summary-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.heat-summary-head span {
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.heat-summary-head strong {
+  color: var(--color-muted-strong);
+  font-size: 11px;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.heat-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.heat-grid div {
+  min-height: 48px;
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-0);
+  padding: 7px;
+}
+
+.heat-grid span,
+.heat-unavailable {
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.heat-grid strong {
+  color: var(--color-ink-950);
+  font-family: var(--font-auction-tabular);
+  font-size: 18px;
+  line-height: 1;
+  overflow-wrap: anywhere;
 }
 
 .system-chat-disabled {

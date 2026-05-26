@@ -105,6 +105,22 @@ type HostPromptsPayload = {
   prompts?: HostPrompt[];
 };
 
+type HeatSummary = {
+  auction_id: string;
+  room_id: string;
+  status: string;
+  generated_at: string;
+  window_seconds: number;
+  active_bidders_30s: number;
+  accepted_bids_30s: number;
+  rejected_bids_30s: number;
+  chat_messages_30s: number;
+  recovery_events_30s: number;
+  watcher_count_available: boolean;
+  watcher_count?: number;
+  source: string;
+};
+
 type RuleAPIError = {
   code?: string;
   message?: string;
@@ -319,6 +335,8 @@ function App() {
   const [hostPrompts, setHostPrompts] = useState<HostPrompt[]>([]);
   const [dismissedPromptIDs, setDismissedPromptIDs] = useState<string[]>([]);
   const [promptsLoading, setPromptsLoading] = useState(false);
+  const [heatSummary, setHeatSummary] = useState<HeatSummary | undefined>();
+  const [heatLoading, setHeatLoading] = useState(false);
   const [monitorFilter, setMonitorFilter] = useState({ type: '', auctionID: '', userID: '', traceID: '' });
   const [loading, setLoading] = useState(false);
   const [savingRule, setSavingRule] = useState(false);
@@ -450,6 +468,32 @@ function App() {
       }
     };
     void loadHostPrompts();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedAuction?.id, sessionReady, loading]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadHeatSummary = async () => {
+      if (!sessionReady || !selectedAuction?.id) {
+        setHeatSummary(undefined);
+        return;
+      }
+      setHeatLoading(true);
+      try {
+        const response = await fetch(`/api/host/auctions/${selectedAuction.id}/heat-summary`);
+        const payload = await readJSON<HeatSummary>(response);
+        if (!cancelled) {
+          setHeatSummary(response.ok ? payload : undefined);
+        }
+      } catch {
+        if (!cancelled) setHeatSummary(undefined);
+      } finally {
+        if (!cancelled) setHeatLoading(false);
+      }
+    };
+    void loadHeatSummary();
     return () => {
       cancelled = true;
     };
@@ -626,6 +670,8 @@ function App() {
           ) : <div className="command-panel"><div className="empty-state">暂无可控制竞拍</div></div>}
           <LiveAssistRail
             dismissedPromptIDs={dismissedPromptIDs}
+            heatLoading={heatLoading}
+            heatSummary={heatSummary}
             monitor={monitor}
             prompts={hostPrompts}
             promptsLoading={promptsLoading}
@@ -1064,6 +1110,8 @@ function AuctionControlSummary({
 
 function LiveAssistRail({
   dismissedPromptIDs,
+  heatLoading,
+  heatSummary,
   monitor,
   prompts,
   promptsLoading,
@@ -1072,6 +1120,8 @@ function LiveAssistRail({
   onDismissPrompt
 }: {
   dismissedPromptIDs: string[];
+  heatLoading: boolean;
+  heatSummary?: HeatSummary;
   monitor: Record<string, MonitorPayload>;
   prompts: HostPrompt[];
   promptsLoading: boolean;
@@ -1126,6 +1176,24 @@ function LiveAssistRail({
         <button type="button">证书/瑕疵</button>
         <button type="button">封顶/保证金</button>
         <button type="button">延时规则</button>
+      </div>
+      <div className="heat-summary" data-testid="heat-summary">
+        <div className="heat-summary-head">
+          <span>Heat 30s</span>
+          <strong>{heatLoading ? 'loading' : heatSummary ? heatSummary.source : 'unavailable'}</strong>
+        </div>
+        {heatSummary ? (
+          <div className="heat-grid">
+            <div><span>Active bidders</span><strong>{heatSummary.active_bidders_30s}</strong></div>
+            <div><span>Accepted bids</span><strong>{heatSummary.accepted_bids_30s}</strong></div>
+            <div><span>Rejected bids</span><strong>{heatSummary.rejected_bids_30s}</strong></div>
+            <div><span>Chat</span><strong>{heatSummary.chat_messages_30s}</strong></div>
+            <div><span>Recovery</span><strong>{heatSummary.recovery_events_30s}</strong></div>
+            <div><span>Watchers</span><strong>{heatSummary.watcher_count_available ? heatSummary.watcher_count ?? 0 : 'unavailable'}</strong></div>
+          </div>
+        ) : (
+          <div className="heat-unavailable">{heatLoading ? '正在读取真实聚合' : '热度聚合暂不可用'}</div>
+        )}
       </div>
       <div className="assist-grid">
         <div>

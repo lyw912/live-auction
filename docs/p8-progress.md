@@ -12,7 +12,7 @@
 | P8-S3 Host Prompter Backend | DONE | `docs/evidence/p8-03-host-prompter-backend.md` |
 | P8-S4 Host Live Assist UI | DONE | `docs/evidence/p8-04-pc-host-live-assist-panel.md` |
 | P8-S5 Seller Rule Wizard And Preview | DONE | `docs/evidence/p8-05-seller-rule-wizard-preview.md` |
-| P8-S6 Heat Summary Aggregation | TODO | - |
+| P8-S6 Heat Summary Aggregation | DONE | `docs/evidence/p8-06-live-auction-heat-summary.md` |
 
 ## Current Rules
 
@@ -24,3 +24,4 @@
 - S3 host prompter is read-only and advisory. It must never mutate auction truth, write outbox, auto-send chat, or enter bid/cancel/payment paths.
 - S4 consumes host prompter prompts in PC UI. Local dismiss is not persisted and must not be described as backend audit.
 - S5 keeps rule create/update payloads unchanged. The PC wizard is only a safer operator layout and H5 preview; backend DRAFT-only validation remains final authority.
+- S6 heat summary is DB-backed and host-only. Watcher count remains explicitly unavailable until a measured producer exists; route-mocked UI tests are contract coverage, not demo evidence.

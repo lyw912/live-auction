@@ -132,17 +132,65 @@ test.beforeEach(async ({ page }) => {
       ]
     }
   }));
+  await page.route('/api/host/auctions/auc_live/heat-summary', async (route) => route.fulfill({
+    json: {
+      auction_id: 'auc_live',
+      room_id: 'room_main',
+      status: 'ACTIVE',
+      generated_at: '2026-05-22T13:59:50Z',
+      window_seconds: 30,
+      active_bidders_30s: 2,
+      accepted_bids_30s: 3,
+      rejected_bids_30s: 1,
+      chat_messages_30s: 4,
+      recovery_events_30s: 1,
+      watcher_count_available: false,
+      source: 'postgres:bids,chat_messages,user_activity_events'
+    }
+  }));
   await page.route('/api/monitor/auctions/auc_next/flight-recorder?limit=20&timeline_limit=20', async (route) => route.fulfill({
     json: { timeline: [] }
   }));
   await page.route('/api/host/auctions/auc_next/prompts', async (route) => route.fulfill({
     json: { auction_id: 'auc_next', room_id: 'room_main', prompts: [] }
   }));
+  await page.route('/api/host/auctions/auc_next/heat-summary', async (route) => route.fulfill({
+    json: {
+      auction_id: 'auc_next',
+      room_id: 'room_main',
+      status: 'DRAFT',
+      generated_at: '2026-05-22T13:59:50Z',
+      window_seconds: 30,
+      active_bidders_30s: 0,
+      accepted_bids_30s: 0,
+      rejected_bids_30s: 0,
+      chat_messages_30s: 0,
+      recovery_events_30s: 0,
+      watcher_count_available: false,
+      source: 'postgres:bids,chat_messages,user_activity_events'
+    }
+  }));
   await page.route('/api/monitor/auctions/auc_scheduled/flight-recorder?limit=20&timeline_limit=20', async (route) => route.fulfill({
     json: { timeline: [] }
   }));
   await page.route('/api/host/auctions/auc_scheduled/prompts', async (route) => route.fulfill({
     json: { auction_id: 'auc_scheduled', room_id: 'room_main', prompts: [] }
+  }));
+  await page.route('/api/host/auctions/auc_scheduled/heat-summary', async (route) => route.fulfill({
+    json: {
+      auction_id: 'auc_scheduled',
+      room_id: 'room_main',
+      status: 'SCHEDULED',
+      generated_at: '2026-05-22T13:59:50Z',
+      window_seconds: 30,
+      active_bidders_30s: 0,
+      accepted_bids_30s: 0,
+      rejected_bids_30s: 0,
+      chat_messages_30s: 0,
+      recovery_events_30s: 0,
+      watcher_count_available: false,
+      source: 'postgres:bids,chat_messages,user_activity_events'
+    }
   }));
 });
 
@@ -170,6 +218,11 @@ test('PC console renders live API auctions, orders, and expanded diagnostic pane
   await expect(page.getByTestId('prompter-cards').getByText('最后窗口')).toBeVisible();
   await expect(page.getByTestId('prompter-cards').getByText(/参考下一口 ¥500.00/)).toBeVisible();
   await expect(page.getByTestId('talk-points').getByText('封顶/保证金')).toBeVisible();
+  await expect(page.getByTestId('heat-summary').getByText('Active bidders')).toBeVisible();
+  await expect(page.getByTestId('heat-summary').getByText('Accepted bids')).toBeVisible();
+  await expect(page.getByTestId('heat-summary').getByText('Rejected bids')).toBeVisible();
+  await expect(page.getByTestId('heat-summary').getByText('Watchers')).toBeVisible();
+  await expect(page.getByTestId('heat-summary').getByText('unavailable')).toBeVisible();
   await expect(page.getByTestId('system-chat-disabled').getByRole('button', { name: '发送模板' })).toBeDisabled();
   await expect(page.getByTestId('recent-events').getByText('bid_accepted')).toBeVisible();
   await expect(page.getByRole('link', { name: /Flight recorder/ })).toHaveAttribute('href', /flight-recorder/);
@@ -197,6 +250,24 @@ test('PC host live assist renders API prompts and dismisses locally without muta
   await expect(page.getByTestId('prompter-cards').getByText('最后窗口')).not.toBeVisible();
   await expect(page.getByTestId('prompter-cards').getByText('暂无主播提示')).toBeVisible();
   expect(mutationRequests).toEqual([]);
+});
+
+test('PC host live assist renders real heat summary and labels watcher count unavailable', async ({ page }) => {
+  await page.goto('/');
+  const heat = page.getByTestId('heat-summary');
+  await expect(heat.getByText('Heat 30s')).toBeVisible();
+  await expect(heat.getByText('postgres:bids,chat_messages,user_activity_events')).toBeVisible();
+  await expect(heat.getByText('Active bidders')).toBeVisible();
+  await expect(heat.getByText('Accepted bids')).toBeVisible();
+  await expect(heat.getByText('Rejected bids')).toBeVisible();
+  await expect(heat.getByText('Chat', { exact: true })).toBeVisible();
+  await expect(heat.getByText('Recovery')).toBeVisible();
+  await expect(heat.getByText('Watchers')).toBeVisible();
+  await expect(heat.getByText('unavailable')).toBeVisible();
+  await expect(heat.locator('.heat-grid div').filter({ hasText: 'Active bidders' }).getByText('2')).toBeVisible();
+  await expect(heat.locator('.heat-grid div').filter({ hasText: 'Accepted bids' }).getByText('3')).toBeVisible();
+  await expect(heat.locator('.heat-grid div').filter({ hasText: 'Rejected bids' }).getByText('1')).toBeVisible();
+  await expect(heat.locator('.heat-grid div').filter({ hasText: 'Chat' }).getByText('4')).toBeVisible();
 });
 
 test('PC auction queue pins active auction and explains active and narrating constraints', async ({ page }) => {
