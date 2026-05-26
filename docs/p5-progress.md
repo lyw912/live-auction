@@ -1,0 +1,15 @@
+# P5 Progress
+
+> Scope: `docs/design-v2-industrial/21-p5-plus-atmosphere-ui-execution-roadmap.md` P5 UI Foundation And Visual System.
+
+| Slice | Status | Evidence |
+|---|---|---|
+| P5-S1 | DONE | `docs/evidence/p5-01-design-tokens.md` |
+| P5-S2 | TODO | Visual regression harness pending |
+| P5-S3 | TODO | H5 component boundary refactor pending |
+| P5-S4 | TODO | PC component boundary refactor pending |
+
+## Notes
+
+- P5 UI foundation does not change auction truth, bidding semantics, outbox, recovery, payment, or diagnostics data producers.
+- P5-S1 intentionally keeps existing layouts materially stable; later P6/P8 slices own major H5/PC redesign.

@@ -1,0 +1,58 @@
+:root {
+  --font-auction-sans: Inter, "Segoe UI", Arial, sans-serif;
+  --font-auction-tabular: Inter, "Segoe UI", Arial, sans-serif;
+
+  --color-ink-950: #111315;
+  --color-ink-900: #17211c;
+  --color-ink-800: #1f2933;
+  --color-surface-0: #fbfcfe;
+  --color-surface-1: #f3f5f8;
+  --color-surface-2: #eef3f2;
+  --color-line: #d9dee7;
+  --color-line-soft: #edf2f0;
+  --color-muted: #667085;
+  --color-muted-strong: #34433e;
+  --color-bid-red: #ff3b30;
+  --color-bid-red-soft: #ffe9e3;
+  --color-auction-gold: #d6a84f;
+  --color-auction-gold-soft: #fff6df;
+  --color-trust-green: #10b981;
+  --color-trust-green-deep: #126b50;
+  --color-trust-green-soft: #e5f3ef;
+  --color-live-cyan: #22d3ee;
+  --color-live-cyan-soft: #e7f8fb;
+  --color-risk-orange: #f97316;
+  --color-risk-orange-soft: #fff1e8;
+  --color-danger-text: #9f2d1d;
+  --color-success-text: #17613f;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  --z-base: 0;
+  --z-raised: 1;
+  --z-overlay: 20;
+  --z-sheet: 40;
+  --z-toast: 60;
+
+  --shadow-panel: 0 16px 28px rgba(15, 23, 42, .14);
+  --shadow-stage: 0 24px 36px rgba(0, 0, 0, .28);
+
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-top: env(safe-area-inset-top, 0px);
+  --touch-target-min: 44px;
+}
+
+.tabular-nums {
+  font-family: var(--font-auction-tabular);
+  font-variant-numeric: tabular-nums;
+}

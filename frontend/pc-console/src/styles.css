@@ -1,7 +1,9 @@
+@import "../../shared-design/tokens.css";
+
 :root {
-  font-family: Inter, "Segoe UI", Arial, sans-serif;
-  color: #1f2933;
-  background: #f3f6f8;
+  font-family: var(--font-auction-sans);
+  color: var(--color-ink-800);
+  background: var(--color-surface-1);
 }
 
 body {
@@ -38,13 +40,13 @@ body {
   align-items: center;
   gap: 10px;
   padding: 0 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: rgba(255,255,255,.06);
 }
 
 .content {
   padding: 20px;
-  background: #f3f6f8;
+  background: var(--color-surface-1);
 }
 
 .toolbar,
@@ -64,19 +66,19 @@ body {
 
 .toolbar p {
   margin: 4px 0 0;
-  color: #65756f;
+  color: var(--color-muted);
 }
 
 .band {
   margin-top: 16px;
   padding: 16px;
   background: #fff;
-  border: 1px solid #dde5e2;
-  border-radius: 8px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
 }
 
 .arco-table-tr.selected-row .arco-table-td {
-  background: #e8f5f0;
+  background: var(--color-trust-green-soft);
 }
 
 .two-column {
@@ -102,10 +104,10 @@ body {
   width: 100%;
   min-height: 32px;
   box-sizing: border-box;
-  border: 1px solid #c9d8d2;
-  border-radius: 6px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
   background: #fff;
-  color: #1f2933;
+  color: var(--color-ink-800);
   padding: 4px 10px;
 }
 
@@ -130,10 +132,10 @@ body {
 
 .cap-suggestions button {
   min-height: 32px;
-  border: 1px solid #c9d8d2;
-  border-radius: 8px;
-  background: #eef6f3;
-  color: #155540;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-trust-green-soft);
+  color: var(--color-trust-green-deep);
   padding: 0 10px;
   font-weight: 700;
 }
@@ -145,23 +147,23 @@ body {
   align-items: center;
   margin: -4px 0 14px;
   padding: 0 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   font-weight: 700;
 }
 
 .backend-rule-error {
-  background: #fff1ee;
-  color: #9f2d1d;
+  background: var(--color-risk-orange-soft);
+  color: var(--color-danger-text);
 }
 
 .rule-save-ok {
-  background: #e9f6ef;
-  color: #17613f;
+  background: var(--color-trust-green-soft);
+  color: var(--color-success-text);
 }
 
 .order-line {
   min-height: 44px;
-  border-bottom: 1px solid #edf1ef;
+  border-bottom: 1px solid var(--color-line-soft);
 }
 
 .order-line:last-child {
@@ -186,22 +188,22 @@ body {
 .control-stats > div {
   min-width: 0;
   min-height: 72px;
-  border: 1px solid #d8e3df;
-  border-radius: 8px;
-  background: #f9fbfa;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-0);
   padding: 10px;
   display: grid;
   gap: 6px;
 }
 
 .control-stats span {
-  color: #687a73;
+  color: var(--color-muted);
   font-size: 12px;
 }
 
 .control-stats strong {
   min-width: 0;
-  color: #17251f;
+  color: var(--color-ink-900);
   font-size: 16px;
   overflow-wrap: anywhere;
   display: inline-flex;
@@ -210,8 +212,8 @@ body {
 }
 
 .recent-events {
-  border: 1px solid #d8e3df;
-  border-radius: 8px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
   background: #fff;
   overflow: hidden;
 }
@@ -224,12 +226,12 @@ body {
   align-items: center;
   gap: 10px;
   padding: 8px 10px;
-  border-top: 1px solid #eef3f1;
+  border-top: 1px solid var(--color-line-soft);
 }
 
 .recent-title {
   border-top: 0;
-  background: #f6f9f8;
+  background: var(--color-surface-0);
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
@@ -270,15 +272,15 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  color: #64736d;
+  color: var(--color-muted);
 }
 
 .empty-state {
   min-height: 96px;
   justify-content: center;
   width: 100%;
-  border: 1px dashed #ccd7d3;
-  border-radius: 8px;
+  border: 1px dashed var(--color-line);
+  border-radius: var(--radius-md);
 }
 
 @media (max-width: 900px) {
