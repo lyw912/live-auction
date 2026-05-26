@@ -780,6 +780,95 @@ button {
   flex-direction: column;
 }
 
+.result-sheet {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  bottom: calc(var(--h5-bid-dock-reserved-height) + 10px);
+  z-index: calc(var(--z-sheet) + 1);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-0);
+  box-shadow: 0 -16px 36px rgba(15, 23, 42, .22);
+  padding: 12px;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.result-sheet-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md);
+  display: grid;
+  place-items: center;
+  background: var(--color-surface-1);
+  color: var(--color-muted-strong);
+}
+
+.result-sheet.winner .result-sheet-icon {
+  background: var(--color-auction-gold-soft);
+  color: #8a5a0f;
+}
+
+.result-sheet.loser .result-sheet-icon {
+  background: var(--color-bid-red-soft);
+  color: var(--color-danger-text);
+}
+
+.result-sheet.unsold .result-sheet-icon {
+  background: var(--color-risk-orange-soft);
+  color: var(--color-risk-orange);
+}
+
+.result-sheet-copy {
+  min-width: 0;
+}
+
+.result-sheet h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+
+.result-sheet p {
+  margin: 0 0 5px;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.38;
+  overflow-wrap: anywhere;
+}
+
+.result-actions {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.result-actions button {
+  min-height: 38px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-trust-green-deep);
+  color: #fff;
+  font-weight: 800;
+}
+
+.result-actions button + button,
+.result-actions button:disabled {
+  border: 1px solid var(--color-line);
+  background: var(--color-surface-0);
+  color: var(--color-muted-strong);
+}
+
+.result-actions span {
+  color: var(--color-muted-strong);
+  font-size: 12px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
 .sheet-handle {
   width: 42px;
   height: 4px;

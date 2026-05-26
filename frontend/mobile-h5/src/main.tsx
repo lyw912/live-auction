@@ -40,6 +40,7 @@ type PaymentPhase = 'idle' | 'pending' | 'paid' | 'failed' | 'expired';
 type RecoveryPhase = 'idle' | 'recovering';
 type ConnectionPhase = 'connecting' | 'connected' | 'recovering' | 'disconnected';
 type BottomSheetKey = 'products' | 'details' | 'leaderboard' | 'history' | 'orders';
+type ResultSheetKind = 'winner' | 'loser' | 'unsold';
 
 type BidResponse = {
   result?: string;
@@ -719,6 +720,16 @@ function App() {
       ctaDisabled: countdownExpired
     };
   }, [activeAuctionID, bidFeedback, bidPhase, confirmAmountCents, connectionPhase, countdownCopy, countdownExpired, currentPriceCents, lastSeq, leaderMasked, nextBidCents, payableOrderAmountCents, payableOrderID, paymentPhase, recoveryPhase, selected, terminalPriceCents, terminalWinnerID]);
+  const resultSheetKind: ResultSheetKind | null = selected === 'sold_winner'
+    ? 'winner'
+    : selected === 'sold_loser'
+      ? 'loser'
+      : selected === 'ended'
+        ? 'unsold'
+        : null;
+  const nextAuction = useMemo(() => roomAuctions.find((row) => (
+    row.id !== activeAuctionID && (row.status === 'SCHEDULED' || row.status === 'DRAFT')
+  )), [activeAuctionID, roomAuctions]);
 
   const applyAcceptedBid = (payload: BidResponse) => {
     const acceptedPrice = payload.current_price_cents ?? currentPriceCents;
@@ -1329,6 +1340,20 @@ function App() {
           onRefreshLeaderboard={() => void loadLeaderboard()}
         />
       )}
+      <ResultSheet
+        activeSheet={activeSheet}
+        kind={resultSheetKind}
+        nextAuction={nextAuction}
+        paymentPhase={paymentPhase}
+        scenario={scenario}
+        terminalPriceCents={terminalPriceCents || currentPriceCents}
+        terminalWinnerID={terminalWinnerID}
+        userBestCents={leaderboard?.my_best_amount_cents ?? 0}
+        orderID={payableOrderID}
+        orderAmountCents={payableOrderAmountCents}
+        onOpenOrders={() => setActiveSheet('orders')}
+        onPay={payOrder}
+      />
       {showStateMatrix && (
         <ChatPanel
           chatDraft={chatDraft}
@@ -1551,6 +1576,94 @@ function AuctionStatePanel({
         <button type="button" onClick={() => onOpenSheet('leaderboard')}>榜单</button>
         <button type="button" onClick={() => onOpenSheet('history')}>历史</button>
         <button type="button" onClick={() => onOpenSheet('orders')}>订单</button>
+      </div>
+    </section>
+  );
+}
+
+function ResultSheet({
+  activeSheet,
+  kind,
+  nextAuction,
+  orderAmountCents,
+  orderID,
+  paymentPhase,
+  scenario,
+  terminalPriceCents,
+  terminalWinnerID,
+  userBestCents,
+  onOpenOrders,
+  onPay
+}: {
+  activeSheet: BottomSheetKey | null;
+  kind: ResultSheetKind | null;
+  nextAuction?: AuctionSummary;
+  orderAmountCents: number;
+  orderID: string;
+  paymentPhase: PaymentPhase;
+  scenario: Scenario;
+  terminalPriceCents: number;
+  terminalWinnerID: string;
+  userBestCents: number;
+  onOpenOrders: () => void;
+  onPay: () => void;
+}) {
+  if (!kind || activeSheet) return null;
+  const soldPrice = formatCents(orderAmountCents || terminalPriceCents);
+  const nextTitle = nextAuction?.item?.title ?? '下一件拍品';
+  const gapCents = Math.max(0, terminalPriceCents - userBestCents);
+  const isPaymentDisabled = scenario.ctaDisabled || paymentPhase === 'pending' || paymentPhase === 'paid' || paymentPhase === 'expired' || !orderID;
+  const title = kind === 'winner'
+    ? paymentPhase === 'paid'
+      ? '支付已完成'
+      : paymentPhase === 'expired'
+        ? '支付窗口已关闭'
+        : '恭喜拍中'
+    : kind === 'loser'
+      ? '本场已落锤'
+      : '本场未成交';
+
+  return (
+    <section className={`result-sheet ${kind}`} data-testid="result-sheet" aria-label={title}>
+      <div className="result-sheet-icon" aria-hidden="true">
+        {kind === 'winner' ? <Trophy size={22} /> : kind === 'loser' ? <Clock3 size={22} /> : <AlertTriangle size={22} />}
+      </div>
+      <div className="result-sheet-copy">
+        <p className="eyebrow">{kind === 'winner' ? '成交结果' : kind === 'loser' ? '输家承接' : '未成交说明'}</p>
+        <h2>{title}</h2>
+        {kind === 'winner' && (
+          <>
+            <p>成交价 {soldPrice}。订单 {orderID || '同步中'} 已锁定，支付状态：{paymentPhase === 'paid' ? '已支付' : paymentPhase === 'pending' ? '确认中' : paymentPhase === 'expired' ? '已超时' : '待支付'}。</p>
+            <p>保证金会随订单状态处理；支付成功后订单完成，未支付超时会关闭支付窗口。</p>
+          </>
+        )}
+        {kind === 'loser' && (
+          <>
+            <p>{terminalWinnerID ? `${terminalWinnerID.slice(0, 2)}**` : '领先者'} 以 {formatCents(terminalPriceCents)} 拍中。{gapCents > 0 ? `你距离成交差 ${formatCents(gapCents)}。` : '你未在最后价格领先。'}</p>
+            <p>可继续关注 {nextTitle}，本场历史会保留在出价记录中。</p>
+          </>
+        )}
+        {kind === 'unsold' && (
+          <>
+            <p>本场没有形成有效成交，出价入口已关闭，不会生成订单。</p>
+            <p>{nextAuction ? `${nextTitle} 即将开始，可回到商品列表继续观看。` : '暂无下一件排期，稍后回到直播间。'}</p>
+          </>
+        )}
+      </div>
+      <div className="result-actions">
+        {kind === 'winner' ? (
+          <>
+            <button type="button" data-testid="result-pay-cta" disabled={isPaymentDisabled} onClick={onPay}>
+              {paymentPhase === 'paid' ? '已支付' : paymentPhase === 'pending' ? '支付确认中' : paymentPhase === 'expired' ? '已超时' : '立即支付'}
+            </button>
+            <button type="button" onClick={onOpenOrders}>查看订单</button>
+          </>
+        ) : (
+          <>
+            <button type="button" onClick={onOpenOrders}>{kind === 'loser' ? '查看出价记录' : '查看商品列表'}</button>
+            <span>{nextAuction ? `下一件：${nextTitle}` : '等待主播切换下一件'}</span>
+          </>
+        )}
       </div>
     </section>
   );

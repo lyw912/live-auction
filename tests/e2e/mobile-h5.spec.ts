@@ -469,6 +469,68 @@ test('H5 payment double click sends one mock payment and reaches paid UI', async
   expect(payCount).toBe(1);
 });
 
+test('H5 winner result sheet locks order and shares the single payment path', async ({ page }) => {
+  let payCount = 0;
+  await page.route('/api/orders/ord_pending/pay-mock', async (route) => {
+    payCount += 1;
+    await route.fulfill({
+      json: {
+        order_id: 'ord_pending',
+        order_status: 'PAID',
+        paid_at: '2026-05-22T13:10:00Z',
+        deposit_status: 'REFUNDED'
+      }
+    });
+  });
+
+  await page.goto('/?stateMatrix=1');
+  await page.getByRole('button', { name: '成交', exact: true }).click();
+  const sheet = page.getByTestId('result-sheet');
+  await expect(sheet).toBeVisible();
+  await expect(sheet.getByRole('heading', { name: '恭喜拍中' })).toBeVisible();
+  await expect(sheet.getByText('成交价 ¥600.00')).toBeVisible();
+  await expect(sheet.getByText('订单 ord_pending 已锁定')).toBeVisible();
+  await expect(sheet.getByText('保证金会随订单状态处理')).toBeVisible();
+  await expect(page.getByTestId('bid-cta')).toHaveCount(1);
+
+  await sheet.getByTestId('result-pay-cta').dblclick();
+  await expect(sheet.getByRole('heading', { name: '支付已完成' })).toBeVisible();
+  await expect(page.getByTestId('bid-cta')).toBeDisabled();
+  expect(payCount).toBe(1);
+});
+
+test('H5 loser and unsold result sheets explain next action without enabling bid', async ({ page }) => {
+  await page.goto('/?stateMatrix=1');
+
+  await page.getByRole('button', { name: '竞价中' }).click();
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('auction:event', {
+      detail: {
+        auction_id: 'auc_live',
+        event_type: 'auction_sold',
+        seq: 42,
+        payload: {
+          amount_cents: 60000,
+          user_id: 'user_2',
+          leader_user_masked: '赵**'
+        }
+      }
+    }));
+  });
+  const loserSheet = page.getByTestId('result-sheet');
+  await expect(loserSheet.getByRole('heading', { name: '本场已落锤' })).toBeVisible();
+  await expect(loserSheet.getByText('us** 以 ¥600.00 拍中')).toBeVisible();
+  await expect(loserSheet.getByText('下一件：紫砂壶')).toBeVisible();
+  await expect(page.getByTestId('bid-cta')).toBeDisabled();
+
+  await page.getByRole('button', { name: '流拍', exact: true }).click();
+  const unsoldSheet = page.getByTestId('result-sheet');
+  await expect(unsoldSheet.getByRole('heading', { name: '本场未成交' })).toBeVisible();
+  await expect(unsoldSheet.getByText('不会生成订单')).toBeVisible();
+  await expect(unsoldSheet.getByText('紫砂壶 即将开始')).toBeVisible();
+  await expect(page.getByTestId('bid-cta')).toBeDisabled();
+});
+
 test('H5 seq gap enters recovering and resumes from fresh snapshot', async ({ page }) => {
   let releaseSnapshot: (value?: unknown) => void = () => undefined;
   const snapshotArrived = new Promise((resolve) => {
