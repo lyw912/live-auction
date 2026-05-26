@@ -8,7 +8,7 @@
 | Slice | Status | Evidence |
 |---|---|---|
 | P8-S1 PC Command Center Layout | DONE | `docs/evidence/p8-01-pc-command-center-layout.md` |
-| P8-S2 Auction Queue And Active Pinning | TODO | - |
+| P8-S2 Auction Queue And Active Pinning | DONE | `docs/evidence/p8-02-pc-auction-queue-active-pinning.md` |
 | P8-S3 Host Prompter Backend | TODO | - |
 | P8-S4 Host Live Assist UI | TODO | - |
 | P8-S5 Seller Rule Wizard And Preview | TODO | - |
@@ -20,3 +20,4 @@
 - PC command surfaces must keep existing host workflows: item create/upload, auction create, rules save, schedule/start/cancel, narrate, orders, and diagnostics.
 - Route-mocked visual tests are UI contract coverage only. Live/backend evidence remains separate.
 - S1 uses existing backend APIs and flight-recorder data; host prompter and heat summary are still owned by S3/S6.
+- S2 only mirrors ACTIVE/narrating constraints in PC UI. Backend state transition and narrating race checks remain authoritative.

@@ -192,7 +192,7 @@ body {
 
 .queue-card {
   width: 100%;
-  min-height: 128px;
+  min-height: 150px;
   display: grid;
   grid-template-columns: 58px minmax(0, 1fr);
   gap: 10px;
@@ -203,6 +203,40 @@ body {
   padding: 10px;
   margin-bottom: 10px;
   cursor: pointer;
+}
+
+.queue-group {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.queue-group:last-child {
+  margin-bottom: 0;
+}
+
+.queue-group-heading {
+  min-height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.queue-group-heading strong {
+  min-width: 22px;
+  min-height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--color-surface-2);
+  color: var(--color-muted-strong);
+  font-size: 12px;
 }
 
 .queue-card.is-selected {
@@ -257,6 +291,31 @@ body {
   font-size: 12px;
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+.queue-constraints {
+  min-height: 24px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.queue-constraints em {
+  min-height: 22px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--radius-sm);
+  background: var(--color-live-cyan-soft);
+  color: var(--color-muted-strong);
+  padding: 0 7px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.queue-card.is-active .queue-constraints em {
+  background: var(--color-trust-green);
+  color: #fff;
 }
 
 .command-hero {

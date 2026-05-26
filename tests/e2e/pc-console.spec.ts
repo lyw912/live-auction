@@ -44,6 +44,19 @@ const auctionDraft = {
   }
 };
 
+const auctionScheduled = {
+  ...auctionLive,
+  id: 'auc_scheduled',
+  item_id: 'item_scheduled',
+  status: 'SCHEDULED',
+  is_narrating: false,
+  current_price_cents: 20000,
+  current_winner_id: undefined,
+  accepted_bid_count: 0,
+  start_at: '2026-05-22T14:30:00Z',
+  item: { id: 'item_scheduled', title: '银壶', description: 'scheduled' }
+};
+
 test.beforeEach(async ({ page }) => {
   await page.route('/api/auth/me', async (route) => {
     await route.fulfill({ json: { user: { ID: 'host_1', Role: 'host' } } });
@@ -54,7 +67,7 @@ test.beforeEach(async ({ page }) => {
   await page.route('/api/rooms', async (route) => {
     await route.fulfill({ json: { items: [{ id: 'room_main', host_id: 'host_1', status: 'OPEN', role: 'host' }] } });
   });
-  await page.route('/api/auctions?room_id=room_main', async (route) => route.fulfill({ json: [auctionLive, auctionDraft] }));
+  await page.route('/api/auctions?room_id=room_main', async (route) => route.fulfill({ json: [auctionDraft, auctionScheduled, auctionLive] }));
   await page.route('/api/orders', async (route) => route.fulfill({
     json: [{ id: 'ord_pending', auction_id: 'auc_live', winner_id: 'user_1', amount_cents: 60000, status: 'ORDER_PENDING', deposit_status: 'HELD' }]
   }));
@@ -96,6 +109,9 @@ test.beforeEach(async ({ page }) => {
   await page.route('/api/monitor/auctions/auc_next/flight-recorder?limit=20&timeline_limit=20', async (route) => route.fulfill({
     json: { timeline: [] }
   }));
+  await page.route('/api/monitor/auctions/auc_scheduled/flight-recorder?limit=20&timeline_limit=20', async (route) => route.fulfill({
+    json: { timeline: [] }
+  }));
 });
 
 test('PC console renders live API auctions, orders, and expanded diagnostic panels', async ({ page }) => {
@@ -106,6 +122,9 @@ test('PC console renders live API auctions, orders, and expanded diagnostic pane
   await expect(page.getByTestId('health-ribbon')).toBeVisible();
   await expect(page.getByTestId('pc-command-center')).toBeVisible();
   await expect(page.getByTestId('auction-queue')).toBeVisible();
+  await expect(page.getByTestId('queue-group-active-pinned').getByText('青瓷手作茶盏')).toBeVisible();
+  await expect(page.getByTestId('queue-group-scheduled').getByText('银壶')).toBeVisible();
+  await expect(page.getByTestId('queue-group-draft').getByText('紫砂壶')).toBeVisible();
   await expect(page.getByTestId('live-assist-rail')).toBeVisible();
   await expect(page.getByTestId('diagnostics')).toBeVisible();
   await expect(page.getByLabel('monitor-anomaly-type')).toBeVisible();
@@ -128,6 +147,19 @@ test('PC console renders live API auctions, orders, and expanded diagnostic pane
   await page.getByRole('tab', { name: 'Recovery' }).click();
   await expect(page.getByLabel('Recovery').getByText('room_main')).toBeVisible();
   await expect(page.getByText('snapshot_from_db')).toBeVisible();
+});
+
+test('PC auction queue pins active auction and explains active and narrating constraints', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByTestId('queue-group-active-pinned').getByText('Pinned current live auction')).toBeVisible();
+  await page.getByTestId('auction-queue').getByText('银壶').click();
+  await expect(page.getByTestId('auction-control-summary').getByRole('button', { name: '开拍' })).toBeDisabled();
+  await expect(page.getByText(/房间已有 ACTIVE auc_live/)).toBeVisible();
+  await expect(page.getByTestId('queue-group-scheduled').getByText(/ACTIVE locked by auc_live/)).toBeVisible();
+  await page.getByTestId('auction-queue').getByText('紫砂壶').click();
+  await expect(page.getByTestId('auction-control-summary').getByRole('button', { name: '开始讲解' })).toBeDisabled();
+  await expect(page.getByText(/讲解中拍品为 auc_live/)).toBeVisible();
+  await expect(page.getByTestId('queue-group-draft').getByText(/Narrating locked by auc_live/)).toBeVisible();
 });
 
 test('PC creates item and auction through backend upload and create APIs', async ({ page }) => {

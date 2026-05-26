@@ -64,6 +64,7 @@
 | `docs/evidence/p7-05-sound-haptic-policy.md` | AUTHORITATIVE | P7-S5 adds opt-in AudioContext reuse, capability fallback, event-specific sound/haptic patterns, hidden-tab skip, reduced-motion haptic suppression, and playback tests. |
 | `docs/evidence/p7-06-countdown-extension-ux.md` | AUTHORITATIVE | P7-S6 adds stable last-10-second tenths countdown, event-authoritative extension old/new end-time copy, local-zero syncing behavior, updated H5 visual baselines, and PC E2E/visual port verification notes. |
 | `docs/evidence/p8-01-pc-command-center-layout.md` | AUTHORITATIVE | P8-S1 rebuilds the PC console into a top health ribbon, left auction queue, center command panel, right live assist rail, and secondary workspace while preserving existing host workflows. |
+| `docs/evidence/p8-02-pc-auction-queue-active-pinning.md` | AUTHORITATIVE | P8-S2 groups the PC auction queue, pins ACTIVE lots, and makes ACTIVE/narrating constraints visible while preserving backend authority. |
 | `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan.md` | AUTHORITATIVE | P3/P4 pressure protocol and admission-off policy. |
 | `docs/design-v2-industrial/18-p3-p4-roadmap-reset.md` | AUTHORITATIVE | Current P3/P4 execution order and decision gates. |
 | `docs/p3-decision-log.md` | AUTHORITATIVE | Current decisions, superseded evidence, and go/no-go gates. |

@@ -149,8 +149,22 @@ function sortedAuctions(auctions: Auction[]) {
   });
 }
 
+function queueGroups(auctions: Auction[]) {
+  const sorted = sortedAuctions(auctions);
+  return {
+    active: sorted.filter((auction) => auction.status === 'ACTIVE'),
+    scheduled: sorted.filter((auction) => auction.status === 'SCHEDULED'),
+    draft: sorted.filter((auction) => auction.status === 'DRAFT'),
+    finished: sorted.filter((auction) => !['ACTIVE', 'SCHEDULED', 'DRAFT'].includes(auction.status))
+  };
+}
+
 function activeAuction(auctions: Auction[]) {
   return auctions.find((auction) => auction.status === 'ACTIVE');
+}
+
+function narratingAuction(auctions: Auction[]) {
+  return auctions.find((auction) => auction.is_narrating);
 }
 
 function monitorCount(payload?: MonitorPayload) {
@@ -279,6 +293,7 @@ function App() {
   const [now, setNow] = useState(Date.now());
   const selectedAuction = useMemo(() => auctions.find((auction) => auction.id === selectedAuctionID) ?? auctions[0], [auctions, selectedAuctionID]);
   const pinnedActiveAuction = useMemo(() => activeAuction(auctions), [auctions]);
+  const currentNarratingAuction = useMemo(() => narratingAuction(auctions), [auctions]);
   const ruleValidation = validateRule(rule);
   const shownSuggestions = ruleValidation.valid ? backendSuggestions : ruleValidation.suggestions;
 
@@ -515,7 +530,13 @@ function App() {
         />
 
         <section className="command-center" data-testid="pc-command-center">
-          <AuctionQueue auctions={auctions} selectedAuction={selectedAuction} onSelect={setSelectedAuctionID} />
+          <AuctionQueue
+            active={pinnedActiveAuction}
+            auctions={auctions}
+            narrating={currentNarratingAuction}
+            selectedAuction={selectedAuction}
+            onSelect={setSelectedAuctionID}
+          />
           {selectedAuction ? (
             <AuctionControlSummary
               monitor={monitor}
@@ -525,6 +546,8 @@ function App() {
             >
               <AuctionCommandPanel
                 cancelReason={cancelReason}
+                activeAuction={pinnedActiveAuction}
+                narratingAuction={currentNarratingAuction}
                 scheduleStartAt={scheduleStartAt}
                 selectedAuction={selectedAuction}
                 onAction={auctionAction}
@@ -685,14 +708,18 @@ function ItemCreatePanel({
 }
 
 function AuctionCommandPanel({
+  activeAuction,
   cancelReason,
+  narratingAuction,
   scheduleStartAt,
   selectedAuction,
   onAction,
   onCancelReasonChange,
   onScheduleStartAtChange
 }: {
+  activeAuction?: Auction;
   cancelReason: string;
+  narratingAuction?: Auction;
   scheduleStartAt: string;
   selectedAuction?: Auction;
   onAction: (action: 'schedule' | 'unschedule' | 'start' | 'cancel' | 'narrate-start' | 'narrate-stop') => void;
@@ -700,6 +727,10 @@ function AuctionCommandPanel({
   onScheduleStartAtChange: (startAt: string) => void;
 }) {
   const isTerminal = selectedAuction ? terminalStatus(selectedAuction.status) : true;
+  const activeConflict = Boolean(selectedAuction && activeAuction && activeAuction.id !== selectedAuction.id);
+  const narratingConflict = Boolean(selectedAuction && narratingAuction && narratingAuction.id !== selectedAuction.id);
+  const canStart = selectedAuction?.status === 'SCHEDULED' && !activeConflict;
+  const canNarrate = Boolean(selectedAuction && !selectedAuction.is_narrating && !isTerminal && !narratingConflict);
   return (
     <div className="rule-panel command-actions">
       <h2>竞拍控制</h2>
@@ -721,18 +752,20 @@ function AuctionCommandPanel({
           </div>
           <Space wrap>
             <Button disabled={selectedAuction.status !== 'DRAFT'} onClick={() => onAction('schedule')}>排期</Button>
-            <Button disabled={selectedAuction.status !== 'SCHEDULED'} icon={<Play size={14} />} onClick={() => onAction('start')}>开拍</Button>
+            <Button disabled={!canStart} icon={<Play size={14} />} onClick={() => onAction('start')}>开拍</Button>
             <Button disabled={isTerminal} status="danger" icon={<Square size={14} />} onClick={() => {
               Modal.confirm({ title: '确认取消竞拍', content: selectedAuction.id, onOk: () => onAction('cancel') });
             }}>取消</Button>
-            <Button disabled={selectedAuction.is_narrating || isTerminal} onClick={() => onAction('narrate-start')}>开始讲解</Button>
+            <Button disabled={!canNarrate} onClick={() => onAction('narrate-start')}>开始讲解</Button>
             <Button disabled={!selectedAuction.is_narrating} onClick={() => onAction('narrate-stop')}>停止讲解</Button>
           </Space>
           <div className="action-guardrail">
             {selectedAuction.status === 'DRAFT' && 'DRAFT 可编辑规则并排期；开拍后价格规则冻结。'}
-            {selectedAuction.status === 'SCHEDULED' && 'SCHEDULED 已冻结价格规则，可开拍或取消。'}
+            {selectedAuction.status === 'SCHEDULED' && !activeConflict && 'SCHEDULED 已冻结价格规则，可开拍或取消。'}
+            {selectedAuction.status === 'SCHEDULED' && activeConflict && `房间已有 ACTIVE ${activeAuction?.id}；同一房间只能有一个 ACTIVE，需先结束或取消当前竞拍。`}
             {selectedAuction.status === 'ACTIVE' && 'ACTIVE 仅允许讲解切换和带原因取消，不能修改价格真源。'}
             {isTerminal && '终态竞拍不可再操作，订单和诊断保留可追溯记录。'}
+            {selectedAuction.status !== 'SCHEDULED' && narratingConflict && `讲解中拍品为 ${narratingAuction?.id}；切换讲解前需先停止当前讲解。`}
           </div>
         </>
       ) : <div className="empty-state">暂无可控制竞拍</div>}
@@ -741,47 +774,147 @@ function AuctionCommandPanel({
 }
 
 function AuctionQueue({
+  active,
   auctions,
+  narrating,
   selectedAuction,
   onSelect
 }: {
+  active?: Auction;
   auctions: Auction[];
+  narrating?: Auction;
   selectedAuction?: Auction;
   onSelect: (auctionID: string) => void;
 }) {
-  const rows = sortedAuctions(auctions);
+  const groups = queueGroups(auctions);
   return (
     <section className="queue-panel" data-testid="auction-queue">
       <div className="panel-heading">
         <h2>竞拍队列</h2>
-        <span>{rows.length} lots</span>
+        <span>{auctions.length} lots</span>
       </div>
-      {rows.length === 0 ? <div className="empty-state compact-empty">暂无竞拍</div> : rows.map((auction) => (
-        <button
-          type="button"
-          className={`queue-card ${auction.id === selectedAuction?.id ? 'is-selected' : ''} ${auction.status === 'ACTIVE' ? 'is-active' : ''}`}
-          key={auction.id}
-          onClick={() => onSelect(auction.id)}
-        >
-          <span className="thumb">
-            {auction.item?.image_url ? <img src={auction.item.image_url} alt="" /> : <ImageIcon size={18} />}
-          </span>
-          <span className="queue-main">
-            <span className="queue-title">{auction.item?.title ?? auction.item_id}</span>
-            <span className="queue-meta">
-              <Tag color={statusTagColor(auction.status)}>{auction.status}</Tag>
-              {auction.is_narrating ? <Tag color="green">讲解中</Tag> : <Tag>未讲解</Tag>}
-            </span>
-            <span className="queue-rules">
-              起 {formatCents(auction.start_price_cents)} · 加 {formatCents(auction.increment_cents)} · 封 {formatCents(auction.cap_price_cents)}
-            </span>
-            <span className="queue-rules">
-              当前/成交 {formatCents(auction.current_price_cents)} · {auction.accepted_bid_count} bids · {auction.end_at ? formatRemaining(auction.end_at) : '-'}
-            </span>
-          </span>
-        </button>
-      ))}
+      {auctions.length === 0 ? <div className="empty-state compact-empty">暂无竞拍</div> : (
+        <>
+          <QueueGroup
+            active={active}
+            auctions={groups.active}
+            label="ACTIVE pinned"
+            narrating={narrating}
+            selectedAuction={selectedAuction}
+            onSelect={onSelect}
+          />
+          <QueueGroup
+            active={active}
+            auctions={groups.scheduled}
+            label="SCHEDULED"
+            narrating={narrating}
+            selectedAuction={selectedAuction}
+            onSelect={onSelect}
+          />
+          <QueueGroup
+            active={active}
+            auctions={groups.draft}
+            label="DRAFT"
+            narrating={narrating}
+            selectedAuction={selectedAuction}
+            onSelect={onSelect}
+          />
+          <QueueGroup
+            active={active}
+            auctions={groups.finished}
+            label="FINISHED"
+            narrating={narrating}
+            selectedAuction={selectedAuction}
+            onSelect={onSelect}
+          />
+        </>
+      )}
     </section>
+  );
+}
+
+function QueueGroup({
+  active,
+  auctions,
+  label,
+  narrating,
+  selectedAuction,
+  onSelect
+}: {
+  active?: Auction;
+  auctions: Auction[];
+  label: string;
+  narrating?: Auction;
+  selectedAuction?: Auction;
+  onSelect: (auctionID: string) => void;
+}) {
+  if (auctions.length === 0) return null;
+  return (
+    <div className="queue-group" data-testid={`queue-group-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}>
+      <div className="queue-group-heading">
+        <span>{label}</span>
+        <strong>{auctions.length}</strong>
+      </div>
+      {auctions.map((auction) => (
+        <QueueCard
+          active={active}
+          auction={auction}
+          key={auction.id}
+          narrating={narrating}
+          selected={auction.id === selectedAuction?.id}
+          onSelect={onSelect}
+        />
+      ))}
+    </div>
+  );
+}
+
+function QueueCard({
+  active,
+  auction,
+  narrating,
+  selected,
+  onSelect
+}: {
+  active?: Auction;
+  auction: Auction;
+  narrating?: Auction;
+  selected: boolean;
+  onSelect: (auctionID: string) => void;
+}) {
+  const activeConflict = Boolean(active && active.id !== auction.id);
+  const narratingConflict = Boolean(narrating && narrating.id !== auction.id);
+  const constraints: string[] = [];
+  if (auction.status === 'SCHEDULED' && activeConflict) constraints.push(`ACTIVE locked by ${active?.id}`);
+  if (!auction.is_narrating && narratingConflict) constraints.push(`Narrating locked by ${narrating?.id}`);
+  if (auction.status === 'ACTIVE') constraints.push('Pinned current live auction');
+  if (auction.status === 'DRAFT') constraints.push('Editable before schedule');
+  return (
+    <button
+      type="button"
+      className={`queue-card ${selected ? 'is-selected' : ''} ${auction.status === 'ACTIVE' ? 'is-active' : ''}`}
+      onClick={() => onSelect(auction.id)}
+    >
+      <span className="thumb">
+        {auction.item?.image_url ? <img src={auction.item.image_url} alt="" /> : <ImageIcon size={18} />}
+      </span>
+      <span className="queue-main">
+        <span className="queue-title">{auction.item?.title ?? auction.item_id}</span>
+        <span className="queue-meta">
+          <Tag color={statusTagColor(auction.status)}>{auction.status}</Tag>
+          {auction.is_narrating ? <Tag color="green">讲解中</Tag> : <Tag>未讲解</Tag>}
+        </span>
+        <span className="queue-rules">
+          起 {formatCents(auction.start_price_cents)} · 加 {formatCents(auction.increment_cents)} · 封 {formatCents(auction.cap_price_cents)}
+        </span>
+        <span className="queue-rules">
+          当前/成交 {formatCents(auction.current_price_cents)} · {auction.accepted_bid_count} bids · {auction.end_at ? formatRemaining(auction.end_at) : '-'}
+        </span>
+        <span className="queue-constraints">
+          {constraints.map((constraint) => <em key={constraint}>{constraint}</em>)}
+        </span>
+      </span>
+    </button>
   );
 }
 
