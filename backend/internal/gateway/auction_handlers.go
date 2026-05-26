@@ -388,6 +388,56 @@ func (h AuctionHandler) GetLeaderboard(w http.ResponseWriter, r *http.Request) {
 	writeResult(w, r, http.StatusOK, result, err)
 }
 
+func (h AuctionHandler) GetMaxBidIntent(w http.ResponseWriter, r *http.Request) {
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	auctionID := chi.URLParam(r, "id")
+	if _, err := h.ACL.requireActiveMembershipForAuction(r.Context(), user, auctionID, traceID(r.Context())); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	result, err := h.Repo.GetMaxBidIntent(r.Context(), auctionID, user.ID)
+	writeResult(w, r, http.StatusOK, result, err)
+}
+
+func (h AuctionHandler) PutMaxBidIntent(w http.ResponseWriter, r *http.Request) {
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	var req auction.MaxBidIntentInput
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "invalid json body", http.StatusBadRequest))
+		return
+	}
+	auctionID := chi.URLParam(r, "id")
+	if _, err := h.ACL.requireActiveMembershipForAuction(r.Context(), user, auctionID, traceID(r.Context())); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	result, err := h.Repo.PutMaxBidIntent(r.Context(), auctionID, user.ID, r.Header.Get("Idempotency-Key"), req)
+	writeResult(w, r, http.StatusOK, result, err)
+}
+
+func (h AuctionHandler) DeleteMaxBidIntent(w http.ResponseWriter, r *http.Request) {
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	auctionID := chi.URLParam(r, "id")
+	if _, err := h.ACL.requireActiveMembershipForAuction(r.Context(), user, auctionID, traceID(r.Context())); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	result, err := h.Repo.DeleteMaxBidIntent(r.Context(), auctionID, user.ID, r.Header.Get("Idempotency-Key"))
+	writeResult(w, r, http.StatusOK, result, err)
+}
+
 func (h AuctionHandler) PayMock(w http.ResponseWriter, r *http.Request) {
 	user, ok := currentUser(r)
 	if !ok {

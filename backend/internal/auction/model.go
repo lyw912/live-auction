@@ -106,6 +106,11 @@ type MaxBidIntentInput struct {
 	Source         MaxBidIntentSource `json:"source"`
 }
 
+type MaxBidIntentResponse struct {
+	Result string       `json:"result"`
+	Intent MaxBidIntent `json:"intent"`
+}
+
 type LeaderboardEntry struct {
 	Rank        int       `json:"rank"`
 	UserID      string    `json:"user_id"`

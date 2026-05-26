@@ -146,3 +146,40 @@ func TestListActiveMaxBidIntentsForAuctionOrdersPrivateCandidates(t *testing.T) 
 		t.Fatalf("cancelled intent leaked into active candidates: %#v", intents)
 	}
 }
+
+func TestMaxBidIntentRepositoryIdempotency(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	repo := NewRepository(db)
+	auction := createActiveAuction(t, repo, db, nil)
+	userID := createTestUser(t, db)
+
+	first, err := repo.PutMaxBidIntent(ctx, auction.ID, userID, "intent-idem-1", MaxBidIntentInput{MaxAmountCents: 25_000})
+	if err != nil {
+		t.Fatalf("PutMaxBidIntent first: %v", err)
+	}
+	replay, err := repo.PutMaxBidIntent(ctx, auction.ID, userID, "intent-idem-1", MaxBidIntentInput{MaxAmountCents: 25_000})
+	if err != nil {
+		t.Fatalf("PutMaxBidIntent replay: %v", err)
+	}
+	if replay.Intent.ID != first.Intent.ID || replay.Intent.Version != first.Intent.Version {
+		t.Fatalf("put replay mutated intent: got %#v want %#v", replay.Intent, first.Intent)
+	}
+
+	_, err = repo.PutMaxBidIntent(ctx, auction.ID, userID, "intent-idem-1", MaxBidIntentInput{MaxAmountCents: 30_000})
+	if !hasCode(err, "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST") {
+		t.Fatalf("changed put err = %v, want idempotency hash mismatch", err)
+	}
+
+	cancel, err := repo.DeleteMaxBidIntent(ctx, auction.ID, userID, "intent-delete-idem-1")
+	if err != nil {
+		t.Fatalf("DeleteMaxBidIntent first: %v", err)
+	}
+	cancelReplay, err := repo.DeleteMaxBidIntent(ctx, auction.ID, userID, "intent-delete-idem-1")
+	if err != nil {
+		t.Fatalf("DeleteMaxBidIntent replay: %v", err)
+	}
+	if cancelReplay.Intent.ID != cancel.Intent.ID || cancelReplay.Intent.Version != cancel.Intent.Version {
+		t.Fatalf("delete replay mutated intent: got %#v want %#v", cancelReplay.Intent, cancel.Intent)
+	}
+}

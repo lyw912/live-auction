@@ -57,6 +57,9 @@ Server always derives user from session/mock token.
 | GET | `/api/auctions/{id}` | authoritative snapshot |
 | POST | `/api/auctions/{id}/bids` | bid |
 | POST | `/api/auctions/{id}/bids/confirm` | fat-finger confirm |
+| GET | `/api/auctions/{id}/max-bid-intent` | read current user's private max bid intent |
+| PUT | `/api/auctions/{id}/max-bid-intent` | create/update current user's private max bid intent |
+| DELETE | `/api/auctions/{id}/max-bid-intent` | cancel current user's private max bid intent |
 | GET | `/api/users/me/bids` | bid history |
 | GET | `/api/users/me/orders` | order history |
 | POST | `/api/orders/{id}/pay-mock` | mock payment |
@@ -114,6 +117,51 @@ Fat-finger response:
 ```
 
 The server resolves original amount from token and runs normal bid pipeline.
+
+## Max Bid Intent
+
+Create/update:
+
+```text
+PUT /api/auctions/{id}/max-bid-intent
+Idempotency-Key: <uuid>
+```
+
+```json
+{
+  "max_amount_cents": 90000,
+  "client_seen_seq": 41,
+  "source": "MAX_BID"
+}
+```
+
+Response:
+
+```json
+{
+  "result": "ACTIVE",
+  "intent": {
+    "id": "mbi_123",
+    "auction_id": "a_123",
+    "user_id": "u_1",
+    "max_amount_cents": 90000,
+    "status": "ACTIVE",
+    "source": "MAX_BID",
+    "version": 0
+  }
+}
+```
+
+Cancel:
+
+```text
+DELETE /api/auctions/{id}/max-bid-intent
+Idempotency-Key: <uuid>
+```
+
+Response result is `CANCELLED`.
+
+`GET /api/auctions/{id}/max-bid-intent` returns only the authenticated user's private intent. Hosts and other bidders do not get another user's max amount through this endpoint.
 
 ## Payment Mock
 
@@ -212,6 +260,9 @@ Gap:
 | BID_TOO_LOW | below minimum |
 | BID_INCREMENT_MISMATCH | not on increment grid |
 | BID_ABOVE_CAP | above cap |
+| MAX_BID_TOO_LOW | max bid below current executable minimum |
+| MAX_BID_INCREMENT_MISMATCH | max bid not on increment grid |
+| MAX_BID_ABOVE_CAP | max bid above cap |
 | REJECTED_SELF_LEADING | current winner bids again |
 | FAT_FINGER_CONFIRM_REQUIRED | need confirm token |
 | RATE_LIMITED | per-user/IP limit |
@@ -251,6 +302,26 @@ scope_id = order_id
 user_id = winner_id
 idempotency_key = Idempotency-Key
 request_hash = sha256("payment:v1|order_id|user_id|idempotency_key")
+```
+
+Max bid intent key:
+
+```text
+scope_type = max_bid_intent
+scope_id = auction_id
+user_id = current user
+idempotency_key = Idempotency-Key
+request_hash = sha256("max-bid-intent:v1|auction_id|user_id|idempotency_key|max_amount_cents")
+```
+
+Cancel intent key:
+
+```text
+scope_type = max_bid_intent
+scope_id = auction_id
+user_id = current user
+idempotency_key = Idempotency-Key
+request_hash = sha256("max-bid-intent-cancel:v1|auction_id|user_id|idempotency_key")
 ```
 
 Validation failures before executable section are not persisted. Any result after auction lock is persisted.
