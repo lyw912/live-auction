@@ -106,6 +106,35 @@ test.beforeEach(async ({ page }) => {
       ]
     }
   }));
+  await page.route('/api/monitor/auctions/auc_live/flight-recorder?limit=80&timeline_limit=120', async (route) => route.fulfill({
+    json: {
+      summary: {
+        auction_id: 'auc_live',
+        room_id: 'room_main',
+        item_id: 'item_live',
+        item_title: '青瓷手作茶盏',
+        status: 'ACTIVE',
+        current_price_cents: 45000,
+        current_winner_id: 'user_2',
+        seq: 42,
+        accepted_bid_count: 18,
+        extend_count: 0
+      },
+      rules: [{ version: 1 }],
+      orders: [{ id: 'ord_pending', status: 'ORDER_PENDING' }],
+      payment_events: [{ id: 3, event_type: 'PAYMENT_AUTHORIZED' }],
+      anomalies: [{ id: 1, type: 'CLOCK_STEP_BACKWARD' }],
+      timeline: [
+        { time: '2026-05-22T13:00:00Z', kind: 'auction_event', auction_id: 'auc_live', seq: 41, event_type: 'bid_accepted', ref_id: 'ev_41', user_id: 'user_2', amount_cents: 45000, trace_id: 'tr_bid_41', payload: { amount_cents: 45000 } },
+        { time: '2026-05-22T13:00:01Z', kind: 'bid', auction_id: 'auc_live', seq: 41, event_type: 'bid_rejected_row', ref_id: 'bid_reject', user_id: 'user_1', amount_cents: 1, status: 'REJECTED', trace_id: 'tr_reject', payload: { reject_reason: 'BID_TOO_LOW' } },
+        { time: '2026-05-22T13:00:02Z', kind: 'outbox', auction_id: 'auc_live', seq: 42, event_type: 'bid_accepted:PUBLISHED', ref_id: '7', status: 'PUBLISHED', payload: { delivery_state: 'ACKED' } },
+        { time: '2026-05-22T13:00:03Z', kind: 'snapshot_rebuild', auction_id: 'auc_live', event_type: 'COMPLETED', ref_id: 'snap_1', status: 'COMPLETED', payload: { source: 'db', stale: false } },
+        { time: '2026-05-22T13:00:04Z', kind: 'order', auction_id: 'auc_live', event_type: 'ORDER_PENDING', ref_id: 'ord_pending', user_id: 'user_1', amount_cents: 60000, status: 'ORDER_PENDING', payload: { deposit_status: 'HELD' } },
+        { time: '2026-05-22T13:00:05Z', kind: 'payment_event', auction_id: 'auc_live', event_type: 'PAYMENT_AUTHORIZED', ref_id: '3', user_id: 'user_1', amount_cents: 60000, status: 'ORDER_PENDING', trace_id: 'tr_payment', payload: { order_id: 'ord_pending' } },
+        { time: '2026-05-22T13:00:06Z', kind: 'anomaly', auction_id: 'auc_live', event_type: 'CLOCK_STEP_BACKWARD', ref_id: '1', status: 'HIGH', trace_id: 'tr_clock', payload: { message: 'clock moved backward' } }
+      ]
+    }
+  }));
   await page.route('/api/host/auctions/auc_live/prompts', async (route) => route.fulfill({
     json: {
       auction_id: 'auc_live',
@@ -225,12 +254,12 @@ test('PC console renders live API auctions, orders, and expanded diagnostic pane
   await expect(page.getByTestId('heat-summary').getByText('unavailable')).toBeVisible();
   await expect(page.getByTestId('system-chat-disabled').getByRole('button', { name: '发送模板' })).toBeDisabled();
   await expect(page.getByTestId('recent-events').getByText('bid_accepted')).toBeVisible();
-  await expect(page.getByRole('link', { name: /Flight recorder/ })).toHaveAttribute('href', /flight-recorder/);
+  await expect(page.getByRole('button', { name: /Flight recorder/ })).toBeVisible();
 
   await page.getByRole('tab', { name: 'Rejects' }).click();
   await expect(page.getByText('BID_TOO_LOW')).toBeVisible();
   await expect(page.getByText('tr_reject')).toBeVisible();
-  await expect(page.getByLabel('Rejects').getByRole('link').first()).toHaveAttribute('href', /flight-recorder/);
+  await expect(page.getByLabel('Rejects').getByRole('button', { name: /tr_reject/ })).toBeVisible();
 
   await page.getByRole('tab', { name: 'Recovery' }).click();
   await expect(page.getByLabel('Recovery').getByText('room_main')).toBeVisible();
@@ -268,6 +297,23 @@ test('PC host live assist renders real heat summary and labels watcher count una
   await expect(heat.locator('.heat-grid div').filter({ hasText: 'Accepted bids' }).getByText('3')).toBeVisible();
   await expect(heat.locator('.heat-grid div').filter({ hasText: 'Rejected bids' }).getByText('1')).toBeVisible();
   await expect(heat.locator('.heat-grid div').filter({ hasText: 'Chat' }).getByText('4')).toBeVisible();
+});
+
+test('PC diagnostics row opens flight recorder drawer with real timeline impact and next action', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('tab', { name: 'Rejects' }).click();
+  await page.getByLabel('Rejects').getByRole('button', { name: /tr_reject/ }).click();
+  const drawer = page.getByTestId('flight-recorder-drawer');
+  await expect(drawer.getByText('auc_live')).toBeVisible();
+  await expect(drawer.getByText('青瓷手作茶盏')).toBeVisible();
+  await expect(drawer.getByText('bid_accepted', { exact: true })).toBeVisible();
+  await expect(drawer.getByText('bid_rejected_row')).toBeVisible();
+  await expect(drawer.getByText('bid_accepted:PUBLISHED')).toBeVisible();
+  await expect(drawer.getByText('PAYMENT_AUTHORIZED')).toBeVisible();
+  await expect(drawer.getByText('CLOCK_STEP_BACKWARD')).toBeVisible();
+  await expect(drawer.getByText(/Authoritative bid advanced auction seq/)).toBeVisible();
+  await expect(drawer.getByText(/Use reject_reason to explain user-facing copy/)).toBeVisible();
+  await expect(drawer.getByText(/Operational anomaly requires host\/ops review/)).toBeVisible();
 });
 
 test('PC auction queue pins active auction and explains active and narrating constraints', async ({ page }) => {

@@ -925,6 +925,7 @@ body {
 }
 
 .recent-title a,
+.link-button,
 .source-link {
   color: #155540;
   display: inline-flex;
@@ -932,6 +933,15 @@ body {
   gap: 5px;
   font-weight: 700;
   text-decoration: none;
+}
+
+.link-button,
+.source-button {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+  font: inherit;
 }
 
 .recent-event-row span,
@@ -972,6 +982,112 @@ body {
   border-radius: var(--radius-md);
 }
 
+.flight-recorder {
+  display: grid;
+  gap: 14px;
+}
+
+.flight-recorder-head {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.flight-recorder-head div,
+.flight-recorder-counts,
+.flight-row {
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-0);
+}
+
+.flight-recorder-head div {
+  display: grid;
+  gap: 4px;
+  min-height: 62px;
+  align-content: center;
+  padding: 10px;
+}
+
+.flight-recorder-head span,
+.flight-recorder-counts,
+.flight-row-meta,
+.flight-row-explain span {
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.flight-recorder-head strong,
+.flight-row-main strong {
+  min-width: 0;
+  color: var(--color-ink-950);
+  overflow-wrap: anywhere;
+}
+
+.flight-recorder-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 9px 10px;
+}
+
+.flight-timeline {
+  display: grid;
+  gap: 8px;
+}
+
+.flight-row {
+  display: grid;
+  gap: 9px;
+  padding: 10px;
+}
+
+.flight-row-main {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(72px, auto);
+  gap: 10px;
+  align-items: center;
+}
+
+.flight-row-main div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.flight-row-main div span,
+.flight-row-main code {
+  min-width: 0;
+  color: var(--color-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.flight-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.flight-row-explain {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.flight-row-explain div {
+  border-left: 3px solid var(--color-live-cyan);
+  background: var(--color-surface);
+  padding: 8px;
+}
+
+.flight-row-explain p {
+  margin: 3px 0 0;
+  color: var(--color-ink-950);
+  line-height: 1.45;
+}
+
 @media (max-width: 900px) {
   .health-ribbon,
   .command-center {
@@ -983,6 +1099,11 @@ body {
   }
 
   .monitor-filter {
+    grid-template-columns: 1fr;
+  }
+
+  .flight-recorder-head,
+  .flight-row-explain {
     grid-template-columns: 1fr;
   }
 

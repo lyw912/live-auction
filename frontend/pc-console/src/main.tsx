@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Button, Form, Input, InputNumber, Layout, Message, Modal, Space, Table, Tabs, Tag } from '@arco-design/web-react';
+import { Button, Drawer, Form, Input, InputNumber, Layout, Message, Modal, Space, Table, Tabs, Tag } from '@arco-design/web-react';
 import '@arco-design/web-react/dist/css/arco.css';
 import { Activity, AlertTriangle, ClipboardList, Clock3, Database, ExternalLink, Gavel, ImageIcon, Play, RadioTower, RefreshCw, Square, Upload, Wifi } from 'lucide-react';
 import './styles.css';
@@ -79,7 +79,39 @@ type MonitorPayload = {
 };
 
 type FlightRecorderPayload = {
-  timeline?: Array<Record<string, unknown>>;
+  summary?: FlightRecorderSummary;
+  rules?: Array<Record<string, unknown>>;
+  orders?: Array<Record<string, unknown>>;
+  payment_events?: Array<Record<string, unknown>>;
+  anomalies?: Array<Record<string, unknown>>;
+  timeline?: FlightRecorderTimelineRow[];
+};
+
+type FlightRecorderSummary = {
+  auction_id: string;
+  room_id: string;
+  item_id: string;
+  item_title: string;
+  status: string;
+  current_price_cents: number;
+  current_winner_id?: string;
+  seq: number;
+  accepted_bid_count: number;
+  extend_count: number;
+};
+
+type FlightRecorderTimelineRow = {
+  time: string;
+  kind: string;
+  auction_id: string;
+  seq?: number;
+  event_type: string;
+  ref_id: string;
+  user_id?: string;
+  amount_cents?: number;
+  status?: string;
+  trace_id?: string;
+  payload?: Record<string, unknown>;
 };
 
 type HostPrompt = {
@@ -230,6 +262,46 @@ function rowSourceURL(sourceKey: string, record: Record<string, unknown>) {
   return '';
 }
 
+function rowAuctionID(record: Record<string, unknown>) {
+  return String(record.auction_id ?? record.aggregate_id ?? record.target_id ?? '');
+}
+
+function timelineTone(row: FlightRecorderTimelineRow) {
+  const text = `${row.kind} ${row.event_type} ${row.status ?? ''}`.toLowerCase();
+  if (text.includes('anomaly') || text.includes('dead') || text.includes('failed') || text.includes('rejected')) return 'red';
+  if (text.includes('sold') || text.includes('paid') || text.includes('published') || text.includes('accepted')) return 'green';
+  if (text.includes('snapshot') || text.includes('recover')) return 'arcoblue';
+  return 'gray';
+}
+
+function timelineImpact(row: FlightRecorderTimelineRow) {
+  if (row.kind === 'auction_event') {
+    if (row.event_type === 'auction_sold') return 'Terminal auction result persisted; winner/order should be traceable below.';
+    if (row.event_type === 'bid_rejected') return 'Bid was rejected by server rules; price and winner remain authoritative.';
+    if (row.event_type === 'bid_accepted') return 'Authoritative bid advanced auction seq and current price.';
+    if (row.event_type === 'auction_extended') return 'Server extended end_at; clients must use this event, not local countdown.';
+    return 'Domain event changed the auction projection for clients.';
+  }
+  if (row.kind === 'bid') return row.status === 'ACCEPTED' ? 'Bid row confirms executable truth was recorded.' : 'Rejected bid row preserves audit and idempotency evidence.';
+  if (row.kind === 'outbox') return row.status === 'PUBLISHED' ? 'Realtime delivery was acknowledged by the relay path.' : 'Realtime delivery still needs relay/retry attention.';
+  if (row.kind === 'order') return 'Order/payment handoff state is tied to the auction terminal result.';
+  if (row.kind === 'payment_event') return 'Payment provider boundary event is recorded for reconciliation.';
+  if (row.kind === 'snapshot_rebuild') return 'Recovery path rebuilt client state from an authoritative source.';
+  if (row.kind === 'anomaly') return 'Operational anomaly requires host/ops review before claiming demo health.';
+  return 'Timeline row is sourced from backend flight recorder data.';
+}
+
+function timelineNextAction(row: FlightRecorderTimelineRow) {
+  if (row.kind === 'outbox' && row.status !== 'PUBLISHED') return 'Open Outbox diagnostics and inspect attempts, shard, and last_error.';
+  if (row.kind === 'anomaly') return 'Filter Anomalies by this auction/trace and capture the incident reason.';
+  if (row.kind === 'snapshot_rebuild' && row.status !== 'COMPLETED') return 'Check recovery diagnostics and whether clients are stuck recovering.';
+  if (row.kind === 'payment_event') return 'Compare order status and provider ids before discussing payment outcome.';
+  if (row.kind === 'order') return 'Verify winner, amount, deposit, and expiry before demoing fulfillment.';
+  if (row.kind === 'bid' && row.status === 'REJECTED') return 'Use reject_reason to explain user-facing copy and CTA behavior.';
+  if (row.trace_id) return `Trace ${row.trace_id} in logs if this row needs deeper investigation.`;
+  return 'No action needed unless the row conflicts with expected state.';
+}
+
 function createRuleDraft(auction?: Auction): RuleDraft {
   return {
     startPriceCents: auction?.start_price_cents ?? 10_000,
@@ -332,6 +404,9 @@ function App() {
   const [selectedAuctionID, setSelectedAuctionID] = useState('');
   const [monitor, setMonitor] = useState<Record<string, MonitorPayload>>({});
   const [recentEvents, setRecentEvents] = useState<Array<Record<string, unknown>>>([]);
+  const [flightRecorderAuctionID, setFlightRecorderAuctionID] = useState('');
+  const [flightRecorder, setFlightRecorder] = useState<FlightRecorderPayload | undefined>();
+  const [flightRecorderLoading, setFlightRecorderLoading] = useState(false);
   const [hostPrompts, setHostPrompts] = useState<HostPrompt[]>([]);
   const [dismissedPromptIDs, setDismissedPromptIDs] = useState<string[]>([]);
   const [promptsLoading, setPromptsLoading] = useState(false);
@@ -356,6 +431,25 @@ function App() {
   const currentNarratingAuction = useMemo(() => narratingAuction(auctions), [auctions]);
   const ruleValidation = validateRule(rule);
   const shownSuggestions = ruleValidation.valid ? backendSuggestions : ruleValidation.suggestions;
+
+  const openFlightRecorder = async (auctionID: string) => {
+    const nextAuctionID = auctionID.trim();
+    if (!nextAuctionID) return;
+    setFlightRecorderAuctionID(nextAuctionID);
+    setFlightRecorderLoading(true);
+    setFlightRecorder(undefined);
+    try {
+      const response = await fetch(`/api/monitor/auctions/${encodeURIComponent(nextAuctionID)}/flight-recorder?limit=80&timeline_limit=120`);
+      const payload = await readJSON<FlightRecorderPayload>(response);
+      if (!response.ok) throw new Error('flight recorder query failed');
+      setFlightRecorder(payload);
+    } catch {
+      Message.error('Flight recorder 读取失败');
+      setFlightRecorder(undefined);
+    } finally {
+      setFlightRecorderLoading(false);
+    }
+  };
 
   const loadAll = async () => {
     if (!sessionReady) return;
@@ -673,6 +767,7 @@ function App() {
             heatLoading={heatLoading}
             heatSummary={heatSummary}
             monitor={monitor}
+            onOpenFlightRecorder={openFlightRecorder}
             prompts={hostPrompts}
             promptsLoading={promptsLoading}
             recentEvents={recentEvents}
@@ -715,7 +810,18 @@ function App() {
         <DiagnosticsPanel
           monitor={monitor}
           monitorFilter={monitorFilter}
+          onOpenFlightRecorder={openFlightRecorder}
           onFilterChange={setMonitorFilter}
+        />
+        <FlightRecorderDrawer
+          auctionID={flightRecorderAuctionID}
+          loading={flightRecorderLoading}
+          payload={flightRecorder}
+          visible={Boolean(flightRecorderAuctionID)}
+          onClose={() => {
+            setFlightRecorderAuctionID('');
+            setFlightRecorder(undefined);
+          }}
         />
       </Layout.Content>
     </Layout>
@@ -1113,6 +1219,7 @@ function LiveAssistRail({
   heatLoading,
   heatSummary,
   monitor,
+  onOpenFlightRecorder,
   prompts,
   promptsLoading,
   recentEvents,
@@ -1123,6 +1230,7 @@ function LiveAssistRail({
   heatLoading: boolean;
   heatSummary?: HeatSummary;
   monitor: Record<string, MonitorPayload>;
+  onOpenFlightRecorder: (auctionID: string) => void;
   prompts: HostPrompt[];
   promptsLoading: boolean;
   recentEvents: Array<Record<string, unknown>>;
@@ -1219,25 +1327,27 @@ function LiveAssistRail({
         <Button disabled>发送模板</Button>
       </div>
       {topPrompt ? <div className="risk-hint" data-testid="risk-hint">优先处理：{topPrompt.title}</div> : null}
-      <EventTimeline events={recentEvents} selectedAuction={selectedAuction} />
+      <EventTimeline events={recentEvents} selectedAuction={selectedAuction} onOpenFlightRecorder={onOpenFlightRecorder} />
     </aside>
   );
 }
 
 function EventTimeline({
   events,
+  onOpenFlightRecorder,
   selectedAuction
 }: {
   events: Array<Record<string, unknown>>;
+  onOpenFlightRecorder: (auctionID: string) => void;
   selectedAuction: Auction;
 }) {
   return (
     <div className="recent-events" data-testid="recent-events">
       <div className="recent-title">
         <strong>最近事件</strong>
-        <a href={`/api/monitor/auctions/${encodeURIComponent(selectedAuction.id)}/flight-recorder?limit=50&timeline_limit=100`} target="_blank" rel="noreferrer">
+        <button type="button" className="link-button" onClick={() => onOpenFlightRecorder(selectedAuction.id)}>
           Flight recorder <ExternalLink size={13} />
-        </a>
+        </button>
       </div>
       {events.length === 0 ? (
         <div className="empty-state compact-empty">暂无最近事件</div>
@@ -1386,10 +1496,12 @@ function OrdersPanel({ orders }: { orders: Order[] }) {
 function DiagnosticsPanel({
   monitor,
   monitorFilter,
+  onOpenFlightRecorder,
   onFilterChange
 }: {
   monitor: Record<string, MonitorPayload>;
   monitorFilter: { type: string; auctionID: string; userID: string; traceID: string };
+  onOpenFlightRecorder: (auctionID: string) => void;
   onFilterChange: React.Dispatch<React.SetStateAction<{ type: string; auctionID: string; userID: string; traceID: string }>>;
 }) {
   return (
@@ -1419,15 +1531,15 @@ function DiagnosticsPanel({
         <input aria-label="monitor-trace-id" data-testid="monitor-trace-id" className="native-input" placeholder="trace_id" value={monitorFilter.traceID} onChange={(event) => onFilterChange((current) => ({ ...current, traceID: event.currentTarget.value }))} />
       </div>
       <Tabs defaultActiveTab="auctions">
-        <Tabs.TabPane key="auctions" title="Auctions"><MonitorTable payload={monitor.auctions} empty="暂无竞拍诊断数据" sourceKey="auction_id" /></Tabs.TabPane>
-        <Tabs.TabPane key="rejects" title="Rejects"><MonitorTable payload={monitor.rejects} empty="暂无拒绝出价" sourceKey="trace_id" icon={<AlertTriangle size={16} />} /></Tabs.TabPane>
-        <Tabs.TabPane key="recovery" title="Recovery"><MonitorTable payload={monitor.recovery} empty="暂无恢复数据" sourceKey="room_id" /></Tabs.TabPane>
-        <Tabs.TabPane key="anomalies" title="Anomalies"><MonitorTable payload={monitor.anomalies} empty="暂无异常" sourceKey="id" icon={<AlertTriangle size={16} />} /></Tabs.TabPane>
-        <Tabs.TabPane key="outbox" title="Outbox"><MonitorTable payload={monitor.outbox} empty="暂无 outbox 数据" sourceKey="outbox_id" /></Tabs.TabPane>
-        <Tabs.TabPane key="watermarks" title="Watermarks"><MonitorTable payload={monitor.outboxWatermarks} empty="暂无 outbox watermark" sourceKey="shard_id" /></Tabs.TabPane>
-        <Tabs.TabPane key="snapshots" title="Snapshots"><MonitorTable payload={monitor.snapshots} empty="暂无 snapshot 记录" sourceKey="request_id" /></Tabs.TabPane>
-        <Tabs.TabPane key="signals" title="Signals"><MonitorTable payload={monitor.signals} empty="暂无 control signal" sourceKey="id" /></Tabs.TabPane>
-        <Tabs.TabPane key="scheduler" title="Scheduler"><MonitorTable payload={monitor.scheduler} empty="暂无 scheduler 数据" sourceKey="job_id" /></Tabs.TabPane>
+        <Tabs.TabPane key="auctions" title="Auctions"><MonitorTable payload={monitor.auctions} empty="暂无竞拍诊断数据" sourceKey="auction_id" onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
+        <Tabs.TabPane key="rejects" title="Rejects"><MonitorTable payload={monitor.rejects} empty="暂无拒绝出价" sourceKey="trace_id" icon={<AlertTriangle size={16} />} onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
+        <Tabs.TabPane key="recovery" title="Recovery"><MonitorTable payload={monitor.recovery} empty="暂无恢复数据" sourceKey="room_id" onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
+        <Tabs.TabPane key="anomalies" title="Anomalies"><MonitorTable payload={monitor.anomalies} empty="暂无异常" sourceKey="id" icon={<AlertTriangle size={16} />} onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
+        <Tabs.TabPane key="outbox" title="Outbox"><MonitorTable payload={monitor.outbox} empty="暂无 outbox 数据" sourceKey="outbox_id" onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
+        <Tabs.TabPane key="watermarks" title="Watermarks"><MonitorTable payload={monitor.outboxWatermarks} empty="暂无 outbox watermark" sourceKey="shard_id" onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
+        <Tabs.TabPane key="snapshots" title="Snapshots"><MonitorTable payload={monitor.snapshots} empty="暂无 snapshot 记录" sourceKey="request_id" onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
+        <Tabs.TabPane key="signals" title="Signals"><MonitorTable payload={monitor.signals} empty="暂无 control signal" sourceKey="id" onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
+        <Tabs.TabPane key="scheduler" title="Scheduler"><MonitorTable payload={monitor.scheduler} empty="暂无 scheduler 数据" sourceKey="job_id" onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
       </Tabs>
     </section>
   );
@@ -1454,7 +1566,13 @@ function NumberField({ label, name, value, min, max, suffix = '分', onChange }:
   );
 }
 
-function MonitorTable({ payload, empty, icon, sourceKey }: { payload?: MonitorPayload; empty: string; icon?: React.ReactNode; sourceKey: string }) {
+function MonitorTable({ payload, empty, icon, sourceKey, onOpenFlightRecorder }: {
+  payload?: MonitorPayload;
+  empty: string;
+  icon?: React.ReactNode;
+  sourceKey: string;
+  onOpenFlightRecorder: (auctionID: string) => void;
+}) {
   const rows = payload?.items ?? [];
   if (rows.length === 0) return <div className="empty-state">{icon}{empty}</div>;
   const priorityKeys = [
@@ -1487,8 +1605,14 @@ function MonitorTable({ payload, empty, icon, sourceKey }: { payload?: MonitorPa
           title: 'source',
           dataIndex: sourceKey,
           render: (value, record) => {
+            const auctionID = rowAuctionID(record);
             const sourceURL = rowSourceURL(sourceKey, record);
-            return sourceURL ? (
+            return auctionID ? (
+              <button type="button" className="source-link source-button" onClick={() => onOpenFlightRecorder(auctionID)}>
+                <Tag color="arcoblue">{String(value ?? '-')}</Tag>
+                <ExternalLink size={13} />
+              </button>
+            ) : sourceURL ? (
               <a className="source-link" href={sourceURL} target="_blank" rel="noreferrer">
                 <Tag color="arcoblue">{String(value ?? '-')}</Tag>
                 <ExternalLink size={13} />
@@ -1503,6 +1627,94 @@ function MonitorTable({ payload, empty, icon, sourceKey }: { payload?: MonitorPa
         }))
       ]}
     />
+  );
+}
+
+function FlightRecorderDrawer({
+  auctionID,
+  loading,
+  payload,
+  visible,
+  onClose
+}: {
+  auctionID: string;
+  loading: boolean;
+  payload?: FlightRecorderPayload;
+  visible: boolean;
+  onClose: () => void;
+}) {
+  const timeline = payload?.timeline ?? [];
+  const summary = payload?.summary;
+  return (
+    <Drawer
+      className="flight-recorder-drawer"
+      width={760}
+      title="Flight Recorder"
+      visible={visible}
+      onCancel={onClose}
+      footer={null}
+      unmountOnExit
+    >
+      <div className="flight-recorder" data-testid="flight-recorder-drawer">
+        <div className="flight-recorder-head">
+          <div>
+            <span>auction</span>
+            <strong>{summary?.auction_id ?? auctionID}</strong>
+          </div>
+          <div>
+            <span>item</span>
+            <strong>{summary?.item_title ?? '-'}</strong>
+          </div>
+          <div>
+            <span>status / seq</span>
+            <strong>{summary ? `${summary.status} / ${summary.seq}` : '-'}</strong>
+          </div>
+          <div>
+            <span>price</span>
+            <strong>{formatCents(summary?.current_price_cents)}</strong>
+          </div>
+        </div>
+
+        <div className="flight-recorder-counts">
+          <span>rules {payload?.rules?.length ?? 0}</span>
+          <span>orders {payload?.orders?.length ?? 0}</span>
+          <span>payments {payload?.payment_events?.length ?? 0}</span>
+          <span>anomalies {payload?.anomalies?.length ?? 0}</span>
+          <span>timeline {timeline.length}</span>
+        </div>
+
+        {loading ? (
+          <div className="empty-state compact-empty">正在读取后端 flight recorder</div>
+        ) : timeline.length === 0 ? (
+          <div className="empty-state compact-empty">暂无 flight recorder timeline</div>
+        ) : (
+          <div className="flight-timeline">
+            {timeline.map((row, index) => (
+              <div className="flight-row" key={`${row.kind}-${row.ref_id}-${index}`}>
+                <div className="flight-row-main">
+                  <Tag color={timelineTone(row)}>{row.kind}</Tag>
+                  <div>
+                    <strong>{row.event_type}</strong>
+                    <span>{new Date(row.time).toLocaleString()} · ref {row.ref_id}</span>
+                  </div>
+                  <code>{row.seq !== undefined ? `seq ${row.seq}` : row.status ?? '-'}</code>
+                </div>
+                <div className="flight-row-meta">
+                  {row.user_id ? <span>user {maskUser(row.user_id)}</span> : null}
+                  {row.amount_cents !== undefined ? <span>{formatCents(row.amount_cents)}</span> : null}
+                  {row.trace_id ? <span>trace {row.trace_id}</span> : null}
+                  {row.status ? <span>{row.status}</span> : null}
+                </div>
+                <div className="flight-row-explain">
+                  <div><span>Impact</span><p>{timelineImpact(row)}</p></div>
+                  <div><span>Next action</span><p>{timelineNextAction(row)}</p></div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </Drawer>
   );
 }
 

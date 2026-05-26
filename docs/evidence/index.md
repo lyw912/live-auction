@@ -69,6 +69,7 @@
 | `docs/evidence/p8-04-pc-host-live-assist-panel.md` | AUTHORITATIVE | P8-S4 renders host prompter cards, talk points, risk hints, and disabled system-chat scope in the PC Live Assist rail without mutating auction state. |
 | `docs/evidence/p8-05-seller-rule-wizard-preview.md` | AUTHORITATIVE | P8-S5 converts PC seller setup into product/price/time/trust/preview wizard sections with H5 rule preview while preserving backend DRAFT-only validation. |
 | `docs/evidence/p8-06-live-auction-heat-summary.md` | AUTHORITATIVE | P8-S6 adds a host-only PostgreSQL-backed 30s heat summary for PC Live Assist and labels watcher count unavailable instead of fabricating presence. |
+| `docs/evidence/p9-01-pc-flight-recorder-timeline-drawer.md` | AUTHORITATIVE | P9-S1 adds an in-app PC flight recorder drawer that renders backend timeline rows with impact and next-action guidance without fabricating diagnostics. |
 | `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan.md` | AUTHORITATIVE | P3/P4 pressure protocol and admission-off policy. |
 | `docs/design-v2-industrial/18-p3-p4-roadmap-reset.md` | AUTHORITATIVE | Current P3/P4 execution order and decision gates. |
 | `docs/p3-decision-log.md` | AUTHORITATIVE | Current decisions, superseded evidence, and go/no-go gates. |
