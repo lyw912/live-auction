@@ -176,6 +176,15 @@ func assertMonitorFlightRecorder(t *testing.T, router http.Handler, auctionID st
 	for _, row := range body.Timeline {
 		if kind, ok := row["kind"].(string); ok {
 			kinds[kind] = true
+			if kind == "bid" {
+				payload, ok := row["payload"].(map[string]any)
+				if !ok || payload["source"] != "MANUAL" {
+					t.Fatalf("flight recorder bid row missing source: %#v", row)
+				}
+				if _, leaked := payload["max_amount_cents"]; leaked {
+					t.Fatalf("flight recorder bid row leaked private max amount: %#v", row)
+				}
+			}
 		}
 	}
 	for _, want := range []string{"auction_event", "bid", "outbox", "anomaly", "snapshot_rebuild"} {

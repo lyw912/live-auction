@@ -153,6 +153,21 @@ type HeatSummary = {
   source: string;
 };
 
+type MaxBidSummary = {
+  auction_id: string;
+  room_id: string;
+  status: string;
+  generated_at: string;
+  active_intent_count: number;
+  pre_bid_count: number;
+  max_bid_count: number;
+  applied_intent_count: number;
+  exhausted_count: number;
+  cancelled_count: number;
+  has_private_pressure: boolean;
+  source: string;
+};
+
 type RuleAPIError = {
   code?: string;
   message?: string;
@@ -275,6 +290,7 @@ function timelineTone(row: FlightRecorderTimelineRow) {
 }
 
 function timelineImpact(row: FlightRecorderTimelineRow) {
+  if (row.kind === 'bid' && row.payload?.source === 'AUTO_MAX_BID') return 'Automatic Max Bid settlement wrote a real bid row; private ceiling remains hidden.';
   if (row.kind === 'auction_event') {
     if (row.event_type === 'auction_sold') return 'Terminal auction result persisted; winner/order should be traceable below.';
     if (row.event_type === 'bid_rejected') return 'Bid was rejected by server rules; price and winner remain authoritative.';
@@ -292,6 +308,7 @@ function timelineImpact(row: FlightRecorderTimelineRow) {
 }
 
 function timelineNextAction(row: FlightRecorderTimelineRow) {
+  if (row.kind === 'bid' && row.payload?.source === 'AUTO_MAX_BID') return 'Confirm public event payload exposes bid_source only, then inspect Max Bid aggregate readiness.';
   if (row.kind === 'outbox' && row.status !== 'PUBLISHED') return 'Open Outbox diagnostics and inspect attempts, shard, and last_error.';
   if (row.kind === 'anomaly') return 'Filter Anomalies by this auction/trace and capture the incident reason.';
   if (row.kind === 'snapshot_rebuild' && row.status !== 'COMPLETED') return 'Check recovery diagnostics and whether clients are stuck recovering.';
@@ -412,6 +429,8 @@ function App() {
   const [promptsLoading, setPromptsLoading] = useState(false);
   const [heatSummary, setHeatSummary] = useState<HeatSummary | undefined>();
   const [heatLoading, setHeatLoading] = useState(false);
+  const [maxBidSummary, setMaxBidSummary] = useState<MaxBidSummary | undefined>();
+  const [maxBidLoading, setMaxBidLoading] = useState(false);
   const [monitorFilter, setMonitorFilter] = useState({ type: '', auctionID: '', userID: '', traceID: '' });
   const [loading, setLoading] = useState(false);
   const [savingRule, setSavingRule] = useState(false);
@@ -593,6 +612,32 @@ function App() {
     };
   }, [selectedAuction?.id, sessionReady, loading]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const loadMaxBidSummary = async () => {
+      if (!sessionReady || !selectedAuction?.id) {
+        setMaxBidSummary(undefined);
+        return;
+      }
+      setMaxBidLoading(true);
+      try {
+        const response = await fetch(`/api/host/auctions/${selectedAuction.id}/max-bid-summary`);
+        const payload = await readJSON<MaxBidSummary>(response);
+        if (!cancelled) {
+          setMaxBidSummary(response.ok ? payload : undefined);
+        }
+      } catch {
+        if (!cancelled) setMaxBidSummary(undefined);
+      } finally {
+        if (!cancelled) setMaxBidLoading(false);
+      }
+    };
+    void loadMaxBidSummary();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedAuction?.id, sessionReady, loading]);
+
   const updateRule = (patch: Partial<RuleDraft>) => {
     setRule((current) => ({ ...current, ...patch }));
     setRuleSaveState('idle');
@@ -766,6 +811,8 @@ function App() {
             dismissedPromptIDs={dismissedPromptIDs}
             heatLoading={heatLoading}
             heatSummary={heatSummary}
+            maxBidLoading={maxBidLoading}
+            maxBidSummary={maxBidSummary}
             monitor={monitor}
             onOpenFlightRecorder={openFlightRecorder}
             prompts={hostPrompts}
@@ -1218,6 +1265,8 @@ function LiveAssistRail({
   dismissedPromptIDs,
   heatLoading,
   heatSummary,
+  maxBidLoading,
+  maxBidSummary,
   monitor,
   onOpenFlightRecorder,
   prompts,
@@ -1229,6 +1278,8 @@ function LiveAssistRail({
   dismissedPromptIDs: string[];
   heatLoading: boolean;
   heatSummary?: HeatSummary;
+  maxBidLoading: boolean;
+  maxBidSummary?: MaxBidSummary;
   monitor: Record<string, MonitorPayload>;
   onOpenFlightRecorder: (auctionID: string) => void;
   prompts: HostPrompt[];
@@ -1284,6 +1335,28 @@ function LiveAssistRail({
         <button type="button">证书/瑕疵</button>
         <button type="button">封顶/保证金</button>
         <button type="button">延时规则</button>
+      </div>
+      <div className="max-bid-summary" data-testid="max-bid-summary">
+        <div className="heat-summary-head">
+          <span>Max Bid readiness</span>
+          <strong>{maxBidLoading ? 'loading' : maxBidSummary ? maxBidSummary.source : 'unavailable'}</strong>
+        </div>
+        {maxBidSummary ? (
+          <>
+            <div className="heat-grid">
+              <div><span>Active intents</span><strong>{maxBidSummary.active_intent_count}</strong></div>
+              <div><span>Pre-bids</span><strong>{maxBidSummary.pre_bid_count}</strong></div>
+              <div><span>Max bids</span><strong>{maxBidSummary.max_bid_count}</strong></div>
+              <div><span>Auto applied</span><strong>{maxBidSummary.applied_intent_count}</strong></div>
+              <div><span>Exhausted</span><strong>{maxBidSummary.exhausted_count}</strong></div>
+              <div><span>Cancelled</span><strong>{maxBidSummary.cancelled_count}</strong></div>
+            </div>
+            <small>{maxBidSummary.has_private_pressure ? '有私有托管出价压力；主播只看聚合计数，明细请查 flight recorder。' : '暂无活跃私有托管出价。'}</small>
+            <Button size="mini" icon={<ExternalLink size={13} />} onClick={() => onOpenFlightRecorder(selectedAuction.id)}>审计自动出价</Button>
+          </>
+        ) : (
+          <div className="heat-unavailable">{maxBidLoading ? '正在读取真实聚合' : 'Max Bid 聚合暂不可用'}</div>
+        )}
       </div>
       <div className="heat-summary" data-testid="heat-summary">
         <div className="heat-summary-head">
@@ -1709,6 +1782,7 @@ function FlightRecorderDrawer({
                 <div className="flight-row-meta">
                   {row.user_id ? <span>user {maskUser(row.user_id)}</span> : null}
                   {row.amount_cents !== undefined ? <span>{formatCents(row.amount_cents)}</span> : null}
+                  {typeof row.payload?.source === 'string' ? <span>source {row.payload.source}</span> : null}
                   {row.trace_id ? <span>trace {row.trace_id}</span> : null}
                   {row.status ? <span>{row.status}</span> : null}
                 </div>

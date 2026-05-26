@@ -101,7 +101,7 @@ test.beforeEach(async ({ page }) => {
   await page.route('/api/monitor/auctions/auc_live/flight-recorder?limit=20&timeline_limit=20', async (route) => route.fulfill({
     json: {
       timeline: [
-        { kind: 'auction_event', event_type: 'bid_accepted', seq: 42, trace_id: 'tr_bid_42' },
+        { kind: 'auction_event', event_type: 'bid_accepted', seq: 42, trace_id: 'tr_bid_42', payload: { bid_source: 'AUTO_MAX_BID' } },
         { kind: 'outbox', status: 'PUBLISHED', outbox_id: 7, seq: 42 }
       ]
     }
@@ -126,7 +126,8 @@ test.beforeEach(async ({ page }) => {
       anomalies: [{ id: 1, type: 'CLOCK_STEP_BACKWARD' }],
       timeline: [
         { time: '2026-05-22T13:00:00Z', kind: 'auction_event', auction_id: 'auc_live', seq: 41, event_type: 'bid_accepted', ref_id: 'ev_41', user_id: 'user_2', amount_cents: 45000, trace_id: 'tr_bid_41', payload: { amount_cents: 45000 } },
-        { time: '2026-05-22T13:00:01Z', kind: 'bid', auction_id: 'auc_live', seq: 41, event_type: 'bid_rejected_row', ref_id: 'bid_reject', user_id: 'user_1', amount_cents: 1, status: 'REJECTED', trace_id: 'tr_reject', payload: { reject_reason: 'BID_TOO_LOW' } },
+        { time: '2026-05-22T13:00:01Z', kind: 'bid', auction_id: 'auc_live', seq: 41, event_type: 'bid_rejected_row', ref_id: 'bid_reject', user_id: 'user_1', amount_cents: 1, status: 'REJECTED', trace_id: 'tr_reject', payload: { reject_reason: 'BID_TOO_LOW', source: 'MANUAL' } },
+        { time: '2026-05-22T13:00:01Z', kind: 'bid', auction_id: 'auc_live', seq: 42, event_type: 'bid_accepted_row', ref_id: 'bid_auto', user_id: 'user_3', amount_cents: 50000, status: 'ACCEPTED', trace_id: 'tr_auto', payload: { source: 'AUTO_MAX_BID', client_bid_id: 'auto-mbi-1' } },
         { time: '2026-05-22T13:00:02Z', kind: 'outbox', auction_id: 'auc_live', seq: 42, event_type: 'bid_accepted:PUBLISHED', ref_id: '7', status: 'PUBLISHED', payload: { delivery_state: 'ACKED' } },
         { time: '2026-05-22T13:00:03Z', kind: 'snapshot_rebuild', auction_id: 'auc_live', event_type: 'COMPLETED', ref_id: 'snap_1', status: 'COMPLETED', payload: { source: 'db', stale: false } },
         { time: '2026-05-22T13:00:04Z', kind: 'order', auction_id: 'auc_live', event_type: 'ORDER_PENDING', ref_id: 'ord_pending', user_id: 'user_1', amount_cents: 60000, status: 'ORDER_PENDING', payload: { deposit_status: 'HELD' } },
@@ -177,6 +178,22 @@ test.beforeEach(async ({ page }) => {
       source: 'postgres:bids,chat_messages,user_activity_events'
     }
   }));
+  await page.route('/api/host/auctions/auc_live/max-bid-summary', async (route) => route.fulfill({
+    json: {
+      auction_id: 'auc_live',
+      room_id: 'room_main',
+      status: 'ACTIVE',
+      generated_at: '2026-05-22T13:59:50Z',
+      active_intent_count: 3,
+      pre_bid_count: 1,
+      max_bid_count: 2,
+      applied_intent_count: 1,
+      exhausted_count: 1,
+      cancelled_count: 0,
+      has_private_pressure: true,
+      source: 'postgres:max_bid_intents'
+    }
+  }));
   await page.route('/api/monitor/auctions/auc_next/flight-recorder?limit=20&timeline_limit=20', async (route) => route.fulfill({
     json: { timeline: [] }
   }));
@@ -199,6 +216,22 @@ test.beforeEach(async ({ page }) => {
       source: 'postgres:bids,chat_messages,user_activity_events'
     }
   }));
+  await page.route('/api/host/auctions/auc_next/max-bid-summary', async (route) => route.fulfill({
+    json: {
+      auction_id: 'auc_next',
+      room_id: 'room_main',
+      status: 'DRAFT',
+      generated_at: '2026-05-22T13:59:50Z',
+      active_intent_count: 0,
+      pre_bid_count: 0,
+      max_bid_count: 0,
+      applied_intent_count: 0,
+      exhausted_count: 0,
+      cancelled_count: 0,
+      has_private_pressure: false,
+      source: 'postgres:max_bid_intents'
+    }
+  }));
   await page.route('/api/monitor/auctions/auc_scheduled/flight-recorder?limit=20&timeline_limit=20', async (route) => route.fulfill({
     json: { timeline: [] }
   }));
@@ -219,6 +252,22 @@ test.beforeEach(async ({ page }) => {
       recovery_events_30s: 0,
       watcher_count_available: false,
       source: 'postgres:bids,chat_messages,user_activity_events'
+    }
+  }));
+  await page.route('/api/host/auctions/auc_scheduled/max-bid-summary', async (route) => route.fulfill({
+    json: {
+      auction_id: 'auc_scheduled',
+      room_id: 'room_main',
+      status: 'SCHEDULED',
+      generated_at: '2026-05-22T13:59:50Z',
+      active_intent_count: 0,
+      pre_bid_count: 0,
+      max_bid_count: 0,
+      applied_intent_count: 0,
+      exhausted_count: 0,
+      cancelled_count: 0,
+      has_private_pressure: false,
+      source: 'postgres:max_bid_intents'
     }
   }));
 });
@@ -252,6 +301,11 @@ test('PC console renders live API auctions, orders, and expanded diagnostic pane
   await expect(page.getByTestId('heat-summary').getByText('Rejected bids')).toBeVisible();
   await expect(page.getByTestId('heat-summary').getByText('Watchers')).toBeVisible();
   await expect(page.getByTestId('heat-summary').getByText('unavailable')).toBeVisible();
+  await expect(page.getByTestId('max-bid-summary').getByText('Max Bid readiness')).toBeVisible();
+  await expect(page.getByTestId('max-bid-summary').getByText('Active intents')).toBeVisible();
+  await expect(page.getByTestId('max-bid-summary').getByText('Auto applied')).toBeVisible();
+  await expect(page.getByTestId('max-bid-summary')).not.toContainText('max_amount_cents');
+  await expect(page.getByTestId('max-bid-summary')).not.toContainText('95000');
   await expect(page.getByTestId('system-chat-disabled').getByRole('button', { name: '发送模板' })).toBeDisabled();
   await expect(page.getByTestId('recent-events').getByText('bid_accepted')).toBeVisible();
   await expect(page.getByRole('button', { name: /Flight recorder/ })).toBeVisible();
@@ -297,6 +351,25 @@ test('PC host live assist renders real heat summary and labels watcher count una
   await expect(heat.locator('.heat-grid div').filter({ hasText: 'Accepted bids' }).getByText('3')).toBeVisible();
   await expect(heat.locator('.heat-grid div').filter({ hasText: 'Rejected bids' }).getByText('1')).toBeVisible();
   await expect(heat.locator('.heat-grid div').filter({ hasText: 'Chat' }).getByText('4')).toBeVisible();
+});
+
+test('PC host live assist renders private Max Bid readiness without exposing ceilings', async ({ page }) => {
+  await page.goto('/');
+  const summary = page.getByTestId('max-bid-summary');
+  await expect(summary.getByText('Max Bid readiness')).toBeVisible();
+  await expect(summary.getByText('postgres:max_bid_intents')).toBeVisible();
+  await expect(summary.locator('.heat-grid div').filter({ hasText: 'Active intents' }).getByText('3')).toBeVisible();
+  await expect(summary.locator('.heat-grid div').filter({ hasText: 'Pre-bids' }).getByText('1')).toBeVisible();
+  await expect(summary.locator('.heat-grid div').filter({ hasText: 'Max bids' }).getByText('2')).toBeVisible();
+  await expect(summary.locator('.heat-grid div').filter({ hasText: 'Auto applied' }).getByText('1')).toBeVisible();
+  await expect(summary.getByText(/主播只看聚合计数/)).toBeVisible();
+  await expect(summary).not.toContainText('max_amount_cents');
+  await expect(summary).not.toContainText('90000');
+  await summary.getByRole('button', { name: /审计自动出价/ }).click();
+  const drawer = page.getByTestId('flight-recorder-drawer');
+  await expect(drawer.getByText('AUTO_MAX_BID')).toBeVisible();
+  await expect(drawer.getByText(/Automatic Max Bid settlement wrote a real bid row/)).toBeVisible();
+  await expect(drawer).not.toContainText('max_amount_cents');
 });
 
 test('PC diagnostics row opens flight recorder drawer with real timeline impact and next action', async ({ page }) => {

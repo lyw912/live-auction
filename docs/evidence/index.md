@@ -79,6 +79,7 @@
 | `docs/evidence/p9-05-3-max-bid-transaction-integration.md` | AUTHORITATIVE | P9-S5-3 executes automatic Max Bid/Pre-Bid settlement under the auction row lock with real bid/event/outbox/order rows and public payload privacy checks. |
 | `docs/evidence/p9-05-4-max-bid-event-recovery-model.md` | AUTHORITATIVE | P9-S5-4 keeps public realtime/Redis snapshots free of private Max Bid data while exposing current-user intent state through authenticated REST snapshots. |
 | `docs/evidence/p9-05-5-h5-max-bid-sheet.md` | AUTHORITATIVE | P9-S5-5 adds H5 Max Bid sheet controls with committed API responses, privacy disclosure, recovery disabling, and updated visual baselines. |
+| `docs/evidence/p9-05-6-pc-max-bid-readiness-audit.md` | AUTHORITATIVE | P9-S5-6 adds a host-only PC Max Bid readiness aggregate and flight recorder source metadata without exposing private ceilings or ranking bidders by max amount. |
 | `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan.md` | AUTHORITATIVE | P3/P4 pressure protocol and admission-off policy. |
 | `docs/design-v2-industrial/18-p3-p4-roadmap-reset.md` | AUTHORITATIVE | Current P3/P4 execution order and decision gates. |
 | `docs/p3-decision-log.md` | AUTHORITATIVE | Current decisions, superseded evidence, and go/no-go gates, including P9-D01 reopening Max Bid/Pre-Bid through ADR only. |

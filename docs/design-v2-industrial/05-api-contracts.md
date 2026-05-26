@@ -37,6 +37,7 @@ Server always derives user from session/mock token.
 | POST | `/api/auctions/{id}/narrate-start` | set focus |
 | POST | `/api/auctions/{id}/narrate-stop` | clear focus |
 | GET | `/api/host/auctions/{id}/prompts` | host-only advisory prompter suggestions from real auction data |
+| GET | `/api/host/auctions/{id}/max-bid-summary` | host-only Max Bid/Pre-Bid readiness aggregate without private max amounts |
 | GET | `/api/auctions` | list |
 | GET | `/api/auctions/{id}` | detail/snapshot |
 | GET | `/api/orders` | order list |
@@ -181,6 +182,33 @@ Response result is `CANCELLED`.
 ```
 
 This field is user-scoped and must not appear in auction lists, public WebSocket events, Redis public snapshots, or another user's `GET /api/auctions/{id}` response.
+
+Host aggregate:
+
+```text
+GET /api/host/auctions/{id}/max-bid-summary
+```
+
+Response:
+
+```json
+{
+  "auction_id": "a_123",
+  "room_id": "r_1",
+  "status": "ACTIVE",
+  "generated_at": "2026-05-27T04:00:00Z",
+  "active_intent_count": 3,
+  "pre_bid_count": 1,
+  "max_bid_count": 2,
+  "applied_intent_count": 1,
+  "exhausted_count": 0,
+  "cancelled_count": 0,
+  "has_private_pressure": true,
+  "source": "postgres:max_bid_intents"
+}
+```
+
+This endpoint is for PC host readiness and audit navigation only. It must not return `max_amount_cents`, per-user private ceilings, bidder ranking by ceiling, or another user's private intent object. Automatic bid rows remain inspectable through the host-only flight recorder as ordinary bid rows with `payload.source = "AUTO_MAX_BID"`.
 
 ## Payment Mock
 

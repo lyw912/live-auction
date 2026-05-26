@@ -829,7 +829,7 @@ func (h MonitorHandler) flightRecorderTimeline(r *http.Request, auctionID string
 		  SELECT b.created_at AS time, 'bid' AS kind, b.auction_id, b.seq,
 		         CASE WHEN b.status = 'ACCEPTED' THEN 'bid_accepted_row' ELSE 'bid_rejected_row' END AS event_type,
 		         b.id AS ref_id, b.user_id, b.amount_cents, b.status, b.trace_id,
-		         jsonb_build_object('client_bid_id', b.client_bid_id, 'reject_reason', b.reject_reason, 'request_hash', b.request_hash, 'response', b.response_json) AS payload
+		         jsonb_build_object('client_bid_id', b.client_bid_id, 'reject_reason', b.reject_reason, 'request_hash', b.request_hash, 'response', b.response_json, 'source', b.source) AS payload
 		  FROM bids b
 		  WHERE b.auction_id = $1
 		  UNION ALL

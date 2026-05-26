@@ -82,6 +82,7 @@ func NewRouterWithRealtime(cfg config.Config, deps *storage.Dependencies, log *s
 	monitorHandler := MonitorHandler{Deps: deps}
 	hostPrompterHandler := HostPrompterHandler{Deps: deps}
 	heatSummaryHandler := HeatSummaryHandler{Deps: deps}
+	maxBidSummaryHandler := MaxBidSummaryHandler{Deps: deps}
 	r.Route("/api", func(r chi.Router) {
 		r.Post("/auth/login", authHandler.Login)
 		r.Post("/auth/logout", authHandler.Logout)
@@ -118,6 +119,7 @@ func NewRouterWithRealtime(cfg config.Config, deps *storage.Dependencies, log *s
 			r.Post("/rooms/{room_id}/chat", auctionHandler.CreateChatMessage)
 			r.With(requireHost).Get("/host/auctions/{id}/prompts", hostPrompterHandler.Prompts)
 			r.With(requireHost).Get("/host/auctions/{id}/heat-summary", heatSummaryHandler.Summary)
+			r.With(requireHost).Get("/host/auctions/{id}/max-bid-summary", maxBidSummaryHandler.Summary)
 			r.With(requireHost).Get("/monitor/auctions", monitorHandler.Auctions)
 			r.With(requireHost).Get("/monitor/auctions/{id}/flight-recorder", monitorHandler.FlightRecorder)
 			r.With(requireHost).Get("/monitor/anomalies", monitorHandler.Anomalies)
