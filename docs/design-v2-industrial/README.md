@@ -23,7 +23,10 @@
 16. `16-industrial-p2-p3-roadmap.md`：P1 完成后的工业级 P2/P3+ 后续路线图、调研依据、取舍和门禁。
 17. `17-local-stress-and-p3-execution-plan.md`：Windows-first 压测、mock 边界、周期性瓶颈发现和 P3 执行细则。
 18. `18-p3-p4-roadmap-reset.md`：P3/P4 中期重置后的性能极限探索、架构决策门槛和 P4 差异化路线。
-19. `templates/`：正式开发时需要持续填写的模板。
+19. `19-extreme-bidding-atmosphere.md`：极致竞价氛围体验的行业调研、产品心理、主播/商家/用户视角和工业级落地方案。
+20. `20-ui-ux-redesign.md`：全新 UI/UX 重构设计方案，覆盖视觉体系、H5 竞拍驾驶舱、主播控场、商家 Studio 和诊断体验。
+21. `21-p5-plus-atmosphere-ui-execution-roadmap.md`：把 19/20 转成 P5+ 工程路线和逐提交 slice 计划。
+22. `templates/`：正式开发时需要持续填写的模板。
 
 ## 一句话方案
 
