@@ -275,6 +275,17 @@ function promptSeverityClass(severity?: string) {
   return normalized || 'info';
 }
 
+function formatSeconds(seconds: number) {
+  if (seconds >= 3600 && seconds % 3600 === 0) return `${seconds / 3600}h`;
+  if (seconds >= 60 && seconds % 60 === 0) return `${seconds / 60}m`;
+  return `${seconds}s`;
+}
+
+function depositPreview(rule: RuleDraft) {
+  const percent = `${(rule.depositBPS / 100).toFixed(rule.depositBPS % 100 === 0 ? 0 : 2)}%`;
+  return `${percent} · ${formatCents(rule.depositFloorCents)}-${formatCents(rule.depositCapCents)}`;
+}
+
 async function ensureDemoSession(account: 'host' | 'user') {
   const me = await fetch('/api/auth/me');
   if (me.ok) {
@@ -745,7 +756,7 @@ function ItemCreatePanel({
   onFileChange: (file: File | null) => void;
 }) {
   return (
-    <div className="rule-panel">
+    <div className="rule-panel item-create-panel" data-testid="wizard-product-step">
       <h2>拍品上架</h2>
       <Form layout="vertical">
         <Form.Item label="标题">
@@ -1194,17 +1205,42 @@ function RuleEditor({
   onRuleChange: (patch: Partial<RuleDraft>) => void;
   onSave: () => void;
 }) {
+  const freezeReason = selectedAuction && selectedAuction.status !== 'DRAFT'
+    ? `规则已随 ${selectedAuction.status} 状态冻结，仅 DRAFT 竞拍允许修改。`
+    : '';
+  const saveDisabled = !ruleValidation.valid || !selectedAuction || selectedAuction.status !== 'DRAFT';
+  const steps = [
+    { key: 'product', label: 'Product', summary: selectedAuction?.item?.title ?? '新拍品草稿' },
+    { key: 'price', label: 'Price', summary: `${formatCents(rule.startPriceCents)} / +${formatCents(rule.incrementCents)} / cap ${formatCents(rule.capPriceCents)}` },
+    { key: 'time', label: 'Time', summary: `${formatSeconds(rule.durationSeconds)} · extend ${formatSeconds(rule.extendWindowSeconds)} +${formatSeconds(rule.extendBySeconds)}` },
+    { key: 'trust', label: 'Trust', summary: depositPreview(rule) },
+    { key: 'preview', label: 'Preview', summary: ruleValidation.valid ? 'ready' : ruleValidation.field }
+  ];
   return (
-    <div className="rule-panel">
+    <div className="rule-panel rule-wizard" data-testid="seller-rule-wizard">
       <h2>规则 {selectedAuction ? selectedAuction.id : ''}</h2>
+      <div className="wizard-steps" aria-label="seller-rule-wizard-steps">
+        {steps.map((step) => (
+          <div className={`wizard-step ${step.key === 'preview' && !ruleValidation.valid ? 'has-error' : ''}`} key={step.key}>
+            <strong>{step.label}</strong>
+            <span>{step.summary}</span>
+          </div>
+        ))}
+      </div>
       <Form layout="vertical">
-        <div className="rule-subgrid">
-          <NumberField label="起拍价" name="start-price-cents" value={rule.startPriceCents} min={0} onChange={(value) => onRuleChange({ startPriceCents: value })} />
-          <NumberField label="加价幅度" name="increment-cents" value={rule.incrementCents} min={1} onChange={(value) => onRuleChange({ incrementCents: value })} />
-        </div>
-        <Form.Item label="封顶价" validateStatus={ruleValidation.valid ? 'success' : 'error'} help={ruleValidation.message}>
-          <InputNumber aria-label="cap-price-cents" value={rule.capPriceCents} min={0} suffix="分" onChange={(value) => onRuleChange({ capPriceCents: Number(value) || 0 })} />
-        </Form.Item>
+        <section className="wizard-section" data-testid="wizard-price-step">
+          <div className="wizard-section-title">
+            <span>Price</span>
+            <strong>起拍、加价、封顶必须形成可达价格网格</strong>
+          </div>
+          <div className="rule-subgrid">
+            <NumberField label="起拍价" name="start-price-cents" value={rule.startPriceCents} min={0} onChange={(value) => onRuleChange({ startPriceCents: value })} />
+            <NumberField label="加价幅度" name="increment-cents" value={rule.incrementCents} min={1} onChange={(value) => onRuleChange({ incrementCents: value })} />
+          </div>
+          <Form.Item label="封顶价" validateStatus={ruleValidation.valid ? 'success' : 'error'} help={ruleValidation.message}>
+            <InputNumber aria-label="cap-price-cents" value={rule.capPriceCents} min={0} suffix="分" onChange={(value) => onRuleChange({ capPriceCents: Number(value) || 0 })} />
+          </Form.Item>
+        </section>
         {backendRuleError && <div className="backend-rule-error" role="alert">{backendRuleError}</div>}
         {ruleSaveState === 'saved' && <div className="rule-save-ok" role="status">规则已保存</div>}
         {!ruleValidation.valid && ruleValidation.field !== 'cap' && <div className="backend-rule-error" role="alert">{ruleValidation.message}</div>}
@@ -1213,17 +1249,52 @@ function RuleEditor({
             {shownSuggestions.map((cap) => <button key={cap} type="button" onClick={() => onRuleChange({ capPriceCents: cap })}>{formatCents(cap)}</button>)}
           </div>
         )}
-        <div className="rule-subgrid">
-          <NumberField label="时长" name="duration-seconds" value={rule.durationSeconds} min={30} max={86400} onChange={(value) => onRuleChange({ durationSeconds: value })} />
-          <NumberField label="延时窗口" name="extend-window-seconds" value={rule.extendWindowSeconds} min={0} onChange={(value) => onRuleChange({ extendWindowSeconds: value })} />
-          <NumberField label="每次延时" name="extend-by-seconds" value={rule.extendBySeconds} min={0} onChange={(value) => onRuleChange({ extendBySeconds: value })} />
-          <NumberField label="最多延时" name="max-extend-count" value={rule.maxExtendCount} min={0} onChange={(value) => onRuleChange({ maxExtendCount: value })} />
-          <NumberField label="高额确认" name="fat-finger-threshold-cents" value={rule.fatFingerThresholdCents} min={rule.incrementCents + 1} onChange={(value) => onRuleChange({ fatFingerThresholdCents: value })} />
-          <NumberField label="保证金比例" name="deposit-bps" value={rule.depositBPS} min={0} max={10000} onChange={(value) => onRuleChange({ depositBPS: value })} />
-          <NumberField label="保证金下限" name="deposit-floor-cents" value={rule.depositFloorCents} min={0} onChange={(value) => onRuleChange({ depositFloorCents: value })} />
-          <NumberField label="保证金上限" name="deposit-cap-cents" value={rule.depositCapCents} min={0} onChange={(value) => onRuleChange({ depositCapCents: value })} />
-        </div>
-        <Button type="primary" disabled={!ruleValidation.valid || !selectedAuction || selectedAuction.status !== 'DRAFT'} loading={savingRule} onClick={onSave}>保存规则</Button>
+        <section className="wizard-section" data-testid="wizard-time-step">
+          <div className="wizard-section-title">
+            <span>Time / Extension</span>
+            <strong>倒计时只展示状态，成交仍由后端状态机决定</strong>
+          </div>
+          <div className="rule-subgrid">
+            <NumberField label="时长" name="duration-seconds" value={rule.durationSeconds} min={30} max={86400} onChange={(value) => onRuleChange({ durationSeconds: value })} />
+            <NumberField label="延时窗口" name="extend-window-seconds" value={rule.extendWindowSeconds} min={0} onChange={(value) => onRuleChange({ extendWindowSeconds: value })} />
+            <NumberField label="每次延时" name="extend-by-seconds" value={rule.extendBySeconds} min={0} onChange={(value) => onRuleChange({ extendBySeconds: value })} />
+            <NumberField label="最多延时" name="max-extend-count" value={rule.maxExtendCount} min={0} onChange={(value) => onRuleChange({ maxExtendCount: value })} />
+          </div>
+        </section>
+        <section className="wizard-section" data-testid="wizard-trust-step">
+          <div className="wizard-section-title">
+            <span>Trust / Deposit</span>
+            <strong>高额确认和保证金提示必须在买家下单前可见</strong>
+          </div>
+          <div className="rule-subgrid">
+            <NumberField label="高额确认" name="fat-finger-threshold-cents" value={rule.fatFingerThresholdCents} min={rule.incrementCents + 1} onChange={(value) => onRuleChange({ fatFingerThresholdCents: value })} />
+            <NumberField label="保证金比例" name="deposit-bps" value={rule.depositBPS} min={0} max={10000} onChange={(value) => onRuleChange({ depositBPS: value })} suffix="bps" />
+            <NumberField label="保证金下限" name="deposit-floor-cents" value={rule.depositFloorCents} min={0} onChange={(value) => onRuleChange({ depositFloorCents: value })} />
+            <NumberField label="保证金上限" name="deposit-cap-cents" value={rule.depositCapCents} min={0} onChange={(value) => onRuleChange({ depositCapCents: value })} />
+          </div>
+        </section>
+        <section className="wizard-section h5-rule-preview" data-testid="h5-rule-preview">
+          <div className="wizard-section-title">
+            <span>Preview</span>
+            <strong>H5 出价区规则芯片</strong>
+          </div>
+          <div className="h5-preview-surface">
+            <div className="h5-preview-price">
+              <span>当前价</span>
+              <strong>{formatCents(rule.startPriceCents)}</strong>
+              <em>下一口 {formatCents(rule.startPriceCents + rule.incrementCents)}</em>
+            </div>
+            <div className="h5-preview-chips">
+              <span>+{formatCents(rule.incrementCents)}</span>
+              <span>封顶 {formatCents(rule.capPriceCents)}</span>
+              <span>延时 {formatSeconds(rule.extendWindowSeconds)} +{formatSeconds(rule.extendBySeconds)}</span>
+              <span>保证金 {depositPreview(rule)}</span>
+              <span>高额确认 {formatCents(rule.fatFingerThresholdCents)}</span>
+            </div>
+          </div>
+        </section>
+        {freezeReason && <div className="rule-freeze-reason" data-testid="rule-freeze-reason">{freezeReason}</div>}
+        <Button type="primary" disabled={saveDisabled} loading={savingRule} onClick={onSave}>保存规则</Button>
       </Form>
     </div>
   );
@@ -1307,10 +1378,10 @@ function rulePayload(rule: RuleDraft) {
   };
 }
 
-function NumberField({ label, name, value, min, max, onChange }: { label: string; name: string; value: number; min: number; max?: number; onChange: (value: number) => void }) {
+function NumberField({ label, name, value, min, max, suffix = '分', onChange }: { label: string; name: string; value: number; min: number; max?: number; suffix?: string; onChange: (value: number) => void }) {
   return (
     <Form.Item label={label}>
-      <InputNumber aria-label={name} value={value} min={min} max={max} suffix="分" onChange={(next) => onChange(Number(next) || min)} />
+      <InputNumber aria-label={name} value={value} min={min} max={max} suffix={suffix} onChange={(next) => onChange(Number(next) || min)} />
     </Form.Item>
   );
 }

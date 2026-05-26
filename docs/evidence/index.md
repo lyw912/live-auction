@@ -67,6 +67,7 @@
 | `docs/evidence/p8-02-pc-auction-queue-active-pinning.md` | AUTHORITATIVE | P8-S2 groups the PC auction queue, pins ACTIVE lots, and makes ACTIVE/narrating constraints visible while preserving backend authority. |
 | `docs/evidence/p8-03-host-prompter-backend.md` | AUTHORITATIVE | P8-S3 adds a host-only read-only prompter API from real auction, bid, event, and order data without mutating auction truth or auto-sending chat. |
 | `docs/evidence/p8-04-pc-host-live-assist-panel.md` | AUTHORITATIVE | P8-S4 renders host prompter cards, talk points, risk hints, and disabled system-chat scope in the PC Live Assist rail without mutating auction state. |
+| `docs/evidence/p8-05-seller-rule-wizard-preview.md` | AUTHORITATIVE | P8-S5 converts PC seller setup into product/price/time/trust/preview wizard sections with H5 rule preview while preserving backend DRAFT-only validation. |
 | `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan.md` | AUTHORITATIVE | P3/P4 pressure protocol and admission-off policy. |
 | `docs/design-v2-industrial/18-p3-p4-roadmap-reset.md` | AUTHORITATIVE | Current P3/P4 execution order and decision gates. |
 | `docs/p3-decision-log.md` | AUTHORITATIVE | Current decisions, superseded evidence, and go/no-go gates. |

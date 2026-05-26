@@ -240,6 +240,7 @@ test('PC creates item and auction through backend upload and create APIs', async
   });
 
   await page.goto('/');
+  await expect(page.getByTestId('wizard-product-step')).toBeVisible();
   await page.getByLabel('item-title').fill('白瓷杯');
   await page.getByLabel('item-image-file').setInputFiles({
     name: 'cup.jpg',
@@ -266,9 +267,18 @@ test('PC rule save targets selected draft auction and includes all money/rule fi
 
   await page.goto('/');
   await page.getByText('紫砂壶').click();
+  await expect(page.getByTestId('seller-rule-wizard')).toBeVisible();
+  await expect(page.getByLabel('seller-rule-wizard-steps').getByText('Product')).toBeVisible();
+  await expect(page.getByLabel('seller-rule-wizard-steps').getByText('Price')).toBeVisible();
+  await expect(page.getByLabel('seller-rule-wizard-steps').getByText('Time')).toBeVisible();
+  await expect(page.getByLabel('seller-rule-wizard-steps').getByText('Trust')).toBeVisible();
+  await expect(page.getByLabel('seller-rule-wizard-steps').getByText('Preview')).toBeVisible();
   await page.getByLabel('start-price-cents').fill('20000');
   await page.getByLabel('increment-cents').fill('10000');
   await page.getByLabel('cap-price-cents').fill('70000');
+  await expect(page.getByTestId('h5-rule-preview').getByText('下一口 ¥300.00')).toBeVisible();
+  await expect(page.getByTestId('h5-rule-preview').getByText('封顶 ¥700.00')).toBeVisible();
+  await expect(page.getByTestId('h5-rule-preview').getByText(/保证金 10%/)).toBeVisible();
   await page.getByRole('button', { name: '保存规则' }).click();
 
   await expect(page.getByText('规则已保存')).toBeVisible();
@@ -277,6 +287,14 @@ test('PC rule save targets selected draft auction and includes all money/rule fi
   expect(saveBody?.cap_price_cents).toBe(70000);
   expect(saveBody?.duration_seconds).toBe(600);
   expect(saveBody?.deposit_cap_cents).toBe(50000);
+});
+
+test('PC rule wizard explains frozen rules for non-draft auctions', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByTestId('rule-freeze-reason')).toContainText('ACTIVE');
+  await expect(page.getByTestId('rule-freeze-reason')).toContainText('仅 DRAFT');
+  await expect(page.getByRole('button', { name: '保存规则' })).toBeDisabled();
+  await expect(page.getByTestId('h5-rule-preview').getByText(/延时 10s \+10s/)).toBeVisible();
 });
 
 test('PC lifecycle controls call selected auction APIs', async ({ page }) => {
