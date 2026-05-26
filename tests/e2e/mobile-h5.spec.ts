@@ -18,14 +18,40 @@ test.beforeEach(async ({ page }) => {
           status: 'ACTIVE',
           current_price_cents: 35000,
           increment_cents: 5000,
+          cap_price_cents: 150000,
+          accepted_bid_count: 3,
           seq: 41,
           end_at: '2099-05-22T14:00:00Z',
+          rule: {
+            extend_window_seconds: 10,
+            extend_by_seconds: 10,
+            max_extend_count: 3,
+            fat_finger_threshold_cents: 100000,
+            deposit_floor_cents: 50000
+          },
           item: {
             title: '青瓷手作茶盏',
             image_url: productImageDataURL,
             certificate: '中检证书',
             condition: '无冲线',
             shipping: '顺丰保价'
+          }
+        },
+        {
+          id: 'auc_next',
+          room_id: 'room_main',
+          status: 'SCHEDULED',
+          current_price_cents: 80000,
+          increment_cents: 10000,
+          cap_price_cents: 300000,
+          accepted_bid_count: 0,
+          end_at: '2099-05-22T14:10:00Z',
+          item: {
+            title: '紫砂壶',
+            image_url: productImageDataURL,
+            certificate: '作者证书',
+            condition: '九五品',
+            shipping: '包邮保价'
           }
         }
       ]
@@ -550,12 +576,90 @@ test('H5 renders bid and order history from user APIs', async ({ page }) => {
   });
 
   await page.goto('/');
-  await page.getByTestId('history-panel').getByRole('button', { name: /刷新/ }).click();
-  await expect(page.getByTestId('history-panel').getByText('auc_live')).toHaveCount(2);
-  await expect(page.getByText('¥450.00 · ACCEPTED')).toBeVisible();
-  await expect(page.getByText('¥400.00 · OUTBID')).toBeVisible();
-  await expect(page.getByText('ord_hist_1')).toBeVisible();
-  await expect(page.getByText('¥600.00 · PAID')).toBeVisible();
+  await page.getByLabel('bid-dock-shortcuts').getByRole('button', { name: '历史' }).click();
+  const historySheet = page.getByTestId('bottom-sheet');
+  await expect(historySheet).toBeVisible();
+  await historySheet.getByRole('button', { name: /刷新/ }).click();
+  await expect(historySheet.getByText('auc_live')).toHaveCount(2);
+  await expect(historySheet.getByText('¥450.00 · ACCEPTED')).toBeVisible();
+  await expect(historySheet.getByText('¥400.00 · OUTBID')).toBeVisible();
+
+  await historySheet.getByRole('tab', { name: '订单' }).click();
+  await expect(historySheet.getByText('ord_hist_1')).toBeVisible();
+  await expect(historySheet.getByText('¥600.00 · PAID')).toBeVisible();
+});
+
+test('H5 bottom sheets open close and keep the primary bid CTA singular', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 844 });
+  await page.goto('/');
+
+  const dock = page.getByLabel('auction-state');
+  await expect(page.getByTestId('bid-cta')).toHaveCount(1);
+
+  await page.getByLabel('bid-dock-shortcuts').getByRole('button', { name: '商品' }).click();
+  const sheet = page.getByTestId('bottom-sheet');
+  await expect(sheet).toBeVisible();
+  await expect(sheet.getByRole('heading', { name: '本场商品' })).toBeVisible();
+  await expect(sheet.getByText('青瓷手作茶盏')).toBeVisible();
+  await expect(sheet.getByText('紫砂壶')).toBeVisible();
+  await expect(sheet.getByText('当前拍品')).toBeVisible();
+  await expect(page.getByTestId('bid-cta')).toHaveCount(1);
+  await expect(page.getByTestId('bid-cta')).toBeVisible();
+  await expect(dock).toBeVisible();
+
+  const sheetBox = await sheet.boundingBox();
+  const dockBox = await dock.boundingBox();
+  expect(sheetBox).toBeTruthy();
+  expect(dockBox).toBeTruthy();
+  expect(sheetBox!.y + sheetBox!.height).toBeLessThanOrEqual(dockBox!.y + 2);
+
+  await sheet.getByRole('tab', { name: '规则' }).click();
+  await expect(sheet.getByRole('heading', { name: '商品与规则' })).toBeVisible();
+  await expect(sheet.getByText('封顶价')).toBeVisible();
+  await expect(sheet.getByText('高额确认')).toBeVisible();
+  await expect(page.getByTestId('bid-cta')).toHaveCount(1);
+
+  await sheet.getByRole('tab', { name: '榜单' }).click();
+  await expect(sheet.getByRole('heading', { name: '实时榜单' })).toBeVisible();
+  await expect(sheet.getByText('张**')).toBeVisible();
+  await expect(page.getByTestId('bid-cta')).toHaveCount(1);
+
+  await sheet.getByLabel('关闭面板').click();
+  await expect(page.getByTestId('bottom-sheet')).toHaveCount(0);
+  await expect(page.getByTestId('bid-cta')).toBeVisible();
+});
+
+test('H5 bottom sheet history and orders use existing user APIs', async ({ page }) => {
+  await page.route('/api/users/me/bids', async (route) => {
+    await route.fulfill({
+      json: {
+        items: [
+          { bid_id: 'bid_sheet_1', auction_id: 'auc_live', amount_cents: 45000, result: 'ACCEPTED' }
+        ]
+      }
+    });
+  });
+  await page.route('/api/users/me/orders', async (route) => {
+    await route.fulfill({
+      json: {
+        items: [
+          { order_id: 'ord_sheet_1', auction_id: 'auc_live', amount_cents: 60000, order_status: 'ORDER_PENDING' }
+        ]
+      }
+    });
+  });
+
+  await page.goto('/');
+  await page.getByLabel('bid-dock-shortcuts').getByRole('button', { name: '历史' }).click();
+  const sheet = page.getByTestId('bottom-sheet');
+  await sheet.getByRole('button', { name: /刷新/ }).click();
+  await expect(sheet.getByText('¥450.00 · ACCEPTED')).toBeVisible();
+  await expect(page.getByTestId('bid-cta')).toHaveCount(1);
+
+  await sheet.getByRole('tab', { name: '订单' }).click();
+  await expect(sheet.getByText('ord_sheet_1')).toBeVisible();
+  await expect(sheet.getByText('¥600.00 · ORDER_PENDING')).toBeVisible();
+  await expect(page.getByTestId('bid-cta')).toBeVisible();
 });
 
 test('H5 chat reads seed messages and sends room chat API', async ({ page }) => {

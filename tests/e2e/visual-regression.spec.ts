@@ -274,9 +274,10 @@ test.describe('H5 visual states @visual-h5', () => {
       await page.getByRole('button', { name: state[1], exact: true }).click();
       await expect(page.getByLabel('auction-state')).toBeVisible();
       await expect(page.getByTestId('bid-cta')).toBeVisible();
-      await expect(page.locator('.app-shell')).toHaveScreenshot(`h5-${state[0]}.png`, {
+      await expect(page).toHaveScreenshot(`h5-${state[0]}.png`, {
         animations: 'disabled',
         caret: 'hide',
+        fullPage: false,
         timeout: 10_000
       });
     });

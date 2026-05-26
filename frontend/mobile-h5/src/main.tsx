@@ -39,6 +39,7 @@ type BidPhase = 'idle' | 'pending' | 'accepted' | 'rejected' | 'confirm_required
 type PaymentPhase = 'idle' | 'pending' | 'paid' | 'failed' | 'expired';
 type RecoveryPhase = 'idle' | 'recovering';
 type ConnectionPhase = 'connecting' | 'connected' | 'recovering' | 'disconnected';
+type BottomSheetKey = 'products' | 'details' | 'leaderboard' | 'history' | 'orders';
 
 type BidResponse = {
   result?: string;
@@ -132,13 +133,26 @@ type AuctionSummary = {
   id: string;
   room_id?: string;
   status?: string;
+  item_id?: string;
   current_price_cents?: number;
   current_winner_id?: string;
   increment_cents?: number;
+  cap_price_cents?: number;
+  accepted_bid_count?: number;
   seq?: number;
   end_at?: string;
   server_time_ms?: number;
   item?: AuctionItem;
+  rule?: {
+    duration_seconds?: number;
+    extend_window_seconds?: number;
+    extend_by_seconds?: number;
+    max_extend_count?: number;
+    fat_finger_threshold_cents?: number;
+    deposit_bps?: number;
+    deposit_floor_cents?: number;
+    deposit_cap_cents?: number;
+  };
 };
 type LeaderboardEntry = {
   rank: number;
@@ -370,6 +384,8 @@ function App() {
   const [currentUserID, setCurrentUserID] = useState(demoUserID);
   const [sessionReady, setSessionReady] = useState(false);
   const [lotTitle, setLotTitle] = useState('青瓷手作茶盏');
+  const [roomAuctions, setRoomAuctions] = useState<AuctionSummary[]>([]);
+  const [activeSheet, setActiveSheet] = useState<BottomSheetKey | null>(null);
   const [stageItem, setStageItem] = useState<AuctionItem>({
     title: '青瓷手作茶盏',
     image_url: '',
@@ -907,6 +923,7 @@ function App() {
         const auctions = Array.isArray(payload) ? payload : payload?.items ?? [];
         const selectedAuction = auctions.find((item) => item.status === 'ACTIVE') ?? auctions[0];
         if (!response.ok || !selectedAuction || cancelled) return;
+        setRoomAuctions(auctions);
         setActiveAuctionID(selectedAuction.id);
         setLotTitle(selectedAuction.item?.title ?? selectedAuction.id);
         setStageItem((current) => ({
@@ -1268,23 +1285,45 @@ function App() {
         scenario={scenario}
         onDecreaseBid={decreaseBidAmount}
         onIncreaseBid={increaseBidAmount}
+        onOpenSheet={setActiveSheet}
         onPrimaryAction={handlePrimaryAction}
-      />
-      <LeaderboardPanel
-        activeAuctionID={activeAuctionID}
-        leaderboard={leaderboard}
-        onRefresh={() => void loadLeaderboard()}
       />
       {showStateMatrix && (
         <StateMatrixTabs selected={selected} onSelect={setSelected} />
       )}
-      <HistoryPanel
-        bidHistory={bidHistory}
-        historyError={historyError}
-        historyLoading={historyLoading}
-        orderHistory={orderHistory}
-        onRefresh={loadHistory}
-      />
+      {showStateMatrix ? (
+        <>
+          <LeaderboardPanel
+            activeAuctionID={activeAuctionID}
+            leaderboard={leaderboard}
+            onRefresh={() => void loadLeaderboard()}
+          />
+          <HistoryPanel
+            bidHistory={bidHistory}
+            historyError={historyError}
+            historyLoading={historyLoading}
+            orderHistory={orderHistory}
+            onRefresh={loadHistory}
+          />
+        </>
+      ) : (
+        <BottomSheet
+          activeAuctionID={activeAuctionID}
+          activeSheet={activeSheet}
+          auctions={roomAuctions}
+          bidHistory={bidHistory}
+          historyError={historyError}
+          historyLoading={historyLoading}
+          item={stageItem}
+          leaderboard={leaderboard}
+          orderHistory={orderHistory}
+          scenario={scenario}
+          onClose={() => setActiveSheet(null)}
+          onOpenSheet={setActiveSheet}
+          onRefreshHistory={loadHistory}
+          onRefreshLeaderboard={() => void loadLeaderboard()}
+        />
+      )}
       {showStateMatrix && (
         <ChatPanel
           chatDraft={chatDraft}
@@ -1431,6 +1470,7 @@ function AuctionStatePanel({
   scenario,
   onDecreaseBid,
   onIncreaseBid,
+  onOpenSheet,
   onPrimaryAction
 }: {
   connectionPhase: ConnectionPhase;
@@ -1441,6 +1481,7 @@ function AuctionStatePanel({
   scenario: Scenario;
   onDecreaseBid: () => void;
   onIncreaseBid: () => void;
+  onOpenSheet: (sheet: BottomSheetKey) => void;
   onPrimaryAction: () => void;
 }) {
   const dockState = scenario.pending
@@ -1500,12 +1541,200 @@ function AuctionStatePanel({
         {scenario.cta}
       </button>
       <div className="dock-shortcuts" aria-label="bid-dock-shortcuts">
-        <button type="button">规则</button>
-        <button type="button">榜单</button>
-        <button type="button">历史</button>
-        <button type="button">订单</button>
+        <button type="button" onClick={() => onOpenSheet('products')}>商品</button>
+        <button type="button" onClick={() => onOpenSheet('details')}>规则</button>
+        <button type="button" onClick={() => onOpenSheet('leaderboard')}>榜单</button>
+        <button type="button" onClick={() => onOpenSheet('history')}>历史</button>
+        <button type="button" onClick={() => onOpenSheet('orders')}>订单</button>
       </div>
     </section>
+  );
+}
+
+function BottomSheet({
+  activeAuctionID,
+  activeSheet,
+  auctions,
+  bidHistory,
+  historyError,
+  historyLoading,
+  item,
+  leaderboard,
+  orderHistory,
+  scenario,
+  onClose,
+  onOpenSheet,
+  onRefreshHistory,
+  onRefreshLeaderboard
+}: {
+  activeAuctionID: string;
+  activeSheet: BottomSheetKey | null;
+  auctions: AuctionSummary[];
+  bidHistory: HistoryRow[];
+  historyError: string;
+  historyLoading: boolean;
+  item: AuctionItem;
+  leaderboard: LeaderboardPayload | null;
+  orderHistory: HistoryRow[];
+  scenario: Scenario;
+  onClose: () => void;
+  onOpenSheet: (sheet: BottomSheetKey) => void;
+  onRefreshHistory: () => void;
+  onRefreshLeaderboard: () => void;
+}) {
+  if (!activeSheet) return null;
+  const titleMap: Record<BottomSheetKey, string> = {
+    products: '本场商品',
+    details: '商品与规则',
+    leaderboard: '实时榜单',
+    history: '我的出价',
+    orders: '我的订单'
+  };
+  return (
+    <div className="sheet-backdrop" data-testid="bottom-sheet-backdrop" onClick={onClose}>
+      <section className="bottom-sheet" data-testid="bottom-sheet" aria-label={titleMap[activeSheet]} onClick={(event) => event.stopPropagation()}>
+        <div className="sheet-handle" aria-hidden="true" />
+        <div className="sheet-header">
+          <h2>{titleMap[activeSheet]}</h2>
+          <button type="button" aria-label="关闭面板" onClick={onClose}>关闭</button>
+        </div>
+        <div className="sheet-tabs" role="tablist" aria-label="sheet-tabs">
+          {([
+            ['products', '商品'],
+            ['details', '规则'],
+            ['leaderboard', '榜单'],
+            ['history', '历史'],
+            ['orders', '订单']
+          ] as Array<[BottomSheetKey, string]>).map(([key, label]) => (
+            <button type="button" role="tab" aria-selected={activeSheet === key} key={key} onClick={() => onOpenSheet(key)}>{label}</button>
+          ))}
+        </div>
+        <div className="sheet-content">
+          {activeSheet === 'products' && <ProductListSheet auctions={auctions} activeAuctionID={activeAuctionID} scenario={scenario} />}
+          {activeSheet === 'details' && <ProductRuleSheet item={item} auction={auctions.find((row) => row.id === activeAuctionID)} scenario={scenario} />}
+          {activeSheet === 'leaderboard' && <LeaderboardSheet activeAuctionID={activeAuctionID} leaderboard={leaderboard} onRefresh={onRefreshLeaderboard} />}
+          {activeSheet === 'history' && (
+            <HistorySheet
+              title="出价历史"
+              empty="暂无出价"
+              rows={bidHistory}
+              historyError={historyError}
+              historyLoading={historyLoading}
+              onRefresh={onRefreshHistory}
+              getPrimary={(row) => String(row.auction_id ?? row.bid_id ?? '-')}
+              getSecondary={(row) => `${formatCents(Number(row.amount_cents ?? 0))} · ${String(row.result ?? row.status ?? '-')}`}
+            />
+          )}
+          {activeSheet === 'orders' && (
+            <HistorySheet
+              title="订单"
+              empty="暂无订单"
+              rows={orderHistory}
+              historyError={historyError}
+              historyLoading={historyLoading}
+              onRefresh={onRefreshHistory}
+              getPrimary={(row) => String(row.order_id ?? row.auction_id ?? '-')}
+              getSecondary={(row) => `${formatCents(Number(row.amount_cents ?? 0))} · ${String(row.order_status ?? '-')}`}
+            />
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function ProductListSheet({
+  activeAuctionID,
+  auctions,
+  scenario
+}: {
+  activeAuctionID: string;
+  auctions: AuctionSummary[];
+  scenario: Scenario;
+}) {
+  const rows = auctions.length > 0 ? auctions : [{ id: activeAuctionID || 'current', status: scenario.status, item: { title: scenario.title } }];
+  return (
+    <div className="product-card-list">
+      {rows.map((auction) => {
+        const status = auction.id === activeAuctionID ? '竞拍中' : auction.status === 'SCHEDULED' || auction.status === 'DRAFT' ? '即将开拍' : auction.status === 'SOLD' ? '已成交' : auction.status === 'ENDED' ? '已结束' : auction.status === 'CANCELLED' ? '已取消' : String(auction.status ?? '排队中');
+        return (
+          <article className={`product-card ${auction.id === activeAuctionID ? 'is-active' : ''}`} key={auction.id}>
+            <div>
+              <strong>{auction.item?.title ?? auction.item_id ?? auction.id}</strong>
+              <span>{status} · {formatCents(auction.current_price_cents ?? 0)} · {auction.accepted_bid_count ?? 0} 口</span>
+            </div>
+            <em>{auction.id === activeAuctionID ? '当前拍品' : status}</em>
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
+function ProductRuleSheet({ auction, item, scenario }: { auction?: AuctionSummary; item: AuctionItem; scenario: Scenario }) {
+  return (
+    <div className="product-rule-sheet">
+      <h3>{item.title ?? scenario.title}</h3>
+      <p>{item.certificate ?? '证书待同步'} · {item.condition ?? '品相待同步'} · {item.shipping ?? '运费以订单为准'}</p>
+      <div className="rule-summary-grid">
+        <span>当前价 <strong>{scenario.price}</strong></span>
+        <span>加价幅度 <strong>{formatCents(auction?.increment_cents ?? 0)}</strong></span>
+        <span>封顶价 <strong>{auction?.cap_price_cents ? formatCents(auction.cap_price_cents) : '未设置'}</strong></span>
+        <span>延时规则 <strong>最后 {auction?.rule?.extend_window_seconds ?? 10}s 延 {auction?.rule?.extend_by_seconds ?? 10}s</strong></span>
+        <span>保证金 <strong>{formatCents(auction?.rule?.deposit_floor_cents ?? 0)} 起</strong></span>
+        <span>高额确认 <strong>{auction?.rule?.fat_finger_threshold_cents ? formatCents(auction.rule.fat_finger_threshold_cents) : '服务端判断'}</strong></span>
+      </div>
+    </div>
+  );
+}
+
+function LeaderboardSheet({ activeAuctionID, leaderboard, onRefresh }: { activeAuctionID: string; leaderboard: LeaderboardPayload | null; onRefresh: () => void }) {
+  const entries = leaderboard?.entries ?? [];
+  return (
+    <div className="sheet-leaderboard">
+      <div className="sheet-action-row">
+        <strong>{leaderboardCopy(leaderboard)}</strong>
+        <button type="button" onClick={onRefresh} disabled={!activeAuctionID}>刷新</button>
+      </div>
+      {entries.length === 0 ? <p>暂无有效出价</p> : entries.map((entry) => (
+        <div className={`leaderboard-row ${entry.is_current ? 'is-current' : ''}`} key={`${entry.rank}-${entry.user_id}`}>
+          <span>#{entry.rank}</span>
+          <strong>{entry.is_current ? '我' : entry.user_masked}</strong>
+          <em>{formatCents(entry.amount_cents)}</em>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function HistorySheet({
+  empty,
+  getPrimary,
+  getSecondary,
+  historyError,
+  historyLoading,
+  onRefresh,
+  rows,
+  title
+}: {
+  empty: string;
+  getPrimary: (row: HistoryRow) => string;
+  getSecondary: (row: HistoryRow) => string;
+  historyError: string;
+  historyLoading: boolean;
+  onRefresh: () => void;
+  rows: HistoryRow[];
+  title: string;
+}) {
+  return (
+    <div className="sheet-history">
+      <div className="sheet-action-row">
+        <strong>{title}</strong>
+        <button type="button" onClick={onRefresh} disabled={historyLoading}>{historyLoading ? '刷新中' : '刷新'}</button>
+      </div>
+      {historyError && <div className="history-error" role="alert">{historyError}</div>}
+      <HistoryList title={title} empty={empty} rows={rows} getPrimary={getPrimary} getSecondary={getSecondary} />
+    </div>
   );
 }
 
