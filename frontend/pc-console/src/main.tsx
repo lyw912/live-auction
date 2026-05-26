@@ -257,6 +257,55 @@ function monitorCount(payload?: MonitorPayload) {
   return payload?.items?.length ?? 0;
 }
 
+function monitorItems(payload?: MonitorPayload) {
+  return payload?.items ?? [];
+}
+
+function riskQueue(monitor: Record<string, MonitorPayload>, selectedAuction: Auction) {
+  const risks: Array<{ level: 'high' | 'med' | 'low'; title: string; body: string; source: string }> = [];
+  const auctionScoped = (row: Record<string, unknown>) => {
+    const auctionID = String(row.auction_id ?? row.aggregate_id ?? row.target_id ?? '');
+    const roomID = String(row.room_id ?? '');
+    return !auctionID || auctionID === selectedAuction.id || roomID === selectedAuction.room_id;
+  };
+  const anomalies = monitorItems(monitor.anomalies).filter(auctionScoped);
+  const highAnomaly = anomalies.find((row) => ['CRITICAL', 'HIGH'].includes(String(row.severity ?? '').toUpperCase())) ?? anomalies[0];
+  if (highAnomaly) {
+    risks.push({
+      level: String(highAnomaly.severity ?? '').toUpperCase() === 'CRITICAL' ? 'high' : 'med',
+      title: String(highAnomaly.type ?? 'Anomaly'),
+      body: String(highAnomaly.message ?? 'Open Anomalies and flight recorder before claiming room health.'),
+      source: 'system_anomaly_events'
+    });
+  }
+  const rejects = monitorItems(monitor.rejects).filter(auctionScoped);
+  if (rejects.length > 0) {
+    const hot = rejects.some((row) => ['BID_AUCTION_TOO_HOT', 'RATE_LIMITED', 'PROCESSING_RETRY_LATER'].includes(String(row.reject_reason ?? row.code ?? '')));
+    risks.push({
+      level: hot ? 'high' : 'med',
+      title: hot ? 'Bid pressure throttle' : 'Rejected bid pressure',
+      body: `${rejects.length} recent reject rows; inspect reject_reason and user copy before prompting more bidding.`,
+      source: 'bids'
+    });
+  }
+  const recoveryRows = monitorItems(monitor.recovery).filter(auctionScoped);
+  const recoveryTotal = recoveryRows.reduce((sum, row) => (
+    sum
+    + Number(row.reconnect_count_recent ?? 0)
+    + Number(row.snapshot_stale ?? 0)
+    + Number(row.slow_consumer_disconnects ?? 0)
+  ), 0);
+  if (recoveryTotal > 0) {
+    risks.push({
+      level: recoveryRows.some((row) => Number(row.snapshot_stale ?? 0) > 0 || Number(row.slow_consumer_disconnects ?? 0) > 0) ? 'high' : 'low',
+      title: 'Recovery pressure',
+      body: `${recoveryTotal} reconnect/stale/slow-consumer signals; avoid urging bids until recovery is stable.`,
+      source: 'user_activity_events'
+    });
+  }
+  return risks.slice(0, 3);
+}
+
 function connectionLabel(monitor: Record<string, MonitorPayload>, roomID: string) {
   const row = monitor.recovery?.items?.find((item) => String(item.room_id ?? '') === roomID) ?? monitor.recovery?.items?.[0];
   if (!row) return '恢复数据未上报';
@@ -1303,6 +1352,7 @@ function LiveAssistRail({
   const hasAnomaly = monitorCount(monitor.anomalies) > 0;
   const visiblePrompts = prompts.filter((prompt) => prompt.id && !dismissedPromptIDs.includes(prompt.id)).slice(0, 3);
   const topPrompt = visiblePrompts[0];
+  const risks = riskQueue(monitor, selectedAuction);
   return (
     <aside className="assist-rail" data-testid="live-assist-rail">
       <div className="panel-heading">
@@ -1393,6 +1443,21 @@ function LiveAssistRail({
           <span>Risk</span>
           <strong>{hasAnomaly ? `${monitorCount(monitor.anomalies)} anomalies` : 'clear'}</strong>
         </div>
+      </div>
+      <div className="risk-queue" data-testid="risk-queue">
+        <div className="heat-summary-head">
+          <span>Risk queue</span>
+          <strong>{risks.length ? `${risks.length} real signals` : 'clear'}</strong>
+        </div>
+        {risks.length === 0 ? (
+          <div className="heat-unavailable">暂无拒绝、异常或恢复压力信号</div>
+        ) : risks.map((risk) => (
+          <div className={`risk-row risk-${risk.level}`} key={`${risk.source}-${risk.title}`}>
+            <strong>{risk.title}</strong>
+            <span>{risk.body}</span>
+            <em>{risk.source}</em>
+          </div>
+        ))}
       </div>
       <div className="system-chat-disabled" data-testid="system-chat-disabled">
         <strong>系统弹幕模板</strong>

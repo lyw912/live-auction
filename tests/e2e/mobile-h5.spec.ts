@@ -377,8 +377,29 @@ test('H5 rejected bid shows business copy and re-enables CTA', async ({ page }) 
   await page.getByTestId('bid-cta').click();
 
   await expect(page.getByText('请按加价幅度出价')).toBeVisible();
+  await expect(page.getByTestId('h5-risk-action')).toContainText('按服务端给出的最低有效价和加价幅度调整');
   await expect(page.getByLabel('auction-state').locator('h2')).toHaveText('¥350.00');
   await expect(page.getByTestId('bid-cta')).toBeEnabled();
+});
+
+test('H5 rate-limit and processing rejects show actionable abuse guidance', async ({ page }) => {
+  const errors = [
+    { code: 'BID_AUCTION_TOO_HOT', message: 'auction too hot' },
+    { code: 'PROCESSING_RETRY_LATER', message: 'processing' }
+  ];
+  await page.route('/api/auctions/auc_live/bids', async (route) => {
+    await route.fulfill({ status: 429, json: errors.shift() ?? { code: 'PROCESSING_RETRY_LATER', message: 'processing' } });
+  });
+
+  await page.goto('/?stateMatrix=1');
+  await page.getByRole('button', { name: '竞价中' }).click();
+  await page.getByTestId('bid-cta').click();
+  await expect(page.getByText('竞价激烈，请稍候')).toBeVisible();
+  await expect(page.getByTestId('h5-risk-action')).toContainText('系统正在削峰，请等待提示恢复后再出价');
+
+  await page.getByTestId('bid-cta').click();
+  await expect(page.getByText('正在确认上一笔出价')).toBeVisible();
+  await expect(page.getByTestId('h5-risk-action')).toContainText('上一笔请求仍在处理，不要连续点击');
 });
 
 test('H5 verified bidder requirement disables bid CTA with clear copy', async ({ page }) => {

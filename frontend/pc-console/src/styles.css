@@ -789,6 +789,7 @@ body {
 .talk-points,
 .heat-summary,
 .max-bid-summary,
+.risk-queue,
 .system-chat-disabled,
 .risk-hint {
   border: 1px solid var(--color-line);
@@ -828,6 +829,47 @@ body {
 .max-bid-summary {
   display: grid;
   gap: 9px;
+}
+
+.risk-queue {
+  display: grid;
+  gap: 8px;
+}
+
+.risk-row {
+  min-height: 58px;
+  display: grid;
+  gap: 4px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-line);
+  background: var(--color-surface-0);
+  padding: 8px;
+}
+
+.risk-row strong {
+  color: var(--color-ink-950);
+}
+
+.risk-row span,
+.risk-row em {
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.risk-row em {
+  font-style: normal;
+  font-weight: 900;
+}
+
+.risk-row.risk-high {
+  border-color: #f9b47d;
+  background: var(--color-risk-orange-soft);
+}
+
+.risk-row.risk-med {
+  border-color: #efd99e;
+  background: var(--color-auction-gold-soft);
 }
 
 .max-bid-summary small {

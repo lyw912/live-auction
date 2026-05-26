@@ -93,7 +93,12 @@ test.beforeEach(async ({ page }) => {
     json: { items: [{ job_id: 'job_1', job_type: 'END_AUCTION', target_id: 'auc_live', status: 'PENDING' }] }
   }));
   await page.route('/api/monitor/rejects', async (route) => route.fulfill({
-    json: { items: [{ time: '2026-05-22T13:00:01Z', auction_id: 'auc_live', user_id: 'user_1', amount_cents: 1, current_price_cents: 45000, reject_reason: 'BID_TOO_LOW', trace_id: 'tr_reject' }] }
+    json: {
+      items: [
+        { time: '2026-05-22T13:00:01Z', auction_id: 'auc_live', user_id: 'user_1', amount_cents: 1, current_price_cents: 45000, reject_reason: 'BID_TOO_LOW', trace_id: 'tr_reject' },
+        { time: '2026-05-22T13:00:02Z', auction_id: 'auc_live', user_id: 'user_4', amount_cents: 50000, current_price_cents: 45000, reject_reason: 'BID_AUCTION_TOO_HOT', trace_id: 'tr_hot' }
+      ]
+    }
   }));
   await page.route('/api/monitor/recovery', async (route) => route.fulfill({
     json: { items: [{ room_id: 'room_main', reconnect_count_recent: 3, history_recovered: 2, snapshot_recovered: 1, snapshot_from_db: 1, snapshot_stale: 0, slow_consumer_disconnects: 0 }] }
@@ -306,6 +311,10 @@ test('PC console renders live API auctions, orders, and expanded diagnostic pane
   await expect(page.getByTestId('max-bid-summary').getByText('Auto applied')).toBeVisible();
   await expect(page.getByTestId('max-bid-summary')).not.toContainText('max_amount_cents');
   await expect(page.getByTestId('max-bid-summary')).not.toContainText('95000');
+  await expect(page.getByTestId('risk-queue').getByText('Bid pressure throttle')).toBeVisible();
+  await expect(page.getByTestId('risk-queue').getByText(/2 recent reject rows/)).toBeVisible();
+  await expect(page.getByTestId('risk-queue').getByText('CLOCK_STEP_BACKWARD')).toBeVisible();
+  await expect(page.getByTestId('risk-queue').getByText('user_activity_events')).toBeVisible();
   await expect(page.getByTestId('system-chat-disabled').getByRole('button', { name: '发送模板' })).toBeDisabled();
   await expect(page.getByTestId('recent-events').getByText('bid_accepted')).toBeVisible();
   await expect(page.getByRole('button', { name: /Flight recorder/ })).toBeVisible();

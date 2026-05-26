@@ -446,6 +446,25 @@ function rejectCopy(code?: string | null) {
   }
 }
 
+function riskActionCopy(code?: string | null) {
+  switch (code) {
+    case 'BID_AUCTION_TOO_HOT':
+    case 'RATE_LIMITED':
+      return '系统正在削峰，请等待提示恢复后再出价';
+    case 'PROCESSING_RETRY_LATER':
+      return '上一笔请求仍在处理，不要连续点击';
+    case 'IDEMPOTENCY_TIMEOUT':
+      return '上一笔结果不确定，请用新的出价请求重试';
+    case 'BID_INCREMENT_MISMATCH':
+    case 'BID_TOO_LOW':
+      return '按服务端给出的最低有效价和加价幅度调整';
+    case 'AUCTION_ENDED':
+      return '等待服务端结果同步，当前不要继续提交';
+    default:
+      return '本次未成交，按当前权威价格重新确认';
+  }
+}
+
 function maxBidStatusCopy(intent: MaxBidIntent) {
   if (intent.status === 'ACTIVE') {
     const applied = intent.last_applied_seq ? ` · 已代出价 seq ${intent.last_applied_seq}` : '';
@@ -498,6 +517,7 @@ function App() {
   const [nextBidCents, setNextBidCents] = useState(40_000);
   const [lastSeq, setLastSeq] = useState(41);
   const [bidFeedback, setBidFeedback] = useState('下一口 ¥400.00');
+  const [riskCode, setRiskCode] = useState('');
   const [leaderMasked, setLeaderMasked] = useState('张**');
   const [confirmToken, setConfirmToken] = useState('');
   const [confirmIdempotencyKey, setConfirmIdempotencyKey] = useState('');
@@ -985,6 +1005,7 @@ function App() {
     setConfirmToken('');
     setConfirmIdempotencyKey('');
     setConfirmAmountCents(0);
+    setRiskCode('');
     if (payload.result === 'ACCEPTED_SOLD') {
       setTerminalPriceCents(acceptedPrice);
       setTerminalWinnerID(payload.current_winner_id ?? '');
@@ -1428,12 +1449,16 @@ function App() {
         return;
       }
       if (!response.ok || payload.reject_reason || payload.code) {
-        setBidFeedback(rejectCopy(payload.reject_reason ?? payload.code));
+        const code = payload.reject_reason ?? payload.code ?? '';
+        setRiskCode(code);
+        setBidFeedback(rejectCopy(code));
         setBidPhase('rejected');
         return;
       }
+      setRiskCode('');
       applyAcceptedBid(payload);
     } catch {
+      setRiskCode('NETWORK_ERROR');
       setBidFeedback('网络异常，请重试');
       setBidPhase('rejected');
     }
@@ -1457,12 +1482,16 @@ function App() {
       });
       const payload = await response.json() as BidResponse;
       if (!response.ok || payload.reject_reason || payload.code) {
-        setBidFeedback(rejectCopy(payload.reject_reason ?? payload.code));
+        const code = payload.reject_reason ?? payload.code ?? '';
+        setRiskCode(code);
+        setBidFeedback(rejectCopy(code));
         setBidPhase('rejected');
         return;
       }
+      setRiskCode('');
       applyAcceptedBid(payload);
     } catch {
+      setRiskCode('NETWORK_ERROR');
       setBidFeedback('网络异常，请重试');
       setBidPhase('rejected');
     }
@@ -1686,17 +1715,18 @@ function App() {
         soundCapability={soundCapability}
         onToggleSound={() => void toggleSound()}
       />
-      <AuctionStatePanel
-        atmosphereCue={atmosphereCue}
-        connectionPhase={connectionPhase}
-        countdownCopy={countdownCopy}
-        currentPriceCents={currentPriceCents}
-        extensionNotice={extensionNotice}
-        leaderboard={leaderboard}
-        minimumNextBidCents={minimumNextBidCents}
-        nextBidCents={nextBidCents}
-        scenario={scenario}
-        onDecreaseBid={decreaseBidAmount}
+        <AuctionStatePanel
+          atmosphereCue={atmosphereCue}
+          connectionPhase={connectionPhase}
+          countdownCopy={countdownCopy}
+          currentPriceCents={currentPriceCents}
+          extensionNotice={extensionNotice}
+          leaderboard={leaderboard}
+          minimumNextBidCents={minimumNextBidCents}
+          nextBidCents={nextBidCents}
+          riskCode={riskCode}
+          scenario={scenario}
+          onDecreaseBid={decreaseBidAmount}
         onIncreaseBid={increaseBidAmount}
         onOpenSheet={setActiveSheet}
         onPrimaryAction={handlePrimaryAction}
@@ -1923,6 +1953,7 @@ function AuctionStatePanel({
   leaderboard,
   minimumNextBidCents,
   nextBidCents,
+  riskCode,
   scenario,
   onDecreaseBid,
   onIncreaseBid,
@@ -1937,6 +1968,7 @@ function AuctionStatePanel({
   leaderboard: LeaderboardPayload | null;
   minimumNextBidCents: number;
   nextBidCents: number;
+  riskCode: string;
   scenario: Scenario;
   onDecreaseBid: () => void;
   onIncreaseBid: () => void;
@@ -2008,6 +2040,12 @@ function AuctionStatePanel({
       <div className="dock-feedback" aria-live={scenario.rejected || scenario.stale ? 'assertive' : 'polite'}>
         <span>{scenario.feedback} · <strong data-testid="bid-hint">{bidHint}</strong></span>
       </div>
+      {scenario.rejected || riskCode ? (
+        <div className="risk-action" data-testid="h5-risk-action" role="status">
+          <AlertTriangle size={15} />
+          <span>{riskActionCopy(riskCode)}</span>
+        </div>
+      ) : null}
       <div className="bid-stepper">
         <button type="button" aria-label="decrease" onClick={onDecreaseBid}>-</button>
         <span>{scenario.sold ? 'ORDER' : formatCents(nextBidCents)}</span>

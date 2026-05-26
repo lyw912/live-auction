@@ -496,6 +496,25 @@ button {
   font-size: inherit;
 }
 
+.risk-action {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid rgba(180, 83, 9, .28);
+  border-radius: var(--radius-md);
+  background: var(--color-risk-orange-soft);
+  color: #8a3f10;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.35;
+}
+
+.risk-action svg {
+  flex: 0 0 auto;
+}
+
 .bid-dock[data-dock-state="OUTBID"] .dock-feedback span {
   color: var(--color-danger-text);
 }
