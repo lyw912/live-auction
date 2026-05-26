@@ -36,6 +36,7 @@ Server always derives user from session/mock token.
 | POST | `/api/auctions/{id}/cancel` | abnormal cancel |
 | POST | `/api/auctions/{id}/narrate-start` | set focus |
 | POST | `/api/auctions/{id}/narrate-stop` | clear focus |
+| GET | `/api/host/auctions/{id}/prompts` | host-only advisory prompter suggestions from real auction data |
 | GET | `/api/auctions` | list |
 | GET | `/api/auctions/{id}` | detail/snapshot |
 | GET | `/api/orders` | order list |

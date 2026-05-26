@@ -80,6 +80,7 @@ func NewRouterWithRealtime(cfg config.Config, deps *storage.Dependencies, log *s
 	}
 	authHandler := AuthHandler{Config: cfg, DB: deps.Postgres}
 	monitorHandler := MonitorHandler{Deps: deps}
+	hostPrompterHandler := HostPrompterHandler{Deps: deps}
 	r.Route("/api", func(r chi.Router) {
 		r.Post("/auth/login", authHandler.Login)
 		r.Post("/auth/logout", authHandler.Logout)
@@ -111,6 +112,7 @@ func NewRouterWithRealtime(cfg config.Config, deps *storage.Dependencies, log *s
 			r.Get("/rooms/{room_id}/auctions", auctionHandler.ListRoomAuctions)
 			r.Get("/rooms/{room_id}/chat", auctionHandler.ListChatMessages)
 			r.Post("/rooms/{room_id}/chat", auctionHandler.CreateChatMessage)
+			r.With(requireHost).Get("/host/auctions/{id}/prompts", hostPrompterHandler.Prompts)
 			r.With(requireHost).Get("/monitor/auctions", monitorHandler.Auctions)
 			r.With(requireHost).Get("/monitor/auctions/{id}/flight-recorder", monitorHandler.FlightRecorder)
 			r.With(requireHost).Get("/monitor/anomalies", monitorHandler.Anomalies)
