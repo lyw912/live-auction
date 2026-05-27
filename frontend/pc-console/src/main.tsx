@@ -492,7 +492,7 @@ function App() {
   const [savingRule, setSavingRule] = useState(false);
   const [creating, setCreating] = useState(false);
   const [ruleSaveState, setRuleSaveState] = useState<'idle' | 'saved' | 'error'>('idle');
-  const [workspaceTab, setWorkspaceTab] = useState('inventory');
+  const [workspaceTab, setWorkspaceTab] = useState('rules');
   const [backendRuleError, setBackendRuleError] = useState('');
   const [backendSuggestions, setBackendSuggestions] = useState<number[]>([]);
   const [itemDraft, setItemDraft] = useState({ title: '新拍品', description: '本场直播竞拍拍品', imageURL: '' });
@@ -877,73 +877,29 @@ function App() {
           }}
         />
 
-        <section className="command-center" data-testid="pc-command-center">
-          <AuctionQueue
-            active={pinnedActiveAuction}
-            auctions={auctions}
-            narrating={currentNarratingAuction}
-            selectedAuction={selectedAuction}
-            onSelect={setSelectedAuctionID}
-          />
-          {selectedAuction ? (
-            <AuctionControlSummary
-              monitor={monitor}
-              now={now}
-              recentEvents={recentEvents}
-              selectedAuction={selectedAuction}
-            >
-              <AuctionCommandPanel
-                cancelReason={cancelReason}
-                activeAuction={pinnedActiveAuction}
-                narratingAuction={currentNarratingAuction}
-                scheduleStartAt={scheduleStartAt}
-                selectedAuction={selectedAuction}
-                onAction={auctionAction}
-                onCancelReasonChange={setCancelReason}
-                onScheduleStartAtChange={setScheduleStartAt}
-              />
-            </AuctionControlSummary>
-          ) : <div className="command-panel"><div className="empty-state">暂无可控制竞拍</div></div>}
-          <LiveAssistRail
-            dismissedPromptIDs={dismissedPromptIDs}
-            heatLoading={heatLoading}
-            heatSummary={heatSummary}
-            maxBidLoading={maxBidLoading}
-            maxBidSummary={maxBidSummary}
-            monitor={monitor}
-            onOpenFlightRecorder={openFlightRecorder}
-            prompts={hostPrompts}
-            promptsLoading={promptsLoading}
-            recentEvents={recentEvents}
-            selectedAuction={selectedAuction}
-            onDismissPrompt={(promptID) => setDismissedPromptIDs((current) => Array.from(new Set([...current, promptID])))}
-            onDriveDemoBid={driveDemoBid}
-          />
-        </section>
-
-        <section className="band workspace-tabs" data-testid="secondary-workspace">
-          <div className="section-title">
-            <h2>二级工作区</h2>
-            <span>按任务进入，不打断上方控场</span>
-          </div>
-          <Tabs activeTab={workspaceTab} onChange={setWorkspaceTab}>
-            <Tabs.TabPane key="inventory" title="商品上架">
-              <div className="two-column secondary-workspace">
-                <ItemCreatePanel
-                  creating={creating}
-                  itemDraft={itemDraft}
-                  ruleValid={ruleValidation.valid}
-                  onCreate={createItemAndAuction}
-                  onFileChange={setItemImageFile}
-                  onDraftChange={setItemDraft}
-                />
-                <div className="workspace-note">
-                  <h2>上架路径</h2>
-                  <p>先创建拍品和草稿竞拍，再进入规则配置。主控区只处理当前直播控场。</p>
-                </div>
+        {workspaceTab === 'inventory' && (
+          <section className="workspace-page inventory-page" data-testid="pc-inventory-page">
+            <div className="section-title">
+              <div>
+                <h1>拍品管理</h1>
+                <p>上架拍品并配置冻结前竞拍规则；开拍和取消进入竞拍页处理。</p>
               </div>
-            </Tabs.TabPane>
-            <Tabs.TabPane key="rules" title="规则配置">
+              <span>{selectedAuction ? `当前选中 ${selectedAuction.id}` : '未选中竞拍'}</span>
+            </div>
+            <InventoryLotsPanel
+              auctions={auctions}
+              selectedAuction={selectedAuction}
+              onSelect={setSelectedAuctionID}
+            />
+            <div className="two-column inventory-workspace">
+              <ItemCreatePanel
+                creating={creating}
+                itemDraft={itemDraft}
+                ruleValid={ruleValidation.valid}
+                onCreate={createItemAndAuction}
+                onFileChange={setItemImageFile}
+                onDraftChange={setItemDraft}
+              />
               <RuleEditor
                 backendRuleError={backendRuleError}
                 rule={rule}
@@ -955,20 +911,76 @@ function App() {
                 onRuleChange={updateRule}
                 onSave={saveRule}
               />
-            </Tabs.TabPane>
-            <Tabs.TabPane key="orders" title="订单">
-              <OrdersPanel orders={orders} />
-            </Tabs.TabPane>
-            <Tabs.TabPane key="diagnostics" title="诊断">
-              <DiagnosticsPanel
-                monitor={monitor}
-                monitorFilter={monitorFilter}
-                onOpenFlightRecorder={openFlightRecorder}
-                onFilterChange={setMonitorFilter}
+            </div>
+          </section>
+        )}
+
+        {workspaceTab === 'rules' && (
+          <section className="workspace-page auction-page" data-testid="pc-auction-page">
+            <div className="section-title">
+              <div>
+                <h1>竞拍控场</h1>
+                <p>选择队列中的拍品，执行排期、开拍、取消、讲解和实时氛围演示。</p>
+              </div>
+              <span>{pinnedActiveAuction ? `ACTIVE ${pinnedActiveAuction.id}` : '当前无 ACTIVE'}</span>
+            </div>
+            <div className="command-center" data-testid="pc-command-center">
+              <AuctionQueue
+                active={pinnedActiveAuction}
+                auctions={auctions}
+                narrating={currentNarratingAuction}
+                selectedAuction={selectedAuction}
+                onSelect={setSelectedAuctionID}
               />
-            </Tabs.TabPane>
-          </Tabs>
-        </section>
+              {selectedAuction ? (
+                <AuctionControlSummary
+                  monitor={monitor}
+                  now={now}
+                  recentEvents={recentEvents}
+                  selectedAuction={selectedAuction}
+                >
+                  <AuctionCommandPanel
+                    cancelReason={cancelReason}
+                    activeAuction={pinnedActiveAuction}
+                    narratingAuction={currentNarratingAuction}
+                    scheduleStartAt={scheduleStartAt}
+                    selectedAuction={selectedAuction}
+                    onAction={auctionAction}
+                    onCancelReasonChange={setCancelReason}
+                    onScheduleStartAtChange={setScheduleStartAt}
+                  />
+                </AuctionControlSummary>
+              ) : <div className="command-panel"><div className="empty-state">暂无可控制竞拍</div></div>}
+              <LiveAssistRail
+                dismissedPromptIDs={dismissedPromptIDs}
+                heatLoading={heatLoading}
+                heatSummary={heatSummary}
+                maxBidLoading={maxBidLoading}
+                maxBidSummary={maxBidSummary}
+                monitor={monitor}
+                onOpenFlightRecorder={openFlightRecorder}
+                prompts={hostPrompts}
+                promptsLoading={promptsLoading}
+                recentEvents={recentEvents}
+                selectedAuction={selectedAuction}
+                onDismissPrompt={(promptID) => setDismissedPromptIDs((current) => Array.from(new Set([...current, promptID])))}
+                onDriveDemoBid={driveDemoBid}
+              />
+            </div>
+            <OrdersPanel orders={orders} />
+          </section>
+        )}
+
+        {workspaceTab === 'diagnostics' && (
+          <section className="workspace-page diagnostics-page" data-testid="pc-diagnostics-page">
+            <DiagnosticsPanel
+              monitor={monitor}
+              monitorFilter={monitorFilter}
+              onOpenFlightRecorder={openFlightRecorder}
+              onFilterChange={setMonitorFilter}
+            />
+          </section>
+        )}
         <FlightRecorderDrawer
           auctionID={flightRecorderAuctionID}
           loading={flightRecorderLoading}
@@ -1006,6 +1018,49 @@ function ConsoleNav({ activeTab, onSelect }: { activeTab: string; onSelect: (tab
         ))}
       </nav>
     </>
+  );
+}
+
+function InventoryLotsPanel({
+  auctions,
+  selectedAuction,
+  onSelect
+}: {
+  auctions: Auction[];
+  selectedAuction?: Auction;
+  onSelect: (auctionID: string) => void;
+}) {
+  const visible = sortedAuctions(auctions).slice(0, 8);
+  return (
+    <section className="inventory-lots" data-testid="inventory-lot-list" aria-label="拍品列表">
+      <div className="panel-heading">
+        <h2>拍品列表</h2>
+        <span>选择 DRAFT 修改规则；开拍/取消在竞拍页执行</span>
+      </div>
+      {visible.length === 0 ? <div className="empty-state compact-empty">暂无拍品</div> : (
+        <div className="inventory-lot-grid">
+          {visible.map((auction) => {
+            const selected = selectedAuction?.id === auction.id;
+            const editable = auction.status === 'DRAFT';
+            return (
+              <button
+                key={auction.id}
+                type="button"
+                className={`inventory-lot-card ${selected ? 'selected' : ''}`}
+                data-status={auction.status.toLowerCase()}
+                onClick={() => onSelect(auction.id)}
+              >
+                <span className={`queue-thumb ${auction.item?.image_url ? 'has-media' : ''}`} style={auction.item?.image_url ? { '--queue-thumb-url': `url("${auction.item.image_url}")` } as React.CSSProperties : undefined}>
+                  {!auction.item?.image_url && <ImageIcon size={18} />}
+                </span>
+                <strong>{auction.item?.title ?? auction.id}</strong>
+                <em>{auction.status} · {editable ? '规则可编辑' : '规则已冻结'}</em>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 }
 

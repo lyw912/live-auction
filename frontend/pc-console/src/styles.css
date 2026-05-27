@@ -136,8 +136,110 @@ body {
   border-radius: var(--radius-md);
 }
 
-.command-center {
+.workspace-page {
   margin-top: 16px;
+  min-width: 0;
+  display: grid;
+  gap: 16px;
+}
+
+.workspace-page > .section-title {
+  min-height: 64px;
+  padding: 16px;
+  background: #fff;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+}
+
+.workspace-page > .section-title h1 {
+  margin: 0;
+  color: var(--color-ink-950);
+  font-size: 24px;
+  letter-spacing: 0;
+}
+
+.workspace-page > .section-title p {
+  margin: 4px 0 0;
+  color: var(--color-muted);
+}
+
+.workspace-page > .section-title > span {
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.inventory-workspace {
+  align-items: start;
+}
+
+.inventory-lots {
+  padding: 14px;
+  background: #fff;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+}
+
+.inventory-lot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+}
+
+.inventory-lot-card {
+  min-height: 82px;
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  gap: 4px 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-0);
+  color: var(--color-ink-800);
+  text-align: left;
+  cursor: pointer;
+}
+
+.inventory-lot-card.selected {
+  border-color: var(--color-bid-red);
+  background: var(--color-bid-red-soft);
+}
+
+.inventory-lot-card .queue-thumb {
+  grid-row: 1 / span 2;
+}
+
+.inventory-lot-card strong {
+  overflow: hidden;
+  color: var(--color-ink-950);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.inventory-lot-card em {
+  color: var(--color-muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.inventory-workspace > .rule-panel {
+  padding: 16px;
+  background: #fff;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+}
+
+.auction-page .orders-panel {
+  margin-top: 0;
+}
+
+.diagnostics-page .diagnostics {
+  margin-top: 0;
+}
+
+.command-center {
   display: grid;
   grid-template-columns: minmax(280px, .82fr) minmax(420px, 1.35fr) minmax(300px, .86fr);
   gap: 14px;

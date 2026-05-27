@@ -58,12 +58,13 @@ P10 demo proves the auction product flow, not a scripted UI playback. The judge-
 
 PC host console:
 
-1. Use the left nav `拍品` to open product creation. Enter title/description and either upload an image or use a URL such as `/demo/ceramic-tea-cup.jpg`.
-2. Click `创建拍品和竞拍`. The new auction is DRAFT and appears in the queue.
-3. Use the left nav `竞拍` or the `规则配置` tab to adjust DRAFT rules. Only DRAFT rules are editable.
-4. In the main control panel click `排期`, then `开拍`. If another ACTIVE auction exists, cancel/end it first because the backend enforces one ACTIVE auction per room.
-5. Use `取消` on DRAFT/SCHEDULED/ACTIVE auctions with a reason. Terminal auctions cannot be cancelled.
-6. Use the queue to select lots. ACTIVE/SCHEDULED/DRAFT are prioritized; finished rows are capped to the latest few records so historical local runs do not dominate the demo.
+1. Use the left nav `拍品` to open the product page. Enter title/description and either upload an image or use a URL such as `/demo/ceramic-tea-cup.jpg`.
+2. On the same `拍品` page, configure the DRAFT auction rules: start price, increment, cap, duration, extension, fat-finger threshold, and deposit fields. Only DRAFT rules are editable.
+3. Click `创建拍品和竞拍`. The new auction is DRAFT and appears in the `拍品` page lot selector and in the `竞拍` page queue.
+4. Use the left nav `竞拍` to open the auction control page. Select the lot from the queue, then click `排期` and `开拍`. If another ACTIVE auction exists, cancel/end it first because the backend enforces one ACTIVE auction per room.
+5. Use `取消` from the `竞拍` page on DRAFT/SCHEDULED/ACTIVE auctions with a reason. Terminal auctions cannot be cancelled.
+6. Use the `竞拍` page queue to select lots. ACTIVE/SCHEDULED/DRAFT are prioritized; finished rows are capped to the latest few records so historical local runs do not dominate the demo.
+7. Use the left nav `诊断` to open monitor tables and the flight recorder. This page is separate from auction control so diagnostic drilldown does not crowd the host's live actions.
 
 H5 bidder room:
 

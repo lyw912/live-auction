@@ -282,18 +282,23 @@ test('PC console renders live API auctions, orders, and expanded diagnostic pane
   await expect(page.getByTestId('auction-queue').getByText('青瓷手作茶盏')).toBeVisible();
   await expect(page.getByTestId('auction-queue').getByText('紫砂壶')).toBeVisible();
   await expect(page.getByTestId('health-ribbon')).toBeVisible();
+  await expect(page.getByTestId('pc-auction-page')).toBeVisible();
   await expect(page.getByTestId('pc-command-center')).toBeVisible();
   await expect(page.getByTestId('auction-queue')).toBeVisible();
   await expect(page.getByTestId('queue-group-active-pinned').getByText('青瓷手作茶盏')).toBeVisible();
   await expect(page.getByTestId('queue-group-scheduled').getByText('银壶')).toBeVisible();
   await expect(page.getByTestId('queue-group-draft').getByText('紫砂壶')).toBeVisible();
   await expect(page.getByTestId('live-assist-rail')).toBeVisible();
-  await expect(page.getByTestId('secondary-workspace')).toBeVisible();
-  await page.getByRole('tab', { name: '订单' }).click();
   await expect(page.getByText('ord_pending')).toBeVisible();
-  await page.getByRole('tab', { name: '诊断' }).click();
+  await page.getByRole('button', { name: '拍品', exact: true }).click();
+  await expect(page.getByTestId('pc-inventory-page')).toBeVisible();
+  await expect(page.getByTestId('pc-command-center')).not.toBeVisible();
+  await page.getByRole('button', { name: '诊断', exact: true }).click();
+  await expect(page.getByTestId('pc-diagnostics-page')).toBeVisible();
+  await expect(page.getByTestId('auction-queue')).not.toBeVisible();
   await expect(page.getByTestId('diagnostics')).toBeVisible();
   await expect(page.getByLabel('monitor-anomaly-type')).toBeVisible();
+  await page.getByRole('button', { name: '竞拍', exact: true }).click();
   await expect(page.getByTestId('auction-control-summary')).toBeVisible();
   await expect(page.getByTestId('auction-control-summary').getByText('当前价')).toBeVisible();
   await expect(page.getByTestId('auction-control-summary').getByText(/服务端倒计时/)).toBeVisible();
@@ -322,6 +327,7 @@ test('PC console renders live API auctions, orders, and expanded diagnostic pane
   await expect(page.getByTestId('recent-events').getByText('bid_accepted')).toBeVisible();
   await expect(page.getByRole('button', { name: /Flight recorder/ })).toBeVisible();
 
+  await page.getByRole('button', { name: '诊断', exact: true }).click();
   await page.getByRole('tab', { name: 'Rejects' }).click();
   await expect(page.getByText('BID_TOO_LOW')).toBeVisible();
   await expect(page.getByText('tr_reject')).toBeVisible();
@@ -346,7 +352,7 @@ test('PC accessibility gate exposes live diagnostic state and named controls', a
   await expect(riskQueue.getByText('Bid pressure throttle')).toBeVisible();
   await expect(riskQueue.locator('em').getByText('bids', { exact: true })).toBeVisible();
 
-  await page.getByRole('tab', { name: '诊断' }).click();
+  await page.getByRole('button', { name: '诊断', exact: true }).click();
   await page.getByRole('tab', { name: 'Rejects' }).click();
   await expect(page.getByLabel('Rejects').getByRole('button', { name: /tr_reject/ })).toBeVisible();
   await expect(page.getByLabel('monitor-auction-id')).toBeVisible();
@@ -408,6 +414,7 @@ test('PC host live assist renders private Max Bid readiness without exposing cei
 
 test('PC diagnostics row opens flight recorder drawer with real timeline impact and next action', async ({ page }) => {
   await page.goto('/');
+  await page.getByRole('button', { name: '诊断', exact: true }).click();
   await page.getByRole('tab', { name: 'Rejects' }).click();
   await page.getByLabel('Rejects').getByRole('button', { name: /tr_reject/ }).click();
   const drawer = page.getByTestId('flight-recorder-drawer');
@@ -464,6 +471,7 @@ test('PC creates item and auction through backend upload and create APIs', async
   });
 
   await page.goto('/');
+  await page.getByRole('button', { name: '拍品', exact: true }).click();
   await expect(page.getByTestId('wizard-product-step')).toBeVisible();
   await page.getByLabel('item-title').fill('白瓷杯');
   await page.getByLabel('item-image-file').setInputFiles({
@@ -490,6 +498,7 @@ test('PC rule save targets selected draft auction and includes all money/rule fi
   });
 
   await page.goto('/');
+  await page.getByRole('button', { name: '拍品', exact: true }).click();
   await page.getByText('紫砂壶').click();
   await expect(page.getByTestId('seller-rule-wizard')).toBeVisible();
   await expect(page.getByLabel('seller-rule-wizard-steps').getByText('Product')).toBeVisible();
@@ -517,6 +526,7 @@ test('PC rule save targets selected draft auction and includes all money/rule fi
 
 test('PC rule wizard explains frozen rules for non-draft auctions', async ({ page }) => {
   await page.goto('/');
+  await page.getByRole('button', { name: '拍品', exact: true }).click();
   await expect(page.getByTestId('rule-freeze-reason')).toContainText('ACTIVE');
   await expect(page.getByTestId('rule-freeze-reason')).toContainText('仅 DRAFT');
   await expect(page.getByRole('button', { name: '保存规则' })).toBeDisabled();
@@ -536,6 +546,7 @@ test('PC lifecycle controls call selected auction APIs', async ({ page }) => {
   });
 
   await page.goto('/');
+  await page.getByRole('button', { name: '竞拍', exact: true }).click();
   await page.getByText('紫砂壶').click();
   await page.getByLabel('schedule-start-at').fill('2026-05-22T14:30');
   await page.getByRole('button', { name: '排期' }).click();

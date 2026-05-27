@@ -378,8 +378,7 @@ test.describe('PC visual states @visual-pc', () => {
     await expect(page.getByTestId('pc-command-center')).toBeVisible();
     await expect(page.getByTestId('health-ribbon')).toBeVisible();
     await expect(page.getByTestId('auction-control-summary')).toBeVisible();
-    await expect(page.getByTestId('secondary-workspace')).toBeVisible();
-    await page.getByRole('tab', { name: '诊断' }).click();
+    await page.getByRole('button', { name: '诊断', exact: true }).click();
     await expect(page.getByTestId('diagnostics')).toBeVisible();
     await expect(page.locator('.console-shell')).toHaveScreenshot('pc-command-diagnostics.png', {
       animations: 'disabled',
