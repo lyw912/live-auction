@@ -1,0 +1,12 @@
+Filesystem      Size  Used Avail Use% Mounted on
+tmpfs           3.1G  1.5M  3.1G   1% /run
+efivarfs        256K  6.2K  245K   3% /sys/firmware/efi/efivars
+/dev/nvme0n1p3   40G  9.9G   28G  27% /
+tmpfs            16G     0   16G   0% /dev/shm
+tmpfs           5.0M     0  5.0M   0% /run/lock
+/dev/nvme0n1p2  197M  6.2M  191M   4% /boot/efi
+overlay          40G  9.9G   28G  27% /var/lib/docker/rootfs/overlayfs/6251e49f959363a16cd333209ac8bd31034f4fca8032bbcbfc77ad73d1084a04
+overlay          40G  9.9G   28G  27% /var/lib/docker/rootfs/overlayfs/850cf5c820eab7bf15bc48888eddb8e80deed06743540518405df9a7c03976e7
+overlay          40G  9.9G   28G  27% /var/lib/docker/rootfs/overlayfs/bbe8ba9830f392ff31f5a477e62635c2d3a5d49bfd58b91658a0627f4a541504
+overlay          40G  9.9G   28G  27% /var/lib/docker/rootfs/overlayfs/841773a5690c8d741fed212ab259a7881c238a10514999d088b300d654f098a4
+overlay          40G  9.9G   28G  27% /var/lib/docker/rootfs/overlayfs/f5a81b679188e1e729e76c8443832411afc6582a262c4f47a846686f4187e8df

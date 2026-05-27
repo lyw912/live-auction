@@ -1,0 +1,4 @@
+user_id,token,role
+k6_bidder_1_0,REPLACE_WITH_REAL_SESSION_TOKEN,user
+k6_bidder_1_1,REPLACE_WITH_REAL_SESSION_TOKEN,user
+k6_ws_1,REPLACE_WITH_REAL_SESSION_TOKEN,user

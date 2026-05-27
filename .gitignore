@@ -37,3 +37,11 @@ infra/.data/
 # Local performance artifacts
 docs/perf/raw/*
 !docs/perf/raw/README.md
+Jmeter压测报告-*.pdf
+aliyun-cli-linux-latest-amd64.tgz
+docs/perf/pts/pts_sessions.csv
+docs/perf/pts/live-auction-server
+docs/perf/pts/server.pid
+docs/perf/pts/pdf-pages/*.ppm
+docs/perf/pts/evidence/**/pts-sampling-logs/
+docs/perf/pts/evidence/**/pts-sampling-logs-smoke/
