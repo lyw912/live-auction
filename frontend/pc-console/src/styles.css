@@ -34,14 +34,24 @@ body {
   margin-top: 18px;
 }
 
-.sider nav span {
+.sider nav button {
   height: 38px;
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 0 10px;
+  border: 0;
   border-radius: var(--radius-md);
   background: rgba(255,255,255,.07);
+  color: #f4f6fb;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sider nav button.active,
+.sider nav button:hover {
+  background: rgba(255, 255, 255, .16);
+  color: #fff;
 }
 
 .content {
@@ -820,6 +830,7 @@ body {
 .talk-points,
 .heat-summary,
 .max-bid-summary,
+.demo-driver,
 .risk-queue,
 .system-chat-disabled,
 .risk-hint {
@@ -850,6 +861,22 @@ body {
   color: var(--color-muted-strong);
   font-weight: 800;
   cursor: default;
+}
+
+.demo-driver {
+  display: grid;
+  gap: 8px;
+}
+
+.demo-driver-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.demo-driver small {
+  color: var(--color-muted);
+  line-height: 1.35;
 }
 
 .heat-summary {

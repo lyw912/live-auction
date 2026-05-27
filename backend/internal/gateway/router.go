@@ -105,6 +105,7 @@ func NewRouterWithRealtime(cfg config.Config, deps *storage.Dependencies, log *s
 			r.With(requireHost).Post("/auctions/{id}/narrate-stop", auctionHandler.NarrateStop)
 			r.Post("/auctions/{id}/bids", auctionHandler.PlaceBid)
 			r.Post("/auctions/{id}/bids/confirm", auctionHandler.ConfirmBid)
+			r.With(requireHost).Post("/demo/auctions/{id}/competing-bid", auctionHandler.DemoCompetingBid)
 			r.Get("/auctions/{id}/leaderboard", auctionHandler.GetLeaderboard)
 			r.Get("/auctions/{id}/max-bid-intent", auctionHandler.GetMaxBidIntent)
 			r.Put("/auctions/{id}/max-bid-intent", auctionHandler.PutMaxBidIntent)

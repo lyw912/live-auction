@@ -51,7 +51,26 @@ P10 demo proves the auction product flow, not a scripted UI playback. The judge-
 - DRAFT rule edit: PC edits rules before schedule; invalid cap/increment is rejected by frontend guardrail and backend authority.
 - Recovery: force reconnect or snapshot refresh; H5 marks stale/recovering and disables dangerous actions until a fresh snapshot applies.
 - Extreme atmosphere: show sticky Bid Dock, rank strip, leaderboard sheet, official bid hints, extension pulse, sold mark, sound/haptic opt-in, and reduced-motion fallback.
+- Local host demo driver: PC Live Assist exposes host-only buttons for reject, second-bidder outbid, extension-window bid, and cap SOLD. These buttons call `/api/demo/auctions/{id}/competing-bid`, which is restricted to `APP_ENV=local|test` and host ownership. It still writes through the real bid repository, auction events, outbox, and order path; it must be described as a local driver for another deterministic demo bidder, not as production product UI.
 - Local fake-provider payment: use `/api/orders/{id}/pay-mock` only after saying it is a local provider boundary, not external payment.
+
+## Manual Operation Map
+
+PC host console:
+
+1. Use the left nav `拍品` to open product creation. Enter title/description and either upload an image or use a URL such as `/demo/ceramic-tea-cup.jpg`.
+2. Click `创建拍品和竞拍`. The new auction is DRAFT and appears in the queue.
+3. Use the left nav `竞拍` or the `规则配置` tab to adjust DRAFT rules. Only DRAFT rules are editable.
+4. In the main control panel click `排期`, then `开拍`. If another ACTIVE auction exists, cancel/end it first because the backend enforces one ACTIVE auction per room.
+5. Use `取消` on DRAFT/SCHEDULED/ACTIVE auctions with a reason. Terminal auctions cannot be cancelled.
+6. Use the queue to select lots. ACTIVE/SCHEDULED/DRAFT are prioritized; finished rows are capped to the latest few records so historical local runs do not dominate the demo.
+
+H5 bidder room:
+
+1. Open `/rooms/{room_id}`. The feed shows product media, chat, connection, price/countdown/status, and a floating product card.
+2. Tap the product card to open the bid panel. Price, countdown, CTA, rank strip, Max Bid, leaderboard, rules, history, and orders are available there.
+3. Bid from H5 to see pending then accepted/leading only after backend confirmation.
+4. In PC Live Assist use `第二买家超越`, `触发 reject`, `窗口出价/延时`, and `封顶 SOLD` to drive the other-bidder branches while watching H5. H5 receives normal server responses/events and short non-blocking atmosphere animations.
 
 ## Evidence To Capture
 

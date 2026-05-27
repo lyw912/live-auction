@@ -179,6 +179,7 @@ type AuctionSummary = {
   cap_price_cents?: number;
   accepted_bid_count?: number;
   seq?: number;
+  start_at?: string;
   end_at?: string;
   server_time_ms?: number;
   item?: AuctionItem;
@@ -508,6 +509,26 @@ function roomIDFromPath() {
   return match ? decodeURIComponent(match[1]) : 'room_main';
 }
 
+function auctionPriority(auction: AuctionSummary) {
+  if (auction.status === 'ACTIVE') return 0;
+  if (auction.status === 'SCHEDULED') return 1;
+  if (auction.status === 'DRAFT') return 2;
+  return 3;
+}
+
+function visibleRoomAuctions(auctions: AuctionSummary[]) {
+  return [...auctions].sort((left, right) => {
+    const priority = auctionPriority(left) - auctionPriority(right);
+    if (priority !== 0) return priority;
+    return String(left.start_at ?? left.end_at ?? left.id).localeCompare(String(right.start_at ?? right.end_at ?? right.id));
+  });
+}
+
+function selectEntryAuction(auctions: AuctionSummary[]) {
+  return visibleRoomAuctions(auctions).find((auction) => ['ACTIVE', 'SCHEDULED', 'DRAFT'].includes(String(auction.status)))
+    ?? visibleRoomAuctions(auctions)[0];
+}
+
 function App() {
   const showStateMatrix = useMemo(isTestMatrixEnabled, []);
   const roomID = useMemo(roomIDFromPath, []);
@@ -828,6 +849,19 @@ function App() {
       };
     }
     if (selected !== 'active_bids') {
+      if (selected === 'scheduled') {
+        return {
+          key: 'scheduled',
+          title: '即将开拍',
+          status: 'SCHEDULED',
+          price: formatCents(currentPriceCents),
+          leader: '等待主播开拍',
+          feedback: '拍品已进入队列',
+          countdown: countdownCopy,
+          cta: '等待开拍',
+          ctaDisabled: true
+        };
+      }
       return scenarios.find((item) => item.key === selected) ?? scenarios[0];
     }
     const verificationBlocked = Boolean(
@@ -1109,6 +1143,10 @@ function App() {
     } else if (status === 'CANCELLED') {
       setSelected('cancelled');
       setBidFeedback(snapshot.payload?.reason ?? '主播已取消');
+    } else if (status === 'SCHEDULED' || status === 'DRAFT') {
+      setSelected('scheduled');
+    } else if (status === 'ACTIVE') {
+      setSelected('active_bids');
     }
     void loadLeaderboard(snapshotAuctionID ?? activeAuctionIDRef.current);
   };
@@ -1263,9 +1301,9 @@ function App() {
         const response = await fetch(`/api/rooms/${roomID}/auctions`);
         const payload = await readJSON<AuctionSummary[] | { items?: AuctionSummary[] }>(response);
         const auctions = Array.isArray(payload) ? payload : payload?.items ?? [];
-        const selectedAuction = auctions.find((item) => item.status === 'ACTIVE') ?? auctions[0];
+        const selectedAuction = selectEntryAuction(auctions);
         if (!response.ok || !selectedAuction || cancelled) return;
-        setRoomAuctions(auctions);
+        setRoomAuctions(visibleRoomAuctions(auctions));
         setActiveAuctionID(selectedAuction.id);
         setLotTitle(selectedAuction.item?.title ?? selectedAuction.id);
         setStageItem((current) => ({
@@ -1425,6 +1463,14 @@ function App() {
       wsRef.current = null;
     };
   }, [activeAuctionID, sessionReady]);
+
+  useEffect(() => {
+    if (!sessionReady || !activeAuctionID || selected !== 'active_bids') return undefined;
+    const timer = window.setInterval(() => {
+      void recoverFromSnapshot();
+    }, 2_500);
+    return () => window.clearInterval(timer);
+  }, [activeAuctionID, sessionReady, selected]);
 
   const submitBid = async () => {
     const auctionID = activeAuctionIDRef.current;
@@ -1744,10 +1790,19 @@ function App() {
           nextBidCents={nextBidCents}
           riskCode={riskCode}
           scenario={scenario}
+          nextAuction={nextAuction}
+          orderAmountCents={payableOrderAmountCents}
+          orderID={payableOrderID}
+          paymentPhase={paymentPhase}
+          resultSheetKind={resultSheetKind}
+          terminalPriceCents={terminalPriceCents || currentPriceCents}
+          terminalWinnerID={terminalWinnerID}
           onClose={() => setOverlayMode('feed')}
           onDecreaseBid={decreaseBidAmount}
           onIncreaseBid={increaseBidAmount}
+          onOpenOrders={() => setActiveSheet('orders')}
           onOpenSheet={setActiveSheet}
+          onPay={payOrder}
           onPrimaryAction={handlePrimaryAction}
         />
       )}
@@ -1791,20 +1846,6 @@ function App() {
           onSubmitMaxBid={submitMaxBidIntent}
         />
       )}
-      <ResultSheet
-        activeSheet={activeSheet}
-        kind={resultSheetKind}
-        nextAuction={nextAuction}
-        paymentPhase={paymentPhase}
-        scenario={scenario}
-        terminalPriceCents={terminalPriceCents || currentPriceCents}
-        terminalWinnerID={terminalWinnerID}
-        userBestCents={leaderboard?.my_best_amount_cents ?? 0}
-        orderID={payableOrderID}
-        orderAmountCents={payableOrderAmountCents}
-        onOpenOrders={() => setActiveSheet('orders')}
-        onPay={payOrder}
-      />
       {showStateMatrix && (
         <ChatPanel
           chatDraft={chatDraft}
@@ -1968,7 +2009,7 @@ function LiveStage({
         <span className="floating-product-copy">
           <strong>{activeAuction?.item?.title ?? lotTitle}</strong>
           <span className="floating-auction-meta">
-            <em data-testid="floating-auction-price">{scenario.status === 'ACTIVE' ? `当前最高价 ${formatCents(currentPriceCents)}` : scenario.feedback}</em>
+            <em data-testid="floating-auction-price">{scenario.status === 'ACTIVE' ? `当前最高价 ${formatCents(currentPriceCents)}` : `${scenario.status} · ${scenario.price}`}</em>
             <small data-testid="floating-auction-countdown"><Clock3 size={12} />{scenario.countdown ?? countdownCopy}</small>
             <small data-testid="floating-auction-status">{scenario.status} · {connectionCopy}</small>
           </span>
@@ -2017,13 +2058,22 @@ function AuctionStatePanel({
   item,
   leaderboard,
   minimumNextBidCents,
+  nextAuction,
   nextBidCents,
+  orderAmountCents,
+  orderID,
+  paymentPhase,
   riskCode,
+  resultSheetKind,
   scenario,
+  terminalPriceCents,
+  terminalWinnerID,
   onClose,
   onDecreaseBid,
   onIncreaseBid,
+  onOpenOrders,
   onOpenSheet,
+  onPay,
   onPrimaryAction
 }: {
   atmosphereCue: AtmosphereCue | null;
@@ -2034,13 +2084,22 @@ function AuctionStatePanel({
   item: AuctionItem;
   leaderboard: LeaderboardPayload | null;
   minimumNextBidCents: number;
+  nextAuction?: AuctionSummary;
   nextBidCents: number;
+  orderAmountCents: number;
+  orderID: string;
+  paymentPhase: PaymentPhase;
   riskCode: string;
+  resultSheetKind: ResultSheetKind | null;
   scenario: Scenario;
+  terminalPriceCents: number;
+  terminalWinnerID: string;
   onClose: () => void;
   onDecreaseBid: () => void;
   onIncreaseBid: () => void;
+  onOpenOrders: () => void;
   onOpenSheet: (sheet: BottomSheetKey) => void;
+  onPay: () => void;
   onPrimaryAction: () => void;
 }) {
   const dockState = scenario.pending
@@ -2129,6 +2188,21 @@ function AuctionStatePanel({
           <span>{riskActionCopy(riskCode)}</span>
         </div>
       ) : null}
+      <ResultSheet
+        activeSheet={null}
+        kind={resultSheetKind}
+        nextAuction={nextAuction}
+        paymentPhase={paymentPhase}
+        scenario={scenario}
+        terminalPriceCents={terminalPriceCents || currentPriceCents}
+        terminalWinnerID={terminalWinnerID}
+        userBestCents={leaderboard?.my_best_amount_cents ?? 0}
+        orderID={orderID}
+        orderAmountCents={orderAmountCents}
+        compact
+        onOpenOrders={onOpenOrders}
+        onPay={onPay}
+      />
       <div className="bid-stepper">
         <button type="button" aria-label="decrease" onClick={onDecreaseBid}>-</button>
         <span>{scenario.sold ? 'ORDER' : formatCents(nextBidCents)}</span>
@@ -2152,6 +2226,7 @@ function AuctionStatePanel({
 
 function ResultSheet({
   activeSheet,
+  compact = false,
   kind,
   nextAuction,
   orderAmountCents,
@@ -2165,6 +2240,7 @@ function ResultSheet({
   onPay
 }: {
   activeSheet: BottomSheetKey | null;
+  compact?: boolean;
   kind: ResultSheetKind | null;
   nextAuction?: AuctionSummary;
   orderAmountCents: number;
@@ -2195,12 +2271,12 @@ function ResultSheet({
       : '本场未成交';
 
   return (
-    <section className={`result-sheet ${kind}`} data-testid="result-sheet" aria-label={title}>
+    <section className={`result-sheet ${kind} ${compact ? 'is-compact' : ''}`} data-testid="result-sheet" aria-label={title}>
       <div className="result-sheet-icon" aria-hidden="true">
         {kind === 'winner' ? <Trophy size={22} /> : kind === 'loser' ? <Clock3 size={22} /> : <AlertTriangle size={22} />}
       </div>
       <div className="result-sheet-copy">
-        <p className="eyebrow">{kind === 'winner' ? '成交结果' : kind === 'loser' ? '输家承接' : '未成交说明'}</p>
+        <p className="result-eyebrow">{kind === 'winner' ? '成交结果' : kind === 'loser' ? '输家承接' : '未成交说明'}</p>
         <h2>{title}</h2>
         {kind === 'winner' && (
           <>

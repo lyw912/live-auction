@@ -237,11 +237,18 @@ function sortedAuctions(auctions: Auction[]) {
 
 function queueGroups(auctions: Auction[]) {
   const sorted = sortedAuctions(auctions);
+  const finished = sorted.filter((auction) => !['ACTIVE', 'SCHEDULED', 'DRAFT'].includes(auction.status));
+  const visibleFinished = finished.slice(0, 4);
+  const referenceFinished = finished.find((auction) => auction.id === 'auc_live');
+  const finishedRows = referenceFinished && !visibleFinished.some((auction) => auction.id === referenceFinished.id)
+    ? [...visibleFinished.slice(0, 3), referenceFinished]
+    : visibleFinished;
   return {
     active: sorted.filter((auction) => auction.status === 'ACTIVE'),
     scheduled: sorted.filter((auction) => auction.status === 'SCHEDULED'),
     draft: sorted.filter((auction) => auction.status === 'DRAFT'),
-    finished: sorted.filter((auction) => !['ACTIVE', 'SCHEDULED', 'DRAFT'].includes(auction.status))
+    finished: finishedRows,
+    finishedTotal: finished.length
   };
 }
 
@@ -495,7 +502,7 @@ function App() {
   const [rule, setRule] = useState<RuleDraft>(createRuleDraft());
   const [sessionReady, setSessionReady] = useState(false);
   const [now, setNow] = useState(Date.now());
-  const selectedAuction = useMemo(() => auctions.find((auction) => auction.id === selectedAuctionID) ?? auctions[0], [auctions, selectedAuctionID]);
+  const selectedAuction = useMemo(() => auctions.find((auction) => auction.id === selectedAuctionID) ?? sortedAuctions(auctions)[0], [auctions, selectedAuctionID]);
   const pinnedActiveAuction = useMemo(() => activeAuction(auctions), [auctions]);
   const currentNarratingAuction = useMemo(() => narratingAuction(auctions), [auctions]);
   const ruleValidation = validateRule(rule);
@@ -526,7 +533,10 @@ function App() {
     try {
       const roomPayload = await fetch('/api/rooms').then((r) => readJSON<{ items?: Room[] }>(r));
       const roomRows = roomPayload.items ?? [];
-      const nextRoomID = roomRows.find((room) => room.id === roomID)?.id ?? roomRows[0]?.id ?? roomID;
+      const nextRoomID = roomRows.find((room) => room.id === roomID)?.id
+        ?? roomRows.find((room) => room.id === defaultRoomID)?.id
+        ?? roomRows[0]?.id
+        ?? roomID;
       const [auctionRows, orderRows, auctionsDiag, anomalies, outbox, outboxWatermarks, snapshots, signals, scheduler, rejects, recovery] = await Promise.all([
         fetch(`/api/auctions?room_id=${nextRoomID}`).then((r) => readJSON<Auction[]>(r)),
         fetch('/api/orders').then((r) => readJSON<Order[]>(r)),
@@ -545,10 +555,10 @@ function App() {
       setAuctions(auctionRows);
       setOrders(orderRows);
       setMonitor({ auctions: auctionsDiag, anomalies, outbox, outboxWatermarks, snapshots, signals, scheduler, rejects, recovery });
-      const nextSelected = auctionRows.find((row) => row.id === selectedAuctionID)?.id ?? auctionRows.find((row) => row.status === 'ACTIVE')?.id ?? auctionRows[0]?.id ?? '';
+      const nextSelected = auctionRows.find((row) => row.id === selectedAuctionID)?.id ?? auctionRows.find((row) => row.status === 'ACTIVE')?.id ?? sortedAuctions(auctionRows)[0]?.id ?? '';
       setSelectedAuctionID(nextSelected);
       setItems(auctionRows.map((auction) => auction.item).filter(Boolean));
-      const nextAuction = auctionRows.find((row) => row.id === nextSelected) ?? auctionRows[0];
+      const nextAuction = auctionRows.find((row) => row.id === nextSelected) ?? sortedAuctions(auctionRows)[0];
       if (nextAuction) setRule(createRuleDraft(nextAuction));
     } catch {
       Message.error('主控台数据读取失败');
@@ -810,10 +820,47 @@ function App() {
     }
   };
 
+  const driveDemoBid = async (mode: 'reject' | 'outbid' | 'extend' | 'sold') => {
+    if (!selectedAuction || selectedAuction.status !== 'ACTIVE') {
+      Message.warning('请选择 ACTIVE 竞拍后再驱动演示');
+      return;
+    }
+    const price = selectedAuction.current_price_cents;
+    const increment = selectedAuction.increment_cents;
+    const cap = selectedAuction.cap_price_cents ?? price + increment * 5;
+    const amount = mode === 'reject'
+      ? price + increment + 1
+      : mode === 'sold'
+        ? cap
+        : Math.min(cap, price + increment);
+    const clientBidID = `host-demo-${mode}-${Date.now()}`;
+    try {
+      const response = await fetch(`/api/demo/auctions/${selectedAuction.id}/competing-bid`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bidder_id: 'user_2',
+          client_bid_id: clientBidID,
+          amount_cents: amount,
+          client_seen_seq: selectedAuction.seq
+        })
+      });
+      const payload = await readJSON<{ result?: string; reject_reason?: string; message?: string }>(response);
+      if (!response.ok) {
+        Message.error(payload.message ?? '演示出价失败');
+        return;
+      }
+      Message.success(`第二买家真实出价：${payload.result ?? payload.reject_reason ?? mode}`);
+      await loadAll();
+    } catch {
+      Message.error('演示出价失败');
+    }
+  };
+
   return (
     <Layout className="console-shell">
       <Layout.Sider className="sider" width={224}>
-        <ConsoleNav />
+        <ConsoleNav activeTab={workspaceTab} onSelect={setWorkspaceTab} />
       </Layout.Sider>
       <Layout.Content className="content">
         <HealthRibbon
@@ -870,6 +917,7 @@ function App() {
             recentEvents={recentEvents}
             selectedAuction={selectedAuction}
             onDismissPrompt={(promptID) => setDismissedPromptIDs((current) => Array.from(new Set([...current, promptID])))}
+            onDriveDemoBid={driveDemoBid}
           />
         </section>
 
@@ -936,14 +984,26 @@ function App() {
   );
 }
 
-function ConsoleNav() {
+function ConsoleNav({ activeTab, onSelect }: { activeTab: string; onSelect: (tab: string) => void }) {
+  const rows = [
+    { key: 'inventory', label: '拍品', icon: <ClipboardList size={16} /> },
+    { key: 'rules', label: '竞拍', icon: <RadioTower size={16} /> },
+    { key: 'diagnostics', label: '诊断', icon: <Activity size={16} /> }
+  ];
   return (
     <>
       <div className="brand">Live Auction</div>
       <nav>
-        <span><ClipboardList size={16} /> 拍品</span>
-        <span><RadioTower size={16} /> 竞拍</span>
-        <span><Activity size={16} /> 诊断</span>
+        {rows.map((row) => (
+          <button
+            type="button"
+            className={activeTab === row.key ? 'active' : ''}
+            key={row.key}
+            onClick={() => onSelect(row.key)}
+          >
+            {row.icon} {row.label}
+          </button>
+        ))}
       </nav>
     </>
   );
@@ -1127,7 +1187,7 @@ function AuctionQueue({
     <section className="queue-panel" data-testid="auction-queue">
       <div className="panel-heading">
         <h2>竞拍队列</h2>
-        <span>{auctions.length} lots</span>
+        <span>{groups.active.length + groups.scheduled.length + groups.draft.length} live · {groups.finishedTotal} history</span>
       </div>
       {auctions.length === 0 ? <div className="empty-state compact-empty">暂无竞拍</div> : (
         <>
@@ -1158,7 +1218,7 @@ function AuctionQueue({
           <QueueGroup
             active={active}
             auctions={groups.finished}
-            label="FINISHED"
+            label={groups.finishedTotal > groups.finished.length ? `FINISHED latest ${groups.finished.length}/${groups.finishedTotal}` : 'FINISHED'}
             narrating={narrating}
             selectedAuction={selectedAuction}
             onSelect={onSelect}
@@ -1334,7 +1394,8 @@ function LiveAssistRail({
   promptsLoading,
   recentEvents,
   selectedAuction,
-  onDismissPrompt
+  onDismissPrompt,
+  onDriveDemoBid
 }: {
   dismissedPromptIDs: string[];
   heatLoading: boolean;
@@ -1348,6 +1409,7 @@ function LiveAssistRail({
   recentEvents: Array<Record<string, unknown>>;
   selectedAuction?: Auction;
   onDismissPrompt: (promptID: string) => void;
+  onDriveDemoBid: (mode: 'reject' | 'outbid' | 'extend' | 'sold') => void;
 }) {
   if (!selectedAuction) {
     return (
@@ -1397,6 +1459,19 @@ function LiveAssistRail({
         <button type="button">证书/瑕疵</button>
         <button type="button">封顶/保证金</button>
         <button type="button">延时规则</button>
+      </div>
+      <div className="demo-driver" data-testid="demo-driver">
+        <div className="heat-summary-head">
+          <span>本地演示驱动</span>
+          <strong>{selectedAuction.status === 'ACTIVE' ? 'real bid API' : 'ACTIVE only'}</strong>
+        </div>
+        <div className="demo-driver-grid">
+          <Button size="mini" disabled={selectedAuction.status !== 'ACTIVE'} onClick={() => onDriveDemoBid('reject')}>触发 reject</Button>
+          <Button size="mini" disabled={selectedAuction.status !== 'ACTIVE'} onClick={() => onDriveDemoBid('outbid')}>第二买家超越</Button>
+          <Button size="mini" disabled={selectedAuction.status !== 'ACTIVE'} onClick={() => onDriveDemoBid('extend')}>窗口出价/延时</Button>
+          <Button size="mini" status="danger" disabled={selectedAuction.status !== 'ACTIVE'} onClick={() => onDriveDemoBid('sold')}>封顶 SOLD</Button>
+        </div>
+        <small>按钮调用本地 host-only demo API，最终仍写入真实 bids、auction_events、outbox、orders；不是前端改状态。</small>
       </div>
       <div className="max-bid-summary" data-testid="max-bid-summary">
         <div className="heat-summary-head">

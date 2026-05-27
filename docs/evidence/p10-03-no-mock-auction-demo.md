@@ -12,6 +12,15 @@ Added the judge-facing no-mock auction demo policy:
 - P10 updates in `docs/demo/demo-flow.md`
 - P10 scope notes in `docs/demo/known-limits.md`
 
+Updated the manual demo surface after the latest H5 feed refactor:
+
+- H5 now selects ACTIVE/SCHEDULED/DRAFT lots before historical terminal lots when entering a room, so stale SOLD rows from local runs do not become the first bidder experience.
+- H5 terminal winner/loser cards are rendered inside the bid panel instead of floating over the feed/CTA, so they cannot cover disabled or terminal controls.
+- PC left navigation now switches the secondary workspace tabs instead of rendering static labels.
+- PC queue prioritizes live lots and caps visible finished history, reducing local demo clutter while preserving diagnostics.
+- Seeded demo items now include a visible local product image path.
+- PC Live Assist exposes a local/test host-only competing-bid driver for manual reject/outbid/extension/SOLD demos. The driver calls the real bid repository and is explicitly documented as local demo assistance, not a production surface.
+
 Added a no-route-mock live smoke:
 
 - `tests/e2e/p10-no-mock-live.spec.ts`
@@ -40,10 +49,10 @@ The raw record includes:
 
 Latest raw record:
 
-- `room_id`: `room_p10_1779873267642`
-- `smoke_item_id`: `item_f7d1d1e5-2b17-49cc-87ed-9d484c402df9`
-- `smoke_auction_id`: `auc_edb3d6e6-73c6-4767-b822-6766f72b1ce1`
-- `flight_recorder_path`: `/api/monitor/auctions/auc_edb3d6e6-73c6-4767-b822-6766f72b1ce1/flight-recorder?limit=80&timeline_limit=120`
+- `room_id`: `room_p10_1779876950478`
+- `smoke_item_id`: `item_eb3e408e-8866-44e8-a022-84907e03c896`
+- `smoke_auction_id`: `auc_c55f7aca-88ed-4689-a31d-337e2020922d`
+- `flight_recorder_path`: `/api/monitor/auctions/auc_c55f7aca-88ed-4689-a31d-337e2020922d/flight-recorder?limit=80&timeline_limit=120`
 
 ## Validation
 

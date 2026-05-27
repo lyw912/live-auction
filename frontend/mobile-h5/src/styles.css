@@ -1403,6 +1403,26 @@ button {
   gap: 10px;
 }
 
+.result-sheet.is-compact {
+  position: static;
+  width: 100%;
+  transform: none;
+  bottom: auto;
+  z-index: auto;
+  margin-top: 8px;
+  padding: 10px;
+  box-shadow: none;
+  background: var(--color-surface-1);
+}
+
+.result-sheet.is-compact .next-auction-card {
+  display: none;
+}
+
+.result-sheet.is-compact .result-actions {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
 .result-sheet-icon {
   width: 40px;
   height: 40px;
@@ -1430,6 +1450,13 @@ button {
 
 .result-sheet-copy {
   min-width: 0;
+}
+
+.result-eyebrow {
+  margin: 0 0 4px;
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .result-sheet h2 {

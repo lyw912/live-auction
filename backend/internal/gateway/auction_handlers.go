@@ -38,6 +38,13 @@ type currentUserAuctionSnapshot struct {
 	MaxBidIntent *auction.MaxBidIntent `json:"max_bid_intent,omitempty"`
 }
 
+type demoCompetingBidRequest struct {
+	BidderID      string `json:"bidder_id"`
+	ClientBidID   string `json:"client_bid_id"`
+	AmountCents   int64  `json:"amount_cents"`
+	ClientSeenSeq int64  `json:"client_seen_seq"`
+}
+
 type roomSummary struct {
 	ID     string `json:"id"`
 	HostID string `json:"host_id"`
@@ -360,6 +367,54 @@ func (h AuctionHandler) PlaceBid(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	result, err := h.Repo.PlaceBid(r.Context(), auctionID, user.ID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context()))
+	writeResult(w, r, http.StatusOK, result, err)
+}
+
+func (h AuctionHandler) DemoCompetingBid(w http.ResponseWriter, r *http.Request) {
+	if h.Config.AppEnv != "local" && h.Config.AppEnv != "test" {
+		writeError(w, r, apierrors.New(apierrors.CodeForbiddenRoom, "demo bid driver is local/test only", http.StatusForbidden))
+		return
+	}
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	auctionID := chi.URLParam(r, "id")
+	if _, err := h.ACL.requireHostOwnsAuction(r.Context(), user, auctionID, traceID(r.Context())); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	var req demoCompetingBidRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "invalid json body", 400))
+		return
+	}
+	if req.BidderID == "" {
+		req.BidderID = h.Config.MockUserID
+	}
+	if req.BidderID == "" {
+		req.BidderID = "user_2"
+	}
+	if req.ClientBidID == "" {
+		req.ClientBidID = "host-demo-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	}
+	if _, err := h.ACL.requireActiveMembershipForAuction(r.Context(), AuthUser{ID: req.BidderID, Role: "user"}, auctionID, traceID(r.Context())); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	input := auction.BidInput{
+		ClientBidID:   req.ClientBidID,
+		AmountCents:   req.AmountCents,
+		ClientSeenSeq: req.ClientSeenSeq,
+	}
+	result, err := h.Repo.PlaceBid(r.Context(), auctionID, req.BidderID, req.ClientBidID, input, traceID(r.Context()))
+	if err == nil && result.Result == string(apierrors.CodeFatFingerConfirmRequired) && result.ConfirmToken != "" {
+		result, err = h.Repo.ConfirmBid(r.Context(), auctionID, req.BidderID, req.ClientBidID, auction.ConfirmBidInput{
+			ConfirmToken:   result.ConfirmToken,
+			IdempotencyKey: req.ClientBidID,
+		}, traceID(r.Context()))
+	}
 	writeResult(w, r, http.StatusOK, result, err)
 }
 

@@ -92,14 +92,14 @@ func seed(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client) error {
 		(
 		  'item_live',
 		  'P0 Live Smoke Item',
-		  NULL,
+		  '/demo/ceramic-tea-cup.jpg',
 		  'P0 live backend smoke item.',
 		  'READY'
 		),
 		(
 		  'item_side',
 		  'Side Room Smoke Item',
-		  NULL,
+		  '/demo/ceramic-tea-cup.jpg',
 		  'Second room smoke item.',
 		  'READY'
 		)

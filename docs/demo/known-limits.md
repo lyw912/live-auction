@@ -15,6 +15,7 @@ Commit: included in current P2 hardening changes; see git history for exact mile
 - There is still no OAuth, SMS, password policy, or account binding. P2 room membership and host ownership ACL now exist for local users and rooms.
 - P10 does not add public registration/login as a product surface. Deterministic local demo users, host, room, and session setup are allowed prerequisites.
 - P10 live smoke may use `/api/test/rooms` while `APP_ENV=test` to create an isolated repeatable demo room. This endpoint is host-only and test-environment-only; it is not part of the production product surface.
+- PC Live Assist includes a local/test host-only demo bid driver at `/api/demo/auctions/{id}/competing-bid` for showing another deterministic bidder during manual demos. It is not production product UI. The driver still calls the real bid repository and produces real bids, auction events, outbox rows, and orders when SOLD.
 - Real live streaming remains outside scope. P10 may use a local looping product video or product image as the H5 live-stage visual asset.
 - Payment uses a local fake-provider boundary with provider IDs, signed webhook handling, provider event idempotency, and reconciliation checks. No external payment provider is integrated.
 - P10 main trunk should stop at SOLD/order creation if claiming "no mock" for the auction path. The local fake-provider payment path is optional and must be labeled as local fake-provider payment, not real external payment.
