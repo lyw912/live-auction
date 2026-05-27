@@ -80,18 +80,18 @@ services:
       prometheus:
         condition: service_started
 
-  toxiproxy:
-    image: ghcr.io/shopify/toxiproxy:2.9.0
-    container_name: live-auction-toxiproxy
-    ports:
-      - "8474:8474"
-      - "15432:15432"
-      - "16379:16379"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+  # toxiproxy:
+  #   image: ghcr.io/shopify/toxiproxy:2.9.0
+  #   container_name: live-auction-toxiproxy
+  #   ports:
+  #     - "8474:8474"
+  #     - "15432:15432"
+  #     - "16379:16379"
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_healthy
 
 volumes:
   postgres-data:
