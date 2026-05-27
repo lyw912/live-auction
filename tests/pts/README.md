@@ -90,6 +90,8 @@ For `live-auction-pts-smoke.jmx`, all four samplers should pass with HTTP 200.
 
 For `live-auction-pts-business-smoke.jmx`, all numbered samplers should pass. If sampler `10 place bid` returns a business `REJECTED` result, the script can still be useful for connectivity, but do not call it a clean business smoke until the seeded auction is `ACTIVE` and executable. Re-run `p0smokeseed` before a clean local or ECS smoke if the auction has already been sold, cancelled, or expired.
 
+If a sampler shows `200/failed`, the network and HTTP route were reachable but a JMeter assertion failed. Check the assertion name and response body. For example, a snapshot response with `"status":"SOLD"` means the demo auction has already reached the cap/hammer state; reseed or create a fresh active auction before expecting the bid step to succeed.
+
 Known limits:
 
 - Cloudflare/ngrok tunnel latency is not representative.

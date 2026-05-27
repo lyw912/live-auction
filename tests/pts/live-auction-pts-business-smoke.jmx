@@ -188,8 +188,8 @@
             <stringProp name="JSONPostProcessor.defaultValues">0</stringProp>
           </JSONPostProcessor>
           <hashTree/>
-          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="snapshot has server time" enabled="true">
-            <collectionProp name="Asserion.test_strings"><stringProp name="server-time">&quot;server_time_ms&quot;</stringProp></collectionProp>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="snapshot has auction status" enabled="true">
+            <collectionProp name="Asserion.test_strings"><stringProp name="status">&quot;status&quot;</stringProp></collectionProp>
             <stringProp name="Assertion.test_field">Assertion.response_data</stringProp>
             <boolProp name="Assertion.assume_success">false</boolProp>
             <intProp name="Assertion.test_type">2</intProp>
