@@ -31,6 +31,7 @@ type Scenario = {
   ctaDisabled: boolean;
   countdown?: string;
   stale?: boolean;
+  staleCopy?: string;
   pending?: boolean;
   rejected?: boolean;
   winner?: boolean;
@@ -897,7 +898,8 @@ function App() {
         countdown: '剩余时间待同步',
         cta: '同步中',
         ctaDisabled: true,
-        stale: true
+        stale: true,
+        staleCopy: '正在读取服务端拍卖'
       };
     }
     if (connectionPhase === 'disconnected') {
@@ -2177,7 +2179,7 @@ function AuctionStatePanel({
       </div>
       <div className="signal-row">
         {scenario.stale || connectionPhase === 'disconnected' ? <WifiOff size={16} /> : <Wifi size={16} />}
-        <span>{scenario.stale ? '状态可能已过期' : connectionPhase === 'connected' ? 'WebSocket 已连接 · 状态来自服务端事件' : 'WebSocket 连接中 · 状态来自服务端事件'}</span>
+        <span>{scenario.stale ? scenario.staleCopy ?? '状态可能已过期' : connectionPhase === 'connected' ? 'WebSocket 已连接 · 状态来自服务端事件' : 'WebSocket 连接中 · 状态来自服务端事件'}</span>
       </div>
       <div className="dock-feedback" aria-live={scenario.rejected || scenario.stale ? 'assertive' : 'polite'}>
         <span>{scenario.feedback} · <strong data-testid="bid-hint">{bidHint}</strong></span>

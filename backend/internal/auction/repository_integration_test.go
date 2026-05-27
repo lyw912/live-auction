@@ -90,6 +90,9 @@ func TestRepositoryCreateScheduleStartLifecycle(t *testing.T) {
 	if auction.StartAt == nil || auction.EndAt == nil {
 		t.Fatalf("start_at/end_at must be set after start")
 	}
+	if auction.ServerTimeMS <= 0 {
+		t.Fatalf("server_time_ms = %d, want positive server timestamp", auction.ServerTimeMS)
+	}
 
 	assertEventOutboxCounts(t, db, auction.ID, 4)
 }

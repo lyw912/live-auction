@@ -58,6 +58,7 @@ type Auction struct {
 	CapPriceCents     *int64     `json:"cap_price_cents,omitempty"`
 	StartAt           *time.Time `json:"start_at,omitempty"`
 	EndAt             *time.Time `json:"end_at,omitempty"`
+	ServerTimeMS      int64      `json:"server_time_ms"`
 	Version           int64      `json:"version"`
 	Seq               int64      `json:"seq"`
 	AcceptedBidCount  int64      `json:"accepted_bid_count"`
