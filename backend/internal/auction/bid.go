@@ -170,7 +170,7 @@ func (r *Repository) PlaceBid(ctx context.Context, auctionID string, userID stri
 	if err != nil {
 		return BidResponse{}, mapPGError(err)
 	}
-	response, bidStatus, rejectCode, lockedAfterBid, err := r.evaluateAndApplyBid(ctx, tx, locked, userID, input, traceID, false)
+	response, bidStatus, rejectCode, durableRealtime, lockedAfterBid, err := r.evaluateAndApplyBid(ctx, tx, locked, userID, input, traceID, false)
 	if err != nil {
 		return BidResponse{}, err
 	}
@@ -183,7 +183,7 @@ func (r *Repository) PlaceBid(ctx context.Context, auctionID string, userID stri
 		return BidResponse{}, err
 	}
 	if response.Result != string(apierrors.CodeFatFingerConfirmRequired) {
-		if err := insertBidRow(ctx, tx, response.BidID, auctionID, userID, input, response.Seq, bidStatus, rejectCode, requestHash, bidRowResponseJSON, traceID, BidSourceManual); err != nil {
+		if err := insertBidRow(ctx, tx, response.BidID, auctionID, userID, input, nullableSeq(durableRealtime, response.Seq), bidStatus, rejectCode, requestHash, bidRowResponseJSON, traceID, BidSourceManual); err != nil {
 			return BidResponse{}, err
 		}
 	}
@@ -269,7 +269,7 @@ func (r *Repository) ConfirmBid(ctx context.Context, auctionID string, userID st
 	if err != nil {
 		return BidResponse{}, mapPGError(err)
 	}
-	response, bidStatus, rejectCode, lockedAfterBid, err := r.evaluateAndApplyBid(ctx, tx, locked, userID, bidInput, traceID, true)
+	response, bidStatus, rejectCode, durableRealtime, lockedAfterBid, err := r.evaluateAndApplyBid(ctx, tx, locked, userID, bidInput, traceID, true)
 	if err != nil {
 		return BidResponse{}, err
 	}
@@ -277,7 +277,7 @@ func (r *Repository) ConfirmBid(ctx context.Context, auctionID string, userID st
 	if err != nil {
 		return BidResponse{}, err
 	}
-	if err := insertBidRow(ctx, tx, response.BidID, auctionID, userID, bidInput, response.Seq, bidStatus, rejectCode, storedHash, bidRowResponseJSON, traceID, BidSourceManual); err != nil {
+	if err := insertBidRow(ctx, tx, response.BidID, auctionID, userID, bidInput, nullableSeq(durableRealtime, response.Seq), bidStatus, rejectCode, storedHash, bidRowResponseJSON, traceID, BidSourceManual); err != nil {
 		return BidResponse{}, err
 	}
 	finalResponse := response
@@ -668,6 +668,7 @@ type lockedAuction struct {
 	IncrementCents      int64
 	CapPriceCents       *int64
 	EndAt               time.Time
+	Seq                 int64
 	AcceptedBidCount    int64
 	ExtendCount         int
 	DurationSeconds     int
@@ -687,7 +688,7 @@ func lockAuctionForBid(ctx context.Context, tx pgx.Tx, auctionID string) (locked
 		SELECT
 			a.id, a.status, a.current_price_cents, a.current_winner_id,
 			a.start_price_cents, a.increment_cents, a.cap_price_cents,
-			a.end_at, a.accepted_bid_count, a.extend_count,
+			a.end_at, a.seq, a.accepted_bid_count, a.extend_count,
 			ar.duration_seconds, ar.extend_window_seconds, ar.extend_by_seconds,
 			ar.max_extend_count, ar.fat_finger_threshold_cents, COALESCE(ar.deposit_bps, $2),
 			COALESCE(ar.deposit_floor_cents, $3), COALESCE(ar.deposit_cap_cents, $4)
@@ -698,7 +699,7 @@ func lockAuctionForBid(ctx context.Context, tx pgx.Tx, auctionID string) (locked
 	`, auctionID, defaultDepositBPS, defaultDepositFloorCents, defaultDepositCapCents).Scan(
 		&a.ID, &a.Status, &a.CurrentPriceCents, &a.CurrentWinnerID,
 		&a.StartPriceCents, &a.IncrementCents, &a.CapPriceCents,
-		&a.EndAt, &a.AcceptedBidCount, &a.ExtendCount,
+		&a.EndAt, &a.Seq, &a.AcceptedBidCount, &a.ExtendCount,
 		&a.DurationSeconds, &a.ExtendWindowSeconds, &a.ExtendBySeconds,
 		&a.MaxExtendCount, &a.FatFingerThreshold, &a.DepositBPS, &a.DepositFloorCents, &a.DepositCapCents,
 	)
@@ -710,20 +711,38 @@ func lockAuctionForBid(ctx context.Context, tx pgx.Tx, auctionID string) (locked
 	return a, nil
 }
 
-func (r *Repository) evaluateAndApplyBid(ctx context.Context, tx pgx.Tx, a lockedAuction, userID string, input BidInput, traceID string, skipFatFinger bool) (BidResponse, string, *string, lockedAuction, error) {
+func currentSeq(a lockedAuction) int64 {
+	return a.Seq
+}
+
+func shouldBroadcastRejectedBid(code apierrors.Code) bool {
+	switch code {
+	case apierrors.CodeBidTooLow, apierrors.CodeAuctionEnded, apierrors.CodeAuctionNotActive:
+		return false
+	default:
+		return true
+	}
+}
+
+func (r *Repository) evaluateAndApplyBid(ctx context.Context, tx pgx.Tx, a lockedAuction, userID string, input BidInput, traceID string, skipFatFinger bool) (BidResponse, string, *string, bool, lockedAuction, error) {
 	bidID := "bid_" + uuid.NewString()
 	now := time.Now().UTC()
 	serverTimeMS := now.UnixMilli()
-	reject := func(code apierrors.Code) (BidResponse, string, *string, lockedAuction, error) {
+	reject := func(code apierrors.Code) (BidResponse, string, *string, bool, lockedAuction, error) {
 		reason := string(code)
-		seq, err := appendAuctionEventWithSeq(ctx, tx, a.ID, "bid_rejected", traceID, map[string]any{
-			"bid_id":       bidID,
-			"user_id":      userID,
-			"amount_cents": input.AmountCents,
-			"reason":       reason,
-		})
-		if err != nil {
-			return BidResponse{}, "", nil, a, err
+		seq := currentSeq(a)
+		durableRealtime := shouldBroadcastRejectedBid(code)
+		if durableRealtime {
+			var err error
+			seq, err = appendAuctionEventWithSeq(ctx, tx, a.ID, "bid_rejected", traceID, map[string]any{
+				"bid_id":       bidID,
+				"user_id":      userID,
+				"amount_cents": input.AmountCents,
+				"reason":       reason,
+			})
+			if err != nil {
+				return BidResponse{}, "", nil, false, a, err
+			}
 		}
 		resp := BidResponse{
 			Result:            BidResultRejected,
@@ -736,32 +755,32 @@ func (r *Repository) evaluateAndApplyBid(ctx context.Context, tx pgx.Tx, a locke
 			ServerTimeMS:      serverTimeMS,
 			RejectReason:      &reason,
 		}
-		return resp, "REJECTED", &reason, a, nil
+		return resp, "REJECTED", &reason, durableRealtime, a, nil
 	}
 	if a.Status != StatusActive {
-		resp, status, reason, locked, err := reject(apierrors.CodeAuctionNotActive)
-		return resp, status, reason, locked, err
+		resp, status, reason, durableRealtime, locked, err := reject(apierrors.CodeAuctionNotActive)
+		return resp, status, reason, durableRealtime, locked, err
 	}
 	if now.After(a.EndAt) {
-		resp, status, reason, locked, err := reject(apierrors.CodeAuctionEnded)
-		return resp, status, reason, locked, err
+		resp, status, reason, durableRealtime, locked, err := reject(apierrors.CodeAuctionEnded)
+		return resp, status, reason, durableRealtime, locked, err
 	}
 	if a.CurrentWinnerID != nil && *a.CurrentWinnerID == userID {
-		resp, status, reason, locked, err := reject(apierrors.CodeRejectedSelfLeading)
-		return resp, status, reason, locked, err
+		resp, status, reason, durableRealtime, locked, err := reject(apierrors.CodeRejectedSelfLeading)
+		return resp, status, reason, durableRealtime, locked, err
 	}
 
 	class := ClassifyBidAmount(a.StartPriceCents, a.CurrentPriceCents, a.IncrementCents, a.CapPriceCents, input.AmountCents, a.AcceptedBidCount > 0)
 	switch class {
 	case BidClassTooLow:
-		resp, status, reason, locked, err := reject(apierrors.CodeBidTooLow)
-		return resp, status, reason, locked, err
+		resp, status, reason, durableRealtime, locked, err := reject(apierrors.CodeBidTooLow)
+		return resp, status, reason, durableRealtime, locked, err
 	case BidClassIncrementMismatch:
-		resp, status, reason, locked, err := reject(apierrors.CodeBidIncrementMismatch)
-		return resp, status, reason, locked, err
+		resp, status, reason, durableRealtime, locked, err := reject(apierrors.CodeBidIncrementMismatch)
+		return resp, status, reason, durableRealtime, locked, err
 	case BidClassAboveCap:
-		resp, status, reason, locked, err := reject(apierrors.CodeBidAboveCap)
-		return resp, status, reason, locked, err
+		resp, status, reason, durableRealtime, locked, err := reject(apierrors.CodeBidAboveCap)
+		return resp, status, reason, durableRealtime, locked, err
 	}
 	if !skipFatFinger && a.FatFingerThreshold != nil && *a.FatFingerThreshold > 0 {
 		basis := a.CurrentPriceCents
@@ -771,7 +790,7 @@ func (r *Repository) evaluateAndApplyBid(ctx context.Context, tx pgx.Tx, a locke
 		if input.AmountCents-basis >= *a.FatFingerThreshold {
 			var seq int64
 			if err := tx.QueryRow(ctx, `SELECT seq FROM auctions WHERE id = $1`, a.ID).Scan(&seq); err != nil {
-				return BidResponse{}, "", nil, a, err
+				return BidResponse{}, "", nil, false, a, err
 			}
 			expiresAt := now.Add(30 * time.Second)
 			return BidResponse{
@@ -787,7 +806,7 @@ func (r *Repository) evaluateAndApplyBid(ctx context.Context, tx pgx.Tx, a locke
 				ExpiresInMS:       30_000,
 				AmountCents:       input.AmountCents,
 				ConfirmExpiresAt:  &expiresAt,
-			}, "", nil, a, nil
+			}, "", nil, false, a, nil
 		}
 	}
 
@@ -800,10 +819,10 @@ func (r *Repository) evaluateAndApplyBid(ctx context.Context, tx pgx.Tx, a locke
 		Now:         now,
 	})
 	if err != nil {
-		return BidResponse{}, "", nil, a, err
+		return BidResponse{}, "", nil, false, a, err
 	}
 	resp.ServerTimeMS = serverTimeMS
-	return resp, "ACCEPTED", nil, updated, nil
+	return resp, "ACCEPTED", nil, true, updated, nil
 }
 
 type acceptedBidInput struct {
@@ -878,6 +897,7 @@ func applyAcceptedBid(ctx context.Context, tx pgx.Tx, a lockedAuction, input acc
 	updated.CurrentWinnerID = &winnerID
 	updated.EndAt = newEndAt
 	updated.ExtendCount = newExtendCount
+	updated.Seq = seq
 	updated.AcceptedBidCount++
 	resp := BidResponse{
 		Result:            result,
@@ -939,7 +959,7 @@ func (r *Repository) applyAutoMaxBid(ctx context.Context, tx pgx.Tx, a lockedAuc
 			ClientBidID:   clientBidID,
 			AmountCents:   amount,
 			ClientSeenSeq: resp.Seq - 1,
-		}, resp.Seq, "ACCEPTED", nil, requestHash, responseJSON, traceID, BidSourceAutoMaxBid); err != nil {
+		}, nullableSeq(true, resp.Seq), "ACCEPTED", nil, requestHash, responseJSON, traceID, BidSourceAutoMaxBid); err != nil {
 			return BidResponse{}, false, err
 		}
 		if err := markMaxBidIntentApplied(ctx, tx, step.Intent.ID, resp.Seq); err != nil {
@@ -1094,7 +1114,14 @@ func createOrderForSoldAuction(ctx context.Context, tx pgx.Tx, a lockedAuction, 
 	return orderID, nil
 }
 
-func insertBidRow(ctx context.Context, tx pgx.Tx, bidID string, auctionID string, userID string, input BidInput, seq int64, status string, rejectReason *string, requestHash string, responseJSON []byte, traceID string, source string) error {
+func nullableSeq(durableRealtime bool, seq int64) *int64 {
+	if !durableRealtime {
+		return nil
+	}
+	return &seq
+}
+
+func insertBidRow(ctx context.Context, tx pgx.Tx, bidID string, auctionID string, userID string, input BidInput, seq *int64, status string, rejectReason *string, requestHash string, responseJSON []byte, traceID string, source string) error {
 	_, err := tx.Exec(ctx, `
 		INSERT INTO bids (id, auction_id, user_id, client_bid_id, amount_cents, seq, status, reject_reason, request_hash, response_json, trace_id, source)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)

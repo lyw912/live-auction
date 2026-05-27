@@ -19,7 +19,7 @@ The system does not promise:
 
 ## Outbox Pattern
 
-Bid/end/cancel transactions write:
+State-changing bid/end/cancel transactions write:
 
 ```text
 auction row mutation
@@ -31,6 +31,12 @@ idempotency_records completion
 ```
 
 All in one DB transaction. If process dies after commit but before WS publish, relay can resume from outbox.
+
+Ordinary non-state bid rejections such as `BID_TOO_LOW`, `AUCTION_ENDED`, and
+`AUCTION_NOT_ACTIVE` are an explicit exception: they are returned to the caller
+over HTTP, completed in idempotency, and stored in `bids` for audit and
+diagnostics, but they do not advance public auction `seq` or enter full-room
+durable realtime. See `docs/adr/p3-03-rejected-bid-realtime-policy.md`.
 
 ## Relay Claim
 

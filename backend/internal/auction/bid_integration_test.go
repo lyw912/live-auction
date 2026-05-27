@@ -47,7 +47,7 @@ func TestPlaceBidAcceptedWritesTruthRowsAndIdempotency(t *testing.T) {
 	}
 }
 
-func TestPlaceBidExecutableRejectIsStoredAndIdempotent(t *testing.T) {
+func TestPlaceBidOrdinaryRejectIsStoredForAuditWithoutRealtimeOutbox(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()
 	repo := NewRepository(db)
@@ -61,7 +61,12 @@ func TestPlaceBidExecutableRejectIsStoredAndIdempotent(t *testing.T) {
 	if resp.Result != BidResultRejected || resp.RejectReason == nil || *resp.RejectReason != "BID_TOO_LOW" {
 		t.Fatalf("unexpected reject response: %#v", resp)
 	}
-	assertBidTruthRows(t, db, auction.ID, 1, 0, 1, 1)
+	if resp.Seq != auction.Seq {
+		t.Fatalf("ordinary reject seq = %d, want current auction seq %d", resp.Seq, auction.Seq)
+	}
+	assertBidTruthRows(t, db, auction.ID, 1, 0, 0, 1)
+	assertBidRealtimeRows(t, db, auction.ID, "bid_rejected", 0)
+	assertRejectedBidAuditRow(t, db, auction.ID, input.ClientBidID, false)
 
 	replay, err := repo.PlaceBid(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_bid")
 	if err != nil {
@@ -70,7 +75,35 @@ func TestPlaceBidExecutableRejectIsStoredAndIdempotent(t *testing.T) {
 	if replay.BidID != resp.BidID || replay.RejectReason == nil || *replay.RejectReason != *resp.RejectReason {
 		t.Fatalf("idempotent reject replay mismatch: got %#v want %#v", replay, resp)
 	}
-	assertBidTruthRows(t, db, auction.ID, 1, 0, 1, 1)
+	assertBidTruthRows(t, db, auction.ID, 1, 0, 0, 1)
+	assertBidRealtimeRows(t, db, auction.ID, "bid_rejected", 0)
+}
+
+func TestPlaceBidPolicyRejectStillUsesDurableRealtime(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	repo := NewRepository(db)
+	auction := createActiveAuction(t, repo, db, nil)
+
+	first := BidInput{ClientBidID: "bid-leading-1", AmountCents: 15_000}
+	accepted, err := repo.PlaceBid(ctx, auction.ID, "user_1", first.ClientBidID, first, "tr_bid")
+	if err != nil {
+		t.Fatalf("PlaceBid accepted: %v", err)
+	}
+	second := BidInput{ClientBidID: "bid-self-leading-1", AmountCents: 20_000}
+	rejected, err := repo.PlaceBid(ctx, auction.ID, "user_1", second.ClientBidID, second, "tr_bid")
+	if err != nil {
+		t.Fatalf("PlaceBid self leading reject: %v", err)
+	}
+	if rejected.Result != BidResultRejected || rejected.RejectReason == nil || *rejected.RejectReason != "REJECTED_SELF_LEADING" {
+		t.Fatalf("unexpected reject response: %#v", rejected)
+	}
+	if rejected.Seq != accepted.Seq+1 {
+		t.Fatalf("policy reject seq = %d, want %d", rejected.Seq, accepted.Seq+1)
+	}
+	assertBidTruthRows(t, db, auction.ID, 2, 1, 2, 2)
+	assertBidRealtimeRows(t, db, auction.ID, "bid_rejected", 1)
+	assertRejectedBidAuditRow(t, db, auction.ID, second.ClientBidID, true)
 }
 
 func TestFatFingerConfirmTokenThenConfirmBid(t *testing.T) {
@@ -366,6 +399,8 @@ func TestCancelActiveThenLaterBidRejects(t *testing.T) {
 	if resp.Result != BidResultRejected || resp.RejectReason == nil || *resp.RejectReason != "AUCTION_NOT_ACTIVE" {
 		t.Fatalf("unexpected reject after cancel: %#v", resp)
 	}
+	assertBidRealtimeRows(t, db, auction.ID, "bid_rejected", 0)
+	assertRejectedBidAuditRow(t, db, auction.ID, input.ClientBidID, false)
 }
 
 func TestProviderWebhookDuplicateCreatesOnePaidTransition(t *testing.T) {
@@ -618,6 +653,47 @@ func assertBidTruthRows(t *testing.T, db *pgxpool.Pool, auctionID string, bidCou
 	}
 	if idem != idemCount {
 		t.Fatalf("idempotency records = %d, want %d", idem, idemCount)
+	}
+}
+
+func assertBidRealtimeRows(t *testing.T, db *pgxpool.Pool, auctionID string, eventType string, want int) {
+	t.Helper()
+	var eventCount int
+	if err := db.QueryRow(context.Background(), `SELECT count(*) FROM auction_events WHERE auction_id = $1 AND event_type = $2`, auctionID, eventType).Scan(&eventCount); err != nil {
+		t.Fatalf("count auction event %s: %v", eventType, err)
+	}
+	if eventCount != want {
+		t.Fatalf("%s auction events = %d, want %d", eventType, eventCount, want)
+	}
+	var outboxCount int
+	if err := db.QueryRow(context.Background(), `SELECT count(*) FROM outbox_events WHERE auction_id = $1 AND event_type = $2`, auctionID, eventType).Scan(&outboxCount); err != nil {
+		t.Fatalf("count outbox event %s: %v", eventType, err)
+	}
+	if outboxCount != want {
+		t.Fatalf("%s outbox events = %d, want %d", eventType, outboxCount, want)
+	}
+}
+
+func assertRejectedBidAuditRow(t *testing.T, db *pgxpool.Pool, auctionID string, clientBidID string, wantSeq bool) {
+	t.Helper()
+	var status string
+	var rejectReason *string
+	var seq *int64
+	if err := db.QueryRow(context.Background(), `
+		SELECT status, reject_reason, seq
+		FROM bids
+		WHERE auction_id = $1 AND client_bid_id = $2
+	`, auctionID, clientBidID).Scan(&status, &rejectReason, &seq); err != nil {
+		t.Fatalf("select rejected bid audit row: %v", err)
+	}
+	if status != "REJECTED" || rejectReason == nil || *rejectReason == "" {
+		t.Fatalf("unexpected rejected bid row status=%s reason=%v", status, rejectReason)
+	}
+	if wantSeq && seq == nil {
+		t.Fatalf("rejected bid seq is nil, want durable realtime seq")
+	}
+	if !wantSeq && seq != nil {
+		t.Fatalf("rejected bid seq = %d, want nil for non-realtime reject", *seq)
 	}
 }
 
