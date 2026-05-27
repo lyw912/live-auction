@@ -3,7 +3,7 @@
 :root {
   font-family: var(--font-auction-sans);
   color: var(--color-ink-800);
-  background: var(--color-surface-1);
+  background: #f5f6fa;
 }
 
 body {
@@ -15,8 +15,8 @@ body {
 }
 
 .sider {
-  background: #14251f;
-  color: #e7f1ed;
+  background: #171923;
+  color: #f4f6fb;
   padding: 18px 14px;
 }
 
@@ -41,12 +41,12 @@ body {
   gap: 10px;
   padding: 0 10px;
   border-radius: var(--radius-md);
-  background: rgba(255,255,255,.06);
+  background: rgba(255,255,255,.07);
 }
 
 .content {
   padding: 20px;
-  background: var(--color-surface-1);
+  background: #f5f6fa;
 }
 
 .health-ribbon {
@@ -154,7 +154,7 @@ body {
 }
 
 .command-panel.status-active {
-  border-top-color: var(--color-trust-green);
+  border-top-color: var(--color-bid-red);
 }
 
 .command-panel.status-scheduled {
@@ -240,12 +240,12 @@ body {
 }
 
 .queue-card.is-selected {
-  border-color: var(--color-trust-green);
-  box-shadow: inset 3px 0 0 var(--color-trust-green);
+  border-color: var(--color-bid-red);
+  box-shadow: inset 3px 0 0 var(--color-bid-red);
 }
 
 .queue-card.is-active {
-  background: linear-gradient(90deg, var(--color-trust-green-soft), #fff);
+  background: linear-gradient(90deg, var(--color-bid-red-soft), #fff);
 }
 
 .thumb {
@@ -314,7 +314,7 @@ body {
 }
 
 .queue-card.is-active .queue-constraints em {
-  background: var(--color-trust-green);
+  background: var(--color-bid-red);
   color: #fff;
 }
 
@@ -391,13 +391,44 @@ body {
 }
 
 .arco-table-tr.selected-row .arco-table-td {
-  background: var(--color-trust-green-soft);
+  background: var(--color-bid-red-soft);
 }
 
 .two-column {
   display: grid;
   grid-template-columns: minmax(0, 1.1fr) minmax(320px, .9fr);
   gap: 16px;
+}
+
+.workspace-tabs {
+  min-height: 420px;
+}
+
+.workspace-tabs > .section-title {
+  margin-bottom: 10px;
+}
+
+.workspace-tabs .arco-tabs-header-nav {
+  padding: 2px;
+  border-radius: 10px;
+  background: var(--color-surface-1);
+}
+
+.workspace-tabs .arco-tabs-header-title {
+  border-radius: 8px;
+}
+
+.workspace-tabs .arco-tabs-header-title-active {
+  color: #b90035;
+  background: #fff;
+}
+
+.workspace-tabs .diagnostics {
+  margin-top: 0;
+  margin-bottom: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .rule-panel {
@@ -595,8 +626,8 @@ body {
   min-height: 32px;
   border: 1px solid var(--color-line);
   border-radius: var(--radius-md);
-  background: var(--color-trust-green-soft);
-  color: var(--color-trust-green-deep);
+  background: var(--color-bid-red-soft);
+  color: #b90035;
   padding: 0 10px;
   font-weight: 700;
 }
@@ -618,7 +649,7 @@ body {
 }
 
 .rule-save-ok {
-  background: var(--color-trust-green-soft);
+  background: var(--color-bid-red-soft);
   color: var(--color-success-text);
 }
 

@@ -312,7 +312,19 @@ async function stabilize(page: Page) {
         transition-duration: 0s !important;
         transition-delay: 0s !important;
       }
+      video {
+        visibility: hidden !important;
+      }
+      .live-video-bg {
+        background: var(--stage-media-url) center / cover no-repeat !important;
+      }
     `
+  });
+  await page.evaluate(() => {
+    for (const video of Array.from(document.querySelectorAll('video'))) {
+      video.pause();
+      video.currentTime = 0;
+    }
   });
 }
 
@@ -340,7 +352,9 @@ test.describe('H5 visual states @visual-h5', () => {
     test(`captures H5 ${state[0]} state`, async ({ page }) => {
       await page.goto('/?stateMatrix=1');
       await stabilize(page);
+      await page.getByRole('button', { name: '关闭竞拍面板' }).click();
       await page.getByRole('button', { name: state[1], exact: true }).click();
+      await page.getByTestId('floating-product-card').click();
       await expect(page.getByLabel('auction-state')).toBeVisible();
       await expect(page.getByTestId('bid-cta')).toBeVisible();
       await expect(page).toHaveScreenshot(`h5-${state[0]}.png`, {
@@ -364,6 +378,8 @@ test.describe('PC visual states @visual-pc', () => {
     await expect(page.getByTestId('pc-command-center')).toBeVisible();
     await expect(page.getByTestId('health-ribbon')).toBeVisible();
     await expect(page.getByTestId('auction-control-summary')).toBeVisible();
+    await expect(page.getByTestId('secondary-workspace')).toBeVisible();
+    await page.getByRole('tab', { name: '诊断' }).click();
     await expect(page.getByTestId('diagnostics')).toBeVisible();
     await expect(page.locator('.console-shell')).toHaveScreenshot('pc-command-diagnostics.png', {
       animations: 'disabled',

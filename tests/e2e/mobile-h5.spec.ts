@@ -1071,6 +1071,7 @@ test('H5 product trust sheet explains proof money and timing in user language', 
   await page.setViewportSize({ width: 360, height: 844 });
   await page.goto('/');
 
+  await page.getByTestId('floating-product-card').click();
   await page.getByLabel('bid-dock-shortcuts').getByRole('button', { name: '规则' }).click();
   const sheet = page.getByTestId('bottom-sheet');
   await expect(sheet.getByRole('heading', { name: '商品与规则' })).toBeVisible();
@@ -1184,6 +1185,7 @@ for (const viewport of [
   test(`H5 sticky bid dock keeps price countdown rank and CTA visible at ${viewport.width}px`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await page.goto('/');
+    await page.getByTestId('floating-product-card').click();
 
     const stage = page.getByTestId('live-stage');
     const dock = page.getByLabel('auction-state');
@@ -1227,13 +1229,35 @@ test('H5 live stage uses product media and keeps chat inside safe zone at 360px'
 
   const stageBox = await stage.boundingBox();
   const chatBox = await page.getByTestId('stage-chat-overlay').boundingBox();
-  const ctaBox = await page.getByTestId('bid-cta').boundingBox();
+  const cardBox = await page.getByTestId('floating-product-card').boundingBox();
   expect(stageBox).toBeTruthy();
   expect(chatBox).toBeTruthy();
-  expect(ctaBox).toBeTruthy();
+  expect(cardBox).toBeTruthy();
   expect(chatBox!.y + chatBox!.height).toBeLessThanOrEqual(stageBox!.y + stageBox!.height);
-  expect(chatBox!.y + chatBox!.height).toBeLessThan(ctaBox!.y);
-  await expect(page.getByTestId('bid-cta')).toBeVisible();
+  expect(chatBox!.y + chatBox!.height).toBeLessThan(cardBox!.y);
+  await expect(page.getByTestId('floating-auction-price')).toHaveText('当前最高价 ¥350.00');
+  await expect(page.getByTestId('floating-auction-countdown')).toBeVisible();
+  await expect(page.getByTestId('floating-auction-status')).toContainText('ACTIVE');
+});
+
+test('H5 feed product card opens the full bidding panel without losing auction pressure', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+
+  await expect(page.getByLabel('auction-state')).toHaveCount(0);
+  await expect(page.getByTestId('floating-product-card')).toBeVisible();
+  await expect(page.getByTestId('floating-auction-price')).toHaveText('当前最高价 ¥350.00');
+  await expect(page.getByTestId('floating-auction-countdown')).toBeVisible();
+  await expect(page.getByTestId('floating-auction-status')).toContainText('ACTIVE');
+
+  await page.getByTestId('floating-product-card').click();
+  await expect(page.getByLabel('auction-state')).toBeVisible();
+  await expect(page.getByTestId('auction-price')).toHaveText('¥350.00');
+  await expect(page.getByTestId('auction-countdown')).toBeVisible();
+  await expect(page.getByTestId('bid-cta')).toBeEnabled();
+  await page.getByRole('button', { name: '关闭竞拍面板' }).click();
+  await expect(page.getByLabel('auction-state')).toHaveCount(0);
+  await expect(page.getByTestId('floating-product-card')).toBeVisible();
 });
 
 test('H5 renders realtime leaderboard and event atmosphere controls', async ({ page }) => {

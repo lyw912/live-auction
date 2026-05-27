@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { AlertTriangle, BadgeCheck, Bell, BellOff, CheckCircle2, ChevronUp, Clock3, CreditCard, History, MessageCircle, PackageCheck, Radio, RefreshCw, Send, ShieldCheck, Truck, Trophy, Wifi, WifiOff } from 'lucide-react';
+import { AlertTriangle, BadgeCheck, Bell, BellOff, CheckCircle2, ChevronUp, Clock3, CreditCard, Gift, Heart, History, MessageCircle, MoreHorizontal, PackageCheck, Radio, RefreshCw, Send, ShieldCheck, ShoppingCart, Truck, Trophy, Users, Wifi, WifiOff, X } from 'lucide-react';
 import type { AtmosphereCue, AtmosphereInput } from './atmosphere';
 import { normalizeAtmosphere } from './atmosphere';
 import './styles.css';
@@ -50,6 +50,7 @@ type PaymentPhase = 'idle' | 'pending' | 'paid' | 'failed' | 'expired';
 type RecoveryPhase = 'idle' | 'recovering';
 type ConnectionPhase = 'connecting' | 'connected' | 'recovering' | 'disconnected';
 type BottomSheetKey = 'products' | 'details' | 'maxBid' | 'leaderboard' | 'history' | 'orders';
+type AuctionOverlayMode = 'feed' | 'bid';
 type ResultSheetKind = 'winner' | 'loser' | 'unsold';
 type SoundCapability = 'ready' | 'unavailable' | 'blocked';
 type MaxBidPhase = 'idle' | 'pending' | 'canceling' | 'error';
@@ -230,6 +231,8 @@ type AuthUser = {
 };
 
 const demoUserID = 'user_1';
+const demoLiveVideoURL = '/demo/pottery-live-loop.webm';
+const demoProductImageURL = '/demo/ceramic-tea-cup.jpg';
 
 const scenarios: Scenario[] = [
   { key: 'scheduled', title: '即将开拍', status: 'SCHEDULED', price: '¥100.00', leader: '暂无领先', feedback: '19:58 开始', countdown: '距开拍 12:00', cta: '等待开拍', ctaDisabled: true },
@@ -553,11 +556,13 @@ function App() {
   const [lotTitle, setLotTitle] = useState('青瓷手作茶盏');
   const [roomAuctions, setRoomAuctions] = useState<AuctionSummary[]>([]);
   const [activeSheet, setActiveSheet] = useState<BottomSheetKey | null>(null);
+  const [overlayMode, setOverlayMode] = useState<AuctionOverlayMode>(() => showStateMatrix ? 'bid' : 'feed');
   const [stageItem, setStageItem] = useState<AuctionItem>({
     title: '青瓷手作茶盏',
-    image_url: '',
-    certificate: '证书待同步',
-    condition: '品相待同步',
+    image_url: demoProductImageURL,
+    video_poster_url: demoProductImageURL,
+    certificate: '本地 P10 演示资产',
+    condition: '实物图已同步',
     shipping: '运费以订单为准'
   });
   const [bidderRequirement, setBidderRequirement] = useState<BidderRequirement | null>(null);
@@ -1630,6 +1635,11 @@ function App() {
     void submitBid();
   };
 
+  const openBidOverlay = () => {
+    setOverlayMode('bid');
+    setActiveSheet(null);
+  };
+
   const decreaseBidAmount = () => {
     setNextBidCents((amount) => Math.max(minimumNextBidCents, amount - activeIncrementCents));
   };
@@ -1713,24 +1723,34 @@ function App() {
         scenario={scenario}
         soundEnabled={soundEnabled}
         soundCapability={soundCapability}
+        auctions={roomAuctions}
+        activeAuctionID={activeAuctionID}
+        currentPriceCents={currentPriceCents}
+        nextBidCents={nextBidCents}
+        onOpenProducts={() => setActiveSheet('products')}
+        onOpenBid={openBidOverlay}
         onToggleSound={() => void toggleSound()}
       />
+      {overlayMode === 'bid' && (
         <AuctionStatePanel
           atmosphereCue={atmosphereCue}
           connectionPhase={connectionPhase}
           countdownCopy={countdownCopy}
           currentPriceCents={currentPriceCents}
           extensionNotice={extensionNotice}
+          item={stageItem}
           leaderboard={leaderboard}
           minimumNextBidCents={minimumNextBidCents}
           nextBidCents={nextBidCents}
           riskCode={riskCode}
           scenario={scenario}
+          onClose={() => setOverlayMode('feed')}
           onDecreaseBid={decreaseBidAmount}
-        onIncreaseBid={increaseBidAmount}
-        onOpenSheet={setActiveSheet}
-        onPrimaryAction={handlePrimaryAction}
-      />
+          onIncreaseBid={increaseBidAmount}
+          onOpenSheet={setActiveSheet}
+          onPrimaryAction={handlePrimaryAction}
+        />
+      )}
       {showStateMatrix && (
         <StateMatrixTabs selected={selected} onSelect={setSelected} />
       )}
@@ -1808,33 +1828,48 @@ function App() {
 }
 
 function LiveStage({
+  activeAuctionID,
   atmosphereCue,
+  auctions,
   chatMessages,
   connectionPhase,
   countdownCopy,
+  currentPriceCents,
   currentUserID,
   item,
   lotTitle,
+  nextBidCents,
   roomID,
   scenario,
   soundEnabled,
   soundCapability,
+  onOpenBid,
+  onOpenProducts,
   onToggleSound
 }: {
+  activeAuctionID: string;
   atmosphereCue: AtmosphereCue | null;
+  auctions: AuctionSummary[];
   chatMessages: ChatMessage[];
   connectionPhase: ConnectionPhase;
   countdownCopy: string;
+  currentPriceCents: number;
   currentUserID: string;
   item: AuctionItem;
   lotTitle: string;
+  nextBidCents: number;
   roomID: string;
   scenario: Scenario;
   soundEnabled: boolean;
   soundCapability: SoundCapability;
+  onOpenBid: () => void;
+  onOpenProducts: () => void;
   onToggleSound: () => void;
 }) {
   const mediaURL = item.video_poster_url ?? item.videoPosterURL ?? item.image_url ?? item.imageURL ?? '';
+  const videoURL = demoLiveVideoURL;
+  const activeAuction = auctions.find((auction) => auction.id === activeAuctionID);
+  const queuedCount = auctions.filter((auction) => auction.id !== activeAuctionID).length;
   const proofChips = [
     { icon: <BadgeCheck size={13} />, label: item.certificate ?? '证书可查' },
     { icon: <PackageCheck size={13} />, label: item.condition ?? '品相已验' },
@@ -1858,6 +1893,7 @@ function LiveStage({
       data-atmosphere-kind={atmosphereCue?.kind ?? 'none'}
       style={mediaURL ? { '--stage-media-url': `url("${mediaURL}")` } as React.CSSProperties : undefined}
     >
+      <video className="live-video-bg" src={videoURL} poster={mediaURL || demoProductImageURL} autoPlay muted loop playsInline aria-hidden="true" />
       {atmosphereCue && (
         <div className="atmosphere-effect-layer" aria-hidden="true">
           <span className="effect-leading-ring" />
@@ -1882,8 +1918,12 @@ function LiveStage({
         </div>
       )}
       <div className="video-topbar">
-        <span className="live-pill"><Radio size={14} /> LIVE</span>
-        <span className="viewer-count">{roomID}</span>
+        <div className="host-profile">
+          <span className="host-avatar">{roomID.slice(0, 1).toUpperCase()}</span>
+          <span><strong>竞拍直播间</strong><em>{roomID}</em></span>
+          <button type="button">关注</button>
+        </div>
+        <span className="viewer-count avatar-stack"><Users size={13} /> 2333</span>
         <span className="viewer-count"><Wifi size={13} /> {connectionCopy}</span>
         <button
           className="sound-toggle"
@@ -1897,6 +1937,10 @@ function LiveStage({
         </button>
       </div>
       <div className="stage-safe-zone">
+        <div className="live-topic-row" aria-label="live-topic">
+          <span>热点 明星大货撑</span>
+          <span>古玩榜第 8 名</span>
+        </div>
         <div className="proof-chip-row" aria-label="product-proof">
           {proofChips.map((chip) => (
             <span className="proof-chip" key={chip.label}>{chip.icon}{chip.label}</span>
@@ -1917,6 +1961,26 @@ function LiveStage({
           <p>Lot A-102 · {scenario.countdown ?? countdownCopy}</p>
         </div>
       </div>
+      <button className="floating-product-card" type="button" onClick={onOpenBid} data-testid="floating-product-card" aria-label="进入竞拍面板">
+        <span className={`floating-thumb ${mediaURL ? 'has-media' : ''}`} style={mediaURL ? { '--floating-media-url': `url("${mediaURL}")` } as React.CSSProperties : undefined}>
+          {!mediaURL && <ShoppingCart size={18} />}
+        </span>
+        <span className="floating-product-copy">
+          <strong>{activeAuction?.item?.title ?? lotTitle}</strong>
+          <span className="floating-auction-meta">
+            <em data-testid="floating-auction-price">{scenario.status === 'ACTIVE' ? `当前最高价 ${formatCents(currentPriceCents)}` : scenario.feedback}</em>
+            <small data-testid="floating-auction-countdown"><Clock3 size={12} />{scenario.countdown ?? countdownCopy}</small>
+            <small data-testid="floating-auction-status">{scenario.status} · {connectionCopy}</small>
+          </span>
+        </span>
+        <span className="floating-product-action">{scenario.ctaDisabled && !scenario.winner ? '看详情' : `出价 ${formatCents(nextBidCents)}`}</span>
+      </button>
+      <div className="live-action-rail" aria-label="live-actions">
+        <button type="button" onClick={onOpenProducts} aria-label="商品列表"><ShoppingCart size={20} /><span>{queuedCount + 1}</span></button>
+        <button type="button" aria-label="点赞"><Heart size={20} /></button>
+        <button type="button" aria-label="礼物"><Gift size={20} /></button>
+        <button type="button" aria-label="更多"><MoreHorizontal size={20} /></button>
+      </div>
     </section>
   );
 }
@@ -1935,7 +1999,7 @@ function ChatComposer({
   return (
     <section className="chat-composer" data-testid="chat-panel">
       <div className="chat-input-row">
-        <input aria-label="chat-input" value={chatDraft} onChange={(event) => onDraftChange(event.currentTarget.value)} placeholder="和主播互动" />
+        <input aria-label="chat-input" value={chatDraft} onChange={(event) => onDraftChange(event.currentTarget.value)} placeholder="说点什么..." />
         <button type="button" aria-label="send-chat" disabled={chatSending || !chatDraft.trim()} onClick={onSend}>
           <Send size={16} />
         </button>
@@ -1950,11 +2014,13 @@ function AuctionStatePanel({
   countdownCopy,
   currentPriceCents,
   extensionNotice,
+  item,
   leaderboard,
   minimumNextBidCents,
   nextBidCents,
   riskCode,
   scenario,
+  onClose,
   onDecreaseBid,
   onIncreaseBid,
   onOpenSheet,
@@ -1965,11 +2031,13 @@ function AuctionStatePanel({
   countdownCopy: string;
   currentPriceCents: number;
   extensionNotice: string;
+  item: AuctionItem;
   leaderboard: LeaderboardPayload | null;
   minimumNextBidCents: number;
   nextBidCents: number;
   riskCode: string;
   scenario: Scenario;
+  onClose: () => void;
   onDecreaseBid: () => void;
   onIncreaseBid: () => void;
   onOpenSheet: (sheet: BottomSheetKey) => void;
@@ -1997,6 +2065,7 @@ function AuctionStatePanel({
       ? '当前领先'
       : scenario.feedback;
   const rankAction = leaderboardActionCopy(leaderboard, nextBidCents);
+  const mediaURL = item.video_poster_url ?? item.videoPosterURL ?? item.image_url ?? item.imageURL ?? '';
   const bidHint = (() => {
     if (scenario.stale || connectionPhase === 'recovering' || connectionPhase === 'disconnected') return '权威价格同步中，暂不提交出价';
     if (scenario.title === '需完成验证') return scenario.feedback;
@@ -2012,6 +2081,20 @@ function AuctionStatePanel({
       data-dock-state={dockState}
       data-atmosphere-kind={atmosphereCue?.kind ?? 'none'}
     >
+      <div className="bid-sheet-handle" aria-hidden="true" />
+      <div className="bid-sheet-title">
+        <strong>{scenario.sold ? '竞拍结果' : '参与竞拍'}</strong>
+        <button type="button" aria-label="关闭竞拍面板" onClick={onClose}><X size={18} /></button>
+      </div>
+      <div className="bid-item-summary">
+        <span className={`bid-item-thumb ${mediaURL ? 'has-media' : ''}`} style={mediaURL ? { '--bid-item-media-url': `url("${mediaURL}")` } as React.CSSProperties : undefined}>
+          {!mediaURL && <PackageCheck size={18} />}
+        </span>
+        <div>
+          <strong>{item.title ?? scenario.title}</strong>
+          <em>{scenario.leader}</em>
+        </div>
+      </div>
       <div className="dock-price-row">
         <div>
           <p className="eyebrow">{scenario.title}</p>

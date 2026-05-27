@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import fs from 'node:fs/promises';
 import http from 'node:http';
 import net from 'node:net';
 import { dirname, join } from 'node:path';
@@ -10,8 +11,9 @@ const node = process.execPath;
 const viteCli = join(root, 'node_modules', 'vite', 'bin', 'vite.js');
 const playwrightCli = join(root, 'node_modules', '@playwright', 'test', 'cli.js');
 const backendURL = process.env.LIVE_AUCTION_API_TARGET || 'http://127.0.0.1:18080';
-const h5URL = process.env.LIVE_AUCTION_H5_URL || 'http://127.0.0.1:5176';
-const pcURL = process.env.LIVE_AUCTION_PC_URL || 'http://127.0.0.1:5177';
+const h5URL = process.env.LIVE_AUCTION_H5_URL || 'http://127.0.0.1:5276';
+const pcURL = process.env.LIVE_AUCTION_PC_URL || 'http://127.0.0.1:5277';
+const evidencePath = join(root, 'docs', 'perf', 'raw', 'p10-no-mock-live-smoke.json');
 const children = [];
 
 function spawnLogged(command, args, options = {}) {
@@ -90,7 +92,15 @@ function assertTCPPortFree(url) {
 
 function stopChildren() {
   for (const child of children.splice(0)) {
-    if (!child.killed) child.kill();
+    if (child.killed) continue;
+    if (process.platform === 'win32') {
+      spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
+        stdio: 'ignore',
+        windowsHide: true
+      });
+    } else {
+      child.kill();
+    }
   }
 }
 
@@ -116,13 +126,23 @@ async function runPlaywright() {
   });
 }
 
+async function assertEvidenceWritten() {
+  const raw = await fs.readFile(evidencePath, 'utf8');
+  const evidence = JSON.parse(raw);
+  if (evidence.result !== 'PASS' || evidence.no_browser_route_mocks !== true || !evidence.smoke_auction_id || !evidence.smoke_item_id) {
+    throw new Error(`P10 smoke evidence is incomplete at ${evidencePath}`);
+  }
+}
+
 try {
   await assertTCPPortFree(backendURL);
   await assertTCPPortFree(h5URL);
   await assertTCPPortFree(pcURL);
 
   const backendEnv = {
-    HTTP_ADDR: '127.0.0.1:18080'
+    HTTP_ADDR: '127.0.0.1:18080',
+    APP_ENV: 'test',
+    ALLOW_MOCK_AUTH: 'true'
   };
   await run('go', ['run', './cmd/p0smokeseed'], {
     cwd: backendDir,
@@ -163,12 +183,16 @@ try {
     env: {
       LIVE_AUCTION_API_TARGET: backendURL
     },
-    label: 'vite:5177'
+    label: `vite:${new URL(pcURL).port}`
   });
   await waitFor(pcURL);
 
   const code = await runPlaywright();
+  if (code === 0) {
+    await assertEvidenceWritten();
+  }
   stopChildren();
+  await new Promise((resolve) => setTimeout(resolve, 1000));
   process.exit(code);
 } catch (error) {
   stopChildren();

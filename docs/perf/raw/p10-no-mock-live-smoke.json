@@ -1,0 +1,27 @@
+{
+  "gate": "P10 no-mock live backend smoke",
+  "generated_at": "2026-05-27T09:14:28.443Z",
+  "backend_url": "http://127.0.0.1:18080",
+  "h5_url": "http://127.0.0.1:5276",
+  "pc_url": "http://127.0.0.1:5277",
+  "no_browser_route_mocks": true,
+  "local_identity_setup": "host/user session login plus X-Mock-User-Id for the second seeded demo bidder",
+  "room_id": "room_p10_1779873267642",
+  "smoke_auction_id": "auc_edb3d6e6-73c6-4767-b822-6766f72b1ce1",
+  "smoke_item_id": "item_f7d1d1e5-2b17-49cc-87ed-9d484c402df9",
+  "smoke_item_title": "P10 No-Mock Tea Cup 1779873267642",
+  "image_asset_path": "docs/demo/assets/ceramic-tea-cup.jpg",
+  "video_asset_path": "docs/demo/assets/pottery-live-loop.webm",
+  "flight_recorder_path": "/api/monitor/auctions/auc_edb3d6e6-73c6-4767-b822-6766f72b1ce1/flight-recorder?limit=80&timeline_limit=120",
+  "proved": [
+    "host-created item through real backend API",
+    "host-created auction through real backend API",
+    "schedule/start through real backend API",
+    "H5 loaded room and auction through real backend API",
+    "WebSocket connected without route interception",
+    "bid rejection persisted and visible in host-only flight recorder",
+    "competing seeded bidder created the cap SOLD bid",
+    "cap bid created SOLD auction and pending order"
+  ],
+  "result": "PASS"
+}

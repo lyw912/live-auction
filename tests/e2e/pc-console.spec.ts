@@ -281,7 +281,6 @@ test('PC console renders live API auctions, orders, and expanded diagnostic pane
   await page.goto('/');
   await expect(page.getByTestId('auction-queue').getByText('青瓷手作茶盏')).toBeVisible();
   await expect(page.getByTestId('auction-queue').getByText('紫砂壶')).toBeVisible();
-  await expect(page.getByText('ord_pending')).toBeVisible();
   await expect(page.getByTestId('health-ribbon')).toBeVisible();
   await expect(page.getByTestId('pc-command-center')).toBeVisible();
   await expect(page.getByTestId('auction-queue')).toBeVisible();
@@ -289,6 +288,10 @@ test('PC console renders live API auctions, orders, and expanded diagnostic pane
   await expect(page.getByTestId('queue-group-scheduled').getByText('银壶')).toBeVisible();
   await expect(page.getByTestId('queue-group-draft').getByText('紫砂壶')).toBeVisible();
   await expect(page.getByTestId('live-assist-rail')).toBeVisible();
+  await expect(page.getByTestId('secondary-workspace')).toBeVisible();
+  await page.getByRole('tab', { name: '订单' }).click();
+  await expect(page.getByText('ord_pending')).toBeVisible();
+  await page.getByRole('tab', { name: '诊断' }).click();
   await expect(page.getByTestId('diagnostics')).toBeVisible();
   await expect(page.getByLabel('monitor-anomaly-type')).toBeVisible();
   await expect(page.getByTestId('auction-control-summary')).toBeVisible();
@@ -343,6 +346,7 @@ test('PC accessibility gate exposes live diagnostic state and named controls', a
   await expect(riskQueue.getByText('Bid pressure throttle')).toBeVisible();
   await expect(riskQueue.locator('em').getByText('bids', { exact: true })).toBeVisible();
 
+  await page.getByRole('tab', { name: '诊断' }).click();
   await page.getByRole('tab', { name: 'Rejects' }).click();
   await expect(page.getByLabel('Rejects').getByRole('button', { name: /tr_reject/ })).toBeVisible();
   await expect(page.getByLabel('monitor-auction-id')).toBeVisible();

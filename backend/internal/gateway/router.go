@@ -131,6 +131,7 @@ func NewRouterWithRealtime(cfg config.Config, deps *storage.Dependencies, log *s
 			r.With(requireHost).Get("/monitor/snapshots", monitorHandler.Snapshots)
 			r.With(requireHost).Get("/monitor/signals", monitorHandler.Signals)
 			r.With(requireHost).Post("/monitor/signals", monitorHandler.CreateSignal)
+			r.With(requireHost).Post("/test/rooms", auctionHandler.TestSetupRoom)
 		})
 	})
 	r.Get("/ws", rt.ServeWS)

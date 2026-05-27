@@ -1,5 +1,7 @@
 # P0 Demo Flow
 
+> P10 judge-facing demo policy lives in `docs/demo/p10-no-mock-auction-demo.md`. P10 should use a backend-created item and auction in the demo session and must not rely on Playwright route mocks or a pre-seeded ACTIVE auction as the main trunk.
+
 Date: 2026-05-22
 
 Commit: pending
@@ -62,6 +64,8 @@ pnpm test:e2e:h5-live
 
 - H5 still enters deterministic local room `room_main`; this is a demo room, not a full room selector.
 - P0 uses mock auth and mock payment.
+- P10 narrows the judge-facing trunk: local demo identity/room setup is allowed, but route-mocked API responses and pre-seeded ACTIVE auctions are not allowed as the main demo evidence.
+- Payment and real live streaming are outside the P10 no-mock auction trunk; a looping product video can stand in for the live visual layer, and local fake-provider payment must be labeled optional if shown.
 - No production performance number is claimed from the demo.
 - Redis-backed WebSocket tickets fail closed when Redis is unavailable.
 

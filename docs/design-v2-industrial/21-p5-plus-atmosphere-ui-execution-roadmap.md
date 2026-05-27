@@ -820,7 +820,7 @@ Commit:
 test: harden UI performance gates for atmosphere effects
 ```
 
-### P10-S3 · Demo Script And Judge Walkthrough
+### P10-S3 · No-Mock Auction Demo Script And Judge Walkthrough
 
 Reference:
 
@@ -829,22 +829,41 @@ Reference:
 
 Scope:
 
-- Update demo flow:
-  - user enters H5
-  - bid/outbid/recover/sold
-  - host prompter
-  - seller preview
-  - diagnostics explanation
+- Define the judge-facing demo as a real backend auction path, not a route-mocked UI playback.
+- Main trunk:
+  - PC host uses the local demo room/session boundary; P10 does not add registration, OAuth, SMS, or password flows.
+  - PC creates a product using demo product copy plus real media asset upload/URL.
+  - PC creates auction rules, schedules/starts the auction, and optionally marks the item as narrating.
+  - H5 enters the room, loads auctions/snapshot from the backend, obtains a real WS ticket, and places real bids.
+  - Backend persists bids/events/outbox through PostgreSQL and delivers realtime updates through Redis/WebSocket.
+  - H5 shows pending, accepted, outbid/rejected, extension, countdown, rank, atmosphere, and terminal result from server events.
+  - PC diagnostics and flight recorder show the same auction's real rules, bids, events, outbox delivery, orders, snapshots, and anomalies.
+- Demo media:
+  - Real live streaming is out of scope.
+  - Use a local looping product video or product image as the live-stage visual asset; this is demo content, not mocked auction state.
+- Payment:
+  - Real external payment is out of scope.
+  - The main P10 no-mock auction demo may stop at SOLD/order creation; local fake-provider payment can be shown only as a labeled optional extension.
+- Extension branches:
+  - cancel an active auction and show terminal UI plus flight-recorder evidence;
+  - edit DRAFT rules before schedule and show backend validation for cap/increment;
+  - inspect generated order rows after SOLD without claiming real payment;
+  - show recovery/gap behavior using real snapshot/reconnect paths;
+  - show P6/P7 high-pressure atmosphere: sticky Bid Dock, rank strip, authoritative bid hints, extension explanation, sound/haptic opt-in, and reduced-motion behavior.
 - Include exact talking points and evidence links.
+- Explicitly separate:
+  - allowed demo sample data: product title, product description, image, and looping video asset;
+  - allowed local identity setup: seeded demo host/user/room/session boundary;
+  - forbidden demo shortcuts: Playwright `page.route` API mocks, local fake bid success, route-mocked diagnostics, or pre-seeded ACTIVE auction masquerading as a PC-created auction.
 
 Validation:
 
-- Manual dry run from README commands.
+- Manual dry run from README commands plus a no-route-mock smoke that creates item/auction/start through backend APIs, bids through H5/backend APIs, and verifies the flight recorder for the created auction.
 
 Commit:
 
 ```text
-docs: add P5 UI atmosphere demo walkthrough
+docs: add no-mock auction demo walkthrough
 ```
 
 ### P10-S4 · Evidence Ledger Update
@@ -857,6 +876,9 @@ Scope:
 
 - Add evidence records for visual regression, e2e, accessibility, performance, live smoke.
 - Link to screenshots, commands, and known limits.
+- Evidence ledger must label route-mocked Playwright tests as UI contract coverage only.
+- Evidence ledger must separately list the no-route-mock P10 demo smoke and the exact created auction ID or captured flight-recorder path.
+- Demo evidence must not claim real live streaming, real payment, registration, OAuth, SMS, or production capacity unless those systems have dedicated implementation and evidence.
 
 Validation:
 

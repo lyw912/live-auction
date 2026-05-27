@@ -485,6 +485,7 @@ function App() {
   const [savingRule, setSavingRule] = useState(false);
   const [creating, setCreating] = useState(false);
   const [ruleSaveState, setRuleSaveState] = useState<'idle' | 'saved' | 'error'>('idle');
+  const [workspaceTab, setWorkspaceTab] = useState('inventory');
   const [backendRuleError, setBackendRuleError] = useState('');
   const [backendSuggestions, setBackendSuggestions] = useState<number[]>([]);
   const [itemDraft, setItemDraft] = useState({ title: '新拍品', description: '本场直播竞拍拍品', imageURL: '' });
@@ -872,43 +873,54 @@ function App() {
           />
         </section>
 
-        <section className="band two-column secondary-workspace" data-testid="secondary-workspace">
-          <ItemCreatePanel
-            creating={creating}
-            itemDraft={itemDraft}
-            ruleValid={ruleValidation.valid}
-            onCreate={createItemAndAuction}
-            onFileChange={setItemImageFile}
-            onDraftChange={setItemDraft}
-          />
-          <RuleEditor
-            backendRuleError={backendRuleError}
-            rule={rule}
-            ruleSaveState={ruleSaveState}
-            ruleValidation={ruleValidation}
-            savingRule={savingRule}
-            selectedAuction={selectedAuction}
-            shownSuggestions={shownSuggestions}
-            onRuleChange={updateRule}
-            onSave={saveRule}
-          />
-        </section>
-
-        <section className="band two-column secondary-workspace">
-          <OrdersPanel orders={orders} />
-          <div className="workspace-note">
-            <h2>Command Center Notes</h2>
-            <p>ACTIVE 操作在上方主控区完成；规则、订单、诊断保留在二级工作区，所有数据仍来自后端 API。</p>
-            <p>下一步 P8-S2 会细化队列 pinning 和讲解/ACTIVE 约束展示。</p>
+        <section className="band workspace-tabs" data-testid="secondary-workspace">
+          <div className="section-title">
+            <h2>二级工作区</h2>
+            <span>按任务进入，不打断上方控场</span>
           </div>
+          <Tabs activeTab={workspaceTab} onChange={setWorkspaceTab}>
+            <Tabs.TabPane key="inventory" title="商品上架">
+              <div className="two-column secondary-workspace">
+                <ItemCreatePanel
+                  creating={creating}
+                  itemDraft={itemDraft}
+                  ruleValid={ruleValidation.valid}
+                  onCreate={createItemAndAuction}
+                  onFileChange={setItemImageFile}
+                  onDraftChange={setItemDraft}
+                />
+                <div className="workspace-note">
+                  <h2>上架路径</h2>
+                  <p>先创建拍品和草稿竞拍，再进入规则配置。主控区只处理当前直播控场。</p>
+                </div>
+              </div>
+            </Tabs.TabPane>
+            <Tabs.TabPane key="rules" title="规则配置">
+              <RuleEditor
+                backendRuleError={backendRuleError}
+                rule={rule}
+                ruleSaveState={ruleSaveState}
+                ruleValidation={ruleValidation}
+                savingRule={savingRule}
+                selectedAuction={selectedAuction}
+                shownSuggestions={shownSuggestions}
+                onRuleChange={updateRule}
+                onSave={saveRule}
+              />
+            </Tabs.TabPane>
+            <Tabs.TabPane key="orders" title="订单">
+              <OrdersPanel orders={orders} />
+            </Tabs.TabPane>
+            <Tabs.TabPane key="diagnostics" title="诊断">
+              <DiagnosticsPanel
+                monitor={monitor}
+                monitorFilter={monitorFilter}
+                onOpenFlightRecorder={openFlightRecorder}
+                onFilterChange={setMonitorFilter}
+              />
+            </Tabs.TabPane>
+          </Tabs>
         </section>
-
-        <DiagnosticsPanel
-          monitor={monitor}
-          monitorFilter={monitorFilter}
-          onOpenFlightRecorder={openFlightRecorder}
-          onFilterChange={setMonitorFilter}
-        />
         <FlightRecorderDrawer
           auctionID={flightRecorderAuctionID}
           loading={flightRecorderLoading}

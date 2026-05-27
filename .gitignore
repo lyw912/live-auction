@@ -37,3 +37,4 @@ infra/.data/
 # Local performance artifacts
 docs/perf/raw/*
 !docs/perf/raw/README.md
+!docs/perf/raw/p10-no-mock-live-smoke.json

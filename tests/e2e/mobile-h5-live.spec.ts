@@ -25,41 +25,65 @@ test('H5 covers live backend REST, fat-finger confirm, cap SOLD order, payment, 
     current_price_cents: 35000
   }));
 
-  await expect(page.getByText('WebSocket 已连接 · 状态来自服务端事件')).toBeVisible();
   await expect(page.getByText('¥350.00')).toBeVisible();
-  await expect(page.getByTestId('auction-countdown')).toBeVisible();
-  await expect(page.getByTestId('chat-panel').getByText('这件拍品状态不错')).toBeVisible();
+  await expect(page.getByTestId('floating-product-card')).toBeVisible();
+  await expect(page.getByTestId('floating-auction-price')).toHaveText('当前最高价 ¥350.00');
+  await expect(page.getByTestId('floating-auction-countdown')).toBeVisible();
+  await expect(page.getByTestId('stage-chat-overlay').getByText('这件拍品状态不错')).toBeVisible();
   await page.getByLabel('chat-input').fill('live smoke chat');
   await page.getByRole('button', { name: 'send-chat' }).click();
-  await expect(page.getByTestId('chat-panel').getByText('live smoke chat')).toBeVisible();
+  await expect(page.getByTestId('stage-chat-overlay').getByText('live smoke chat')).toBeVisible();
 
+  await page.getByTestId('floating-product-card').click();
+  await expect(page.getByLabel('auction-state').getByText('ACTIVE')).toBeVisible();
+  await expect(page.getByText('WebSocket 已连接 · 状态来自服务端事件')).toBeVisible();
+  await expect(page.getByTestId('auction-countdown')).toBeVisible();
   await page.getByRole('button', { name: 'increase' }).click();
   await page.getByRole('button', { name: 'increase' }).click();
   await page.getByRole('button', { name: 'increase' }).click();
   await page.getByRole('button', { name: 'increase' }).click();
   await expect(page.getByTestId('bid-cta')).toHaveText(/¥600.00/);
   await page.getByTestId('bid-cta').click();
-  await expect(page.getByText('确认 ¥600.00 出价')).toBeVisible();
-  await expect(page.getByText('¥350.00')).toBeVisible();
+  await expect(page.getByTestId('bid-cta')).toHaveText(/确认高额出价/);
+  await expect(page.getByLabel('auction-state').getByRole('heading', { name: '¥350.00' })).toBeVisible();
   await expect(page.getByTestId('bid-cta')).toHaveText(/确认高额出价/);
 
   await page.getByTestId('bid-cta').click();
-  await expect(page.getByText('等待服务端确认高额出价')).toBeVisible();
-  await expect(page.getByText('¥350.00')).toBeVisible();
+  await expect(page.getByLabel('auction-state')).toContainText('等待服务端确认高额出价');
+  await expect(page.getByLabel('auction-state').getByRole('heading', { name: '¥350.00' })).toBeVisible();
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
   await expect(page.getByLabel('auction-state').locator('.eyebrow')).toHaveText('成交');
   await expect(page.getByLabel('auction-state').getByRole('heading', { name: '¥600.00' })).toBeVisible();
   await expect(page.getByTestId('bid-cta')).toHaveText(/去支付/);
   await expect(page.getByTestId('bid-cta')).toBeEnabled();
 
-  await page.getByTestId('history-panel').getByRole('button', { name: /刷新/ }).click();
-  await expect(page.getByTestId('history-panel').getByText('auc_live')).toBeVisible();
-  await expect(page.getByText('¥600.00 · ACCEPTED_SOLD').first()).toBeVisible();
-  await expect(page.getByText('¥600.00 · ORDER_PENDING')).toBeVisible();
+  const bids = await page.request.get('/api/users/me/bids');
+  expect(bids.ok()).toBeTruthy();
+  const bidPayload = await bids.json();
+  const acceptedSoldBid = bidPayload.items.find((row: { auction_id: string; amount_cents: number }) => (
+    row.auction_id === 'auc_live' && row.amount_cents === 60000
+  ));
+  expect(acceptedSoldBid).toMatchObject({
+    auction_id: 'auc_live',
+    amount_cents: 60000,
+    result: 'ACCEPTED_SOLD'
+  });
+
+  const pendingOrders = await page.request.get('/api/users/me/orders');
+  expect(pendingOrders.ok()).toBeTruthy();
+  const pendingOrderPayload = await pendingOrders.json();
+  const pendingOrder = pendingOrderPayload.items.find((row: { auction_id: string; amount_cents: number }) => (
+    row.auction_id === 'auc_live' && row.amount_cents === 60000
+  ));
+  expect(pendingOrder).toMatchObject({
+    auction_id: 'auc_live',
+    amount_cents: 60000,
+    order_status: 'ORDER_PENDING'
+  });
 
   await page.getByTestId('bid-cta').click();
   await expect(page.getByLabel('auction-state').locator('.eyebrow')).toHaveText('已支付');
-  await expect(page.getByText('保证金已处理')).toBeVisible();
+  await expect(page.getByLabel('auction-state').locator('.dock-feedback')).toContainText('保证金已处理');
 
   const orders = await page.request.get('/api/users/me/orders');
   expect(orders.ok()).toBeTruthy();
@@ -92,5 +116,5 @@ test('H5 route isolates two room contexts', async ({ page }) => {
   ]));
   await expect(page.getByText('auc_live')).not.toBeVisible();
   await expect(page.getByLabel('live-stage').getByText('room_side')).toBeVisible();
-  await expect(page.getByTestId('chat-panel').getByText('侧房间独立弹幕')).toBeVisible();
+  await expect(page.getByTestId('stage-chat-overlay').getByText('侧房间独立弹幕')).toBeVisible();
 });
