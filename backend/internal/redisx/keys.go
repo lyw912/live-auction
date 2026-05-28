@@ -14,6 +14,10 @@ func BidLimitAuctionKey(auctionID string) string {
 	return fmt.Sprintf("bid:{%s}:limit:auction", auctionID)
 }
 
+func BidGuardProjectionKey(auctionID string) string {
+	return fmt.Sprintf("bid:{%s}:guard:projection", auctionID)
+}
+
 func WSTicketKey(token string) string {
 	return "ws_ticket:" + token
 }

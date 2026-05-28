@@ -419,6 +419,174 @@ func TestPostgresBidLaneCompletedConfirmReplayBypassesFullQueue(t *testing.T) {
 	}
 }
 
+func TestRedisGuardRejectsClearlyTooLowBidBeforePostgresLane(t *testing.T) {
+	observability.Default = observability.NewRegistry()
+	db := openMonitorDB(t)
+	rdb := openMonitorRedis(t)
+	auctionRow := createAdmissionAuction(t, db, "user_1")
+	cfg := admissionTestConfig()
+	cfg.BidEngineMode = bidEngineModeRedisGuard
+	cfg.BidRedisGuardMaxStaleness = time.Second
+	seedRedisGuardProjection(t, rdb, auctionRow.ID, map[string]any{
+		"status":              "ACTIVE",
+		"current_price_cents": 20_000,
+		"start_price_cents":   10_000,
+		"increment_cents":     5_000,
+		"cap_price_cents":     0,
+		"end_at_ms":           time.Now().Add(time.Minute).UnixMilli(),
+		"seq":                 7,
+		"accepted_bid_count":  2,
+		"current_winner_id":   "user_2",
+		"projected_at_ms":     time.Now().UnixMilli(),
+	})
+	handler := AuctionHandler{
+		Config: cfg,
+		Deps:   &storage.Dependencies{Postgres: db, Redis: rdb},
+		Repo:   auction.NewRepository(db),
+		ACL:    newRoomACL(db),
+		Bids:   newBidAdmission(cfg, db, rdb),
+		Lanes:  newBidLaneManager(cfg, db),
+		Guard:  newRedisGuard(cfg, db, rdb),
+	}
+	router := chi.NewRouter()
+	router.Use(traceMiddleware)
+	router.Use(mockAuthMiddleware(cfg))
+	router.Post("/api/auctions/{id}/bids", handler.PlaceBid)
+
+	body := `{"client_bid_id":"guard-too-low","amount_cents":20000,"client_seen_seq":7}`
+	rec := performBid(router, auctionRow.ID, body, "guard-too-low", "user_1")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp auction.BidResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Result != auction.BidResultRejected || resp.RejectReason == nil || *resp.RejectReason != string(apierrors.CodeBidTooLow) {
+		t.Fatalf("unexpected guard response: %#v", resp)
+	}
+	var bidRows int
+	if err := db.QueryRow(context.Background(), `SELECT count(*) FROM bids WHERE auction_id = $1 AND client_bid_id = 'guard-too-low'`, auctionRow.ID).Scan(&bidRows); err != nil {
+		t.Fatalf("count bids: %v", err)
+	}
+	if bidRows != 0 {
+		t.Fatalf("guard reject wrote %d bid rows, want 0", bidRows)
+	}
+	assertAdmissionAnomalyRecorded(t, db, auctionRow.ID, string(apierrors.CodeBidTooLow))
+	metrics := string(observability.Default.Render(context.Background()))
+	if !strings.Contains(metrics, `auction_bid_redis_guard_total{outcome="REJECT",reason="BID_TOO_LOW"} 1`) {
+		t.Fatalf("missing guard reject metric in:\n%s", metrics)
+	}
+}
+
+func TestRedisGuardMissingOrStaleProjectionFallsThroughToPostgresTruth(t *testing.T) {
+	db := openMonitorDB(t)
+	rdb := openMonitorRedis(t)
+	auctionRow := createAdmissionAuction(t, db, "user_1")
+	cfg := admissionTestConfig()
+	cfg.BidEngineMode = bidEngineModeRedisGuard
+	cfg.BidRedisGuardMaxStaleness = 50 * time.Millisecond
+	handler := AuctionHandler{
+		Config: cfg,
+		Deps:   &storage.Dependencies{Postgres: db, Redis: rdb},
+		Repo:   auction.NewRepository(db),
+		ACL:    newRoomACL(db),
+		Bids:   newBidAdmission(cfg, db, rdb),
+		Lanes:  newBidLaneManager(cfg, db),
+		Guard:  newRedisGuard(cfg, db, rdb),
+	}
+	router := chi.NewRouter()
+	router.Use(traceMiddleware)
+	router.Use(mockAuthMiddleware(cfg))
+	router.Post("/api/auctions/{id}/bids", handler.PlaceBid)
+
+	missingBody := `{"client_bid_id":"guard-missing","amount_cents":15000,"client_seen_seq":0}`
+	missing := performBid(router, auctionRow.ID, missingBody, "guard-missing", "user_1")
+	if missing.Code != http.StatusOK {
+		t.Fatalf("missing projection status = %d body=%s", missing.Code, missing.Body.String())
+	}
+	var missingResp auction.BidResponse
+	if err := json.Unmarshal(missing.Body.Bytes(), &missingResp); err != nil {
+		t.Fatalf("decode missing response: %v", err)
+	}
+	if missingResp.Result != auction.BidResultAccepted {
+		t.Fatalf("missing projection did not fall through to PG: %#v", missingResp)
+	}
+
+	seedRedisGuardProjection(t, rdb, auctionRow.ID, map[string]any{
+		"status":              "ACTIVE",
+		"current_price_cents": 100_000,
+		"start_price_cents":   10_000,
+		"increment_cents":     5_000,
+		"cap_price_cents":     0,
+		"end_at_ms":           time.Now().Add(time.Minute).UnixMilli(),
+		"seq":                 99,
+		"accepted_bid_count":  10,
+		"current_winner_id":   "user_2",
+		"projected_at_ms":     time.Now().Add(-time.Minute).UnixMilli(),
+	})
+	if _, err := db.Exec(context.Background(), `INSERT INTO users (id, role, display_name) VALUES ('user_2', 'user', 'Guard User 2') ON CONFLICT DO NOTHING`); err != nil {
+		t.Fatalf("insert user_2: %v", err)
+	}
+	if _, err := db.Exec(context.Background(), `
+		INSERT INTO room_memberships (room_id, user_id, role, status)
+		SELECT room_id, 'user_2', 'viewer', 'ACTIVE'
+		FROM auctions WHERE id = $1
+		ON CONFLICT (room_id, user_id) DO UPDATE SET status = 'ACTIVE', left_at = NULL
+	`, auctionRow.ID); err != nil {
+		t.Fatalf("insert user_2 membership: %v", err)
+	}
+	staleBody := `{"client_bid_id":"guard-stale","amount_cents":20000,"client_seen_seq":0}`
+	stale := performBid(router, auctionRow.ID, staleBody, "guard-stale", "user_2")
+	if stale.Code != http.StatusOK {
+		t.Fatalf("stale projection status = %d body=%s", stale.Code, stale.Body.String())
+	}
+	var staleResp auction.BidResponse
+	if err := json.Unmarshal(stale.Body.Bytes(), &staleResp); err != nil {
+		t.Fatalf("decode stale response: %v", err)
+	}
+	if staleResp.Result != auction.BidResultAccepted {
+		t.Fatalf("stale projection blocked PG truth: %#v", staleResp)
+	}
+}
+
+func TestRedisGuardUnavailableFallsThroughToPostgresTruth(t *testing.T) {
+	db := openMonitorDB(t)
+	badRedis := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", DialTimeout: 5 * time.Millisecond, ReadTimeout: 5 * time.Millisecond, WriteTimeout: 5 * time.Millisecond})
+	t.Cleanup(func() { _ = badRedis.Close() })
+	auctionRow := createAdmissionAuction(t, db, "user_1")
+	cfg := admissionTestConfig()
+	cfg.BidEngineMode = bidEngineModeRedisGuard
+	cfg.BidLimitRedisTimeout = 5 * time.Millisecond
+	cfg.BidRedisGuardTimeout = 5 * time.Millisecond
+	handler := AuctionHandler{
+		Config: cfg,
+		Deps:   &storage.Dependencies{Postgres: db, Redis: badRedis},
+		Repo:   auction.NewRepository(db),
+		ACL:    newRoomACL(db),
+		Bids:   newBidAdmission(cfg, db, badRedis),
+		Lanes:  newBidLaneManager(cfg, db),
+		Guard:  newRedisGuard(cfg, db, badRedis),
+	}
+	router := chi.NewRouter()
+	router.Use(traceMiddleware)
+	router.Use(mockAuthMiddleware(cfg))
+	router.Post("/api/auctions/{id}/bids", handler.PlaceBid)
+
+	body := `{"client_bid_id":"guard-unavailable","amount_cents":15000,"client_seen_seq":0}`
+	rec := performBid(router, auctionRow.ID, body, "guard-unavailable", "user_1")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp auction.BidResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Result != auction.BidResultAccepted {
+		t.Fatalf("redis unavailable did not fall through to PG: %#v", resp)
+	}
+}
+
 func createAdmissionAuction(t *testing.T, db *pgxpool.Pool, viewerID string) auction.Auction {
 	t.Helper()
 	repo := auction.NewRepository(db)
@@ -472,6 +640,24 @@ func createAdmissionAuction(t *testing.T, db *pgxpool.Pool, viewerID string) auc
 		t.Fatalf("Start: %v", err)
 	}
 	return started
+}
+
+func seedRedisGuardProjection(t *testing.T, rdb *redis.Client, auctionID string, values map[string]any) {
+	t.Helper()
+	key := redisx.BidGuardProjectionKey(auctionID)
+	if err := rdb.Del(context.Background(), key).Err(); err != nil {
+		t.Fatalf("clear guard projection: %v", err)
+	}
+	pipe := rdb.TxPipeline()
+	for field, value := range values {
+		pipe.HSet(context.Background(), key, field, value)
+	}
+	if _, err := pipe.Exec(context.Background()); err != nil {
+		t.Fatalf("seed guard projection: %v", err)
+	}
+	if err := rdb.Expire(context.Background(), key, time.Minute).Err(); err != nil {
+		t.Fatalf("expire guard projection: %v", err)
+	}
 }
 
 func performBid(router http.Handler, auctionID string, body string, key string, userID string) *httptest.ResponseRecorder {

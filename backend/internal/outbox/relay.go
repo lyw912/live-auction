@@ -19,6 +19,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"live-auction/backend/internal/observability"
+	"live-auction/backend/internal/redisx"
 )
 
 const (
@@ -28,11 +29,13 @@ const (
 	StatusFailed     = "FAILED"
 	StatusDead       = "DEAD"
 
-	DefaultHistoryLimit = 4096
-	DefaultHistoryTTL   = 30 * time.Minute
-	DefaultDrainBatch   = 256
-	DefaultLeaseTTL     = 5 * time.Second
-	EventSchemaVersion  = 1
+	DefaultHistoryLimit    = 4096
+	DefaultHistoryTTL      = 30 * time.Minute
+	DefaultDrainBatch      = 256
+	DefaultLeaseTTL        = 5 * time.Second
+	EventSchemaVersion     = 1
+	GuardProjectionTTL     = 30 * time.Minute
+	guardProjectionTimeout = 25 * time.Millisecond
 
 	ErrorClassRedisUnavailable = "REDIS_UNAVAILABLE"
 	ErrorClassPayloadInvalid   = "PAYLOAD_INVALID"
@@ -175,6 +178,18 @@ func NewRelay(db *pgxpool.Pool, redisClient *redis.Client, workerID string) *Rel
 		leaseTTL:     DefaultLeaseTTL,
 		notify:       true,
 	}
+}
+
+type guardProjection struct {
+	Status            string
+	CurrentPriceCents int64
+	CurrentWinnerID   *string
+	StartPriceCents   int64
+	IncrementCents    int64
+	CapPriceCents     *int64
+	EndAt             *time.Time
+	Seq               int64
+	AcceptedBidCount  int64
 }
 
 func (r *Relay) WithPublisher(publisher func(context.Context, string, []byte)) *Relay {
@@ -373,14 +388,102 @@ func (r *Relay) publish(ctx context.Context, event Event) error {
 	pipe.Expire(ctx, eventsKey, r.historyTTL)
 	pipe.Set(ctx, snapshotKey, data, r.historyTTL)
 	redisStart := time.Now()
-	if _, err = pipe.Exec(ctx); err != nil {
+	if cmds, err := pipe.Exec(ctx); err != nil {
+		for _, cmd := range cmds {
+			if cmdErr := cmd.Err(); cmdErr != nil {
+				return cmdErr
+			}
+		}
 		return err
 	}
 	observability.Observe("redis_command_latency_seconds", time.Since(redisStart).Seconds(), map[string]string{"command": "outbox_publish_pipeline"}, observability.DefaultLatencyBuckets)
 	if r.publisher != nil {
 		r.publisher(ctx, event.AuctionID, data)
 	}
+	r.refreshGuardProjectionBestEffort(ctx, event.AuctionID, event.EventType)
 	return nil
+}
+
+func (r *Relay) refreshGuardProjectionBestEffort(ctx context.Context, auctionID string, eventType string) {
+	projectionCtx, cancel := context.WithTimeout(ctx, guardProjectionTimeout)
+	defer cancel()
+	if projection, ok, err := r.guardProjectionFromEvent(projectionCtx, Event{AuctionID: auctionID, EventType: eventType}); err == nil && ok {
+		if err := r.writeGuardProjection(projectionCtx, auctionID, projection); err != nil {
+			observability.Inc("auction_bid_redis_guard_projection_update_total", map[string]string{"outcome": "error"})
+		} else {
+			observability.Inc("auction_bid_redis_guard_projection_update_total", map[string]string{"outcome": "updated"})
+		}
+	} else if err != nil {
+		observability.Inc("auction_bid_redis_guard_projection_update_total", map[string]string{"outcome": "error"})
+	}
+}
+
+func (r *Relay) guardProjectionFromEvent(ctx context.Context, event Event) (guardProjection, bool, error) {
+	switch event.EventType {
+	case "bid_accepted", "auction_sold", "auction_started", "auction_cancelled", "auction_ended", "rules_updated", "snapshot":
+	default:
+		return guardProjection{}, false, nil
+	}
+	var projection guardProjection
+	err := r.db.QueryRow(ctx, `
+		SELECT status, current_price_cents, current_winner_id, start_price_cents,
+		       increment_cents, cap_price_cents, end_at, seq, accepted_bid_count
+		FROM auctions
+		WHERE id = $1
+	`, event.AuctionID).Scan(
+		&projection.Status,
+		&projection.CurrentPriceCents,
+		&projection.CurrentWinnerID,
+		&projection.StartPriceCents,
+		&projection.IncrementCents,
+		&projection.CapPriceCents,
+		&projection.EndAt,
+		&projection.Seq,
+		&projection.AcceptedBidCount,
+	)
+	if err != nil {
+		return guardProjection{}, false, err
+	}
+	return projection, true, nil
+}
+
+func (r *Relay) writeGuardProjection(ctx context.Context, auctionID string, projection guardProjection) error {
+	values := map[string]any{
+		"status":              projection.Status,
+		"current_price_cents": projection.CurrentPriceCents,
+		"start_price_cents":   projection.StartPriceCents,
+		"increment_cents":     projection.IncrementCents,
+		"cap_price_cents":     0,
+		"end_at_ms":           0,
+		"seq":                 projection.Seq,
+		"accepted_bid_count":  projection.AcceptedBidCount,
+		"current_winner_id":   "",
+		"projected_at_ms":     time.Now().UTC().UnixMilli(),
+	}
+	if projection.CurrentWinnerID != nil {
+		values["current_winner_id"] = *projection.CurrentWinnerID
+	}
+	if projection.CapPriceCents != nil {
+		values["cap_price_cents"] = *projection.CapPriceCents
+	}
+	if projection.EndAt != nil {
+		values["end_at_ms"] = projection.EndAt.UTC().UnixMilli()
+	}
+	key := redisx.BidGuardProjectionKey(auctionID)
+	pipe := r.redis.TxPipeline()
+	for field, value := range values {
+		pipe.HSet(ctx, key, field, value)
+	}
+	pipe.Expire(ctx, key, GuardProjectionTTL)
+	cmds, err := pipe.Exec(ctx)
+	if err != nil {
+		for _, cmd := range cmds {
+			if cmdErr := cmd.Err(); cmdErr != nil {
+				return cmdErr
+			}
+		}
+	}
+	return err
 }
 
 func (r *Relay) ensureStreamEpoch(ctx context.Context, auctionID string) (string, error) {
@@ -573,6 +676,7 @@ func (r *Relay) RebuildSnapshot(ctx context.Context, auctionID string) ([]byte, 
 		_ = r.recordSnapshotEvent(ctx, auctionID, requestID, "db", "FAILED", false, &duration, &errClass, err)
 		return nil, err
 	}
+	r.refreshGuardProjectionBestEffort(ctx, auctionID, "snapshot")
 	duration := time.Since(start).Milliseconds()
 	_ = r.recordSnapshotEvent(ctx, auctionID, requestID, "db", "COMPLETED", false, &duration, nil, nil)
 	return payload, nil

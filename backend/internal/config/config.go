@@ -25,17 +25,19 @@ type Config struct {
 	AllowMockAuth  bool
 	SessionTTL     time.Duration
 
-	BidUserLimitPerSecond    int
-	BidIPLimitPerSecond      int
-	BidAuctionLimitPerSecond int
-	BidAuctionMaxInFlight    int
-	BidLimitWindow           time.Duration
-	BidLimitRedisTimeout     time.Duration
-	BidEngineMode            string
-	BidLaneWorkers           int
-	BidLaneQueueSize         int
-	BidLaneQueueTimeout      time.Duration
-	FakePaymentWebhookSecret string
+	BidUserLimitPerSecond     int
+	BidIPLimitPerSecond       int
+	BidAuctionLimitPerSecond  int
+	BidAuctionMaxInFlight     int
+	BidLimitWindow            time.Duration
+	BidLimitRedisTimeout      time.Duration
+	BidEngineMode             string
+	BidLaneWorkers            int
+	BidLaneQueueSize          int
+	BidLaneQueueTimeout       time.Duration
+	BidRedisGuardMaxStaleness time.Duration
+	BidRedisGuardTimeout      time.Duration
+	FakePaymentWebhookSecret  string
 
 	AdmissionEnabled       bool
 	WSTicketMaxInFlight    int
@@ -80,17 +82,19 @@ func Load() Config {
 		AllowMockAuth:  getEnvBool("ALLOW_MOCK_AUTH", false),
 		SessionTTL:     getEnvDuration("SESSION_TTL", 12*time.Hour),
 
-		BidUserLimitPerSecond:    getEnvInt("BID_USER_LIMIT_PER_SECOND", 3),
-		BidIPLimitPerSecond:      getEnvInt("BID_IP_LIMIT_PER_SECOND", 10),
-		BidAuctionLimitPerSecond: getEnvInt("BID_AUCTION_LIMIT_PER_SECOND", 80),
-		BidAuctionMaxInFlight:    getEnvInt("BID_AUCTION_MAX_IN_FLIGHT", 32),
-		BidLimitWindow:           getEnvDuration("BID_LIMIT_WINDOW", time.Second),
-		BidLimitRedisTimeout:     getEnvDuration("BID_LIMIT_REDIS_TIMEOUT", 50*time.Millisecond),
-		BidEngineMode:            getEnv("BID_ENGINE_MODE", "postgres_lane"),
-		BidLaneWorkers:           getEnvInt("BID_LANE_WORKERS", 1),
-		BidLaneQueueSize:         getEnvInt("BID_LANE_QUEUE_SIZE", 128),
-		BidLaneQueueTimeout:      getEnvDuration("BID_LANE_QUEUE_TIMEOUT", 750*time.Millisecond),
-		FakePaymentWebhookSecret: getEnv("FAKE_PAYMENT_WEBHOOK_SECRET", "local_fake_payment_secret"),
+		BidUserLimitPerSecond:     getEnvInt("BID_USER_LIMIT_PER_SECOND", 3),
+		BidIPLimitPerSecond:       getEnvInt("BID_IP_LIMIT_PER_SECOND", 10),
+		BidAuctionLimitPerSecond:  getEnvInt("BID_AUCTION_LIMIT_PER_SECOND", 80),
+		BidAuctionMaxInFlight:     getEnvInt("BID_AUCTION_MAX_IN_FLIGHT", 32),
+		BidLimitWindow:            getEnvDuration("BID_LIMIT_WINDOW", time.Second),
+		BidLimitRedisTimeout:      getEnvDuration("BID_LIMIT_REDIS_TIMEOUT", 50*time.Millisecond),
+		BidEngineMode:             getEnv("BID_ENGINE_MODE", "postgres_lane"),
+		BidLaneWorkers:            getEnvInt("BID_LANE_WORKERS", 1),
+		BidLaneQueueSize:          getEnvInt("BID_LANE_QUEUE_SIZE", 128),
+		BidLaneQueueTimeout:       getEnvDuration("BID_LANE_QUEUE_TIMEOUT", 750*time.Millisecond),
+		BidRedisGuardMaxStaleness: getEnvDuration("BID_REDIS_GUARD_MAX_STALENESS", 1500*time.Millisecond),
+		BidRedisGuardTimeout:      getEnvDuration("BID_REDIS_GUARD_TIMEOUT", 30*time.Millisecond),
+		FakePaymentWebhookSecret:  getEnv("FAKE_PAYMENT_WEBHOOK_SECRET", "local_fake_payment_secret"),
 
 		AdmissionEnabled:       getEnvBool("ADMISSION_ENABLED", true),
 		WSTicketMaxInFlight:    getEnvInt("WS_TICKET_MAX_IN_FLIGHT", 256),

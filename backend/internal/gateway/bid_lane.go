@@ -71,7 +71,7 @@ func normalizeBidLaneConfig(cfg config.Config) config.Config {
 }
 
 func (m *bidLaneManager) Execute(ctx context.Context, auctionID string, userID string, traceID string, fn bidLaneFunc) (auction.BidResponse, error) {
-	if m == nil || m.cfg.BidEngineMode != bidEngineModePostgresLane {
+	if m == nil || (m.cfg.BidEngineMode != bidEngineModePostgresLane && m.cfg.BidEngineMode != bidEngineModeRedisGuard) {
 		return fn(ctx)
 	}
 	lane := m.laneFor(auctionID)
@@ -170,7 +170,7 @@ func (l *bidLane) worker() {
 }
 
 func (m *bidLaneManager) recordLaneReject(ctx context.Context, auctionID string, userID string, traceID string, code apierrors.Code, reason string, retryAfter time.Duration) error {
-	if m.cfg.BidEngineMode != bidEngineModePostgresLane || m.db == nil {
+	if (m.cfg.BidEngineMode != bidEngineModePostgresLane && m.cfg.BidEngineMode != bidEngineModeRedisGuard) || m.db == nil {
 		return nil
 	}
 	payload, err := json.Marshal(map[string]any{

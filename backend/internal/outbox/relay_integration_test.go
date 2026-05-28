@@ -14,6 +14,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"live-auction/backend/internal/auction"
+	"live-auction/backend/internal/redisx"
 )
 
 func TestRelayPublishesPendingOutboxToRedisInOrder(t *testing.T) {
@@ -98,6 +99,13 @@ func TestRelayPublishesPendingOutboxToRedisInOrder(t *testing.T) {
 	}
 	if lastEnvelope.StreamEpoch == "" {
 		t.Fatalf("empty stream epoch in last envelope: %s", values[len(values)-1])
+	}
+	projection, err := rdb.HGetAll(ctx, redisx.BidGuardProjectionKey(auctionRow.ID)).Result()
+	if err != nil {
+		t.Fatalf("read guard projection: %v", err)
+	}
+	if projection["status"] != "ACTIVE" || projection["current_price_cents"] != "20000" || projection["seq"] == "" || projection["projected_at_ms"] == "" {
+		t.Fatalf("unexpected guard projection: %#v", projection)
 	}
 
 	var pending int

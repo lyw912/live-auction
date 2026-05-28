@@ -27,6 +27,7 @@ type AuctionHandler struct {
 	ACL    roomACL
 	Bids   *bidAdmission
 	Lanes  *bidLaneManager
+	Guard  *redisGuard
 }
 
 type uploadURLRequest struct {
@@ -365,6 +366,14 @@ func (h AuctionHandler) PlaceBid(w http.ResponseWriter, r *http.Request) {
 			return
 		} else if permit != nil {
 			defer permit.Release()
+		}
+	}
+	if h.Guard != nil {
+		decision := h.Guard.Check(r.Context(), auctionID, user.ID, req)
+		if decision.Outcome == redisGuardOutcomeReject {
+			result, err := h.Guard.Response(r.Context(), auctionID, user.ID, traceID(r.Context()), decision)
+			writeBidAdmissionResult(w, r, result, err)
+			return
 		}
 	}
 	place := func(ctx context.Context) (auction.BidResponse, error) {
