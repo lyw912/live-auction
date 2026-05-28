@@ -13,6 +13,7 @@ import (
 	"live-auction/backend/internal/config"
 	"live-auction/backend/internal/observability"
 	"live-auction/backend/internal/realtime"
+	"live-auction/backend/internal/redisengine"
 	"live-auction/backend/internal/storage"
 )
 
@@ -78,6 +79,10 @@ func NewRouterWithRealtime(cfg config.Config, deps *storage.Dependencies, log *s
 	r.Get("/api/health", health.Readiness)
 	r.Get("/metrics", observability.Handler(deps.Postgres).ServeHTTP)
 
+	var engine *redisengine.Engine
+	if cfg.BidEngineMode != bidEngineModePostgresLane && cfg.BidEngineMode != bidEngineModeRedisGuard {
+		engine = redisengine.New(deps.Postgres, deps.Redis)
+	}
 	auctionHandler := AuctionHandler{
 		Config: cfg,
 		Deps:   deps,
@@ -86,7 +91,7 @@ func NewRouterWithRealtime(cfg config.Config, deps *storage.Dependencies, log *s
 		ACL:    newRoomACL(deps.Postgres),
 		Bids:   newBidAdmission(cfg, deps.Postgres, deps.Redis),
 		Lanes:  newBidLaneManager(cfg, deps.Postgres),
-		Guard:  newRedisGuard(cfg, deps.Postgres, deps.Redis),
+		Engine: engine,
 	}
 	authHandler := AuthHandler{Config: cfg, DB: deps.Postgres}
 	monitorHandler := MonitorHandler{Deps: deps}
@@ -141,6 +146,7 @@ func NewRouterWithRealtime(cfg config.Config, deps *storage.Dependencies, log *s
 			r.With(requireHost).Get("/monitor/recovery", monitorHandler.Recovery)
 			r.With(requireHost).Get("/monitor/snapshots", monitorHandler.Snapshots)
 			r.With(requireHost).Get("/monitor/signals", monitorHandler.Signals)
+			r.With(requireHost).Get("/monitor/redis-engine", monitorHandler.RedisEngine)
 			r.With(requireHost).Post("/monitor/signals", monitorHandler.CreateSignal)
 			r.With(requireHost).Post("/test/rooms", auctionHandler.TestSetupRoom)
 		})

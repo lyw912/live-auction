@@ -16,6 +16,7 @@ import (
 	"live-auction/backend/internal/config"
 	apierrors "live-auction/backend/internal/platform/errors"
 	"live-auction/backend/internal/realtime"
+	"live-auction/backend/internal/redisengine"
 	"live-auction/backend/internal/storage"
 )
 
@@ -28,6 +29,7 @@ type AuctionHandler struct {
 	Bids   *bidAdmission
 	Lanes  *bidLaneManager
 	Guard  *redisGuard
+	Engine *redisengine.Engine
 }
 
 type uploadURLRequest struct {
@@ -376,6 +378,11 @@ func (h AuctionHandler) PlaceBid(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if h.Engine != nil {
+		result, err := h.Engine.PlaceBid(r.Context(), auctionID, user.ID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context()))
+		writeBidAdmissionResult(w, r, result, err)
+		return
+	}
 	place := func(ctx context.Context) (auction.BidResponse, error) {
 		return h.Repo.PlaceBid(ctx, auctionID, user.ID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context()))
 	}
@@ -714,5 +721,5 @@ func writeResult(w http.ResponseWriter, r *http.Request, status int, payload any
 		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, minioErr.Message, 500))
 		return
 	}
-	writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "internal server error", 500))
+	writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "internal server error: "+err.Error(), 500))
 }

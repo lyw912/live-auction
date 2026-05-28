@@ -18,6 +18,18 @@ func BidGuardProjectionKey(auctionID string) string {
 	return fmt.Sprintf("bid:{%s}:guard:projection", auctionID)
 }
 
+func BidEngineStateKey(auctionID string) string {
+	return fmt.Sprintf("bid:{%s}:engine:state", auctionID)
+}
+
+func BidEngineIdempotencyKey(auctionID string, clientBidID string) string {
+	return fmt.Sprintf("bid:{%s}:engine:idem:%s", auctionID, clientBidID)
+}
+
+func BidEngineStreamKey(auctionID string) string {
+	return fmt.Sprintf("bid:{%s}:engine:stream", auctionID)
+}
+
 func WSTicketKey(token string) string {
 	return "ws_ticket:" + token
 }

@@ -14,6 +14,7 @@ import (
 const (
 	ScriptBidAdmissionGCRA = "bid_admission_gcra"
 	ScriptBidRedisGuard    = "bid_redis_guard"
+	ScriptBidRedisLedger   = "bid_redis_ledger"
 	ScriptWSTicketConsume  = "ws_ticket_consume"
 )
 

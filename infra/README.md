@@ -11,7 +11,9 @@ docker compose -f infra\docker-compose.yml down
 Services:
 
 - PostgreSQL: `localhost:5432`
-- Redis: `localhost:6379`
+- Redis 7: `localhost:6380`
+
+Redis 7 is required for the Redis ledger bidding engine because L4b uses Redis Streams/XADD and consumer groups. Some Windows hosts also run an old Redis service on `localhost:6379`; do not use that service for L4b if it does not support XADD.
 - MinIO API: `localhost:9000`
 - MinIO Console: `http://localhost:9001`
 - Prometheus: `http://localhost:9090`

@@ -232,6 +232,22 @@ type monitorSignalRow struct {
 	ProcessedAt  *time.Time     `json:"processed_at,omitempty"`
 }
 
+type monitorRedisEngineRow struct {
+	AuctionID          string     `json:"auction_id"`
+	Status             string     `json:"status"`
+	CurrentPrice       int64      `json:"current_price_cents"`
+	CurrentWinnerID    *string    `json:"current_winner_id,omitempty"`
+	Seq                int64      `json:"seq"`
+	EngineEpoch        int64      `json:"engine_epoch"`
+	EngineSeq          int64      `json:"engine_seq"`
+	EnginePaused       bool       `json:"engine_paused"`
+	EnginePauseReason  *string    `json:"engine_pause_reason,omitempty"`
+	EnginePausedAt     *time.Time `json:"engine_paused_at,omitempty"`
+	PendingSettlements int64      `json:"pending_settlements"`
+	FailedSettlements  int64      `json:"failed_settlements"`
+	LastSettledAt      *time.Time `json:"last_settled_at,omitempty"`
+}
+
 type createSignalRequest struct {
 	SignalType string         `json:"signal_type"`
 	TargetType string         `json:"target_type"`
@@ -411,7 +427,8 @@ func (h MonitorHandler) Outbox(w http.ResponseWriter, r *http.Request) {
 		FROM outbox_events e
 		JOIN outbox_delivery d ON d.outbox_id = e.id
 		LEFT JOIN outbox_relay_shard_leases l ON l.shard_id = d.shard_id
-		ORDER BY e.created_at DESC, e.id DESC
+		ORDER BY CASE WHEN d.status IN ('PENDING','FAILED','PUBLISHING') THEN 0 ELSE 1 END,
+		         e.created_at DESC, e.id DESC
 		LIMIT $1
 	`, monitorLimit(r))
 	if err != nil {
@@ -553,22 +570,28 @@ func (h MonitorHandler) Rejects(w http.ResponseWriter, r *http.Request) {
 
 func (h MonitorHandler) Recovery(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.Deps.Postgres.Query(r.Context(), `
-		SELECT COALESCE(room_id, '-') AS room_id,
-		       count(*) FILTER (WHERE event_type = 'ws_reconnect') AS reconnect_count_recent,
-		       count(*) FILTER (WHERE event_type = 'ws_recovered' AND payload_json->>'source' = 'history') AS history_recovered,
-		       count(*) FILTER (WHERE event_type = 'ws_recovered' AND payload_json->>'source' IN ('snapshot','db','redis')) AS snapshot_recovered,
-		       count(*) FILTER (WHERE event_type = 'ws_recovered' AND payload_json->>'source' = 'db') AS snapshot_from_db,
-		       count(*) FILTER (WHERE event_type = 'ws_recovered' AND payload_json->>'stale' = 'true') AS snapshot_stale,
-		       count(*) FILTER (WHERE event_type = 'ws_slow_consumer_closed') AS slow_consumer_disconnects,
-		       count(*) FILTER (WHERE event_type = 'ws_slow_consumer_closed' AND payload_json->>'reason' = 'pending_bytes') AS slow_pending_bytes,
-		       count(*) FILTER (WHERE event_type = 'ws_slow_consumer_closed' AND payload_json->>'reason' = 'pending_messages') AS slow_pending_messages,
-		       COALESCE(max((payload_json->>'queue_bytes')::bigint) FILTER (WHERE event_type = 'ws_slow_consumer_closed' AND payload_json ? 'queue_bytes'), 0) AS max_queue_bytes,
-		       COALESCE(max((payload_json->>'queue_depth')::bigint) FILTER (WHERE event_type = 'ws_slow_consumer_closed' AND payload_json ? 'queue_depth'), 0) AS max_queue_depth
-		FROM user_activity_events
-		WHERE created_at >= now() - interval '10 minutes'
-		  AND event_type IN ('ws_reconnect','ws_recovered','ws_slow_consumer_closed')
-		GROUP BY COALESCE(room_id, '-')
-		ORDER BY reconnect_count_recent DESC, room_id
+		SELECT room_id, reconnect_count_recent, history_recovered, snapshot_recovered,
+		       snapshot_from_db, snapshot_stale, slow_consumer_disconnects,
+		       slow_pending_bytes, slow_pending_messages, max_queue_bytes, max_queue_depth
+		FROM (
+		  SELECT COALESCE(room_id, '-') AS room_id,
+		         count(*) FILTER (WHERE event_type = 'ws_reconnect') AS reconnect_count_recent,
+		         count(*) FILTER (WHERE event_type = 'ws_recovered' AND payload_json->>'source' = 'history') AS history_recovered,
+		         count(*) FILTER (WHERE event_type = 'ws_recovered' AND payload_json->>'source' IN ('snapshot','db','redis')) AS snapshot_recovered,
+		         count(*) FILTER (WHERE event_type = 'ws_recovered' AND payload_json->>'source' = 'db') AS snapshot_from_db,
+		         count(*) FILTER (WHERE event_type = 'ws_recovered' AND payload_json->>'stale' = 'true') AS snapshot_stale,
+		         count(*) FILTER (WHERE event_type = 'ws_slow_consumer_closed') AS slow_consumer_disconnects,
+		         count(*) FILTER (WHERE event_type = 'ws_slow_consumer_closed' AND payload_json->>'reason' = 'pending_bytes') AS slow_pending_bytes,
+		         count(*) FILTER (WHERE event_type = 'ws_slow_consumer_closed' AND payload_json->>'reason' = 'pending_messages') AS slow_pending_messages,
+		         COALESCE(max((payload_json->>'queue_bytes')::bigint) FILTER (WHERE event_type = 'ws_slow_consumer_closed' AND payload_json ? 'queue_bytes'), 0) AS max_queue_bytes,
+		         COALESCE(max((payload_json->>'queue_depth')::bigint) FILTER (WHERE event_type = 'ws_slow_consumer_closed' AND payload_json ? 'queue_depth'), 0) AS max_queue_depth,
+		         max(created_at) AS last_event_at
+		  FROM user_activity_events
+		  WHERE created_at >= now() - interval '10 minutes'
+		    AND event_type IN ('ws_reconnect','ws_recovered','ws_slow_consumer_closed')
+		  GROUP BY COALESCE(room_id, '-')
+		) recovery
+		ORDER BY last_event_at DESC, reconnect_count_recent DESC, room_id
 		LIMIT $1
 	`, monitorLimit(r))
 	if err != nil {
@@ -651,6 +674,42 @@ func (h MonitorHandler) Signals(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": result})
 }
 
+func (h MonitorHandler) RedisEngine(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.Deps.Postgres.Query(r.Context(), `
+		SELECT a.id, a.status, a.current_price_cents, a.current_winner_id, a.seq,
+		       a.engine_epoch, a.engine_seq, a.engine_paused, a.engine_pause_reason,
+		       a.engine_paused_at,
+		       COALESCE(count(s.id) FILTER (WHERE s.status = 'PROCESSING'), 0) AS pending_settlements,
+		       COALESCE(count(s.id) FILTER (WHERE s.status = 'FAILED'), 0) AS failed_settlements,
+		       max(s.settled_at) AS last_settled_at
+		FROM auctions a
+		LEFT JOIN redis_engine_settlements s ON s.auction_id = a.id
+		WHERE a.engine_seq > 0 OR a.engine_paused OR a.status = 'ACTIVE'
+		GROUP BY a.id
+		ORDER BY a.updated_at DESC
+		LIMIT $1
+	`, monitorLimit(r))
+	if err != nil {
+		writeError(w, r, internalMonitorError(err))
+		return
+	}
+	defer rows.Close()
+	result := []monitorRedisEngineRow{}
+	for rows.Next() {
+		var row monitorRedisEngineRow
+		if err := rows.Scan(&row.AuctionID, &row.Status, &row.CurrentPrice, &row.CurrentWinnerID, &row.Seq, &row.EngineEpoch, &row.EngineSeq, &row.EnginePaused, &row.EnginePauseReason, &row.EnginePausedAt, &row.PendingSettlements, &row.FailedSettlements, &row.LastSettledAt); err != nil {
+			writeError(w, r, internalMonitorError(err))
+			return
+		}
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, r, internalMonitorError(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": result})
+}
+
 func (h MonitorHandler) CreateSignal(w http.ResponseWriter, r *http.Request) {
 	user, ok := currentUser(r)
 	if !ok {
@@ -713,6 +772,13 @@ func validateMonitorSignalRequest(req createSignalRequest) error {
 		shardID, err := strconv.Atoi(req.TargetID)
 		if err != nil || shardID < 0 || shardID >= 16 {
 			return fmt.Errorf("relay_shard target_id must be an integer from 0 to 15")
+		}
+	case "pause_redis_engine", "resume_redis_engine", "reconcile_redis_engine":
+		if req.TargetType != "auction" {
+			return fmt.Errorf("%s requires auction target", req.SignalType)
+		}
+		if strings.TrimSpace(req.TargetID) == "" {
+			return fmt.Errorf("auction target_id is required")
 		}
 	default:
 		return fmt.Errorf("unsupported signal_type %s", req.SignalType)

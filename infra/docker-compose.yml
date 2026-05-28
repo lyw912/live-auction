@@ -20,7 +20,7 @@ services:
     image: redis:7-alpine
     container_name: live-auction-redis
     ports:
-      - "6379:6379"
+      - "6380:6379"
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis-data:/data

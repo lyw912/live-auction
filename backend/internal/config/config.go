@@ -68,7 +68,7 @@ func Load() Config {
 		HTTPAddr:    getEnv("HTTP_ADDR", ":8080"),
 		DatabaseURL: getEnv("DATABASE_URL", "postgres://live_auction:live_auction@localhost:5432/live_auction?sslmode=disable"),
 
-		RedisAddr:     getEnv("REDIS_ADDR", "localhost:6379"),
+		RedisAddr:     getEnv("REDIS_ADDR", "localhost:6380"),
 		RedisPassword: getEnv("REDIS_PASSWORD", ""),
 		RedisDB:       getEnvInt("REDIS_DB", 0),
 
@@ -88,7 +88,7 @@ func Load() Config {
 		BidAuctionMaxInFlight:     getEnvInt("BID_AUCTION_MAX_IN_FLIGHT", 32),
 		BidLimitWindow:            getEnvDuration("BID_LIMIT_WINDOW", time.Second),
 		BidLimitRedisTimeout:      getEnvDuration("BID_LIMIT_REDIS_TIMEOUT", 50*time.Millisecond),
-		BidEngineMode:             getEnv("BID_ENGINE_MODE", "postgres_lane"),
+		BidEngineMode:             getEnv("BID_ENGINE_MODE", "redis_ledger"),
 		BidLaneWorkers:            getEnvInt("BID_LANE_WORKERS", 1),
 		BidLaneQueueSize:          getEnvInt("BID_LANE_QUEUE_SIZE", 128),
 		BidLaneQueueTimeout:       getEnvDuration("BID_LANE_QUEUE_TIMEOUT", 750*time.Millisecond),

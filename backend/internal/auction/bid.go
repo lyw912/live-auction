@@ -25,6 +25,13 @@ const (
 	BidResultAcceptedExtended = "ACCEPTED_EXTENDED"
 	BidResultAcceptedSold     = "ACCEPTED_SOLD"
 	BidResultRejected         = "REJECTED"
+	BidResultEngineAccepted   = "ENGINE_ACCEPTED"
+	BidResultEngineRejected   = "ENGINE_REJECTED"
+	BidResultEngineSold       = "ENGINE_SOLD"
+
+	SettlementStatusPending = "PENDING"
+	SettlementStatusSettled = "SETTLED"
+	SettlementStatusFailed  = "FAILED"
 
 	BidSourceManual     = "MANUAL"
 	BidSourceAutoMaxBid = "AUTO_MAX_BID"
@@ -53,6 +60,9 @@ type BidResponse struct {
 	BidID             string     `json:"bid_id,omitempty"`
 	AuctionID         string     `json:"auction_id"`
 	Seq               int64      `json:"seq"`
+	EngineSeq         int64      `json:"engine_seq,omitempty"`
+	EngineEpoch       int64      `json:"engine_epoch,omitempty"`
+	SettlementStatus  string     `json:"settlement_status,omitempty"`
 	CurrentPriceCents int64      `json:"current_price_cents"`
 	CurrentWinnerID   *string    `json:"current_winner_id,omitempty"`
 	EndAt             *time.Time `json:"end_at,omitempty"`

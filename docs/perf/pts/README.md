@@ -59,6 +59,8 @@ Decision:
 | Aggressive differentiator | `redis_ledger` | Move hot bid decision out of PG row lock using Redis Lua + ledger + settlement + reconciliation. | Same codebase behind feature flag until failure gates pass. |
 | Realtime proof | WS fanout/reconnect | Prove room-scoped long connection, heartbeat, slow-client, 1000+ watcher route. | Mainline delivery plane for both modes. |
 
+2026-05-29 update: L4b Redis ledger is implemented in mainline as the hot bidding path. It requires Redis 5+ Streams/XADD; local Docker Redis is exposed as `localhost:6380` to avoid old Windows Redis 3.2 services on `localhost:6379`. Evidence: `docs/evidence/pts-l4b-redis-ledger-engine-2026-05-29.md`.
+
 These are layers, not competing branches. Temporary branches can be used for review, but the target architecture is integrated.
 
 ## Development Sequence
