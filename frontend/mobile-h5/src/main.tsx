@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { AlertTriangle, BadgeCheck, Bell, BellOff, CheckCircle2, ChevronUp, Clock3, CreditCard, Gift, Heart, History, MessageCircle, MoreHorizontal, PackageCheck, Radio, RefreshCw, Send, ShieldCheck, ShoppingCart, Truck, Trophy, Users, Wifi, WifiOff, X } from 'lucide-react';
 import type { AtmosphereCue, AtmosphereInput } from './atmosphere';
 import { normalizeAtmosphere } from './atmosphere';
+import { reconnectDelayMS } from './realtime';
 import './styles.css';
 
 type AuctionState =
@@ -467,6 +468,15 @@ function retryAfterMS(response: Response, payload?: BidResponse | null) {
   return 0;
 }
 
+function retryAfterMSFromHeaders(response: Response) {
+  const header = response.headers.get('Retry-After');
+  if (!header) return 0;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds) && seconds > 0) return seconds * 1000;
+  const dateMS = Date.parse(header);
+  return Number.isFinite(dateMS) ? Math.max(0, dateMS - Date.now()) : 0;
+}
+
 function riskActionCopy(code?: string | null) {
   switch (code) {
     case 'BID_AUCTION_TOO_HOT':
@@ -515,7 +525,7 @@ function maxBidErrorCopy(code?: string | null) {
 }
 
 function isDangerousActionDisabled(scenario: Scenario, connectionPhase: ConnectionPhase) {
-  return scenario.ctaDisabled || scenario.stale || scenario.sold || connectionPhase === 'recovering' || connectionPhase === 'disconnected';
+  return scenario.ctaDisabled || scenario.stale || scenario.sold || connectionPhase === 'connecting' || connectionPhase === 'recovering' || connectionPhase === 'disconnected';
 }
 
 function isTestMatrixEnabled() {
@@ -610,6 +620,8 @@ function App() {
   const bidInFlightRef = useRef(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
+  const reconnectAttemptRef = useRef(0);
+  const recoveryInFlightRef = useRef(false);
   const lastSeqRef = useRef(lastSeq);
   const currentPriceRef = useRef(currentPriceCents);
   const leaderMaskedRef = useRef(leaderMasked);
@@ -1191,6 +1203,8 @@ function App() {
   const recoverFromSnapshot = async () => {
     const auctionID = activeAuctionIDRef.current;
     if (!auctionID) return;
+    if (recoveryInFlightRef.current) return;
+    recoveryInFlightRef.current = true;
     setSelected('active_bids');
     setRecoveryPhase('recovering');
     setConnectionPhase((phase) => phase === 'disconnected' ? phase : 'recovering');
@@ -1209,6 +1223,8 @@ function App() {
       setConnectionPhase('connected');
     } catch {
       setBidFeedback('snapshot unavailable，继续同步');
+    } finally {
+      recoveryInFlightRef.current = false;
     }
   };
 
@@ -1433,11 +1449,13 @@ function App() {
         reconnectTimerRef.current = null;
       }
     };
-    const scheduleReconnect = () => {
+    const scheduleReconnect = (retryAfter = 0) => {
       clearReconnect();
+      reconnectAttemptRef.current += 1;
+      const delay = reconnectDelayMS(reconnectAttemptRef.current, retryAfter);
       reconnectTimerRef.current = window.setTimeout(() => {
         if (!cancelled) void connectWebSocket();
-      }, 2_000);
+      }, delay);
     };
     const connectWebSocket = async () => {
       if (!sessionReady || !activeAuctionID) return;
@@ -1450,9 +1468,10 @@ function App() {
           },
           body: JSON.stringify({ room_id: roomID, auction_id: activeAuctionID })
         });
-        const ticketPayload = await ticketResponse.json() as WSTicketResponse;
-        if (!ticketResponse.ok || !ticketPayload.ticket) {
-          throw new Error('ws ticket unavailable');
+        const ticketPayload = await readJSON<WSTicketResponse>(ticketResponse);
+        if (!ticketResponse.ok || !ticketPayload?.ticket) {
+          scheduleReconnect(retryAfterMSFromHeaders(ticketResponse));
+          return;
         }
         if (cancelled) return;
         const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
@@ -1460,7 +1479,10 @@ function App() {
         const socket = new WebSocket(wsURL, ['auction.v1', `ticket.${ticketPayload.ticket}`]);
         wsRef.current = socket;
         socket.onopen = () => {
-          if (!cancelled) setConnectionPhase('connected');
+          if (!cancelled) {
+            reconnectAttemptRef.current = 0;
+            setConnectionPhase('connected');
+          }
         };
         socket.onmessage = (message) => {
           try {
@@ -1503,11 +1525,12 @@ function App() {
 
   useEffect(() => {
     if (!sessionReady || !activeAuctionID || selected !== 'active_bids') return undefined;
+    if (connectionPhase === 'connected' && recoveryPhase === 'idle' && !countdownExpired) return undefined;
     const timer = window.setInterval(() => {
       void recoverFromSnapshot();
     }, 2_500);
     return () => window.clearInterval(timer);
-  }, [activeAuctionID, sessionReady, selected]);
+  }, [activeAuctionID, connectionPhase, countdownExpired, recoveryPhase, sessionReady, selected]);
 
   const submitBid = async () => {
     const auctionID = activeAuctionIDRef.current;
@@ -2157,9 +2180,11 @@ function AuctionStatePanel({
   onPay: () => void;
   onPrimaryAction: () => void;
 }) {
+  const unsafeAction = isDangerousActionDisabled(scenario, connectionPhase);
+  const primaryDisabled = scenario.sold ? scenario.ctaDisabled : unsafeAction;
   const dockState = scenario.pending
     ? 'PENDING'
-    : scenario.stale || connectionPhase === 'disconnected' || connectionPhase === 'recovering'
+    : unsafeAction && !scenario.sold
       ? 'RECOVERING'
       : scenario.winner
         ? 'SOLD_WINNER'
@@ -2181,7 +2206,7 @@ function AuctionStatePanel({
   const rankAction = leaderboardActionCopy(leaderboard, nextBidCents);
   const mediaURL = item.video_poster_url ?? item.videoPosterURL ?? item.image_url ?? item.imageURL ?? '';
   const bidHint = (() => {
-    if (scenario.stale || connectionPhase === 'recovering' || connectionPhase === 'disconnected') return '权威价格同步中，暂不提交出价';
+    if (unsafeAction && !scenario.sold) return '权威价格同步中，暂不提交出价';
     if (scenario.title === '需完成验证') return scenario.feedback;
     if (scenario.ctaDisabled && !scenario.sold && scenario.leader.includes('你')) return '当前您已是最高价，等待其他用户出价';
     if (nextBidCents > minimumNextBidCents) return `高于当前价 ${formatCents(nextBidCents - currentPriceCents)} · 高于最低下一口 ${formatCents(nextBidCents - minimumNextBidCents)}`;
@@ -2263,7 +2288,7 @@ function AuctionStatePanel({
         <span>{scenario.sold ? 'ORDER' : formatCents(nextBidCents)}</span>
         <button type="button" aria-label="increase" onClick={onIncreaseBid}><ChevronUp size={18} /></button>
       </div>
-      <button className="primary-cta" data-testid="bid-cta" disabled={scenario.ctaDisabled} onClick={onPrimaryAction}>
+      <button className="primary-cta" data-testid="bid-cta" disabled={primaryDisabled} onClick={onPrimaryAction}>
         {scenario.winner ? <CreditCard size={18} /> : scenario.rejected ? <AlertTriangle size={18} /> : <CheckCircle2 size={18} />}
         {scenario.cta}
       </button>

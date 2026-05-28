@@ -30,6 +30,8 @@ func realtimeOptions(cfg config.Config) realtime.Options {
 		HistoryTTL:           cfg.RealtimeHistoryTTL,
 		SnapshotTTL:          cfg.RealtimeSnapshotTTL,
 		StreamEpochTTL:       cfg.RealtimeStreamEpochTTL,
+		HeartbeatInterval:    cfg.WSHeartbeatInterval,
+		HeartbeatTimeout:     cfg.WSHeartbeatTimeout,
 	}
 }
 
@@ -61,6 +63,8 @@ func NewRouterWithRealtime(cfg config.Config, deps *storage.Dependencies, log *s
 		WSQueueBytes:          cfg.WSQueueBytes,
 		WSRecoveryMaxEvents:   cfg.WSRecoveryMaxEvents,
 		WSSnapshotRebuildMax:  cfg.WSSnapshotRebuildMax,
+		WSHeartbeatInterval:   cfg.WSHeartbeatInterval,
+		WSHeartbeatTimeout:    cfg.WSHeartbeatTimeout,
 	})
 
 	r := chi.NewRouter()

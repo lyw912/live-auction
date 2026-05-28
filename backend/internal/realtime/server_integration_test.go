@@ -251,6 +251,26 @@ func TestServeWSAdmissionRejectsWhenConnectSaturated(t *testing.T) {
 	}
 }
 
+func TestNormalizeOptionsKeepsHeartbeatConfig(t *testing.T) {
+	options := normalizeOptions(Options{
+		HeartbeatInterval: 3 * time.Second,
+		HeartbeatTimeout:  750 * time.Millisecond,
+	})
+	if options.HeartbeatInterval != 3*time.Second {
+		t.Fatalf("HeartbeatInterval = %s, want 3s", options.HeartbeatInterval)
+	}
+	if options.HeartbeatTimeout != 750*time.Millisecond {
+		t.Fatalf("HeartbeatTimeout = %s, want 750ms", options.HeartbeatTimeout)
+	}
+}
+
+func TestSnapshotSourceMarksStaleRedisRecovery(t *testing.T) {
+	payload := []byte(`{"event_type":"snapshot","auction_id":"auc","seq":7,"source":"redis","stale":true,"payload":{}}`)
+	if got := snapshotSource(payload, "redis"); got != "redis_stale" {
+		t.Fatalf("snapshotSource = %q, want redis_stale", got)
+	}
+}
+
 func TestHubClosesSlowConsumerOnBoundedQueueOverflow(t *testing.T) {
 	hub := NewHub(1)
 	closed := make(chan struct{})

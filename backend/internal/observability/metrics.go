@@ -54,6 +54,8 @@ type AdmissionConfig struct {
 	WSQueueBytes          int64
 	WSRecoveryMaxEvents   int64
 	WSSnapshotRebuildMax  int
+	WSHeartbeatInterval   time.Duration
+	WSHeartbeatTimeout    time.Duration
 }
 
 var Default = NewRegistry()
@@ -119,6 +121,8 @@ func SetAdmissionConfig(cfg AdmissionConfig) {
 	Set("auction_realtime_config_limit", float64(cfg.WSQueueBytes), map[string]string{"kind": "ws_queue_bytes"})
 	Set("auction_realtime_config_limit", float64(cfg.WSRecoveryMaxEvents), map[string]string{"kind": "ws_recovery_max_events"})
 	Set("auction_realtime_config_limit", float64(cfg.WSSnapshotRebuildMax), map[string]string{"kind": "ws_snapshot_rebuild_max_in_flight"})
+	Set("auction_realtime_config_limit", cfg.WSHeartbeatInterval.Seconds(), map[string]string{"kind": "ws_heartbeat_interval_seconds"})
+	Set("auction_realtime_config_limit", cfg.WSHeartbeatTimeout.Seconds(), map[string]string{"kind": "ws_heartbeat_timeout_seconds"})
 }
 
 func (r *Registry) ServeHTTP(w http.ResponseWriter, req *http.Request) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRegistryRendersPrometheusText(t *testing.T) {
@@ -20,6 +21,32 @@ func TestRegistryRendersPrometheusText(t *testing.T) {
 		`auction_bid_latency_seconds_bucket{le="0.05"} 1`,
 		`auction_bid_latency_seconds_count 1`,
 		`runtime_goroutines`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("metrics text missing %q in:\n%s", want, text)
+		}
+	}
+}
+
+func TestSetAdmissionConfigRendersRealtimeHeartbeatLimits(t *testing.T) {
+	old := Default
+	t.Cleanup(func() { Default = old })
+	Default = NewRegistry()
+
+	SetAdmissionConfig(AdmissionConfig{
+		Enabled:              true,
+		WSQueueMessages:      256,
+		WSQueueBytes:         1 << 20,
+		WSRecoveryMaxEvents:  300,
+		WSSnapshotRebuildMax: 4,
+		WSHeartbeatInterval:  20 * time.Second,
+		WSHeartbeatTimeout:   5 * time.Second,
+	})
+
+	text := string(Default.Render(context.Background()))
+	for _, want := range []string{
+		`auction_realtime_config_limit{kind="ws_heartbeat_interval_seconds"} 20`,
+		`auction_realtime_config_limit{kind="ws_heartbeat_timeout_seconds"} 5`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("metrics text missing %q in:\n%s", want, text)

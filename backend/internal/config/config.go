@@ -45,6 +45,8 @@ type Config struct {
 	WSQueueBytes           int64
 	WSRecoveryMaxEvents    int64
 	WSSnapshotRebuildMax   int
+	WSHeartbeatInterval    time.Duration
+	WSHeartbeatTimeout     time.Duration
 	RealtimeHistoryTTL     time.Duration
 	RealtimeSnapshotTTL    time.Duration
 	RealtimeStreamEpochTTL time.Duration
@@ -98,6 +100,8 @@ func Load() Config {
 		WSQueueBytes:           getEnvInt64("WS_QUEUE_BYTES", 1<<20),
 		WSRecoveryMaxEvents:    getEnvInt64("WS_RECOVERY_MAX_EVENTS", 300),
 		WSSnapshotRebuildMax:   getEnvInt("WS_SNAPSHOT_REBUILD_MAX_IN_FLIGHT", 4),
+		WSHeartbeatInterval:    getEnvDuration("WS_HEARTBEAT_INTERVAL", 20*time.Second),
+		WSHeartbeatTimeout:     getEnvDuration("WS_HEARTBEAT_TIMEOUT", 5*time.Second),
 		RealtimeHistoryTTL:     getEnvDuration("REALTIME_HISTORY_TTL", 30*time.Minute),
 		RealtimeSnapshotTTL:    getEnvDuration("REALTIME_SNAPSHOT_TTL", 30*time.Minute),
 		RealtimeStreamEpochTTL: getEnvDuration("REALTIME_STREAM_EPOCH_TTL", 24*time.Hour),

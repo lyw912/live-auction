@@ -269,6 +269,7 @@ test('H5 opens browser WebSocket with ticket subprotocol and consumes authoritat
   });
 
   await page.goto('/');
+  await page.getByRole('button', { name: /进入竞拍面板/ }).click();
   await expect(page.getByText('WebSocket 已连接 · 状态来自服务端事件')).toBeVisible();
   const expectedWSURL = await page.evaluate(() => {
     const wsScheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -301,7 +302,61 @@ test('H5 opens browser WebSocket with ticket subprotocol and consumes authoritat
 
   await expect(page.getByText('event seq 42')).toBeVisible();
   await expect(page.getByLabel('auction-state').locator('h2')).toHaveText('¥400.00');
-  await expect(page.getByText('陈** 领先')).toBeVisible();
+  await expect(page.getByLabel('auction-state').getByText('陈** 领先').first()).toBeVisible();
+});
+
+test('H5 keeps recovery snapshot quiet while WebSocket is healthy', async ({ page }) => {
+  let snapshotReads = 0;
+  await page.route('/api/auctions/auc_live', async (route) => {
+    snapshotReads += 1;
+    await route.fulfill({
+      json: {
+        event_type: 'snapshot',
+        auction_id: 'auc_live',
+        id: 'auc_live',
+        status: 'ACTIVE',
+        seq: 41,
+        source: 'db',
+        stale: false,
+        current_price_cents: 35000,
+        increment_cents: 5000,
+        current_winner_id: 'user_2',
+        end_at: '2099-05-22T14:00:00Z',
+        server_time_ms: Date.parse('2099-05-22T13:58:45Z'),
+        payload: {
+          status: 'ACTIVE',
+          current_price_cents: 35000,
+          leader_user_masked: '张**',
+          current_winner_id: 'user_2',
+          end_at: '2099-05-22T14:00:00Z',
+          server_time_ms: Date.parse('2099-05-22T13:58:45Z')
+        }
+      }
+    });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: /进入竞拍面板/ }).click();
+  await expect(page.getByText('WebSocket 已连接 · 状态来自服务端事件')).toBeVisible();
+  await page.waitForTimeout(3200);
+  expect(snapshotReads).toBe(1);
+});
+
+test('H5 disables bid CTA while WebSocket is still connecting', async ({ page }) => {
+  await page.route('/api/auth/ws-ticket', async (route) => {
+    await route.fulfill({
+      status: 429,
+      headers: { 'Retry-After': '2' },
+      body: 'ws admission retry later'
+    });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: /进入竞拍面板/ }).click();
+  await expect(page.getByText('WebSocket 连接中 · 状态来自服务端事件')).toBeVisible();
+  await expect(page.getByTestId('bid-cta')).toBeDisabled();
+  await page.waitForTimeout(500);
+  await expect(page.getByTestId('bid-cta')).toBeDisabled();
 });
 
 test('H5 recovering and disconnected states show stale marker', async ({ page }) => {
@@ -787,8 +842,8 @@ test('H5 seq gap enters recovering and resumes from fresh snapshot', async ({ pa
 
   releaseSnapshot();
   await expect(page.getByText('snapshot db seq 44')).toBeVisible();
-  await expect(page.getByText('¥450.00')).toBeVisible();
-  await expect(page.getByText('王** 领先')).toBeVisible();
+  await expect(page.getByTestId('auction-price')).toHaveText('¥450.00');
+  await expect(page.getByLabel('auction-state').getByText('王** 领先').first()).toBeVisible();
   await expect(page.getByTestId('auction-countdown')).toHaveText(/延时后|剩余/);
   await expect(page.getByTestId('bid-cta')).toBeEnabled();
 });

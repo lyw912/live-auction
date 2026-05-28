@@ -77,6 +77,8 @@ func realtimeOptions(cfg config.Config) realtime.Options {
 		HistoryTTL:           cfg.RealtimeHistoryTTL,
 		SnapshotTTL:          cfg.RealtimeSnapshotTTL,
 		StreamEpochTTL:       cfg.RealtimeStreamEpochTTL,
+		HeartbeatInterval:    cfg.WSHeartbeatInterval,
+		HeartbeatTimeout:     cfg.WSHeartbeatTimeout,
 	}
 }
 

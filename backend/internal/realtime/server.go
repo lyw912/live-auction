@@ -241,7 +241,7 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 	connCtx, cancelConn := context.WithCancel(r.Context())
 	defer cancelConn()
 	writeMu := &sync.Mutex{}
-	go s.keepAlive(connCtx, conn, roomID, auctionID, ticket.UserID)
+	go s.keepAlive(connCtx, cancelConn, conn, roomID, auctionID, ticket.UserID)
 
 	slow := make(chan SlowConsumerInfo, 1)
 	var closeSlow sync.Once
@@ -267,6 +267,7 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 	})
 	_ = s.recordWSActivity(ctx, roomID, auctionID, ticket.UserID, "ws_recovered", map[string]any{
 		"source": recoverySource,
+		"stale":  recoverySource == "redis_stale",
 	})
 	for _, message := range messages {
 		if err := writeWS(writeCtx, conn, writeMu, websocket.MessageText, message); err != nil {
@@ -325,7 +326,7 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) keepAlive(ctx context.Context, conn *websocket.Conn, roomID string, auctionID string, userID string) {
+func (s *Server) keepAlive(ctx context.Context, cancelConn context.CancelFunc, conn *websocket.Conn, roomID string, auctionID string, userID string) {
 	ticker := time.NewTicker(s.options.HeartbeatInterval)
 	defer ticker.Stop()
 	for {
@@ -341,6 +342,7 @@ func (s *Server) keepAlive(ctx context.Context, conn *websocket.Conn, roomID str
 					"timeout_ms":  int64(s.options.HeartbeatTimeout / time.Millisecond),
 				})
 				_ = conn.Close(websocket.StatusPolicyViolation, "heartbeat timeout")
+				cancelConn()
 				return
 			}
 			observability.Inc("auction_ws_heartbeat_ping_total", nil)
@@ -412,7 +414,7 @@ func (s *Server) snapshotMessage(ctx context.Context, auctionID string) ([][]byt
 			_ = s.recordSnapshotSaturated(ctx, auctionID)
 		}
 		if stale := s.staleSnapshot(ctx, auctionID); len(stale) > 0 {
-			return [][]byte{stale}, "redis"
+			return [][]byte{stale}, snapshotSource(stale, "redis")
 		}
 		return [][]byte{snapshotUnavailable(auctionID)}, "snapshot_unavailable"
 	}
@@ -544,6 +546,13 @@ func snapshotSource(payload []byte, fallback string) string {
 	}
 	if event.EventType == "snapshot_unavailable" {
 		return "snapshot_unavailable"
+	}
+	var staleEvent struct {
+		Stale bool `json:"stale"`
+	}
+	_ = json.Unmarshal(payload, &staleEvent)
+	if staleEvent.Stale {
+		return fallback + "_stale"
 	}
 	if event.Source != "" {
 		return event.Source
