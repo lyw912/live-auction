@@ -47,7 +47,7 @@ type BidderRequirement = {
   reason?: string;
 };
 
-type BidPhase = 'idle' | 'pending' | 'accepted' | 'rejected' | 'confirm_required' | 'confirming';
+type BidPhase = 'idle' | 'pending' | 'engine_pending' | 'accepted' | 'rejected' | 'confirm_required' | 'confirming';
 type PaymentPhase = 'idle' | 'pending' | 'paid' | 'failed' | 'expired';
 type RecoveryPhase = 'idle' | 'recovering';
 type ConnectionPhase = 'connecting' | 'connected' | 'recovering' | 'disconnected';
@@ -72,6 +72,9 @@ type BidResponse = {
   result?: string;
   auction_id?: string;
   seq?: number;
+  engine_seq?: number;
+  engine_epoch?: number;
+  settlement_status?: string;
   current_price_cents?: number;
   current_winner_id?: string;
   end_at?: string;
@@ -991,6 +994,20 @@ function App() {
         pending: true
       };
     }
+    if (bidPhase === 'engine_pending') {
+      return {
+        key: 'pending' as AuctionState,
+        title: '结算中',
+        status: 'ENGINE_PENDING',
+        price: formatCents(currentPriceCents),
+        leader: leaderMasked ? `${leaderMasked} 领先` : '热引擎已接收',
+        feedback: bidFeedback || `等待账本结算 seq ${lastSeq}`,
+        countdown: countdownCopy,
+        cta: '结算中',
+        ctaDisabled: true,
+        pending: true
+      };
+    }
     if (bidPhase === 'confirming') {
       return {
         key: 'pending' as AuctionState,
@@ -1025,7 +1042,7 @@ function App() {
         status: 'ACTIVE',
         price: formatCents(currentPriceCents),
         leader: '你已领先',
-        feedback: `服务端确认 seq ${lastSeq}`,
+        feedback: `已结算 seq ${lastSeq}`,
         countdown: countdownCopy,
         cta: '已领先',
         ctaDisabled: true
@@ -1071,12 +1088,31 @@ function App() {
   const applyAcceptedBid = (payload: BidResponse) => {
     const acceptedPrice = payload.current_price_cents ?? currentPriceCents;
     const acceptedWinnerID = payload.current_winner_id ?? '';
+    const isEnginePending = payload.result === 'ENGINE_ACCEPTED' && payload.settlement_status !== 'SETTLED';
+    const isEngineSoldPending = payload.result === 'ENGINE_SOLD' && payload.settlement_status !== 'SETTLED';
     setCurrentPriceCents(acceptedPrice);
     setMinimumNextBidCents(acceptedPrice + activeIncrementCents);
     setNextBidCents(acceptedPrice + activeIncrementCents);
-    setLastSeq(payload.seq ?? lastSeq);
+    setLastSeq(payload.seq ?? payload.engine_seq ?? lastSeq);
     if (payload.end_at) setAuctionEndAt(payload.end_at);
     if (payload.server_time_ms) setServerTimeMS(payload.server_time_ms);
+    if (isEnginePending || isEngineSoldPending) {
+      setBidFeedback(isEngineSoldPending
+        ? `热引擎已落锤，等待订单结算 seq ${payload.engine_seq ?? payload.seq ?? lastSeq}`
+        : `热引擎已接收，等待账本结算 seq ${payload.engine_seq ?? payload.seq ?? lastSeq}`);
+      setBidPhase('engine_pending');
+      showAtmosphere({
+        kind: 'leading',
+        title: isEngineSoldPending ? '落锤结算中' : '出价已接收',
+        detail: isEngineSoldPending ? '等待 PostgreSQL 订单结算' : '等待 Kafka 账本结算',
+        auction_id: payload.auction_id ?? activeAuctionIDRef.current,
+        cause_seq: payload.engine_seq ?? payload.seq ?? lastSeqRef.current,
+        event_type: payload.result ?? 'ENGINE_ACCEPTED',
+        user_scope: 'self'
+      });
+      void loadLeaderboard(payload.auction_id ?? activeAuctionIDRef.current);
+      return;
+    }
     if (payload.result === 'ACCEPTED_EXTENDED') {
       setExtensionNotice('服务端已延时');
       setBidFeedback(`服务端已延时 seq ${payload.seq ?? lastSeq}`);
@@ -1116,7 +1152,7 @@ function App() {
       showAtmosphere({
         kind: 'leading',
         title: '领先！',
-        detail: `${formatCents(acceptedPrice)} 服务端确认`,
+        detail: `${formatCents(acceptedPrice)} 已结算`,
         auction_id: payload.auction_id ?? activeAuctionIDRef.current,
         cause_seq: payload.seq ?? lastSeqRef.current,
         event_type: payload.result ?? 'bid_accepted',
@@ -1241,6 +1277,12 @@ function App() {
       void recoverFromSnapshot();
       return;
     }
+    if (detail.event_type === 'redis_engine_paused' || detail.event_type === 'redis_engine_reconciling') {
+      setBidPhase('engine_pending');
+      setBidFeedback(detail.event_type === 'redis_engine_paused' ? '拍卖引擎已暂停，等待结算恢复' : '拍卖引擎对账中');
+      setConnectionPhase('recovering');
+      return;
+    }
     if (detail.seq == null || detail.seq <= currentSeq) return;
     const price = detail.payload?.current_price_cents ?? detail.payload?.amount_cents ?? currentPriceRef.current;
     const increment = activeIncrementCentsRef.current;
@@ -1332,6 +1374,8 @@ function App() {
       setConfirmIdempotencyKey('');
       setConfirmAmountCents(0);
     } else if (winnerID === currentUserIDRef.current || detail.payload?.current_winner_id === currentUserIDRef.current) {
+      setBidPhase('accepted');
+      setBidFeedback(`已结算 seq ${detail.seq}`);
       showAtmosphere({
         kind: 'leading',
         title: '领先！',

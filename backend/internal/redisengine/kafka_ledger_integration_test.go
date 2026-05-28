@@ -19,11 +19,12 @@ func TestKafkaLedgerRedpandaIntegration(t *testing.T) {
 	}
 	suffix := uuid.NewString()
 	ledger, err := NewKafkaLedger(KafkaLedgerConfig{
-		Brokers:       parseKafkaBrokers(brokers),
-		BidTopic:      "auction.bid-events.test." + suffix,
-		DLQTopic:      "auction.dlq.test." + suffix,
-		ConsumerGroup: "settlement-workers-test-" + suffix,
-		ClientID:      "redisengine-test-" + suffix,
+		Brokers:                parseKafkaBrokers(brokers),
+		BidTopic:               "auction.bid-events.test." + suffix,
+		DLQTopic:               "auction.dlq.test." + suffix,
+		ConsumerGroup:          "settlement-workers-test-" + suffix,
+		ClientID:               "redisengine-test-" + suffix,
+		AllowAutoTopicCreation: true,
 	})
 	if err != nil {
 		t.Fatalf("NewKafkaLedger: %v", err)

@@ -34,11 +34,13 @@ Redis is no longer the durable ledger in L4b. It is still required for the Lua s
 ## Failure Gates Covered
 
 - Kafka append failure after Redis decision pauses the auction and returns `ENGINE_PAUSED`.
+- Redis decision crash window is recoverable: reconciliation backfills Redis pending decisions into Kafka, deletes pending only after append, and settlement remains idempotent if Kafka already had the message.
 - Duplicate Kafka delivery is idempotent; duplicate settlement does not create a second bid/order/event.
 - Engine seq gap pauses settlement through `REDIS_ENGINE_LEDGER_GAP`.
 - Stale `engine_epoch` pauses settlement through `REDIS_ENGINE_STALE_EPOCH`.
 - Settlement retry is bounded; poison events go to DLQ and are recorded in PostgreSQL.
 - Reconcile detects Redis-ahead/DB-ahead and DLQ settlement drift.
+- H5 renders `ENGINE_ACCEPTED` / `ENGINE_SOLD` pending settlement distinctly instead of displaying DB-settled success.
 
 ## Validation
 
@@ -69,5 +71,10 @@ Real Kafka-compatible ledger smoke against local Redpanda:
 KAFKA_INTEGRATION=1 KAFKA_BROKERS=localhost:9092 go test ./internal/redisengine -run TestKafkaLedgerRedpandaIntegration -count=1 -v
 PASS
 ```
+
+Recovery fix record:
+
+- `docs/reviews/pts-l4b-kafka-ledger-judge-review-2026-05-29.md`
+- `docs/evidence/pts-l4b-kafka-ledger-recovery-fix-2026-05-29.md`
 
 No PTS latency number is claimed here. Redis/Kafka engine performance still needs the same-JMX before/after PTS profile with raw outputs, DB/Redis/Kafka/outbox/WS metrics snapshots, and invariant reports.

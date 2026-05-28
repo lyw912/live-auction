@@ -38,11 +38,12 @@ type BidLedger interface {
 }
 
 type KafkaLedgerConfig struct {
-	Brokers       []string
-	BidTopic      string
-	DLQTopic      string
-	ConsumerGroup string
-	ClientID      string
+	Brokers                []string
+	BidTopic               string
+	DLQTopic               string
+	ConsumerGroup          string
+	ClientID               string
+	AllowAutoTopicCreation bool
 }
 
 type KafkaLedger struct {
@@ -81,7 +82,7 @@ func NewKafkaLedger(cfg KafkaLedgerConfig) (*KafkaLedger, error) {
 		WriteTimeout:           3 * time.Second,
 		ReadTimeout:            3 * time.Second,
 		MaxAttempts:            3,
-		AllowAutoTopicCreation: true,
+		AllowAutoTopicCreation: cfg.AllowAutoTopicCreation,
 	}
 	dlq := &kafka.Writer{
 		Addr:                   addr,
@@ -94,7 +95,7 @@ func NewKafkaLedger(cfg KafkaLedgerConfig) (*KafkaLedger, error) {
 		WriteTimeout:           3 * time.Second,
 		ReadTimeout:            3 * time.Second,
 		MaxAttempts:            3,
-		AllowAutoTopicCreation: true,
+		AllowAutoTopicCreation: cfg.AllowAutoTopicCreation,
 	}
 	reader := kafka.NewReader(kafka.ReaderConfig{
 		Brokers:     cfg.Brokers,

@@ -2,6 +2,7 @@ package redisengine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"testing"
@@ -130,9 +131,7 @@ func TestRedisLedgerDuplicateReplayAndReconcilePause(t *testing.T) {
 	`, auctionID); err != nil {
 		t.Fatalf("clear pause for settlement: %v", err)
 	}
-	if err := rdb.HSet(ctx, "bid:{"+auctionID+"}:engine:state", "paused", 0, "pause_reason", "").Err(); err != nil {
-		t.Fatalf("clear redis pause: %v", err)
-	}
+	setRedisHashFields(t, rdb, redisx.BidEngineStateKey(auctionID), map[string]any{"paused": 0, "pause_reason": ""})
 	if _, err := worker.ProcessKafka(ctx, 1); err != nil {
 		t.Fatalf("settle: %v", err)
 	}
@@ -387,28 +386,26 @@ func TestKafkaSettlementRetriesThenDLQAndReconcilePause(t *testing.T) {
 	ledger := NewMemoryLedger()
 	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
 	auctionID := createEngineAuction(t, db, 0)
+	missingUserID := "missing_user_" + uuid.NewString()
 	result := engineResult{
 		Result:            resultAccepted,
 		BidID:             "bid_retry_" + uuid.NewString(),
 		AuctionID:         auctionID,
-		UserID:            "user_1",
+		UserID:            missingUserID,
 		ClientBidID:       "retry-bid",
 		AmountCents:       15_000,
 		EngineSeq:         1,
 		EngineEpoch:       1,
 		SettlementStatus:  auction.SettlementStatusPending,
 		CurrentPriceCents: 15_000,
-		CurrentWinnerID:   "user_1",
+		CurrentWinnerID:   missingUserID,
 		EndAtMS:           time.Now().UTC().Add(time.Minute).UnixMilli(),
 		ServerTimeMS:      time.Now().UTC().UnixMilli(),
 		TraceID:           "tr_retry",
-		RequestHash:       requestHash(auctionID, "user_1", "retry-bid", 15_000),
+		RequestHash:       requestHash(auctionID, missingUserID, "retry-bid", 15_000),
 	}
 	if _, err := ledger.Append(ctx, result); err != nil {
 		t.Fatalf("append retry: %v", err)
-	}
-	if _, err := db.Exec(ctx, `UPDATE auctions SET engine_paused = true, engine_pause_reason = 'TEST_PAUSED' WHERE id = $1`, auctionID); err != nil {
-		t.Fatalf("pause seed: %v", err)
 	}
 	if _, err := worker.ProcessKafka(ctx, 1); err != nil {
 		t.Fatalf("process should retry, DLQ, and commit poison: %v", err)
@@ -436,7 +433,7 @@ func TestKafkaSettlementRetriesThenDLQAndReconcilePause(t *testing.T) {
 	}
 }
 
-func TestReconcilePausesRedisDecisionWithoutKafkaAck(t *testing.T) {
+func TestReconcileRecoversRedisDecisionWithoutKafkaAck(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 	rdb := openStreamsRedis(t)
@@ -453,17 +450,103 @@ func TestReconcilePausesRedisDecisionWithoutKafkaAck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("place bid: %v", err)
 	}
-	if err := rdb.HSet(ctx, redisx.BidEnginePendingKey(auctionID), resp.EngineSeq, `{"lost":true}`).Err(); err != nil {
+	msg, ok := ledger.Message(0)
+	if !ok {
+		t.Fatalf("missing memory ledger message")
+	}
+	if err := rdb.HSet(ctx, redisx.BidEnginePendingKey(auctionID), resp.EngineSeq, string(msg.Value)).Err(); err != nil {
 		t.Fatalf("seed pending: %v", err)
 	}
 	report, err := worker.Reconcile(ctx, auctionID)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if report.Status != "REDIS_PENDING_WITHOUT_KAFKA_LEDGER" {
+	if report.RecoveredPending != 1 || report.Status != "DB_BEHIND_REDIS" {
 		t.Fatalf("report = %#v", report)
 	}
-	assertEnginePaused(t, db, auctionID, "REDIS_ENGINE_PENDING_KAFKA_APPEND_UNKNOWN")
+	pending, err := rdb.HLen(ctx, redisx.BidEnginePendingKey(auctionID)).Result()
+	if err != nil {
+		t.Fatalf("count pending after recover: %v", err)
+	}
+	if pending != 0 {
+		t.Fatalf("pending decisions = %d, want 0", pending)
+	}
+	assertEnginePaused(t, db, auctionID, "REDIS_ENGINE_DB_BEHIND_REDIS")
+	if _, err := db.Exec(ctx, `
+		UPDATE auctions
+		SET engine_paused = false, engine_pause_reason = NULL, engine_paused_at = NULL
+		WHERE id = $1
+	`, auctionID); err != nil {
+		t.Fatalf("clear pause for recovered settlement: %v", err)
+	}
+	setRedisHashFields(t, rdb, redisx.BidEngineStateKey(auctionID), map[string]any{"paused": 0, "pause_reason": ""})
+	if _, err := worker.ProcessKafka(ctx, 2); err != nil {
+		t.Fatalf("settle recovered pending: %v", err)
+	}
+	assertAuctionEngineSeq(t, db, auctionID, resp.EngineSeq, 15_000, "ACTIVE")
+}
+
+func TestReconcileBackfillsKafkaLedgerFromRedisPendingCrashWindow(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+	result := engineResult{
+		Result:            resultAccepted,
+		BidID:             "bid_pending_" + uuid.NewString(),
+		AuctionID:         auctionID,
+		UserID:            "user_1",
+		ClientBidID:       "pending-crash-bid",
+		AmountCents:       15_000,
+		EngineSeq:         1,
+		EngineEpoch:       1,
+		SettlementStatus:  auction.SettlementStatusPending,
+		CurrentPriceCents: 15_000,
+		CurrentWinnerID:   "user_1",
+		EndAtMS:           time.Now().UTC().Add(time.Minute).UnixMilli(),
+		ServerTimeMS:      time.Now().UTC().UnixMilli(),
+		TraceID:           "tr_pending_crash",
+		RequestHash:       requestHash(auctionID, "user_1", "pending-crash-bid", 15_000),
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal pending result: %v", err)
+	}
+	setRedisHashFields(t, rdb, redisx.BidEngineStateKey(auctionID), map[string]any{
+		"status":              "ACTIVE",
+		"current_price_cents": "15000",
+		"current_winner_id":   "user_1",
+		"engine_seq":          "1",
+		"engine_epoch":        "1",
+		"paused":              "0",
+		"pause_reason":        "",
+	})
+	if err := rdb.HSet(ctx, redisx.BidEnginePendingKey(auctionID), "1", string(raw)).Err(); err != nil {
+		t.Fatalf("seed redis pending: %v", err)
+	}
+	report, err := worker.Reconcile(ctx, auctionID)
+	if err != nil {
+		t.Fatalf("reconcile pending crash: %v", err)
+	}
+	if report.RecoveredPending != 1 || report.Status != "DB_BEHIND_REDIS" {
+		t.Fatalf("report = %#v", report)
+	}
+	if ledger.Len() != 1 {
+		t.Fatalf("ledger len = %d, want 1", ledger.Len())
+	}
+	if _, err := db.Exec(ctx, `
+		UPDATE auctions
+		SET engine_paused = false, engine_pause_reason = NULL, engine_paused_at = NULL
+		WHERE id = $1
+	`, auctionID); err != nil {
+		t.Fatalf("clear pause for recovered settlement: %v", err)
+	}
+	if _, err := worker.ProcessKafka(ctx, 1); err != nil {
+		t.Fatalf("settle recovered kafka backfill: %v", err)
+	}
+	assertAuctionEngineSeq(t, db, auctionID, 1, 15_000, "ACTIVE")
 }
 
 type failingLedger struct{}
@@ -489,6 +572,15 @@ func assertEnginePaused(t *testing.T, db *pgxpool.Pool, auctionID string, wantRe
 	}
 	if !paused || reason != wantReason {
 		t.Fatalf("pause state paused=%v reason=%q, want %q", paused, reason, wantReason)
+	}
+}
+
+func setRedisHashFields(t *testing.T, rdb *redis.Client, key string, fields map[string]any) {
+	t.Helper()
+	for field, value := range fields {
+		if err := rdb.HSet(context.Background(), key, field, value).Err(); err != nil {
+			t.Fatalf("set redis hash %s[%s]: %v", key, field, err)
+		}
 	}
 }
 

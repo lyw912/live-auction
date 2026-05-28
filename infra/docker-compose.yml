@@ -61,6 +61,20 @@ services:
       timeout: 5s
       retries: 30
 
+  redpanda-init:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.13
+    container_name: live-auction-redpanda-init
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        rpk topic create auction.bid-events --brokers redpanda:9092 --partitions 16 --replicas 1 --if-not-exists
+        rpk topic create auction.dlq --brokers redpanda:9092 --partitions 16 --replicas 1 --if-not-exists
+    restart: "no"
+
   minio:
     image: quay.io/minio/minio:latest
     container_name: live-auction-minio

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -537,6 +538,7 @@ type Report struct {
 	PendingSettlements int64     `json:"pending_settlements"`
 	FailedSettlements  int64     `json:"failed_settlements"`
 	DLQSettlements     int64     `json:"dlq_settlements"`
+	RecoveredPending   int64     `json:"recovered_pending"`
 	Paused             bool      `json:"paused"`
 	DriftCount         int       `json:"drift_count"`
 	Message            string    `json:"message,omitempty"`
@@ -657,6 +659,53 @@ func (w *Worker) ProcessReconcile(ctx context.Context, limit int) (int, error) {
 		processed++
 	}
 	return processed, nil
+}
+
+func (w *Worker) recoverPendingDecisions(ctx context.Context, auctionID string) (int64, error) {
+	if w == nil || w.redis == nil || w.ledger == nil {
+		return 0, nil
+	}
+	pendingKey := redisx.BidEnginePendingKey(auctionID)
+	entries, err := w.redis.HGetAll(ctx, pendingKey).Result()
+	if err != nil {
+		return 0, err
+	}
+	if len(entries) == 0 {
+		return 0, nil
+	}
+	type pendingDecision struct {
+		seq   int64
+		field string
+		raw   string
+	}
+	decisions := make([]pendingDecision, 0, len(entries))
+	for field, raw := range entries {
+		seq, err := strconv.ParseInt(field, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("invalid pending redis engine seq %q: %w", field, err)
+		}
+		decisions = append(decisions, pendingDecision{seq: seq, field: field, raw: raw})
+	}
+	sort.Slice(decisions, func(i, j int) bool { return decisions[i].seq < decisions[j].seq })
+
+	recovered := int64(0)
+	for _, decision := range decisions {
+		var result engineResult
+		if err := json.Unmarshal([]byte(decision.raw), &result); err != nil {
+			return recovered, err
+		}
+		if result.AuctionID != auctionID {
+			return recovered, fmt.Errorf("pending redis engine auction mismatch key=%s payload=%s", auctionID, result.AuctionID)
+		}
+		if _, err := w.ledger.Append(ctx, result); err != nil {
+			return recovered, err
+		}
+		if err := w.redis.HDel(ctx, pendingKey, decision.field).Err(); err != nil {
+			return recovered, err
+		}
+		recovered++
+	}
+	return recovered, nil
 }
 
 func (w *Worker) ProcessSignals(ctx context.Context, limit int) error {
@@ -817,17 +866,13 @@ func (w *Worker) settlePayload(ctx context.Context, auctionID string, ledgerID s
 
 	var dbEpoch int64
 	var dbSeq int64
-	var paused bool
 	if err := tx.QueryRow(ctx, `
-		SELECT engine_epoch, engine_seq, engine_paused
+		SELECT engine_epoch, engine_seq
 		FROM auctions
 		WHERE id = $1
 		FOR UPDATE
-	`, auctionID).Scan(&dbEpoch, &dbSeq, &paused); err != nil {
+	`, auctionID).Scan(&dbEpoch, &dbSeq); err != nil {
 		return err
-	}
-	if paused {
-		return fmt.Errorf("auction engine is paused")
 	}
 	if result.EngineEpoch != dbEpoch {
 		_ = markSettlementFailed(ctx, tx, auctionID, ledgerID, fmt.Sprintf("stale epoch redis=%d db=%d", result.EngineEpoch, dbEpoch))
@@ -1283,6 +1328,15 @@ func (w *Worker) Reconcile(ctx context.Context, auctionID string) (Report, error
 		return report, nil
 	}
 	report.RedisSeq = redisSeq
+	recovered, err := w.recoverPendingDecisions(ctx, auctionID)
+	if err != nil {
+		report.Status = "REDIS_PENDING_KAFKA_RECOVERY_FAILED"
+		report.DriftCount = 1
+		report.Message = err.Error()
+		_ = w.pause(ctx, auctionID, "REDIS_ENGINE_PENDING_KAFKA_RECOVERY_FAILED", err.Error(), "", nil)
+		return report, nil
+	}
+	report.RecoveredPending = recovered
 	pending, err := w.redis.HLen(ctx, redisx.BidEnginePendingKey(auctionID)).Result()
 	if err != nil && !errors.Is(err, redis.Nil) {
 		report.Status = "REDIS_PENDING_READ_FAILED"
@@ -1294,8 +1348,8 @@ func (w *Worker) Reconcile(ctx context.Context, auctionID string) (Report, error
 	if pending > 0 {
 		report.Status = "REDIS_PENDING_WITHOUT_KAFKA_LEDGER"
 		report.DriftCount = 1
-		report.Message = "Redis has hot-engine decisions not acknowledged by Kafka ledger"
-		_ = w.pause(ctx, auctionID, "REDIS_ENGINE_PENDING_KAFKA_APPEND_UNKNOWN", report.Message, "", map[string]any{"pending_decisions": pending})
+		report.Message = "Redis has hot-engine decisions that could not be recovered into Kafka ledger"
+		_ = w.pause(ctx, auctionID, "REDIS_ENGINE_PENDING_KAFKA_APPEND_UNKNOWN", report.Message, "", map[string]any{"pending_decisions": pending, "recovered_pending": recovered})
 		return report, nil
 	}
 	if redisSeq < dbSeq {
