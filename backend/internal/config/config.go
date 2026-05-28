@@ -14,6 +14,9 @@ type Config struct {
 	RedisAddr     string
 	RedisPassword string
 	RedisDB       int
+	KafkaBrokers  string
+	KafkaBidTopic string
+	KafkaDLQTopic string
 
 	MinIOEndpoint  string
 	MinIORootUser  string
@@ -71,6 +74,9 @@ func Load() Config {
 		RedisAddr:     getEnv("REDIS_ADDR", "localhost:6380"),
 		RedisPassword: getEnv("REDIS_PASSWORD", ""),
 		RedisDB:       getEnvInt("REDIS_DB", 0),
+		KafkaBrokers:  getEnv("KAFKA_BROKERS", "localhost:9092"),
+		KafkaBidTopic: getEnv("KAFKA_BID_TOPIC", "auction.bid-events"),
+		KafkaDLQTopic: getEnv("KAFKA_DLQ_TOPIC", "auction.dlq"),
 
 		MinIOEndpoint:  getEnv("MINIO_ENDPOINT", "localhost:9000"),
 		MinIORootUser:  getEnv("MINIO_ROOT_USER", "liveauction"),

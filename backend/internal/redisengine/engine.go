@@ -25,9 +25,9 @@ import (
 )
 
 const (
-	groupName         = "settlement"
 	engineStateTTL    = 30 * time.Minute
 	idempotencyTTL    = 24 * time.Hour
+	maxSettleAttempts = 3
 	resultAccepted    = "ENGINE_ACCEPTED"
 	resultRejected    = "ENGINE_REJECTED"
 	resultSold        = "ENGINE_SOLD"
@@ -37,7 +37,7 @@ const (
 var ledgerRunner = redisx.NewScriptRunner(redisx.ScriptBidRedisLedger, `
 local state_key = KEYS[1]
 local idem_key = KEYS[2]
-local stream_key = KEYS[3]
+local pending_key = KEYS[3]
 
 local now_ms = tonumber(ARGV[1])
 local auction_id = ARGV[2]
@@ -116,15 +116,10 @@ local function store_result(result)
   return encoded
 end
 
-local function append_ledger(result)
+local function store_decision(result)
   local encoded = store_result(result)
-  redis.call('xadd', stream_key, '*',
-    'auction_id', auction_id,
-    'engine_epoch', tostring(result['engine_epoch']),
-    'engine_seq', tostring(result['engine_seq']),
-    'result', result['result'],
-    'payload', encoded)
-  redis.call('PEXPIRE', stream_key, state_ttl_ms)
+  redis.call('HSET', pending_key, tostring(result['engine_seq']), encoded)
+  redis.call('PEXPIRE', pending_key, state_ttl_ms)
   return encoded
 end
 
@@ -150,7 +145,7 @@ local function reject(reason)
     trace_id = trace_id,
     request_hash = request_hash
   }
-  return {'OK', append_ledger(result)}
+  return {'OK', store_decision(result)}
 end
 
 if paused == '1' then
@@ -233,12 +228,13 @@ local result = {
   trace_id = trace_id,
   request_hash = request_hash
 }
-return {'OK', append_ledger(result)}
+return {'OK', store_decision(result)}
 `)
 
 type Engine struct {
-	db    *pgxpool.Pool
-	redis *redis.Client
+	db     *pgxpool.Pool
+	redis  *redis.Client
+	ledger BidLedger
 }
 
 type snapshot struct {
@@ -280,32 +276,13 @@ type engineResult struct {
 	RequestHash       string  `json:"request_hash"`
 }
 
-func New(db *pgxpool.Pool, redisClient *redis.Client) *Engine {
-	return &Engine{db: db, redis: redisClient}
-}
-
-func SupportsStreams(ctx context.Context, redisClient *redis.Client) error {
-	if redisClient == nil {
-		return fmt.Errorf("redis client is nil")
-	}
-	key := "bid:{streams-capability}:probe"
-	if err := redisClient.XAdd(ctx, &redis.XAddArgs{
-		Stream: key,
-		Values: map[string]any{"probe": "1"},
-	}).Err(); err != nil {
-		return fmt.Errorf("redis streams unsupported or unavailable: %w", err)
-	}
-	_ = redisClient.Del(ctx, key).Err()
-	return nil
+func New(db *pgxpool.Pool, redisClient *redis.Client, ledger BidLedger) *Engine {
+	return &Engine{db: db, redis: redisClient, ledger: ledger}
 }
 
 func (e *Engine) PlaceBid(ctx context.Context, auctionID string, userID string, idempotencyKey string, input auction.BidInput, traceID string) (auction.BidResponse, error) {
-	if e == nil || e.db == nil || e.redis == nil {
-		return auction.BidResponse{}, apierrors.New(apierrors.CodeEnginePaused, "redis ledger engine is unavailable", http.StatusServiceUnavailable)
-	}
-	if err := SupportsStreams(ctx, e.redis); err != nil {
-		_ = e.pause(ctx, auctionID, "REDIS_ENGINE_STREAMS_UNSUPPORTED", err.Error(), traceID)
-		return auction.BidResponse{}, apierrors.New(apierrors.CodeEnginePaused, "redis ledger engine requires Redis Streams/XADD", http.StatusServiceUnavailable)
+	if e == nil || e.db == nil || e.redis == nil || e.ledger == nil {
+		return auction.BidResponse{}, apierrors.New(apierrors.CodeEnginePaused, "redis/kafka ledger engine is unavailable", http.StatusServiceUnavailable)
 	}
 	if input.ClientBidID == "" || input.AmountCents <= 0 {
 		return auction.BidResponse{}, apierrors.New(apierrors.CodeInvalidArgument, "client_bid_id and positive amount_cents are required", http.StatusBadRequest)
@@ -332,7 +309,7 @@ func (e *Engine) PlaceBid(ctx context.Context, auctionID string, userID string, 
 	cmd := ledgerRunner.Run(ctx, e.redis, []string{
 		redisx.BidEngineStateKey(auctionID),
 		redisx.BidEngineIdempotencyKey(auctionID, input.ClientBidID),
-		redisx.BidEngineStreamKey(auctionID),
+		redisx.BidEnginePendingKey(auctionID),
 	}, nowMS, auctionID, userID, input.ClientBidID, input.AmountCents, requestHash, traceID, bidID, string(stateJSON), engineStateTTL.Milliseconds(), idempotencyTTL.Milliseconds())
 	values, err := cmd.Slice()
 	if err != nil {
@@ -360,6 +337,11 @@ func (e *Engine) PlaceBid(ctx context.Context, auctionID string, userID string, 
 		_ = e.pause(ctx, auctionID, "REDIS_ENGINE_RESULT_DECODE_FAILED", err.Error(), traceID)
 		return auction.BidResponse{}, err
 	}
+	if _, err := e.ledger.Append(ctx, result); err != nil {
+		_ = e.pause(ctx, auctionID, "KAFKA_LEDGER_APPEND_FAILED", err.Error(), traceID)
+		return auction.BidResponse{}, apierrors.New(apierrors.CodeEnginePaused, "kafka bid ledger append failed; auction engine paused", http.StatusServiceUnavailable)
+	}
+	_ = e.redis.HDel(ctx, redisx.BidEnginePendingKey(auctionID), strconv.FormatInt(result.EngineSeq, 10)).Err()
 	ledgerRunner.Record("ok", time.Since(start))
 	recordDecision(result.Result, time.Since(start))
 	return result.response(), nil
@@ -539,27 +521,32 @@ func recordDecision(result string, elapsed time.Duration) {
 type Worker struct {
 	db         *pgxpool.Pool
 	redis      *redis.Client
+	ledger     BidLedger
+	dlqTopic   string
 	consumerID string
 	batchSize  int64
 	block      time.Duration
 }
 
 type Report struct {
-	CheckedAt  time.Time `json:"checked_at"`
-	AuctionID  string    `json:"auction_id"`
-	Status     string    `json:"status"`
-	RedisSeq   int64     `json:"redis_engine_seq"`
-	DBSeq      int64     `json:"db_engine_seq"`
-	Paused     bool      `json:"paused"`
-	DriftCount int       `json:"drift_count"`
-	Message    string    `json:"message,omitempty"`
+	CheckedAt          time.Time `json:"checked_at"`
+	AuctionID          string    `json:"auction_id"`
+	Status             string    `json:"status"`
+	RedisSeq           int64     `json:"redis_engine_seq"`
+	DBSeq              int64     `json:"db_engine_seq"`
+	PendingSettlements int64     `json:"pending_settlements"`
+	FailedSettlements  int64     `json:"failed_settlements"`
+	DLQSettlements     int64     `json:"dlq_settlements"`
+	Paused             bool      `json:"paused"`
+	DriftCount         int       `json:"drift_count"`
+	Message            string    `json:"message,omitempty"`
 }
 
-func NewWorker(db *pgxpool.Pool, redisClient *redis.Client, consumerID string) *Worker {
+func NewWorker(db *pgxpool.Pool, redisClient *redis.Client, ledger BidLedger, consumerID string) *Worker {
 	if consumerID == "" {
 		consumerID = "settlement-" + uuid.NewString()
 	}
-	return &Worker{db: db, redis: redisClient, consumerID: consumerID, batchSize: 32, block: time.Second}
+	return &Worker{db: db, redis: redisClient, ledger: ledger, dlqTopic: ledgerDLQTopic(ledger), consumerID: consumerID, batchSize: 32, block: time.Second}
 }
 
 func (w *Worker) Run(ctx context.Context, interval time.Duration) {
@@ -568,6 +555,8 @@ func (w *Worker) Run(ctx context.Context, interval time.Duration) {
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	reconcileTicker := time.NewTicker(5 * time.Second)
+	defer reconcileTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -575,18 +564,99 @@ func (w *Worker) Run(ctx context.Context, interval time.Duration) {
 		default:
 		}
 		_ = w.ProcessSignals(ctx, 16)
-		auctionIDs, err := w.activeAuctionIDs(ctx, 100)
-		if err == nil {
-			for _, auctionID := range auctionIDs {
-				_, _ = w.ProcessAuction(ctx, auctionID)
-			}
+		if w.ledger != nil {
+			_, _ = w.ProcessKafka(ctx, 100)
 		}
 		select {
 		case <-ctx.Done():
 			return
+		case <-reconcileTicker.C:
+			_, _ = w.ProcessReconcile(ctx, 100)
 		case <-ticker.C:
 		}
 	}
+}
+
+func (w *Worker) ProcessKafka(ctx context.Context, limit int) (int, error) {
+	if w == nil || w.ledger == nil || w.db == nil {
+		return 0, nil
+	}
+	if limit <= 0 {
+		limit = 1
+	}
+	processed := 0
+	for processed < limit {
+		fetchCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+		message, err := w.ledger.Fetch(fetchCtx)
+		cancel()
+		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+				return processed, nil
+			}
+			return processed, err
+		}
+		if err := w.settleLedgerMessage(ctx, message); err != nil {
+			if err := w.retryOrDLQ(ctx, message, err); err != nil {
+				return processed, err
+			}
+			processed++
+			continue
+		}
+		if err := w.ledger.Commit(ctx, message); err != nil {
+			return processed, err
+		}
+		processed++
+	}
+	return processed, nil
+}
+
+func (w *Worker) retryOrDLQ(ctx context.Context, message LedgerMessage, settleErr error) error {
+	err := settleErr
+	for {
+		attempts := w.settlementAttempts(ctx, message)
+		if isPermanentSettlementError(err) || attempts <= 0 || attempts >= maxSettleAttempts {
+			_ = w.ledger.WriteDLQ(ctx, message, err)
+			_ = w.markDLQ(ctx, message, err)
+			auctionID := string(message.Key)
+			if auctionID == "" {
+				auctionID = "-"
+			}
+			_ = w.pause(ctx, auctionID, "KAFKA_LEDGER_SETTLEMENT_POISON", err.Error(), "", map[string]any{
+				"ledger_topic":     message.Topic,
+				"ledger_partition": message.Partition,
+				"ledger_offset":    message.Offset,
+				"attempts":         attempts,
+			})
+			return w.ledger.Commit(ctx, message)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+		err = w.settleLedgerMessage(ctx, message)
+		if err == nil {
+			return w.ledger.Commit(ctx, message)
+		}
+	}
+}
+
+func (w *Worker) ProcessReconcile(ctx context.Context, limit int) (int, error) {
+	if w == nil || w.db == nil || w.redis == nil {
+		return 0, nil
+	}
+	auctionIDs, err := w.activeAuctionIDs(ctx, limit)
+	if err != nil {
+		return 0, err
+	}
+	processed := 0
+	for _, auctionID := range auctionIDs {
+		if _, err := w.Reconcile(ctx, auctionID); err != nil {
+			return processed, err
+		}
+		processed++
+	}
+	return processed, nil
 }
 
 func (w *Worker) ProcessSignals(ctx context.Context, limit int) error {
@@ -688,43 +758,6 @@ func (w *Worker) processSignal(ctx context.Context, signalType string, auctionID
 	}
 }
 
-func (w *Worker) ProcessAuction(ctx context.Context, auctionID string) (int, error) {
-	if w == nil || w.redis == nil || w.db == nil {
-		return 0, nil
-	}
-	stream := redisx.BidEngineStreamKey(auctionID)
-	if err := w.redis.XGroupCreateMkStream(ctx, stream, groupName, "0").Err(); err != nil && !stringsContains(err.Error(), "BUSYGROUP") {
-		return 0, err
-	}
-	streams, err := w.redis.XReadGroup(ctx, &redis.XReadGroupArgs{
-		Group:    groupName,
-		Consumer: w.consumerID,
-		Streams:  []string{stream, ">"},
-		Count:    w.batchSize,
-		Block:    w.block,
-	}).Result()
-	if errors.Is(err, redis.Nil) {
-		return 0, nil
-	}
-	if err != nil {
-		return 0, err
-	}
-	processed := 0
-	for _, streamResult := range streams {
-		for _, message := range streamResult.Messages {
-			if err := w.settleMessage(ctx, auctionID, stream, message); err != nil {
-				_ = w.pause(ctx, auctionID, "REDIS_ENGINE_SETTLEMENT_POISON", err.Error(), "", nil)
-				return processed, err
-			}
-			if err := w.redis.XAck(ctx, stream, groupName, message.ID).Err(); err != nil {
-				return processed, err
-			}
-			processed++
-		}
-	}
-	return processed, nil
-}
-
 func (w *Worker) activeAuctionIDs(ctx context.Context, limit int) ([]string, error) {
 	rows, err := w.db.Query(ctx, `
 		SELECT id
@@ -748,31 +781,39 @@ func (w *Worker) activeAuctionIDs(ctx context.Context, limit int) ([]string, err
 	return ids, rows.Err()
 }
 
-func (w *Worker) settleMessage(ctx context.Context, auctionID string, stream string, message redis.XMessage) error {
-	payloadValue, ok := message.Values["payload"]
-	if !ok {
-		return fmt.Errorf("redis engine ledger entry %s has no payload", message.ID)
+func (w *Worker) settleLedgerMessage(ctx context.Context, message LedgerMessage) error {
+	var envelope struct {
+		AuctionID string `json:"auction_id"`
 	}
+	if err := json.Unmarshal(message.Value, &envelope); err != nil {
+		return permanentSettlementError{err: err}
+	}
+	if envelope.AuctionID == "" {
+		return permanentSettlementError{err: fmt.Errorf("kafka ledger message %s has no auction_id", message.ID)}
+	}
+	return w.settlePayload(ctx, envelope.AuctionID, message.ID, string(message.Value), message)
+}
+
+func (w *Worker) settlePayload(ctx context.Context, auctionID string, ledgerID string, payload string, message LedgerMessage) error {
 	var result engineResult
-	if err := json.Unmarshal([]byte(fmt.Sprint(payloadValue)), &result); err != nil {
-		return err
+	if err := json.Unmarshal([]byte(payload), &result); err != nil {
+		return permanentSettlementError{err: err}
 	}
 	if result.AuctionID != auctionID {
-		return fmt.Errorf("ledger auction mismatch stream=%s payload=%s", auctionID, result.AuctionID)
+		return permanentSettlementError{err: fmt.Errorf("ledger auction mismatch stream=%s payload=%s", auctionID, result.AuctionID)}
+	}
+	attempt, err := w.recordSettlementAttempt(ctx, auctionID, ledgerID, result, message)
+	if err != nil {
+		return err
+	}
+	if attempt.status == "SETTLED" || attempt.status == "SKIPPED" {
+		return nil
 	}
 	tx, err := w.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-
-	inserted, err := recordSettlementAttempt(ctx, tx, auctionID, message.ID, result)
-	if err != nil {
-		return err
-	}
-	if !inserted {
-		return tx.Commit(ctx)
-	}
 
 	var dbEpoch int64
 	var dbSeq int64
@@ -789,15 +830,21 @@ func (w *Worker) settleMessage(ctx context.Context, auctionID string, stream str
 		return fmt.Errorf("auction engine is paused")
 	}
 	if result.EngineEpoch != dbEpoch {
-		_ = markSettlementFailed(ctx, tx, auctionID, message.ID, fmt.Sprintf("stale epoch redis=%d db=%d", result.EngineEpoch, dbEpoch))
+		_ = markSettlementFailed(ctx, tx, auctionID, ledgerID, fmt.Sprintf("stale epoch redis=%d db=%d", result.EngineEpoch, dbEpoch))
+		_ = pauseTx(ctx, tx, auctionID, "REDIS_ENGINE_STALE_EPOCH", "settlement rejected stale engine epoch", map[string]any{
+			"redis_engine_epoch": result.EngineEpoch,
+			"db_engine_epoch":    dbEpoch,
+			"engine_seq":         result.EngineSeq,
+			"ledger_id":          ledgerID,
+		})
 		return tx.Commit(ctx)
 	}
 	if result.EngineSeq != dbSeq+1 {
-		_ = markSettlementFailed(ctx, tx, auctionID, message.ID, fmt.Sprintf("engine seq gap redis=%d db_next=%d", result.EngineSeq, dbSeq+1))
+		_ = markSettlementFailed(ctx, tx, auctionID, ledgerID, fmt.Sprintf("engine seq gap redis=%d db_next=%d", result.EngineSeq, dbSeq+1))
 		_ = pauseTx(ctx, tx, auctionID, "REDIS_ENGINE_LEDGER_GAP", "settlement detected engine seq gap", map[string]any{
 			"redis_engine_seq": result.EngineSeq,
 			"db_engine_seq":    dbSeq,
-			"stream_id":        message.ID,
+			"ledger_id":        ledgerID,
 		})
 		return tx.Commit(ctx)
 	}
@@ -805,19 +852,20 @@ func (w *Worker) settleMessage(ctx context.Context, auctionID string, stream str
 	switch result.Result {
 	case resultAccepted, resultSold:
 		if err := settleAccepted(ctx, tx, result); err != nil {
-			_ = markSettlementFailed(ctx, tx, auctionID, message.ID, err.Error())
+			_ = markSettlementFailed(ctx, tx, auctionID, ledgerID, err.Error())
 			return err
 		}
 	case resultRejected:
 		if err := settleRejected(ctx, tx, result); err != nil {
-			_ = markSettlementFailed(ctx, tx, auctionID, message.ID, err.Error())
+			_ = markSettlementFailed(ctx, tx, auctionID, ledgerID, err.Error())
 			return err
 		}
 	default:
-		_ = markSettlementFailed(ctx, tx, auctionID, message.ID, "unknown result "+result.Result)
-		return fmt.Errorf("unknown redis engine result %s", result.Result)
+		_ = markSettlementFailed(ctx, tx, auctionID, ledgerID, "unknown result "+result.Result)
+		_ = tx.Commit(ctx)
+		return permanentSettlementError{err: fmt.Errorf("unknown redis engine result %s", result.Result)}
 	}
-	if err := markSettlementSettled(ctx, tx, auctionID, message.ID); err != nil {
+	if err := markSettlementSettled(ctx, tx, auctionID, ledgerID); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -827,23 +875,61 @@ func (w *Worker) settleMessage(ctx context.Context, auctionID string, stream str
 	return nil
 }
 
-func recordSettlementAttempt(ctx context.Context, tx pgx.Tx, auctionID string, streamID string, result engineResult) (bool, error) {
+type settlementAttempt struct {
+	attempts int
+	status   string
+}
+
+func (w *Worker) recordSettlementAttempt(ctx context.Context, auctionID string, streamID string, result engineResult, message LedgerMessage) (settlementAttempt, error) {
 	payload, err := json.Marshal(result)
 	if err != nil {
-		return false, err
+		return settlementAttempt{}, err
 	}
-	var inserted bool
-	err = tx.QueryRow(ctx, `
+	ledgerSource := "redis_stream"
+	if message.Topic != "" && strings.HasPrefix(message.ID, "kafka:") {
+		ledgerSource = "kafka"
+	}
+	var attempt settlementAttempt
+	err = w.db.QueryRow(ctx, `
 		INSERT INTO redis_engine_settlements (
-		  auction_id, stream_id, engine_epoch, engine_seq, result, status, attempts, payload_json
+		  auction_id, stream_id, engine_epoch, engine_seq, result, status, attempts, payload_json,
+		  ledger_source, ledger_topic, ledger_partition, ledger_offset, ledger_key
 		)
-		VALUES ($1, $2, $3, $4, $5, 'PROCESSING', 1, $6)
+		VALUES ($1, $2, $3, $4, $5, 'PROCESSING', 1, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (auction_id, stream_id) DO UPDATE
-		SET attempts = redis_engine_settlements.attempts + 1,
+		SET attempts = CASE
+		      WHEN redis_engine_settlements.status IN ('SETTLED','SKIPPED') THEN redis_engine_settlements.attempts
+		      ELSE redis_engine_settlements.attempts + 1
+		    END,
+		    status = CASE
+		      WHEN redis_engine_settlements.status IN ('SETTLED','SKIPPED') THEN redis_engine_settlements.status
+		      ELSE 'PROCESSING'
+		    END,
 		    updated_at = now()
-		RETURNING xmax = 0
-	`, auctionID, streamID, result.EngineEpoch, result.EngineSeq, result.Result, payload).Scan(&inserted)
-	return inserted, err
+		RETURNING attempts, status
+	`, auctionID, streamID, result.EngineEpoch, result.EngineSeq, result.Result, payload, ledgerSource, message.Topic, message.Partition, message.Offset, message.Key).Scan(&attempt.attempts, &attempt.status)
+	if isUniqueViolation(err) {
+		return w.existingSettlementAttempt(ctx, auctionID, streamID, result)
+	}
+	return attempt, err
+}
+
+func (w *Worker) existingSettlementAttempt(ctx context.Context, auctionID string, streamID string, result engineResult) (settlementAttempt, error) {
+	var attempt settlementAttempt
+	var existingStreamID string
+	var existingRequestHash string
+	err := w.db.QueryRow(ctx, `
+		SELECT stream_id, attempts, status, COALESCE(payload_json->>'request_hash', '')
+		FROM redis_engine_settlements
+		WHERE auction_id = $1 AND engine_epoch = $2 AND engine_seq = $3
+	`, auctionID, result.EngineEpoch, result.EngineSeq).Scan(&existingStreamID, &attempt.attempts, &attempt.status, &existingRequestHash)
+	if err != nil {
+		return settlementAttempt{}, err
+	}
+	if existingRequestHash != result.RequestHash {
+		return settlementAttempt{}, permanentSettlementError{err: fmt.Errorf("engine seq conflict auction=%s epoch=%d seq=%d existing_stream=%s new_stream=%s", auctionID, result.EngineEpoch, result.EngineSeq, existingStreamID, streamID)}
+	}
+	return attempt, nil
 }
 
 func settleAccepted(ctx context.Context, tx pgx.Tx, result engineResult) error {
@@ -1078,6 +1164,53 @@ func markSettlementFailed(ctx context.Context, tx pgx.Tx, auctionID string, stre
 	return err
 }
 
+func (w *Worker) settlementAttempts(ctx context.Context, message LedgerMessage) int {
+	if w == nil || w.db == nil {
+		return 0
+	}
+	var attempts int
+	_ = w.db.QueryRow(ctx, `
+		SELECT attempts
+		FROM redis_engine_settlements
+		WHERE stream_id = $1
+	`, message.ID).Scan(&attempts)
+	return attempts
+}
+
+func (w *Worker) markDLQ(ctx context.Context, message LedgerMessage, eventErr error) error {
+	if w == nil || w.db == nil {
+		return nil
+	}
+	_, err := w.db.Exec(ctx, `
+		UPDATE redis_engine_settlements
+		SET status = 'FAILED',
+		    dlq_topic = $2,
+		    dlq_error = $3,
+		    dlq_at = now(),
+		    last_error = $3,
+		    updated_at = now()
+		WHERE stream_id = $1
+	`, message.ID, w.dlqTopic, eventErr.Error())
+	return err
+}
+
+type permanentSettlementError struct {
+	err error
+}
+
+func (e permanentSettlementError) Error() string {
+	return e.err.Error()
+}
+
+func (e permanentSettlementError) Unwrap() error {
+	return e.err
+}
+
+func isPermanentSettlementError(err error) bool {
+	var target permanentSettlementError
+	return errors.As(err, &target)
+}
+
 func (w *Worker) pause(ctx context.Context, auctionID string, reason string, message string, traceID string, details map[string]any) error {
 	tx, err := w.db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -1127,10 +1260,16 @@ func (w *Worker) Reconcile(ctx context.Context, auctionID string) (Report, error
 	var dbSeq int64
 	var paused bool
 	if err := w.db.QueryRow(ctx, `
-		SELECT engine_seq, engine_paused
-		FROM auctions
-		WHERE id = $1
-	`, auctionID).Scan(&dbSeq, &paused); err != nil {
+		SELECT a.engine_seq,
+		       a.engine_paused,
+		       COALESCE(count(s.id) FILTER (WHERE s.status = 'PROCESSING'), 0) AS pending_settlements,
+		       COALESCE(count(s.id) FILTER (WHERE s.status = 'FAILED'), 0) AS failed_settlements,
+		       COALESCE(count(s.id) FILTER (WHERE s.dlq_at IS NOT NULL), 0) AS dlq_settlements
+		FROM auctions a
+		LEFT JOIN redis_engine_settlements s ON s.auction_id = a.id
+		WHERE a.id = $1
+		GROUP BY a.id
+	`, auctionID).Scan(&dbSeq, &paused, &report.PendingSettlements, &report.FailedSettlements, &report.DLQSettlements); err != nil {
 		return report, err
 	}
 	report.DBSeq = dbSeq
@@ -1144,6 +1283,21 @@ func (w *Worker) Reconcile(ctx context.Context, auctionID string) (Report, error
 		return report, nil
 	}
 	report.RedisSeq = redisSeq
+	pending, err := w.redis.HLen(ctx, redisx.BidEnginePendingKey(auctionID)).Result()
+	if err != nil && !errors.Is(err, redis.Nil) {
+		report.Status = "REDIS_PENDING_READ_FAILED"
+		report.DriftCount = 1
+		report.Message = err.Error()
+		_ = w.pause(ctx, auctionID, "REDIS_ENGINE_PENDING_READ_FAILED", err.Error(), "", nil)
+		return report, nil
+	}
+	if pending > 0 {
+		report.Status = "REDIS_PENDING_WITHOUT_KAFKA_LEDGER"
+		report.DriftCount = 1
+		report.Message = "Redis has hot-engine decisions not acknowledged by Kafka ledger"
+		_ = w.pause(ctx, auctionID, "REDIS_ENGINE_PENDING_KAFKA_APPEND_UNKNOWN", report.Message, "", map[string]any{"pending_decisions": pending})
+		return report, nil
+	}
 	if redisSeq < dbSeq {
 		report.Status = "REDIS_BEHIND_DB"
 		report.DriftCount = 1
@@ -1155,6 +1309,12 @@ func (w *Worker) Reconcile(ctx context.Context, auctionID string) (Report, error
 		report.DriftCount = 1
 		report.Message = "PostgreSQL settlement is behind Redis engine ledger"
 		_ = w.pause(ctx, auctionID, "REDIS_ENGINE_DB_BEHIND_REDIS", report.Message, "", map[string]any{"redis_seq": redisSeq, "db_seq": dbSeq})
+	}
+	if report.DLQSettlements > 0 {
+		report.Status = "KAFKA_LEDGER_DLQ"
+		report.DriftCount++
+		report.Message = "Kafka bid ledger settlement has dead-lettered events"
+		_ = w.pause(ctx, auctionID, "KAFKA_LEDGER_DLQ_PRESENT", report.Message, "", map[string]any{"dlq_settlements": report.DLQSettlements})
 	}
 	return report, nil
 }
@@ -1176,10 +1336,6 @@ func stringPtrValue(value *string) string {
 		return ""
 	}
 	return *value
-}
-
-func stringsContains(value string, sub string) bool {
-	return strings.Contains(value, sub)
 }
 
 func isUniqueViolation(err error) bool {

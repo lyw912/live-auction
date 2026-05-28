@@ -168,6 +168,98 @@ func TestCheckerDetectsPaymentIdempotencyMismatch(t *testing.T) {
 	assertCheck(t, report, "payment_idempotency_consistent", StatusFail)
 }
 
+func TestCheckerDetectsRedisEngineSettlementFailures(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	auctionID := createCleanSoldAuction(t, db)
+
+	if _, err := db.Exec(ctx, `
+		UPDATE auctions SET engine_epoch = 1, engine_seq = 4 WHERE id = $1
+	`, auctionID); err != nil {
+		t.Fatalf("seed engine auction fields: %v", err)
+	}
+	if _, err := db.Exec(ctx, `
+		INSERT INTO redis_engine_settlements (
+			auction_id, stream_id, engine_epoch, engine_seq, result, status,
+			attempts, payload_json, ledger_source, dlq_topic, dlq_error, dlq_at
+		) VALUES (
+			$1, 'kafka:auction.bid-events:0:4', 1, 4, 'ENGINE_SOLD', 'FAILED',
+			4, '{}'::jsonb, 'kafka', 'auction.dlq', 'poison', now()
+		)
+	`, auctionID); err != nil {
+		t.Fatalf("insert failed settlement: %v", err)
+	}
+	for _, seq := range []int{1, 3} {
+		if _, err := db.Exec(ctx, `
+			INSERT INTO redis_engine_settlements (
+				auction_id, stream_id, engine_epoch, engine_seq, result, status,
+				attempts, payload_json, ledger_source, settled_at
+			) VALUES (
+				$1, $2, 1, $3, 'ENGINE_REJECTED', 'SETTLED',
+				1, '{}'::jsonb, 'kafka', now()
+			)
+		`, auctionID, fmt.Sprintf("kafka:auction.bid-events:0:%d", seq), seq); err != nil {
+			t.Fatalf("insert gap settlement seq %d: %v", seq, err)
+		}
+	}
+
+	report, err := NewChecker(db).Run(ctx, Options{AuctionID: auctionID, MaxDetails: 10})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	assertCheck(t, report, "redis_engine_settlement_seq_contiguous", StatusFail)
+	assertCheck(t, report, "redis_engine_ledger_no_failed_or_dlq", StatusFail)
+	assertCheck(t, report, "redis_engine_seq_matches_settlement", StatusFail)
+}
+
+func TestCheckerPassesCleanRedisEngineSettlement(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	auctionID := createCleanSoldAuction(t, db)
+
+	if _, err := db.Exec(ctx, `
+		UPDATE auctions SET engine_epoch = 1, engine_seq = 4 WHERE id = $1
+	`, auctionID); err != nil {
+		t.Fatalf("seed engine auction fields: %v", err)
+	}
+	for seq := 1; seq <= 4; seq++ {
+		result := "ENGINE_REJECTED"
+		if seq == 4 {
+			result = "ENGINE_SOLD"
+		}
+		if _, err := db.Exec(ctx, `
+			INSERT INTO redis_engine_settlements (
+				auction_id, stream_id, engine_epoch, engine_seq, result, status,
+				attempts, payload_json, ledger_source, ledger_topic, ledger_partition, ledger_offset, ledger_key, settled_at
+			) VALUES (
+				$1, $2, 1, $3, $4, 'SETTLED',
+				1, '{}'::jsonb, 'kafka', 'auction.bid-events', 0, $3, $1, now()
+			)
+		`, auctionID, fmt.Sprintf("kafka:auction.bid-events:0:%d", seq), seq, result); err != nil {
+			t.Fatalf("insert settlement seq %d: %v", seq, err)
+		}
+	}
+	if _, err := db.Exec(ctx, `
+		UPDATE bids SET engine_epoch = 1, engine_seq = 4 WHERE auction_id = $1
+	`, auctionID); err != nil {
+		t.Fatalf("seed bid engine fields: %v", err)
+	}
+	if _, err := db.Exec(ctx, `
+		UPDATE auction_events SET engine_epoch = 1, engine_seq = seq WHERE auction_id = $1
+	`, auctionID); err != nil {
+		t.Fatalf("seed event engine fields: %v", err)
+	}
+
+	report, err := NewChecker(db).Run(ctx, Options{AuctionID: auctionID, MaxDetails: 10})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	assertCheck(t, report, "redis_engine_settlement_seq_contiguous", StatusPass)
+	assertCheck(t, report, "redis_engine_ledger_no_failed_or_dlq", StatusPass)
+	assertCheck(t, report, "redis_engine_seq_matches_settlement", StatusPass)
+	assertCheck(t, report, "redis_engine_accepted_settlement_has_bid_event", StatusPass)
+}
+
 func TestCheckerDetectsCrossRoomPayloadLeak(t *testing.T) {
 	db := openIntegrationDB(t)
 	ctx := context.Background()

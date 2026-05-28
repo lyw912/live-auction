@@ -47,11 +47,22 @@ func main() {
 	}
 	go scheduler.NewRunner(deps.Postgres, schedulerWorkerID).Run(ctx, log, 500*time.Millisecond)
 	settlementWorkerID := envOrDefault("REDIS_ENGINE_SETTLEMENT_WORKER_ID", workerID)
-	go redisengine.NewWorker(deps.Postgres, deps.Redis, settlementWorkerID).Run(ctx, 200*time.Millisecond)
+	var bidLedger redisengine.BidLedger
+	if cfg.BidEngineMode != "postgres_lane" && cfg.BidEngineMode != "redis_guard" {
+		ledger, err := redisengine.NewKafkaLedgerFromEnv(cfg.KafkaBrokers, cfg.KafkaBidTopic, cfg.KafkaDLQTopic, "settlement-workers", settlementWorkerID)
+		if err != nil {
+			log.Error("open kafka bid ledger", slog.String("error", err.Error()))
+			os.Exit(1)
+		} else {
+			bidLedger = ledger
+			defer bidLedger.Close()
+			go redisengine.NewWorker(deps.Postgres, deps.Redis, bidLedger, settlementWorkerID).Run(ctx, 200*time.Millisecond)
+		}
+	}
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           gateway.NewRouterWithRealtime(cfg, deps, log, rt),
+		Handler:           gateway.NewRouterWithRealtimeAndLedger(cfg, deps, log, rt, bidLedger),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

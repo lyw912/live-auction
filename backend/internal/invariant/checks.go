@@ -510,6 +510,124 @@ func (c *Checker) checkPaymentIdempotency(ctx context.Context, scopeSQL string, 
 	return failOrPass("payment_idempotency_consistent", SeverityP0, "Payment idempotency must replay completed payment and be scoped to the order winner with the expected hash. Missing-order payment records are checked in unscoped full-database mode.", countDetails(details), details), err
 }
 
+func (c *Checker) checkRedisEngineSettlementContiguous(ctx context.Context, scopeSQL string, args []any, maxDetails int) (CheckResult, error) {
+	queryArgs, limit := limitArg(args, maxDetails)
+	details, err := c.queryDetails(ctx, fmt.Sprintf(`
+		WITH scoped AS (
+			SELECT a.id
+			FROM auctions a
+			%s
+		), ranges AS (
+			SELECT s.auction_id, s.engine_epoch, max(s.engine_seq) AS max_seq
+			FROM redis_engine_settlements s
+			JOIN scoped a ON a.id = s.auction_id
+			WHERE s.status = 'SETTLED'
+			GROUP BY s.auction_id, s.engine_epoch
+		), missing AS (
+			SELECT r.auction_id, r.engine_epoch, gs.seq AS missing_engine_seq
+			FROM ranges r
+			CROSS JOIN LATERAL generate_series(1, r.max_seq) AS gs(seq)
+			LEFT JOIN redis_engine_settlements s
+			  ON s.auction_id = r.auction_id
+			 AND s.engine_epoch = r.engine_epoch
+			 AND s.engine_seq = gs.seq
+			 AND s.status = 'SETTLED'
+			WHERE s.id IS NULL
+		)
+		SELECT *, count(*) OVER() AS total
+		FROM missing
+		ORDER BY auction_id, engine_epoch, missing_engine_seq
+		LIMIT %s
+	`, scopeSQL, limit), queryArgs...)
+	return failOrPass("redis_engine_settlement_seq_contiguous", SeverityP0, "Redis/Kafka engine settlement rows must be contiguous per auction epoch before they are treated as PostgreSQL truth.", countDetails(details), details), err
+}
+
+func (c *Checker) checkRedisEngineSeqMatchesSettlement(ctx context.Context, scopeSQL string, args []any, maxDetails int) (CheckResult, error) {
+	queryArgs, limit := limitArg(args, maxDetails)
+	details, err := c.queryDetails(ctx, fmt.Sprintf(`
+		WITH scoped AS (
+			SELECT a.id, a.engine_epoch, a.engine_seq
+			FROM auctions a
+			%s
+		), settled AS (
+			SELECT s.auction_id, s.engine_epoch, COALESCE(max(s.engine_seq), 0) AS max_settled_seq
+			FROM redis_engine_settlements s
+			JOIN scoped a ON a.id = s.auction_id AND a.engine_epoch = s.engine_epoch
+			WHERE s.status = 'SETTLED'
+			GROUP BY s.auction_id, s.engine_epoch
+		), violations AS (
+			SELECT a.id AS auction_id, a.engine_epoch, a.engine_seq, COALESCE(s.max_settled_seq, 0) AS max_settled_seq
+			FROM scoped a
+			LEFT JOIN settled s ON s.auction_id = a.id AND s.engine_epoch = a.engine_epoch
+			WHERE a.engine_seq > 0 AND a.engine_seq <> COALESCE(s.max_settled_seq, 0)
+		)
+		SELECT *, count(*) OVER() AS total
+		FROM violations
+		ORDER BY auction_id
+		LIMIT %s
+	`, scopeSQL, limit), queryArgs...)
+	return failOrPass("redis_engine_seq_matches_settlement", SeverityP0, "auctions.engine_seq must equal the latest settled Redis/Kafka engine ledger seq for the current engine epoch.", countDetails(details), details), err
+}
+
+func (c *Checker) checkRedisEngineLedgerHealthy(ctx context.Context, scopeSQL string, args []any, maxDetails int) (CheckResult, error) {
+	queryArgs, limit := limitArg(args, maxDetails)
+	details, err := c.queryDetails(ctx, fmt.Sprintf(`
+		WITH scoped AS (
+			SELECT a.id
+			FROM auctions a
+			%s
+		)
+		SELECT s.auction_id, s.stream_id, s.ledger_source, s.ledger_topic, s.ledger_partition,
+		       s.ledger_offset, s.engine_epoch, s.engine_seq, s.status, s.attempts,
+		       s.last_error, s.dlq_topic, s.dlq_at, count(*) OVER() AS total
+		FROM redis_engine_settlements s
+		JOIN scoped a ON a.id = s.auction_id
+		WHERE s.status = 'FAILED'
+		   OR s.dlq_at IS NOT NULL
+		   OR s.attempts > 3
+		ORDER BY s.auction_id, s.engine_epoch, s.engine_seq
+		LIMIT %s
+	`, scopeSQL, limit), queryArgs...)
+	return failOrPass("redis_engine_ledger_no_failed_or_dlq", SeverityP0, "Kafka-backed Redis engine ledger must not contain failed, dead-lettered, or over-retried settlement rows without operator reconciliation.", countDetails(details), details), err
+}
+
+func (c *Checker) checkRedisEngineEventCoverage(ctx context.Context, scopeSQL string, args []any, maxDetails int) (CheckResult, error) {
+	queryArgs, limit := limitArg(args, maxDetails)
+	details, err := c.queryDetails(ctx, fmt.Sprintf(`
+		WITH scoped AS (
+			SELECT a.id
+			FROM auctions a
+			%s
+		), accepted_settlements AS (
+			SELECT s.auction_id, s.engine_epoch, s.engine_seq, s.result
+			FROM redis_engine_settlements s
+			JOIN scoped a ON a.id = s.auction_id
+			WHERE s.status = 'SETTLED'
+			  AND s.result IN ('ENGINE_ACCEPTED','ENGINE_SOLD')
+		), violations AS (
+			SELECT s.auction_id, s.engine_epoch, s.engine_seq, s.result,
+			       b.id AS bid_id, e.id AS event_id
+			FROM accepted_settlements s
+			LEFT JOIN bids b
+			  ON b.auction_id = s.auction_id
+			 AND b.engine_epoch = s.engine_epoch
+			 AND b.engine_seq = s.engine_seq
+			 AND b.status = 'ACCEPTED'
+			LEFT JOIN auction_events e
+			  ON e.auction_id = s.auction_id
+			 AND e.engine_epoch = s.engine_epoch
+			 AND e.engine_seq = s.engine_seq
+			 AND e.event_type IN ('bid_accepted','auction_sold')
+			WHERE b.id IS NULL OR e.id IS NULL
+		)
+		SELECT *, count(*) OVER() AS total
+		FROM violations
+		ORDER BY auction_id, engine_epoch, engine_seq
+		LIMIT %s
+	`, scopeSQL, limit), queryArgs...)
+	return failOrPass("redis_engine_accepted_settlement_has_bid_event", SeverityP0, "Every accepted/sold Redis engine settlement must have matching bid and auction_event rows with the same engine epoch/seq.", countDetails(details), details), err
+}
+
 func (c *Checker) checkRoomIsolation(ctx context.Context, scopeSQL string, args []any, maxDetails int) (CheckResult, error) {
 	queryArgs, limit := limitArg(args, maxDetails)
 	details, err := c.queryDetails(ctx, fmt.Sprintf(`

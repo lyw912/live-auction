@@ -4,6 +4,8 @@ Date: 2026-05-28
 
 Status: proposed execution plan
 
+Supersession note, 2026-05-29: current L4b intentionally uses Kafka/Redpanda as the required durable ledger. Earlier roadmap text preferring Redis Streams first is superseded by the Redis hot state + Kafka ledger + PostgreSQL settlement implementation.
+
 ## Goal
 
 Turn PTS-1 from a weak point into the project's strongest differentiator:
@@ -166,8 +168,8 @@ Deliberate exclusions:
 - max/proxy bid in Redis;
 - multi-region;
 - real payment;
-- mandatory Kafka; use Redis Streams behind a command-log interface first.
-- Flink/Kafka unless Redis Stream is proven insufficient.
+- Flink stream processing; settlement remains app-owned.
+- multi-node production Kafka proof; local Redpanda is a functional test topology.
 
 Expected result:
 
@@ -182,8 +184,8 @@ Concrete components:
 | `PostgresEngine` | Existing repository path plus lane. | Default mode. |
 | `RedisGuard` | Reject clearly invalid/stale pressure before PG truth transaction. | No winner/order mutation. |
 | `RedisLedgerEngine` | Lua state transition and ledger append. | Manual bid only. |
-| Redis Lua script | Atomic rule validation, idempotency, current price/winner/end_at, cap sold, stream append. | No proxy/max-bid loop. |
-| `AuctionCommandLog` | Abstract Redis Streams now, Kafka later if needed. | Redis Streams first; no mandatory Kafka container. |
+| Redis Lua script | Atomic rule validation, idempotency, current price/winner/end_at, cap sold, pending-decision marker. | No proxy/max-bid loop. |
+| `AuctionCommandLog` | Kafka/Redpanda durable ledger behind a small interface. | Local Redpanda for functional gates; production requires replicated brokers. |
 | Settlement worker | Consume ledger and write PostgreSQL bid/event/outbox/idempotency/order. | At-least-once, idempotent. |
 | Reconciler | Compare Redis state, ledger, DB, outbox. | pause on gap/poison/divergence. |
 | Gateway response adapter | Preserve old response where possible, add settlement fields. | `ENGINE_ACCEPTED`, `ENGINE_REJECTED`, `ENGINE_SOLD`. |

@@ -12,8 +12,11 @@ Services:
 
 - PostgreSQL: `localhost:5432`
 - Redis 7: `localhost:6380`
+- Kafka-compatible Redpanda: `localhost:9092` (admin API: `localhost:9644`)
 
-Redis 7 is required for the Redis ledger bidding engine because L4b uses Redis Streams/XADD and consumer groups. Some Windows hosts also run an old Redis service on `localhost:6379`; do not use that service for L4b if it does not support XADD.
+Redis 7 is required for the Redis hot bidding state machine. Local Redis is configured with AOF and `appendfsync always` plus `noeviction` for failure testing. Production needs Sentinel or Redis Cluster with replicas; the local single-node service is only a test topology.
+
+Kafka/Redpanda is required for the L4b durable bid ledger. Redis is the hot state machine; Kafka is the immutable event log; PostgreSQL remains settlement/audit truth. The local Redpanda service is single-node and exists for functional/failure gates only. Production must use replicated brokers, `acks=all`, idempotent producers, sufficient ISR, disabled unclean leader election, DLQ monitoring, and replay/reconciliation runbooks.
 - MinIO API: `localhost:9000`
 - MinIO Console: `http://localhost:9001`
 - Prometheus: `http://localhost:9090`

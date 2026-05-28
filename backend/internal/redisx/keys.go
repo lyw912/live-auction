@@ -26,8 +26,8 @@ func BidEngineIdempotencyKey(auctionID string, clientBidID string) string {
 	return fmt.Sprintf("bid:{%s}:engine:idem:%s", auctionID, clientBidID)
 }
 
-func BidEngineStreamKey(auctionID string) string {
-	return fmt.Sprintf("bid:{%s}:engine:stream", auctionID)
+func BidEnginePendingKey(auctionID string) string {
+	return fmt.Sprintf("bid:{%s}:engine:pending", auctionID)
 }
 
 func WSTicketKey(token string) string {
