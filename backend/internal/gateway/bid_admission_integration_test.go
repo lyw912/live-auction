@@ -47,13 +47,14 @@ func TestBidAdmissionCompletedReplayBypassesRedisLimiter(t *testing.T) {
 	if firstResp.Result != auction.BidResultAccepted {
 		t.Fatalf("first result = %s, want ACCEPTED body=%s", firstResp.Result, first.Body.String())
 	}
-	if _, err := rdb.Set(ctx, redisx.BidLimitUserKey(auctionRow.ID, "user_1"), 99, time.Second).Result(); err != nil {
+	blockUntilMS := time.Now().Add(time.Second).UnixMilli()
+	if _, err := rdb.Set(ctx, redisx.BidLimitUserKey(auctionRow.ID, "user_1"), blockUntilMS, time.Second).Result(); err != nil {
 		t.Fatalf("force user limit: %v", err)
 	}
-	if _, err := rdb.Set(ctx, redisx.BidLimitIPKey(auctionRow.ID, "192.0.2.1"), 99, time.Second).Result(); err != nil {
+	if _, err := rdb.Set(ctx, redisx.BidLimitIPKey(auctionRow.ID, "192.0.2.1"), blockUntilMS, time.Second).Result(); err != nil {
 		t.Fatalf("force ip limit: %v", err)
 	}
-	if _, err := rdb.Set(ctx, redisx.BidLimitAuctionKey(auctionRow.ID), 99, time.Second).Result(); err != nil {
+	if _, err := rdb.Set(ctx, redisx.BidLimitAuctionKey(auctionRow.ID), blockUntilMS, time.Second).Result(); err != nil {
 		t.Fatalf("force auction limit: %v", err)
 	}
 
@@ -122,7 +123,14 @@ func TestBidAdmissionUserLimitReturnsRateLimited(t *testing.T) {
 	if payload.Code != apierrors.CodeRateLimited {
 		t.Fatalf("code = %s, want RATE_LIMITED", payload.Code)
 	}
+	if limited.Header().Get("Retry-After") != "1" {
+		t.Fatalf("Retry-After = %q, want 1", limited.Header().Get("Retry-After"))
+	}
+	if payload.Details == nil || payload.Details["retry_after_ms"] == nil || payload.Details["retry_after_secs"] == nil {
+		t.Fatalf("missing retry-after details in payload: %#v", payload.Details)
+	}
 	assertAdmissionAnomalyRecorded(t, db, auctionRow.ID, string(apierrors.CodeRateLimited))
+	assertAdmissionAnomalyRetryAfterRecorded(t, db, auctionRow.ID, string(apierrors.CodeRateLimited))
 	metrics := string(observability.Default.Render(context.Background()))
 	for _, want := range []string{
 		`redis_lua_script_total{outcome="allowed",script="` + redisx.ScriptBidAdmissionGCRA + `"}`,
@@ -170,7 +178,11 @@ func TestBidAdmissionLocalAuctionTooHotReturnsRetryAfter(t *testing.T) {
 	if payload.Code != apierrors.CodeBidAuctionTooHot {
 		t.Fatalf("code = %s, want BID_AUCTION_TOO_HOT", payload.Code)
 	}
+	if payload.Details == nil || payload.Details["retry_after_ms"] == nil || payload.Details["retry_after_secs"] == nil {
+		t.Fatalf("missing retry-after details in payload: %#v", payload.Details)
+	}
 	assertAdmissionAnomalyRecorded(t, db, auctionRow.ID, string(apierrors.CodeBidAuctionTooHot))
+	assertAdmissionAnomalyRetryAfterRecorded(t, db, auctionRow.ID, string(apierrors.CodeBidAuctionTooHot))
 }
 
 func TestAdmissionDisabledBypassesBidRedisAndLocalLimits(t *testing.T) {
@@ -309,5 +321,23 @@ func assertAdmissionAnomalyRecorded(t *testing.T, db *pgxpool.Pool, auctionID st
 	}
 	if count == 0 {
 		t.Fatalf("missing anomaly %s for auction %s", anomalyType, auctionID)
+	}
+}
+
+func assertAdmissionAnomalyRetryAfterRecorded(t *testing.T, db *pgxpool.Pool, auctionID string, anomalyType string) {
+	t.Helper()
+	var retryAfterMS int64
+	var retryAfterSecs int
+	if err := db.QueryRow(context.Background(), `
+		SELECT (payload_json->>'retry_after_ms')::bigint, (payload_json->>'retry_after_secs')::int
+		FROM system_anomaly_events
+		WHERE auction_id = $1 AND type = $2
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, auctionID, anomalyType).Scan(&retryAfterMS, &retryAfterSecs); err != nil {
+		t.Fatalf("read anomaly retry-after payload: %v", err)
+	}
+	if retryAfterMS <= 0 || retryAfterSecs <= 0 {
+		t.Fatalf("invalid retry-after payload for %s: ms=%d secs=%d", anomalyType, retryAfterMS, retryAfterSecs)
 	}
 }

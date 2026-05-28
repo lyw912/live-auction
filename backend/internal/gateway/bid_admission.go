@@ -35,11 +35,11 @@ local ttl = tonumber(ARGV[4])
 local tat = tonumber(redis.call("GET", KEYS[1]) or "0")
 local allow_at = tat - ((burst - 1) * emission)
 if now < allow_at then
-  return 0
+  return allow_at - now
 end
 local new_tat = math.max(tat, now) + emission
 redis.call("SET", KEYS[1], new_tat, "PX", ttl)
-return 1
+return 0
 `
 
 var bidAdmissionGCRARunner = redisx.NewScriptRunner(redisx.ScriptBidAdmissionGCRA, bidAdmissionGCRAScript)
@@ -206,26 +206,26 @@ func (a *bidAdmission) checkRedisLimits(ctx context.Context, r *http.Request, us
 		if check.limit <= 0 {
 			continue
 		}
-		allowed, err := evalGCRALimit(redisCtx, a.redis, check.key, check.limit, windowMS, nowMS)
+		retryAfter, err := evalGCRALimit(redisCtx, a.redis, check.key, check.limit, windowMS, nowMS)
 		if err != nil {
 			_ = a.recordRedisDown(ctx, auctionID, user.ID, traceID, err)
 			return nil
 		}
-		if !allowed {
+		if retryAfter > 0 {
 			if check.code == apierrors.CodeBidAuctionTooHot {
 				recordAdmissionMetric(apierrors.CodeBidAuctionTooHot)
-				_ = a.recordAdmissionReject(ctx, auctionID, user.ID, traceID, apierrors.CodeBidAuctionTooHot, "redis auction global limit")
-				return apierrors.New(apierrors.CodeBidAuctionTooHot, "auction is temporarily too hot", http.StatusTooManyRequests)
+				_ = a.recordAdmissionReject(ctx, auctionID, user.ID, traceID, apierrors.CodeBidAuctionTooHot, "redis auction global limit", retryAfter)
+				return retryableAdmissionError(apierrors.CodeBidAuctionTooHot, "auction is temporarily too hot", retryAfter)
 			}
 			recordAdmissionMetric(apierrors.CodeRateLimited)
-			_ = a.recordAdmissionReject(ctx, auctionID, user.ID, traceID, apierrors.CodeRateLimited, "redis user or ip limit")
-			return apierrors.New(apierrors.CodeRateLimited, "too many bid attempts", http.StatusTooManyRequests)
+			_ = a.recordAdmissionReject(ctx, auctionID, user.ID, traceID, apierrors.CodeRateLimited, "redis user or ip limit", retryAfter)
+			return retryableAdmissionError(apierrors.CodeRateLimited, "too many bid attempts", retryAfter)
 		}
 	}
 	return nil
 }
 
-func evalGCRALimit(ctx context.Context, redisClient redis.Cmdable, key string, limit int, windowMS int64, nowMS int64) (bool, error) {
+func evalGCRALimit(ctx context.Context, redisClient redis.Cmdable, key string, limit int, windowMS int64, nowMS int64) (time.Duration, error) {
 	emissionMS := windowMS / int64(limit)
 	if emissionMS <= 0 {
 		emissionMS = 1
@@ -234,14 +234,15 @@ func evalGCRALimit(ctx context.Context, redisClient redis.Cmdable, key string, l
 	start := time.Now()
 	result, err := bidAdmissionGCRARunner.Run(ctx, redisClient, []string{key}, nowMS, emissionMS, limit, ttlMS).Int()
 	if err != nil {
-		return false, err
+		return 0, err
 	}
-	if result == 1 {
+	if result == 0 {
 		bidAdmissionGCRARunner.Record(redisx.OutcomeAllowed, time.Since(start))
+		return 0, nil
 	} else {
 		bidAdmissionGCRARunner.Record(redisx.OutcomeRejected, time.Since(start))
 	}
-	return result == 1, nil
+	return time.Duration(result) * time.Millisecond, nil
 }
 
 func (a *bidAdmission) acquireLocalPermit(ctx context.Context, auctionID string, userID string, traceID string) (*bidAdmissionPermit, error) {
@@ -259,8 +260,9 @@ func (a *bidAdmission) acquireLocalPermit(ctx context.Context, auctionID string,
 		return &bidAdmissionPermit{release: func() { <-sem }}, nil
 	default:
 		recordAdmissionMetric(apierrors.CodeBidAuctionTooHot)
-		_ = a.recordAdmissionReject(ctx, auctionID, userID, traceID, apierrors.CodeBidAuctionTooHot, "local auction semaphore full")
-		return nil, apierrors.New(apierrors.CodeBidAuctionTooHot, "auction local admission queue is full", http.StatusTooManyRequests)
+		retryAfter := time.Duration(bidLimitRetryAfterSeconds) * time.Second
+		_ = a.recordAdmissionReject(ctx, auctionID, userID, traceID, apierrors.CodeBidAuctionTooHot, "local auction semaphore full", retryAfter)
+		return nil, retryableAdmissionError(apierrors.CodeBidAuctionTooHot, "auction local admission queue is full", retryAfter)
 	}
 }
 
@@ -290,16 +292,18 @@ func (a *bidAdmission) recordRedisDown(ctx context.Context, auctionID string, us
 	return err
 }
 
-func (a *bidAdmission) recordAdmissionReject(ctx context.Context, auctionID string, userID string, traceID string, code apierrors.Code, reason string) error {
+func (a *bidAdmission) recordAdmissionReject(ctx context.Context, auctionID string, userID string, traceID string, code apierrors.Code, reason string, retryAfter time.Duration) error {
 	if a.db == nil {
 		return nil
 	}
 	payload, err := json.Marshal(map[string]any{
-		"auction_id": auctionID,
-		"user_id":    userID,
-		"trace_id":   traceID,
-		"code":       code,
-		"reason":     reason,
+		"auction_id":       auctionID,
+		"user_id":          userID,
+		"trace_id":         traceID,
+		"code":             code,
+		"reason":           reason,
+		"retry_after_ms":   retryAfter.Milliseconds(),
+		"retry_after_secs": retryAfterSeconds(retryAfter),
 	})
 	if err != nil {
 		return err
@@ -313,6 +317,47 @@ func (a *bidAdmission) recordAdmissionReject(ctx context.Context, auctionID stri
 
 func recordAdmissionMetric(code apierrors.Code) {
 	observability.Inc("auction_bid_request_total", map[string]string{"result": "admission_rejected", "reason": string(code)})
+}
+
+func retryableAdmissionError(code apierrors.Code, message string, retryAfter time.Duration) apierrors.APIError {
+	return apierrors.WithDetails(apierrors.New(code, message, http.StatusTooManyRequests), map[string]any{
+		"retry_after_ms":   retryAfter.Milliseconds(),
+		"retry_after_secs": retryAfterSeconds(retryAfter),
+	})
+}
+
+func retryAfterFromError(err apierrors.APIError) int {
+	if err.Details != nil {
+		switch value := err.Details["retry_after_secs"].(type) {
+		case int:
+			if value > 0 {
+				return value
+			}
+		case int64:
+			if value > 0 {
+				return int(value)
+			}
+		case float64:
+			if value > 0 {
+				return int(value)
+			}
+		}
+	}
+	return bidLimitRetryAfterSeconds
+}
+
+func retryAfterSeconds(d time.Duration) int {
+	if d <= 0 {
+		return bidLimitRetryAfterSeconds
+	}
+	seconds := int(d / time.Second)
+	if d%time.Second != 0 {
+		seconds++
+	}
+	if seconds <= 0 {
+		return bidLimitRetryAfterSeconds
+	}
+	return seconds
 }
 
 func bidAdmissionRequestHash(auctionID string, userID string, clientBidID string, amountCents int64) string {

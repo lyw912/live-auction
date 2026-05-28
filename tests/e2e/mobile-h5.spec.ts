@@ -382,13 +382,22 @@ test('H5 rejected bid shows business copy and re-enables CTA', async ({ page }) 
   await expect(page.getByTestId('bid-cta')).toBeEnabled();
 });
 
-test('H5 rate-limit and processing rejects show actionable abuse guidance', async ({ page }) => {
-  const errors = [
-    { code: 'BID_AUCTION_TOO_HOT', message: 'auction too hot' },
-    { code: 'PROCESSING_RETRY_LATER', message: 'processing' }
-  ];
+test('H5 rate-limit rejects enter retry-after cooldown before another bid', async ({ page }) => {
+  let requests = 0;
   await page.route('/api/auctions/auc_live/bids', async (route) => {
-    await route.fulfill({ status: 429, json: errors.shift() ?? { code: 'PROCESSING_RETRY_LATER', message: 'processing' } });
+    requests += 1;
+    await route.fulfill({
+      status: 429,
+      headers: { 'Retry-After': '2' },
+      json: {
+        code: 'BID_AUCTION_TOO_HOT',
+        message: 'auction too hot',
+        details: {
+          retry_after_ms: 2000,
+          retry_after_secs: 2
+        }
+      }
+    });
   });
 
   await page.goto('/?stateMatrix=1');
@@ -396,10 +405,38 @@ test('H5 rate-limit and processing rejects show actionable abuse guidance', asyn
   await page.getByTestId('bid-cta').click();
   await expect(page.getByText('竞价激烈，请稍候')).toBeVisible();
   await expect(page.getByTestId('h5-risk-action')).toContainText('系统正在削峰，请等待提示恢复后再出价');
+  await expect(page.getByTestId('bid-cta')).toBeDisabled();
+  await expect(page.getByTestId('bid-cta')).toHaveText(/秒后重试/);
 
+  await page.waitForTimeout(250);
+  expect(requests).toBe(1);
+  await expect(page.getByTestId('bid-cta')).toBeEnabled({ timeout: 3000 });
+});
+
+test('H5 processing retry-later keeps duplicate-click guidance without cooldown', async ({ page }) => {
+  let requests = 0;
+  await page.route('/api/auctions/auc_live/bids', async (route) => {
+    requests += 1;
+    await route.fulfill({
+      status: 409,
+      json: {
+        code: 'PROCESSING_RETRY_LATER',
+        message: 'same idempotency key is still processing',
+        details: {}
+      }
+    });
+  });
+
+  await page.goto('/?stateMatrix=1');
+  await page.getByRole('button', { name: '竞价中' }).click();
   await page.getByTestId('bid-cta').click();
+
   await expect(page.getByText('正在确认上一笔出价')).toBeVisible();
   await expect(page.getByTestId('h5-risk-action')).toContainText('上一笔请求仍在处理，不要连续点击');
+  await expect(page.getByTestId('bid-cta')).toBeEnabled();
+
+  await page.getByTestId('bid-cta').click();
+  expect(requests).toBe(2);
 });
 
 test('H5 verified bidder requirement disables bid CTA with clear copy', async ({ page }) => {

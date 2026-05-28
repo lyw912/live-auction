@@ -55,3 +55,8 @@ func New(code Code, message string, status int) APIError {
 	}
 	return APIError{Code: code, Message: message, Status: status}
 }
+
+func WithDetails(err APIError, details map[string]any) APIError {
+	err.Details = details
+	return err
+}

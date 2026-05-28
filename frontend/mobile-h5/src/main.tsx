@@ -80,6 +80,10 @@ type BidResponse = {
   confirm_token?: string;
   expires_in_ms?: number;
   amount_cents?: number;
+  details?: {
+    retry_after_ms?: number;
+    retry_after_secs?: number;
+  };
 };
 
 type AuctionRealtimeEvent = {
@@ -437,6 +441,7 @@ function rejectCopy(code?: string | null) {
     case 'REJECTED_SELF_LEADING':
       return '你已领先，无需重复出价';
     case 'BID_AUCTION_TOO_HOT':
+    case 'RATE_LIMITED':
       return '竞价激烈，请稍候';
     case 'PROCESSING_RETRY_LATER':
       return '正在确认上一笔出价';
@@ -449,6 +454,16 @@ function rejectCopy(code?: string | null) {
     default:
       return '出价未通过，请重试';
   }
+}
+
+function retryAfterMS(response: Response, payload?: BidResponse | null) {
+  const detailMS = Number(payload?.details?.retry_after_ms ?? 0);
+  if (Number.isFinite(detailMS) && detailMS > 0) return detailMS;
+  const detailSeconds = Number(payload?.details?.retry_after_secs ?? 0);
+  if (Number.isFinite(detailSeconds) && detailSeconds > 0) return detailSeconds * 1000;
+  const headerSeconds = Number(response.headers.get('Retry-After') ?? 0);
+  if (Number.isFinite(headerSeconds) && headerSeconds > 0) return headerSeconds * 1000;
+  return 0;
 }
 
 function riskActionCopy(code?: string | null) {
@@ -572,6 +587,7 @@ function App() {
   const [auctionEndAt, setAuctionEndAt] = useState('');
   const [serverTimeMS, setServerTimeMS] = useState(0);
   const [nowMS, setNowMS] = useState(Date.now());
+  const [bidCooldownUntilMS, setBidCooldownUntilMS] = useState(0);
   const [extensionNotice, setExtensionNotice] = useState('');
   const [currentUserID, setCurrentUserID] = useState(demoUserID);
   const [sessionReady, setSessionReady] = useState(false);
@@ -589,6 +605,7 @@ function App() {
   });
   const [bidderRequirement, setBidderRequirement] = useState<BidderRequirement | null>(null);
   const paymentInFlight = useRef(false);
+  const bidInFlightRef = useRef(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const lastSeqRef = useRef(lastSeq);
@@ -670,6 +687,7 @@ function App() {
     const terminal = selected === 'sold_winner' || selected === 'sold_loser' || selected === 'ended' || selected === 'cancelled';
     return deriveCountdown(auctionEndAt, serverTimeMS, nowMS, terminal, stale, Boolean(extensionNotice));
   }, [activeAuctionID, auctionEndAt, connectionPhase, extensionNotice, nowMS, recoveryPhase, selected, serverTimeMS]);
+  const bidCooldownRemainingMS = Math.max(0, bidCooldownUntilMS - nowMS);
   const countdownExpired = useMemo(() => (
     selected === 'active_bids' &&
     connectionPhase === 'connected' &&
@@ -930,6 +948,21 @@ function App() {
         stale: true
       };
     }
+    if (bidCooldownRemainingMS > 0) {
+      const remainingSeconds = Math.ceil(bidCooldownRemainingMS / 1000);
+      return {
+        key: 'rejected' as AuctionState,
+        title: '冷却中',
+        status: 'THROTTLED',
+        price: formatCents(currentPriceCents),
+        leader: `${leaderMasked} 领先`,
+        feedback: `${bidFeedback || '竞价激烈，请稍候'} · ${remainingSeconds} 秒后重试`,
+        countdown: countdownCopy,
+        cta: `${remainingSeconds} 秒后重试`,
+        ctaDisabled: true,
+        rejected: true
+      };
+    }
     if (bidPhase === 'pending') {
       return {
         key: 'pending' as AuctionState,
@@ -1009,7 +1042,7 @@ function App() {
       cta: countdownExpired ? '同步中' : `出价 ${formatCents(nextBidCents)}`,
       ctaDisabled: countdownExpired
     };
-  }, [activeAuctionID, bidFeedback, bidderRequirement, bidPhase, confirmAmountCents, connectionPhase, countdownCopy, countdownExpired, currentPriceCents, lastSeq, leaderMasked, minimumNextBidCents, nextBidCents, payableOrderAmountCents, payableOrderID, paymentPhase, recoveryPhase, selected, terminalPriceCents, terminalWinnerID]);
+  }, [activeAuctionID, bidCooldownRemainingMS, bidFeedback, bidderRequirement, bidPhase, confirmAmountCents, connectionPhase, countdownCopy, countdownExpired, currentPriceCents, lastSeq, leaderMasked, minimumNextBidCents, nextBidCents, payableOrderAmountCents, payableOrderID, paymentPhase, recoveryPhase, selected, terminalPriceCents, terminalWinnerID]);
   const resultSheetKind: ResultSheetKind | null = selected === 'sold_winner'
     ? 'winner'
     : selected === 'sold_loser'
@@ -1477,6 +1510,8 @@ function App() {
   const submitBid = async () => {
     const auctionID = activeAuctionIDRef.current;
     if (selected !== 'active_bids' || scenario.ctaDisabled || !auctionID) return;
+    if (bidInFlightRef.current || bidCooldownUntilMS > Date.now()) return;
+    bidInFlightRef.current = true;
     const clientBidID = createClientBidID();
     setBidPhase('pending');
     try {
@@ -1503,23 +1538,32 @@ function App() {
       }
       if (!response.ok || payload.reject_reason || payload.code) {
         const code = payload.reject_reason ?? payload.code ?? '';
+        const retryMS = retryAfterMS(response, payload);
+        if (retryMS > 0) {
+          setBidCooldownUntilMS(Date.now() + retryMS);
+        }
         setRiskCode(code);
         setBidFeedback(rejectCopy(code));
         setBidPhase('rejected');
         return;
       }
       setRiskCode('');
+      setBidCooldownUntilMS(0);
       applyAcceptedBid(payload);
     } catch {
       setRiskCode('NETWORK_ERROR');
       setBidFeedback('网络异常，请重试');
       setBidPhase('rejected');
+    } finally {
+      bidInFlightRef.current = false;
     }
   };
 
   const confirmBid = async () => {
     const auctionID = activeAuctionIDRef.current;
     if (!confirmToken || !confirmIdempotencyKey || scenario.ctaDisabled || !auctionID) return;
+    if (bidInFlightRef.current || bidCooldownUntilMS > Date.now()) return;
+    bidInFlightRef.current = true;
     setBidPhase('confirming');
     try {
       const response = await fetch(`/api/auctions/${auctionID}/bids/confirm`, {
@@ -1536,17 +1580,24 @@ function App() {
       const payload = await response.json() as BidResponse;
       if (!response.ok || payload.reject_reason || payload.code) {
         const code = payload.reject_reason ?? payload.code ?? '';
+        const retryMS = retryAfterMS(response, payload);
+        if (retryMS > 0) {
+          setBidCooldownUntilMS(Date.now() + retryMS);
+        }
         setRiskCode(code);
         setBidFeedback(rejectCopy(code));
         setBidPhase('rejected');
         return;
       }
       setRiskCode('');
+      setBidCooldownUntilMS(0);
       applyAcceptedBid(payload);
     } catch {
       setRiskCode('NETWORK_ERROR');
       setBidFeedback('网络异常，请重试');
       setBidPhase('rejected');
+    } finally {
+      bidInFlightRef.current = false;
     }
   };
 
