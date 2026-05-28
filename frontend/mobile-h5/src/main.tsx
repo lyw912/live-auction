@@ -441,6 +441,7 @@ function rejectCopy(code?: string | null) {
     case 'REJECTED_SELF_LEADING':
       return '你已领先，无需重复出价';
     case 'BID_AUCTION_TOO_HOT':
+    case 'BID_RETRY_LATER':
     case 'RATE_LIMITED':
       return '竞价激烈，请稍候';
     case 'PROCESSING_RETRY_LATER':
@@ -469,6 +470,7 @@ function retryAfterMS(response: Response, payload?: BidResponse | null) {
 function riskActionCopy(code?: string | null) {
   switch (code) {
     case 'BID_AUCTION_TOO_HOT':
+    case 'BID_RETRY_LATER':
     case 'RATE_LIMITED':
       return '系统正在削峰，请等待提示恢复后再出价';
     case 'PROCESSING_RETRY_LATER':

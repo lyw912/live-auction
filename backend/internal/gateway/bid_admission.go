@@ -320,7 +320,11 @@ func recordAdmissionMetric(code apierrors.Code) {
 }
 
 func retryableAdmissionError(code apierrors.Code, message string, retryAfter time.Duration) apierrors.APIError {
-	return apierrors.WithDetails(apierrors.New(code, message, http.StatusTooManyRequests), map[string]any{
+	status := http.StatusTooManyRequests
+	if code == apierrors.CodeBidRetryLater {
+		status = http.StatusConflict
+	}
+	return apierrors.WithDetails(apierrors.New(code, message, status), map[string]any{
 		"retry_after_ms":   retryAfter.Milliseconds(),
 		"retry_after_secs": retryAfterSeconds(retryAfter),
 	})

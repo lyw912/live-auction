@@ -26,6 +26,7 @@ type AuctionHandler struct {
 	RT     *realtime.Server
 	ACL    roomACL
 	Bids   *bidAdmission
+	Lanes  *bidLaneManager
 }
 
 type uploadURLRequest struct {
@@ -366,8 +367,11 @@ func (h AuctionHandler) PlaceBid(w http.ResponseWriter, r *http.Request) {
 			defer permit.Release()
 		}
 	}
-	result, err := h.Repo.PlaceBid(r.Context(), auctionID, user.ID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context()))
-	writeResult(w, r, http.StatusOK, result, err)
+	place := func(ctx context.Context) (auction.BidResponse, error) {
+		return h.Repo.PlaceBid(ctx, auctionID, user.ID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context()))
+	}
+	result, err := h.executeBidLane(r.Context(), auctionID, user.ID, traceID(r.Context()), place)
+	writeBidAdmissionResult(w, r, result, err)
 }
 
 func (h AuctionHandler) DemoCompetingBid(w http.ResponseWriter, r *http.Request) {
@@ -442,8 +446,18 @@ func (h AuctionHandler) ConfirmBid(w http.ResponseWriter, r *http.Request) {
 			defer permit.Release()
 		}
 	}
-	result, err := h.Repo.ConfirmBid(r.Context(), auctionID, user.ID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context()))
-	writeResult(w, r, http.StatusOK, result, err)
+	confirm := func(ctx context.Context) (auction.BidResponse, error) {
+		return h.Repo.ConfirmBid(ctx, auctionID, user.ID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context()))
+	}
+	result, err := h.executeBidLane(r.Context(), auctionID, user.ID, traceID(r.Context()), confirm)
+	writeBidAdmissionResult(w, r, result, err)
+}
+
+func (h AuctionHandler) executeBidLane(ctx context.Context, auctionID string, userID string, traceID string, fn bidLaneFunc) (auction.BidResponse, error) {
+	if h.Lanes == nil {
+		return fn(ctx)
+	}
+	return h.Lanes.Execute(ctx, auctionID, userID, traceID, fn)
 }
 
 func (h AuctionHandler) GetLeaderboard(w http.ResponseWriter, r *http.Request) {

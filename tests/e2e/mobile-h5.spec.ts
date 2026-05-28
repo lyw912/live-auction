@@ -439,6 +439,37 @@ test('H5 processing retry-later keeps duplicate-click guidance without cooldown'
   expect(requests).toBe(2);
 });
 
+test('H5 postgres lane retry-later enters retry-after cooldown', async ({ page }) => {
+  let requests = 0;
+  await page.route('/api/auctions/auc_live/bids', async (route) => {
+    requests += 1;
+    await route.fulfill({
+      status: 409,
+      headers: { 'Retry-After': '1' },
+      json: {
+        code: 'BID_RETRY_LATER',
+        message: 'auction bid lane is busy; retry later',
+        details: {
+          retry_after_ms: 1000,
+          retry_after_secs: 1
+        }
+      }
+    });
+  });
+
+  await page.goto('/?stateMatrix=1');
+  await page.getByRole('button', { name: '竞价中' }).click();
+  await page.getByTestId('bid-cta').click();
+  await page.getByTestId('bid-cta').click({ force: true });
+
+  await expect(page.getByText('竞价激烈，请稍候')).toBeVisible();
+  await expect(page.getByTestId('h5-risk-action')).toContainText('系统正在削峰');
+  await expect(page.getByTestId('bid-cta')).toBeDisabled();
+  await expect(page.getByTestId('bid-cta')).toHaveText(/秒后重试/);
+  expect(requests).toBe(1);
+  await expect(page.getByTestId('bid-cta')).toBeEnabled({ timeout: 2500 });
+});
+
 test('H5 verified bidder requirement disables bid CTA with clear copy', async ({ page }) => {
   let bidRequests = 0;
   await page.route('/api/rooms/room_main/auctions', async (route) => {

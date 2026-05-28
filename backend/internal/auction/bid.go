@@ -160,6 +160,10 @@ func (r *Repository) PlaceBid(ctx context.Context, auctionID string, userID stri
 	if err != nil {
 		return BidResponse{}, err
 	}
+	txStart := time.Now()
+	defer func() {
+		observability.Observe("auction_bid_tx_seconds", time.Since(txStart).Seconds(), nil, observability.DefaultLatencyBuckets)
+	}()
 	defer rollback(ctx, tx)
 
 	if err := upsertProcessing(ctx, tx, "bid", auctionID, userID, idempotencyKey, requestHash); err != nil {
@@ -220,6 +224,10 @@ func (r *Repository) ConfirmBid(ctx context.Context, auctionID string, userID st
 	if err != nil {
 		return BidResponse{}, err
 	}
+	txStart := time.Now()
+	defer func() {
+		observability.Observe("auction_bid_tx_seconds", time.Since(txStart).Seconds(), nil, observability.DefaultLatencyBuckets)
+	}()
 	defer rollback(ctx, tx)
 
 	var storedHash string

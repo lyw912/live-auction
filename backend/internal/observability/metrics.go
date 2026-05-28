@@ -45,6 +45,9 @@ type AdmissionConfig struct {
 	BidIPLimit            int
 	BidAuctionLimit       int
 	BidAuctionMaxInFlight int
+	BidLaneWorkers        int
+	BidLaneQueueSize      int
+	BidLaneQueueTimeout   time.Duration
 	WSTicketMaxInFlight   int
 	WSConnectMaxInFlight  int
 	WSQueueMessages       int
@@ -107,6 +110,9 @@ func SetAdmissionConfig(cfg AdmissionConfig) {
 	Set("auction_admission_config_limit", float64(cfg.BidIPLimit), map[string]string{"kind": "bid_ip_per_second"})
 	Set("auction_admission_config_limit", float64(cfg.BidAuctionLimit), map[string]string{"kind": "bid_auction_per_second"})
 	Set("auction_admission_config_limit", float64(cfg.BidAuctionMaxInFlight), map[string]string{"kind": "bid_auction_max_in_flight"})
+	Set("auction_bid_lane_config", float64(cfg.BidLaneWorkers), map[string]string{"kind": "workers"})
+	Set("auction_bid_lane_config", float64(cfg.BidLaneQueueSize), map[string]string{"kind": "queue_size"})
+	Set("auction_bid_lane_config", cfg.BidLaneQueueTimeout.Seconds(), map[string]string{"kind": "queue_timeout_seconds"})
 	Set("auction_admission_config_limit", float64(cfg.WSTicketMaxInFlight), map[string]string{"kind": "ws_ticket_max_in_flight"})
 	Set("auction_admission_config_limit", float64(cfg.WSConnectMaxInFlight), map[string]string{"kind": "ws_connect_max_in_flight"})
 	Set("auction_realtime_config_limit", float64(cfg.WSQueueMessages), map[string]string{"kind": "ws_queue_messages"})

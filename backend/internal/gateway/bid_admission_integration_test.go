@@ -231,6 +231,194 @@ func TestAdmissionDisabledBypassesBidRedisAndLocalLimits(t *testing.T) {
 	}
 }
 
+func TestPostgresBidLaneFullReturnsRetryAfterAndRecordsAnomaly(t *testing.T) {
+	observability.Default = observability.NewRegistry()
+	db := openMonitorDB(t)
+	rdb := openMonitorRedis(t)
+	auctionRow := createAdmissionAuction(t, db, "user_1")
+	cfg := admissionTestConfig()
+	cfg.BidLaneQueueSize = 1
+	cfg.BidLaneQueueTimeout = time.Second
+	handler := AuctionHandler{
+		Config: cfg,
+		Deps:   &storage.Dependencies{Postgres: db, Redis: rdb},
+		Repo:   auction.NewRepository(db),
+		ACL:    newRoomACL(db),
+		Bids:   newBidAdmission(cfg, db, rdb),
+		Lanes:  newBidLaneManager(cfg, db),
+	}
+	lane := &bidLane{auctionID: auctionRow.ID, tasks: make(chan bidLaneTask, 1)}
+	handler.Lanes.lanes.Store(auctionRow.ID, lane)
+	lane.tasks <- bidLaneTask{
+		ctx:       context.Background(),
+		queuedAt:  time.Now(),
+		expiresAt: time.Now().Add(time.Second),
+		started:   make(chan struct{}),
+		done:      make(chan bidLaneResult, 1),
+		run: func(context.Context) (auction.BidResponse, error) {
+			return auction.BidResponse{}, nil
+		},
+	}
+	lane.depth.Add(1)
+	router := chi.NewRouter()
+	router.Use(traceMiddleware)
+	router.Use(mockAuthMiddleware(cfg))
+	router.Post("/api/auctions/{id}/bids", handler.PlaceBid)
+
+	body := `{"client_bid_id":"lane-full","amount_cents":15000,"client_seen_seq":0}`
+	rec := performBid(router, auctionRow.ID, body, "lane-full", "user_1")
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429 body=%s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("Retry-After") != "1" {
+		t.Fatalf("Retry-After = %q, want 1", rec.Header().Get("Retry-After"))
+	}
+	var payload apierrors.APIError
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if payload.Code != apierrors.CodeBidAuctionTooHot {
+		t.Fatalf("code = %s, want BID_AUCTION_TOO_HOT", payload.Code)
+	}
+	assertAdmissionAnomalyRecorded(t, db, auctionRow.ID, string(apierrors.CodeBidAuctionTooHot))
+	assertAdmissionAnomalyRetryAfterRecorded(t, db, auctionRow.ID, string(apierrors.CodeBidAuctionTooHot))
+	metrics := string(observability.Default.Render(context.Background()))
+	for _, want := range []string{
+		`auction_bid_queue_rejected_total{reason="BID_AUCTION_TOO_HOT"} 1`,
+		`auction_bid_queue_depth{auction_id="` + auctionRow.ID + `"}`,
+	} {
+		if !strings.Contains(metrics, want) {
+			t.Fatalf("metrics missing %q in:\n%s", want, metrics)
+		}
+	}
+}
+
+func TestPostgresBidLaneCompletedReplayBypassesFullQueue(t *testing.T) {
+	db := openMonitorDB(t)
+	rdb := openMonitorRedis(t)
+	auctionRow := createAdmissionAuction(t, db, "user_1")
+	cfg := admissionTestConfig()
+	cfg.BidLaneQueueSize = 1
+	cfg.BidLaneQueueTimeout = time.Second
+	handler := AuctionHandler{
+		Config: cfg,
+		Deps:   &storage.Dependencies{Postgres: db, Redis: rdb},
+		Repo:   auction.NewRepository(db),
+		ACL:    newRoomACL(db),
+		Bids:   newBidAdmission(cfg, db, rdb),
+		Lanes:  newBidLaneManager(cfg, db),
+	}
+	router := chi.NewRouter()
+	router.Use(traceMiddleware)
+	router.Use(mockAuthMiddleware(cfg))
+	router.Post("/api/auctions/{id}/bids", handler.PlaceBid)
+
+	body := `{"client_bid_id":"lane-replay","amount_cents":15000,"client_seen_seq":0}`
+	first := performBid(router, auctionRow.ID, body, "lane-replay", "user_1")
+	if first.Code != http.StatusOK {
+		t.Fatalf("first status = %d body=%s", first.Code, first.Body.String())
+	}
+	var firstResp auction.BidResponse
+	if err := json.Unmarshal(first.Body.Bytes(), &firstResp); err != nil {
+		t.Fatalf("decode first response: %v", err)
+	}
+	lane := &bidLane{auctionID: auctionRow.ID, tasks: make(chan bidLaneTask, 1)}
+	handler.Lanes.lanes.Store(auctionRow.ID, lane)
+	lane.tasks <- bidLaneTask{
+		ctx:       context.Background(),
+		queuedAt:  time.Now(),
+		expiresAt: time.Now().Add(time.Second),
+		started:   make(chan struct{}),
+		done:      make(chan bidLaneResult, 1),
+		run: func(context.Context) (auction.BidResponse, error) {
+			return auction.BidResponse{}, nil
+		},
+	}
+	lane.depth.Add(1)
+
+	replay := performBid(router, auctionRow.ID, body, "lane-replay", "user_1")
+	if replay.Code != http.StatusOK {
+		t.Fatalf("replay status = %d body=%s", replay.Code, replay.Body.String())
+	}
+	var replayResp auction.BidResponse
+	if err := json.Unmarshal(replay.Body.Bytes(), &replayResp); err != nil {
+		t.Fatalf("decode replay response: %v", err)
+	}
+	if replayResp.BidID != firstResp.BidID || replayResp.Seq != firstResp.Seq {
+		t.Fatalf("replay mismatch: got %#v want %#v", replayResp, firstResp)
+	}
+}
+
+func TestPostgresBidLaneCompletedConfirmReplayBypassesFullQueue(t *testing.T) {
+	db := openMonitorDB(t)
+	rdb := openMonitorRedis(t)
+	auctionRow := createAdmissionAuction(t, db, "user_1")
+	cfg := admissionTestConfig()
+	cfg.BidLaneQueueSize = 1
+	cfg.BidLaneQueueTimeout = time.Second
+	handler := AuctionHandler{
+		Config: cfg,
+		Deps:   &storage.Dependencies{Postgres: db, Redis: rdb},
+		Repo:   auction.NewRepository(db),
+		ACL:    newRoomACL(db),
+		Bids:   newBidAdmission(cfg, db, rdb),
+		Lanes:  newBidLaneManager(cfg, db),
+	}
+	completed := auction.BidResponse{
+		Result:            auction.BidResultAccepted,
+		BidID:             "bid_confirm_replay",
+		AuctionID:         auctionRow.ID,
+		Seq:               7,
+		CurrentPriceCents: 15_000,
+		ServerTimeMS:      time.Now().UnixMilli(),
+	}
+	responseJSON, err := json.Marshal(completed)
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+	if _, err := db.Exec(context.Background(), `
+		INSERT INTO idempotency_records (scope_type, scope_id, user_id, idempotency_key, request_hash, status, http_status, result_code, response_json, completed_at)
+		VALUES ('bid', $1, 'user_1', 'lane-confirm-replay', 'confirm-hash', 'COMPLETED', 200, $2, $3, now())
+	`, auctionRow.ID, auction.BidResultAccepted, responseJSON); err != nil {
+		t.Fatalf("insert completed confirm replay: %v", err)
+	}
+	lane := &bidLane{auctionID: auctionRow.ID, tasks: make(chan bidLaneTask, 1)}
+	handler.Lanes.lanes.Store(auctionRow.ID, lane)
+	lane.tasks <- bidLaneTask{
+		ctx:       context.Background(),
+		queuedAt:  time.Now(),
+		expiresAt: time.Now().Add(time.Second),
+		started:   make(chan struct{}),
+		done:      make(chan bidLaneResult, 1),
+		run: func(context.Context) (auction.BidResponse, error) {
+			return auction.BidResponse{}, nil
+		},
+	}
+	lane.depth.Add(1)
+	router := chi.NewRouter()
+	router.Use(traceMiddleware)
+	router.Use(mockAuthMiddleware(cfg))
+	router.Post("/api/auctions/{id}/bids/confirm", handler.ConfirmBid)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auctions/"+auctionRow.ID+"/bids/confirm", bytes.NewBufferString(`{"confirm_token":"already-settled","idempotency_key":"lane-confirm-replay"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "lane-confirm-replay")
+	req.Header.Set("X-Mock-Role", "user")
+	req.Header.Set("X-Mock-User-Id", "user_1")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("confirm replay status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var replay auction.BidResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &replay); err != nil {
+		t.Fatalf("decode replay: %v", err)
+	}
+	if replay.BidID != completed.BidID || replay.Seq != completed.Seq {
+		t.Fatalf("confirm replay mismatch: got %#v want %#v", replay, completed)
+	}
+}
+
 func createAdmissionAuction(t *testing.T, db *pgxpool.Pool, viewerID string) auction.Auction {
 	t.Helper()
 	repo := auction.NewRepository(db)

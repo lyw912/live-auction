@@ -31,6 +31,10 @@ type Config struct {
 	BidAuctionMaxInFlight    int
 	BidLimitWindow           time.Duration
 	BidLimitRedisTimeout     time.Duration
+	BidEngineMode            string
+	BidLaneWorkers           int
+	BidLaneQueueSize         int
+	BidLaneQueueTimeout      time.Duration
 	FakePaymentWebhookSecret string
 
 	AdmissionEnabled       bool
@@ -80,6 +84,10 @@ func Load() Config {
 		BidAuctionMaxInFlight:    getEnvInt("BID_AUCTION_MAX_IN_FLIGHT", 32),
 		BidLimitWindow:           getEnvDuration("BID_LIMIT_WINDOW", time.Second),
 		BidLimitRedisTimeout:     getEnvDuration("BID_LIMIT_REDIS_TIMEOUT", 50*time.Millisecond),
+		BidEngineMode:            getEnv("BID_ENGINE_MODE", "postgres_lane"),
+		BidLaneWorkers:           getEnvInt("BID_LANE_WORKERS", 1),
+		BidLaneQueueSize:         getEnvInt("BID_LANE_QUEUE_SIZE", 128),
+		BidLaneQueueTimeout:      getEnvDuration("BID_LANE_QUEUE_TIMEOUT", 750*time.Millisecond),
 		FakePaymentWebhookSecret: getEnv("FAKE_PAYMENT_WEBHOOK_SECRET", "local_fake_payment_secret"),
 
 		AdmissionEnabled:       getEnvBool("ADMISSION_ENABLED", true),

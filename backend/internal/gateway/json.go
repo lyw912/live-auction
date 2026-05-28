@@ -26,7 +26,7 @@ func writeBidAdmissionResult(w http.ResponseWriter, r *http.Request, result any,
 		return
 	}
 	var apiErr apierrors.APIError
-	if errors.As(err, &apiErr) && (apiErr.Code == apierrors.CodeBidAuctionTooHot || apiErr.Code == apierrors.CodeRateLimited) {
+	if errors.As(err, &apiErr) && (apiErr.Code == apierrors.CodeBidAuctionTooHot || apiErr.Code == apierrors.CodeRateLimited || apiErr.Code == apierrors.CodeBidRetryLater) {
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfterFromError(apiErr)))
 	}
 	writeResult(w, r, http.StatusOK, result, err)

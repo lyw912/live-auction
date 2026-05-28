@@ -45,12 +45,16 @@ func newRealtimeAdmission(cfg config.Config) *realtime.Admission {
 }
 
 func NewRouterWithRealtime(cfg config.Config, deps *storage.Dependencies, log *slog.Logger, rt *realtime.Server) http.Handler {
+	bidLaneCfg := normalizeBidLaneConfig(cfg)
 	observability.SetAdmissionConfig(observability.AdmissionConfig{
 		Enabled:               cfg.AdmissionEnabled,
 		BidUserLimit:          cfg.BidUserLimitPerSecond,
 		BidIPLimit:            cfg.BidIPLimitPerSecond,
 		BidAuctionLimit:       cfg.BidAuctionLimitPerSecond,
 		BidAuctionMaxInFlight: cfg.BidAuctionMaxInFlight,
+		BidLaneWorkers:        bidLaneCfg.BidLaneWorkers,
+		BidLaneQueueSize:      bidLaneCfg.BidLaneQueueSize,
+		BidLaneQueueTimeout:   bidLaneCfg.BidLaneQueueTimeout,
 		WSTicketMaxInFlight:   cfg.WSTicketMaxInFlight,
 		WSConnectMaxInFlight:  cfg.WSConnectMaxInFlight,
 		WSQueueMessages:       cfg.WSQueueMessages,
@@ -77,6 +81,7 @@ func NewRouterWithRealtime(cfg config.Config, deps *storage.Dependencies, log *s
 		RT:     rt,
 		ACL:    newRoomACL(deps.Postgres),
 		Bids:   newBidAdmission(cfg, deps.Postgres, deps.Redis),
+		Lanes:  newBidLaneManager(cfg, deps.Postgres),
 	}
 	authHandler := AuthHandler{Config: cfg, DB: deps.Postgres}
 	monitorHandler := MonitorHandler{Deps: deps}
