@@ -23,7 +23,7 @@ ps -eo pid,ppid,pcpu,pmem,rss,vsz,cmd --sort=-pcpu | head -n 40 > "$OUT_DIR/top-
 curl -fsS "$BASE_URL/readyz" > "$OUT_DIR/readyz.json"
 curl -fsS "$BASE_URL/metrics" > "$OUT_DIR/metrics.prom"
 
-docker exec "$DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f - > "$OUT_DIR/postgres-summary.txt" <<'SQL'
+docker exec -i "$DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f - > "$OUT_DIR/postgres-summary.txt" <<'SQL'
 \timing on
 select now() as ts;
 select id, status, current_price_cents, accepted_bid_count, seq, end_at from auctions where id in ('auc_live','auc_side');

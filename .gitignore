@@ -41,8 +41,13 @@ docs/perf/raw/*
 Jmeter压测报告-*.pdf
 aliyun-cli-linux-latest-amd64.tgz
 docs/perf/pts/pts_sessions.csv
+docs/perf/pts/pts_*_sessions.csv
 docs/perf/pts/live-auction-server
 docs/perf/pts/server.pid
 docs/perf/pts/pdf-pages/*.ppm
+docs/perf/pts/evidence/after-*/
+docs/perf/pts/evidence/before-*/
 docs/perf/pts/evidence/**/pts-sampling-logs/
 docs/perf/pts/evidence/**/pts-sampling-logs-smoke/
+[\[]*压测报告*[\]]*.pdf
+*压测报告*.pdf

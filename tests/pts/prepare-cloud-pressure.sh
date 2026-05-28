@@ -5,6 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BACKEND_DIR="$ROOT_DIR/backend"
 MIGRATIONS_DIR="$BACKEND_DIR/migrations"
 OUT_DIR="$ROOT_DIR/docs/perf/pts"
+SESSION_CSV="${SESSION_CSV:-pts_sessions.csv}"
+JMX_PATH="${JMX_PATH:-$ROOT_DIR/tests/pts/live-auction-core-pressure.jmx}"
 TMP_SQL="/tmp/live-auction-migrations-up.sql"
 BOOTSTRAP_SQL="/tmp/live-auction-bootstrap-before-migrations.sql"
 DB_CONTAINER="${DB_CONTAINER:-live-auction-postgres}"
@@ -16,6 +18,10 @@ HTTP_PORT="${HTTP_ADDR##*:}"
 DATABASE_URL="${DATABASE_URL:-postgres://live_auction:live_auction@localhost:5432/live_auction?sslmode=disable}"
 REDIS_ADDR="${REDIS_ADDR:-localhost:6379}"
 SESSION_COUNT="${SESSION_COUNT:-4096}"
+DB_MAX_CONNS="${DB_MAX_CONNS:-90}"
+DB_MIN_CONNS="${DB_MIN_CONNS:-16}"
+DB_MAX_CONN_LIFETIME="${DB_MAX_CONN_LIFETIME:-1h}"
+DB_MAX_CONN_IDLE_TIME="${DB_MAX_CONN_IDLE_TIME:-30m}"
 
 mkdir -p "$OUT_DIR"
 : > "$TMP_SQL"
@@ -66,6 +72,8 @@ perl -0pi -e "s/ALTER TABLE outbox_events\\s+ADD COLUMN event_schema_version int
 
 perl -0pi -e "s/ALTER TABLE outbox_delivery\\s+ADD COLUMN last_error_class text,\\s+ADD COLUMN last_error_retriable boolean,\\s+ADD COLUMN last_error_at timestamptz,\\s+ADD COLUMN last_published_watermark jsonb;/ALTER TABLE outbox_delivery ADD COLUMN IF NOT EXISTS last_error_class text;\\nALTER TABLE outbox_delivery ADD COLUMN IF NOT EXISTS last_error_retriable boolean;\\nALTER TABLE outbox_delivery ADD COLUMN IF NOT EXISTS last_error_at timestamptz;\\nALTER TABLE outbox_delivery ADD COLUMN IF NOT EXISTS last_published_watermark jsonb;/s" "$TMP_SQL"
 
+perl -0pi -e "s/ALTER TABLE bids\\s+ADD COLUMN source text NOT NULL DEFAULT 'MANUAL',\\s+ADD CONSTRAINT bids_source_check CHECK \\(source IN \\('MANUAL','AUTO_MAX_BID'\\)\\);/ALTER TABLE bids ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'MANUAL';\\nDO \\$\\$ BEGIN\\n  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'bids_source_check') THEN\\n    ALTER TABLE bids ADD CONSTRAINT bids_source_check CHECK (source IN ('MANUAL','AUTO_MAX_BID'));\\n  END IF;\\nEND \\$\\$;/s" "$TMP_SQL"
+
 echo "[1/7] Applying migrations to $DB_CONTAINER/$DB_NAME"
 docker cp "$BOOTSTRAP_SQL" "$DB_CONTAINER:/tmp/live-auction-bootstrap-before-migrations.sql"
 docker exec "$DB_CONTAINER" psql -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$DB_NAME" -f /tmp/live-auction-bootstrap-before-migrations.sql
@@ -91,7 +99,7 @@ echo "[4/7] Generating real session CSV for PTS"
 {
   echo "user_id,token,role"
   docker exec -i "$DB_CONTAINER" psql -q -A -F ',' -t -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$DB_NAME" -v session_count="$SESSION_COUNT" -f - < "$OUT_DIR/generate-pts-sessions.sql"
-} > "$OUT_DIR/pts_sessions.csv"
+} > "$OUT_DIR/$SESSION_CSV"
 
 echo "[5/7] Building backend"
 (
@@ -124,6 +132,10 @@ done < <(
   HTTP_ADDR="$HTTP_ADDR" \
   DATABASE_URL="$DATABASE_URL" \
   REDIS_ADDR="$REDIS_ADDR" \
+  DB_MAX_CONNS="$DB_MAX_CONNS" \
+  DB_MIN_CONNS="$DB_MIN_CONNS" \
+  DB_MAX_CONN_LIFETIME="$DB_MAX_CONN_LIFETIME" \
+  DB_MAX_CONN_IDLE_TIME="$DB_MAX_CONN_IDLE_TIME" \
   ALLOW_MOCK_AUTH=false \
   ADMISSION_ENABLED=false \
   SESSION_TTL=12h \
@@ -137,10 +149,10 @@ echo "[7/7] Verifying backend"
 sleep 1
 curl -fsS "http://127.0.0.1:${HTTP_PORT}/readyz"
 curl -fsS "http://127.0.0.1:${HTTP_PORT}/metrics" | grep 'auction_admission_enabled 0'
-ss -lntpH "sport = :$HTTP_PORT" | grep '0.0.0.0'
+ss -lntpH "sport = :$HTTP_PORT" | grep -E '(\*:|0\.0\.0\.0:|\[::\]:)'"$HTTP_PORT"
 
 echo "Prepared:"
 echo "- Backend: http://47.113.223.90:${HTTP_PORT}"
-echo "- JMX: $ROOT_DIR/tests/pts/live-auction-core-pressure.jmx"
-echo "- CSV: $OUT_DIR/pts_sessions.csv"
+echo "- JMX: $JMX_PATH"
+echo "- CSV: $OUT_DIR/$SESSION_CSV"
 echo "- Logs: $OUT_DIR/server.log and $OUT_DIR/server.err.log"

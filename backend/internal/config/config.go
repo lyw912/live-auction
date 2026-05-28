@@ -46,8 +46,12 @@ type Config struct {
 	RealtimeStreamEpochTTL time.Duration
 	OutboxNotifyEnabled    bool
 
-	DBPingTimeout    time.Duration
-	RedisPingTimeout time.Duration
+	DBPingTimeout     time.Duration
+	RedisPingTimeout  time.Duration
+	DBMaxConns        int32
+	DBMinConns        int32
+	DBMaxConnLifetime time.Duration
+	DBMaxConnIdleTime time.Duration
 }
 
 func Load() Config {
@@ -91,8 +95,12 @@ func Load() Config {
 		RealtimeStreamEpochTTL: getEnvDuration("REALTIME_STREAM_EPOCH_TTL", 24*time.Hour),
 		OutboxNotifyEnabled:    getEnvBool("OUTBOX_NOTIFY_ENABLED", true),
 
-		DBPingTimeout:    getEnvDuration("DB_PING_TIMEOUT", 2*time.Second),
-		RedisPingTimeout: getEnvDuration("REDIS_PING_TIMEOUT", 2*time.Second),
+		DBPingTimeout:     getEnvDuration("DB_PING_TIMEOUT", 2*time.Second),
+		RedisPingTimeout:  getEnvDuration("REDIS_PING_TIMEOUT", 2*time.Second),
+		DBMaxConns:        int32(getEnvInt("DB_MAX_CONNS", 8)),
+		DBMinConns:        int32(getEnvInt("DB_MIN_CONNS", 0)),
+		DBMaxConnLifetime: getEnvDuration("DB_MAX_CONN_LIFETIME", time.Hour),
+		DBMaxConnIdleTime: getEnvDuration("DB_MAX_CONN_IDLE_TIME", 30*time.Minute),
 	}
 }
 

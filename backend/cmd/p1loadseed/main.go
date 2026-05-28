@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -13,8 +15,21 @@ import (
 )
 
 func main() {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	seedTimeout := 2 * time.Minute
+	if raw := os.Getenv("P1_LOAD_SEED_TIMEOUT"); raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil {
+			log.Fatalf("parse P1_LOAD_SEED_TIMEOUT: %v", err)
+		}
+		seedTimeout = parsed
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), seedTimeout)
 	defer cancel()
+
+	liveCapPriceCents := envInt64("P1_LOAD_AUC_LIVE_CAP_PRICE_CENTS", 100_000_000)
+	sideCapPriceCents := envInt64("P1_LOAD_AUC_SIDE_CAP_PRICE_CENTS", 100_000_000)
+	auctionEndMinutes := envInt64("P1_LOAD_AUCTION_END_MINUTES", 30)
 
 	cfg := config.Load()
 	db, err := pgxpool.New(ctx, cfg.DatabaseURL)
@@ -30,20 +45,36 @@ func main() {
 	})
 	defer func() { _ = rdb.Close() }()
 
-	if err := seed(ctx, db, rdb); err != nil {
+	if err := seed(ctx, db, rdb, liveCapPriceCents, sideCapPriceCents, auctionEndMinutes); err != nil {
 		log.Fatalf("seed p1 load data: %v", err)
 	}
 	_, _ = os.Stdout.WriteString("p1 load data ready\n")
 }
 
-func seed(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client) error {
+func envInt64(name string, fallback int64) int64 {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		log.Fatalf("parse %s: %v", name, err)
+	}
+	return parsed
+}
+
+func seed(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client, liveCapPriceCents, sideCapPriceCents, auctionEndMinutes int64) error {
 	tx, err := db.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	_, err = tx.Exec(ctx, `
+	query := strings.NewReplacer(
+		"$1", strconv.FormatInt(liveCapPriceCents, 10),
+		"$2", strconv.FormatInt(sideCapPriceCents, 10),
+		"$3", strconv.FormatInt(auctionEndMinutes, 10),
+	).Replace(`
 		DELETE FROM scheduler_jobs
 		WHERE target_id IN ('auc_live', 'auc_side')
 		   OR target_id IN (SELECT id FROM orders WHERE auction_id IN ('auc_live', 'auc_side'));
@@ -153,8 +184,8 @@ func seed(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client) error {
 		VALUES (
 		  'auc_live', 'room_main', 'item_live', 'ACTIVE', true,
 		  10000, NULL,
-		  10000, 5000, 100000000,
-		  now() - interval '1 minute', now() + interval '30 minutes',
+		  10000, 5000, $1,
+		  now() - interval '1 minute', now() + ($3 * interval '1 minute'),
 		  1, 0, 0,
 		  0, 1, now()
 		);
@@ -169,8 +200,8 @@ func seed(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client) error {
 		VALUES (
 		  'auc_side', 'room_side', 'item_side', 'ACTIVE', true,
 		  20000, NULL,
-		  20000, 10000, 100000000,
-		  now() - interval '1 minute', now() + interval '30 minutes',
+		  20000, 10000, $2,
+		  now() - interval '1 minute', now() + ($3 * interval '1 minute'),
 		  1, 0, 0,
 		  0, 1, now()
 		);
@@ -208,6 +239,7 @@ func seed(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client) error {
 		  ('room_side', 'user_2', 'seed_side_chat_1', 'Cold room baseline ready')
 		ON CONFLICT DO NOTHING;
 	`)
+	_, err = tx.Exec(ctx, query)
 	if err != nil {
 		return err
 	}

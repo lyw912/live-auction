@@ -2,6 +2,45 @@
 
 Use this flow for each pressure round.
 
+For the current PTS-1 hotspot optimization work, use the dedicated hotspot
+bundle:
+
+```bash
+cd /root/workspace/live-auction
+bash tests/pts/reset-hotspot-pressure-data.sh
+bash tests/pts/collect-server-evidence.sh before-pts1-hotspot-YYYYMMDD-HHMM
+```
+
+Upload:
+
+- `tests/pts/live-auction-hotspot-pressure.jmx`
+- `docs/perf/pts/pts_hotspot_sessions.csv`
+
+PTS settings:
+
+```text
+Pressure source: Alibaba Cloud VPC internal network
+Mode: virtual users
+Traffic model: ramping evenly
+Max VU: 1000
+Duration: 8 minutes
+Ramp duration: 3 minutes
+Specified loop: no
+IP count: 1
+IPv6: off
+```
+
+After the run:
+
+```bash
+bash tests/pts/collect-server-evidence.sh after-REPORTID-pts1-hotspot-review
+bash tests/pts/fetch-pts-sampling-logs.sh REPORTID docs/perf/pts/evidence/after-REPORTID-pts1-hotspot-review/pts-sampling-logs
+```
+
+The current baseline for this profile is report `9VY7W7BF`: correctness passed
+but bid P99 was about 2265ms. The next run should be a before/after comparison
+for hotspot latency optimization, not a repeated capacity claim.
+
 ## 1. Reset Data
 
 ```bash

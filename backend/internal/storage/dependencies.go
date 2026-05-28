@@ -28,7 +28,24 @@ type Health struct {
 }
 
 func Open(ctx context.Context, cfg config.Config, log *slog.Logger) (*Dependencies, error) {
-	pg, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	pgConfig, err := pgxpool.ParseConfig(cfg.DatabaseURL)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.DBMaxConns > 0 {
+		pgConfig.MaxConns = cfg.DBMaxConns
+	}
+	if cfg.DBMinConns > 0 {
+		pgConfig.MinConns = cfg.DBMinConns
+	}
+	if cfg.DBMaxConnLifetime > 0 {
+		pgConfig.MaxConnLifetime = cfg.DBMaxConnLifetime
+	}
+	if cfg.DBMaxConnIdleTime > 0 {
+		pgConfig.MaxConnIdleTime = cfg.DBMaxConnIdleTime
+	}
+
+	pg, err := pgxpool.NewWithConfig(ctx, pgConfig)
 	if err != nil {
 		return nil, err
 	}
