@@ -13,6 +13,7 @@ DB_NAME="${DB_NAME:-live_auction}"
 KAFKA_BOOTSTRAP="${KAFKA_BOOTSTRAP:-localhost:9092}"
 KAFKA_BID_TOPIC="${KAFKA_BID_TOPIC:-auction.bid-events}"
 KAFKA_DLQ_TOPIC="${KAFKA_DLQ_TOPIC:-auction.dlq}"
+KAFKA_CONSUMER_GROUP="${KAFKA_CONSUMER_GROUP:-settlement-workers}"
 FINAL_WAIT_SECONDS="${FINAL_WAIT_SECONDS:-0}"
 
 mkdir -p "$OUT_DIR"
@@ -218,14 +219,19 @@ outbox_not_published as (
   where e.auction_id = :'auction_id'
     and d.status <> 'PUBLISHED'
 ),
-cross_auction as (
+cross_auction_mismatch as (
   select count(*) as violations
-  from bids b
-  join auction_events e
-    on e.auction_id = b.auction_id
-   and e.seq = b.seq
-  where b.auction_id = :'auction_id'
-    and e.auction_id <> :'auction_id'
+  from auction_events e
+  where e.auction_id = :'auction_id'
+    and (
+      (e.payload_json ? 'auction_id' and e.payload_json->>'auction_id' <> :'auction_id')
+      or (e.payload_json ? 'bid_id' and not exists (
+        select 1
+        from bids b
+        where b.auction_id = e.auction_id
+          and b.id = e.payload_json->>'bid_id'
+      ))
+    )
 )
 select *
 from (
@@ -246,7 +252,7 @@ from (
     ('P0', 'no_accepted_after_final_end', (select violations = 0 from accepted_after_end), 'no accepted bid may appear after final end_at'),
     ('P0', 'increment_grid_valid', (select violations = 0 from increment_violations), 'accepted bid deltas must follow auction increment_cents'),
     ('P0', 'at_most_one_order', (select orders <= 1 from orders_count), 'one auction can create at most one order'),
-    ('P0', 'no_cross_auction_join_leak', (select violations = 0 from cross_auction), 'bid/event auction_id must not cross-contaminate'),
+    ('P0', 'no_cross_auction_event_payload_leak', (select violations = 0 from cross_auction_mismatch), 'event payload bid_id/auction_id must belong to the same auction'),
     ('P1', 'outbox_drained', (select pending = 0 from outbox_not_published), 'outbox should drain after the chosen settle window')
 ) as gates(severity, name, pass, detail)
 order by severity, name;
@@ -666,14 +672,19 @@ outbox_not_published as (
   where e.auction_id = :'auction_id'
     and d.status <> 'PUBLISHED'
 ),
-cross_auction as (
+cross_auction_mismatch as (
   select count(*) as violations
-  from bids b
-  join auction_events e
-    on e.auction_id = b.auction_id
-   and e.seq = b.seq
-  where b.auction_id = :'auction_id'
-    and e.auction_id <> :'auction_id'
+  from auction_events e
+  where e.auction_id = :'auction_id'
+    and (
+      (e.payload_json ? 'auction_id' and e.payload_json->>'auction_id' <> :'auction_id')
+      or (e.payload_json ? 'bid_id' and not exists (
+        select 1
+        from bids b
+        where b.auction_id = e.auction_id
+          and b.id = e.payload_json->>'bid_id'
+      ))
+    )
 )
 select severity, name, case when pass then 'PASS' else 'FAIL' end as status, detail
 from (
@@ -694,7 +705,7 @@ from (
     ('P0', 'no_accepted_after_final_end', (select violations = 0 from accepted_after_end), 'no accepted bid may appear after final end_at'),
     ('P0', 'increment_grid_valid', (select violations = 0 from increment_violations), 'accepted bid deltas must follow auction increment_cents'),
     ('P0', 'at_most_one_order', (select orders <= 1 from orders_count), 'one auction can create at most one order'),
-    ('P0', 'no_cross_auction_join_leak', (select violations = 0 from cross_auction), 'bid/event auction_id must not cross-contaminate'),
+    ('P0', 'no_cross_auction_event_payload_leak', (select violations = 0 from cross_auction_mismatch), 'event payload bid_id/auction_id must belong to the same auction'),
     ('P1', 'outbox_drained', (select pending = 0 from outbox_not_published), 'outbox should drain after the chosen settle window')
 ) as gates(severity, name, pass, detail)
 order by severity, name;
@@ -715,9 +726,18 @@ SQL
     --from-beginning --timeout-ms 3000 --max-messages 20 2>&1 || true
 
   echo
+  echo "## kafka consumer group offsets"
+  docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-consumer-groups.sh \
+    --bootstrap-server "$KAFKA_BOOTSTRAP" --describe --group "$KAFKA_CONSUMER_GROUP" 2>&1 || true
+
+  echo
   echo "## redis auction keys"
   docker exec "$REDIS_CONTAINER" redis-cli --scan --pattern "bid:{$AUCTION_ID}:*" || true
   docker exec "$REDIS_CONTAINER" redis-cli exists "auction:$AUCTION_ID:snapshot" "auction:$AUCTION_ID:events" || true
+  echo
+  echo "## redis pending decisions"
+  docker exec "$REDIS_CONTAINER" redis-cli HLEN "bid:{$AUCTION_ID}:engine:pending" || true
+  docker exec "$REDIS_CONTAINER" redis-cli HGETALL "bid:{$AUCTION_ID}:engine:pending" || true
   echo
   echo "## redis memory hard gates"
   docker exec "$REDIS_CONTAINER" redis-cli INFO memory | grep -E '^(used_memory:|maxmemory:|maxmemory_policy:)' || true
@@ -841,10 +861,19 @@ outbox_not_published as (
   from outbox_delivery d join outbox_events e on e.id = d.outbox_id
   where e.auction_id = :'auction_id' and d.status <> 'PUBLISHED'
 ),
-cross_auction as (
+cross_auction_mismatch as (
   select count(*) as violations
-  from bids b join auction_events e on e.auction_id = b.auction_id and e.seq = b.seq
-  where b.auction_id = :'auction_id' and e.auction_id <> :'auction_id'
+  from auction_events e
+  where e.auction_id = :'auction_id'
+    and (
+      (e.payload_json ? 'auction_id' and e.payload_json->>'auction_id' <> :'auction_id')
+      or (e.payload_json ? 'bid_id' and not exists (
+        select 1
+        from bids b
+        where b.auction_id = e.auction_id
+          and b.id = e.payload_json->>'bid_id'
+      ))
+    )
 )
 select severity, name, case when pass then 'PASS' else 'FAIL' end as status, detail
 from (
@@ -865,7 +894,7 @@ from (
     ('P0', 'no_accepted_after_final_end', (select violations = 0 from accepted_after_end), 'no accepted bid may appear after final end_at'),
     ('P0', 'increment_grid_valid', (select violations = 0 from increment_violations), 'accepted bid deltas must follow auction increment_cents'),
     ('P0', 'at_most_one_order', (select orders <= 1 from orders_count), 'one auction can create at most one order'),
-    ('P0', 'no_cross_auction_join_leak', (select violations = 0 from cross_auction), 'bid/event auction_id must not cross-contaminate'),
+    ('P0', 'no_cross_auction_event_payload_leak', (select violations = 0 from cross_auction_mismatch), 'event payload bid_id/auction_id must belong to the same auction'),
     ('P1', 'outbox_drained', (select pending = 0 from outbox_not_published), 'outbox should drain after the chosen settle window')
 ) as gates(severity, name, pass, detail)
 order by severity, name;
@@ -887,10 +916,20 @@ kafka_gate_file="$OUT_DIR/l4b-kafka-gates.tsv"
 {
   dlq_offsets="$(docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server "$KAFKA_BOOTSTRAP" --topic "$KAFKA_DLQ_TOPIC" 2>/dev/null || true)"
   dlq_total="$(printf '%s\n' "$dlq_offsets" | awk -F: 'NF >= 3 {sum += $3} END {print sum + 0}')"
+  group_lag="$(docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server "$KAFKA_BOOTSTRAP" --describe --group "$KAFKA_CONSUMER_GROUP" 2>/dev/null | awk 'NR > 1 && $6 ~ /^[0-9]+$/ {sum += $6} END {print sum + 0}')"
   printf 'P0\tdlq_empty\t%s\tKafka DLQ must stay empty or be explained before release\n' "$([ "${dlq_total:-0}" = "0" ] && echo PASS || echo FAIL)"
+  printf 'P1\tkafka_consumer_group_lag_zero\t%s\tSettlement consumer group lag should drain to zero after the chosen settle window\n' "$([ "${group_lag:-0}" = "0" ] && echo PASS || echo FAIL)"
 } > "$kafka_gate_file"
 
 cat "$kafka_gate_file" >> "$OUT_DIR/l4b-invariant-gates.tsv"
+
+redis_pending_gate_file="$OUT_DIR/l4b-redis-pending-gates.tsv"
+{
+  pending_count="$(docker exec "$REDIS_CONTAINER" redis-cli HLEN "bid:{$AUCTION_ID}:engine:pending" | tr -d '\r')"
+  printf 'P0\tredis_pending_decisions_empty\t%s\tRedis pending decisions must be zero; otherwise Redis accepted work may not have reached Kafka\n' "$([ "${pending_count:-0}" = "0" ] && echo PASS || echo FAIL)"
+} > "$redis_pending_gate_file"
+
+cat "$redis_pending_gate_file" >> "$OUT_DIR/l4b-invariant-gates.tsv"
 
 if awk -F '\t' '$1 == "P0" && $3 == "FAIL" { found=1 } END { exit found ? 0 : 1 }' "$OUT_DIR/l4b-invariant-gates.tsv"; then
   echo "[verify] P0 invariant violation; see $OUT_DIR/l4b-invariant-gates.tsv" >&2

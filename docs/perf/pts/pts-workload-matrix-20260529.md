@@ -73,6 +73,36 @@ P9 proxy/max-bid integrity is not part of the PTS-1 manual-bid workload; it must
 be covered by a dedicated max-bid workload because proxy bidding changes product
 semantics and event privacy.
 
+## Risk Coverage Cross-Check
+
+| Risk | PTS-1 Automatic Gate | Status |
+|---|---|---|
+| Redis/Kafka/PG/Outbox convergence | `redis_kafka_pg_accepted_match`, `auction_accepted_count_matches_pg`, `outbox_drained` | P0/P1 automated |
+| Redis accepted but Kafka append lost | `redis_pending_decisions_empty` plus settlement/Kafka-position gates | P0 automated; crash-before-append recovery still needs fault injection |
+| Money/order uniqueness and cap race | `at_most_one_order`, `increment_grid_valid`, `no_accepted_after_final_end` | P0 automated |
+| Seq continuity and audit recovery | `no_accepted_bid_seq_gap`, `no_auction_event_seq_gap` | P0 automated |
+| Clock/order inversion | `no_created_at_seq_inversion` | P0 automated |
+| Consumer offset and settlement correspondence | `kafka_position_present`, `kafka_offset_matches_engine_order`, `kafka_consumer_group_lag_zero`, consumer-group offset snapshot in report | P0 automated plus P1 lag gate |
+| Split-brain stale writer | `engine_epoch_seq_monotonic`; settlement code rejects stale `engine_epoch` | P0 automated for data; network partition requires fault injection |
+| Redis eviction | `redis_no_eviction`, `redis_noeviction_policy` | P0 automated |
+| Kafka reordering | `kafka_offset_matches_engine_order` | P0 automated |
+| Cross-auction contamination | `no_cross_auction_event_payload_leak` | P0 automated |
+| DLQ | `dlq_empty` | P0 automated |
+
+Fault-injection workloads still required before a release-level resilience claim:
+
+- Redis kill/restart while `bid:{auction}:engine:pending` is non-empty;
+- Kafka consumer restart/rebalance under active settlement lag;
+- broker or app crash after Redis Lua decision and before Kafka append;
+- network partition/stale Redis engine epoch test;
+- dedicated P9 max-bid/proxy-bid workload when proxy bidding is in scope.
+
+This table is not a claim that the system has already survived those faults.
+It states whether PTS-1 can detect the bad state if it appears during a normal
+final-second run. Crash/restart, rebalance, network partition, and proxy-bid
+privacy require separate workloads because a normal PTS run does not create
+those failure modes.
+
 ## Why Both VU And RPS Modes Are Needed
 
 Alibaba Cloud PTS exposes two useful pressure models:
