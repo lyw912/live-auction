@@ -605,7 +605,7 @@ func openStreamsRedis(t *testing.T) *redis.Client {
 		addr = os.Getenv("REDIS_ADDR")
 	}
 	if addr == "" {
-		addr = "localhost:6379"
+		addr = "localhost:6380"
 	}
 	client := redis.NewClient(&redis.Options{Addr: addr})
 	if err := client.Ping(context.Background()).Err(); err != nil {

@@ -17,7 +17,7 @@ import (
 
 func TestChatRoutesPersistAndSeedRoomMessages(t *testing.T) {
 	db := openMonitorDB(t)
-	rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+	rdb := redis.NewClient(&redis.Options{Addr: "localhost:6380"})
 	t.Cleanup(func() { _ = rdb.Close() })
 
 	roomID := "room_chat_" + uuid.NewString()

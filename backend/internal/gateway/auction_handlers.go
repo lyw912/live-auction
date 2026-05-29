@@ -387,6 +387,11 @@ func (h AuctionHandler) PlaceBid(w http.ResponseWriter, r *http.Request) {
 		return h.Repo.PlaceBid(ctx, auctionID, user.ID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context()))
 	}
 	result, err := h.executeBidLane(r.Context(), auctionID, user.ID, traceID(r.Context()), place)
+	if err == nil && h.Guard != nil {
+		// This refresh is a best-effort cache update after PostgreSQL commit.
+		// Outbox relay remains the durable projection repair path.
+		h.Guard.RefreshAfterAcceptedBid(r.Context(), result)
+	}
 	writeBidAdmissionResult(w, r, result, err)
 }
 
@@ -466,6 +471,11 @@ func (h AuctionHandler) ConfirmBid(w http.ResponseWriter, r *http.Request) {
 		return h.Repo.ConfirmBid(ctx, auctionID, user.ID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context()))
 	}
 	result, err := h.executeBidLane(r.Context(), auctionID, user.ID, traceID(r.Context()), confirm)
+	if err == nil && h.Guard != nil {
+		// This refresh is a best-effort cache update after PostgreSQL commit.
+		// Outbox relay remains the durable projection repair path.
+		h.Guard.RefreshAfterAcceptedBid(r.Context(), result)
+	}
 	writeBidAdmissionResult(w, r, result, err)
 }
 

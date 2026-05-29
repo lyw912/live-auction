@@ -65,7 +65,7 @@ func assertAuctionListExcludes(t *testing.T, router http.Handler, headers http.H
 
 func TestHostOwnershipACLRejectsForeignHostMutation(t *testing.T) {
 	db := openMonitorDB(t)
-	rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+	rdb := redis.NewClient(&redis.Options{Addr: "localhost:6380"})
 	t.Cleanup(func() { _ = rdb.Close() })
 	router := NewRouter(testConfig(), &storage.Dependencies{Postgres: db, Redis: rdb}, slog.Default())
 	repo := auction.NewRepository(db)

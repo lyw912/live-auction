@@ -98,7 +98,7 @@ func TestBidLaneStartedRequestReturnsDBTruthPastWaitBudget(t *testing.T) {
 		BidEngineMode:       bidEngineModePostgresLane,
 		BidLaneWorkers:      1,
 		BidLaneQueueSize:    1,
-		BidLaneQueueTimeout: time.Nanosecond,
+		BidLaneQueueTimeout: time.Second,
 	}
 	manager := newBidLaneManager(cfg, nil)
 	resp, err := manager.Execute(context.Background(), "auc_lane_started", "user_1", "tr_lane_started", func(context.Context) (auction.BidResponse, error) {

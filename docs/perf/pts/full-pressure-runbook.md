@@ -3,7 +3,7 @@
 Use this flow for each pressure round.
 
 For the current PTS-1 hotspot optimization work, use the dedicated hotspot
-bundle:
+exploration bundle:
 
 ```bash
 cd /root/workspace/live-auction
@@ -11,18 +11,53 @@ bash tests/pts/reset-hotspot-pressure-data.sh
 bash tests/pts/collect-server-evidence.sh before-pts1-hotspot-YYYYMMDD-HHMM
 ```
 
+Current phase: post-`1L29X7UG` hotspot optimization validation, not final judge
+evidence and not production capacity evidence. The explicit goal is to verify
+that Redis guard filters stale-low pressure before PostgreSQL, that accepted
+bids refresh the guard projection immediately after commit, and that the
+per-auction lane keeps single-auction PG concurrency bounded.
+
+The reset script starts the backend with:
+
+```text
+ADMISSION_ENABLED=false
+BID_ENGINE_MODE=redis_guard
+BID_LANE_WORKERS=1
+BID_LANE_QUEUE_SIZE=2048
+BID_LANE_QUEUE_TIMEOUT=3s
+DB_MAX_CONNS=90
+DB_MIN_CONNS=16
+```
+
+This is intentionally different from the `1L29X7UG` high-lane exploration
+profile. `BID_LANE_WORKERS=256` was useful for exposing the PG row-lock convoy,
+but it is not the optimized single-auction profile. The optimized profile
+converts DB lock wait into bounded application queue wait plus explicit
+`BID_AUCTION_TOO_HOT` / `BID_RETRY_LATER` when offered pressure exceeds the
+single-auction serialization capacity.
+
+If a future diagnostic round needs to push through the lane to expose a lower
+component, override the variables explicitly and label the evidence as
+`HARNESS_EXPLORATION`, not as a user-facing latency optimization result:
+
+```bash
+BID_LANE_WORKERS=256 BID_LANE_QUEUE_SIZE=100000 BID_LANE_QUEUE_TIMEOUT=10m \
+  bash tests/pts/prepare-cloud-pressure.sh
+```
+
 Upload:
 
 - `tests/pts/live-auction-hotspot-pressure.jmx`
 - `docs/perf/pts/pts_hotspot_sessions.csv`
 
-PTS settings:
+PTS settings for optimization validation rounds:
 
 ```text
 Pressure source: Alibaba Cloud VPC internal network
 Mode: virtual users
 Traffic model: ramping evenly
-Max VU: 1000
+Max VU: 1000 first; raise only after guard reject rate, queue wait, DB lock
+wait, and correctness are understood
 Duration: 8 minutes
 Ramp duration: 3 minutes
 Specified loop: no
@@ -37,9 +72,12 @@ bash tests/pts/collect-server-evidence.sh after-REPORTID-pts1-hotspot-review
 bash tests/pts/fetch-pts-sampling-logs.sh REPORTID docs/perf/pts/evidence/after-REPORTID-pts1-hotspot-review/pts-sampling-logs
 ```
 
-The current baseline for this profile is report `9VY7W7BF`: correctness passed
-but bid P99 was about 2265ms. The next run should be a before/after comparison
-for hotspot latency optimization, not a repeated capacity claim.
+`1L29X7UG` is the high-lane failure baseline for this repair: Redis guard was
+mostly stale, `auction_bid_lock_wait_seconds_sum` was about `40973s`, and DB
+pool wait was about `236216s`. The next run must report guard outcomes,
+projection update outcomes, queue wait/rejects, DB lock wait, tx duration,
+outbox lag, and correctness invariants together. Do not publish a capacity
+number from a single validation run.
 
 ## 1. Reset Data
 

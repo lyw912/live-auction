@@ -18,7 +18,9 @@ import (
 )
 
 const (
-	bidEngineModeRedisGuard = "redis_guard"
+	bidEngineModeRedisGuard  = "redis_guard"
+	redisGuardProjectionTTL  = 30 * time.Minute
+	redisGuardRefreshRetries = 2
 
 	redisGuardOutcomeAllow       = "ALLOW"
 	redisGuardOutcomeReject      = "REJECT"
@@ -51,9 +53,6 @@ local amount = tonumber(ARGV[2])
 local user_id = ARGV[3]
 local max_staleness_ms = tonumber(ARGV[4])
 local projected_at_ms = tonumber(projection[10])
-if projected_at_ms == nil or projected_at_ms <= 0 or (now_ms - projected_at_ms) > max_staleness_ms then
-  return {'STALE'}
-end
 
 local status = tostring(projection[1])
 local current_price = tonumber(projection[2]) or 0
@@ -64,6 +63,7 @@ local end_at_ms = tonumber(projection[6]) or 0
 local seq = tonumber(projection[7]) or 0
 local accepted_bid_count = tonumber(projection[8]) or 0
 local current_winner_id = projection[9]
+local stale = projected_at_ms == nil or projected_at_ms <= 0 or (now_ms - projected_at_ms) > max_staleness_ms
 
 if status ~= 'ACTIVE' then
   if status ~= 'SOLD' and status ~= 'ENDED' and status ~= 'CANCELLED' then
@@ -86,14 +86,51 @@ if accepted_bid_count <= 0 then
   base = start_price
 end
 local minimum = base + increment
+if stale and amount <= current_price then
+  return {'REJECT', 'BID_TOO_LOW', tostring(seq), tostring(current_price), current_winner_id or '', tostring(end_at_ms)}
+end
 if amount < minimum then
   return {'REJECT', 'BID_TOO_LOW', tostring(seq), tostring(current_price), current_winner_id or '', tostring(end_at_ms)}
+end
+if stale then
+  return {'STALE'}
 end
 if ((amount - base) % increment) ~= 0 then
   return {'REJECT', 'BID_INCREMENT_MISMATCH', tostring(seq), tostring(current_price), current_winner_id or '', tostring(end_at_ms)}
 end
 
 return {'ALLOW'}
+`)
+
+var bidRedisGuardRefreshRunner = redisx.NewScriptRunner(redisx.ScriptBidRedisGuardRefresh, `
+local projection = redis.call('HMGET', KEYS[1], 'seq', 'accepted_bid_count')
+if projection[1] == false then
+  return {'missing'}
+end
+
+local old_seq = tonumber(projection[1]) or 0
+local new_seq = tonumber(ARGV[1]) or 0
+if new_seq <= old_seq then
+  return {'stale'}
+end
+
+local old_count = tonumber(projection[2]) or 0
+local new_count = old_count + 1
+if new_count < 1 then
+  new_count = 1
+end
+
+redis.call('HSET', KEYS[1],
+  'status', ARGV[2],
+  'current_price_cents', ARGV[3],
+  'current_winner_id', ARGV[4],
+  'end_at_ms', ARGV[5],
+  'seq', ARGV[1],
+  'accepted_bid_count', tostring(new_count),
+  'projected_at_ms', ARGV[6]
+)
+redis.call('EXPIRE', KEYS[1], ARGV[7])
+return {'updated'}
 `)
 
 type redisGuard struct {
@@ -205,6 +242,71 @@ func (g *redisGuard) Response(ctx context.Context, auctionID string, userID stri
 		return auction.BidResponse{}, err
 	}
 	return resp, nil
+}
+
+func (g *redisGuard) RefreshAfterAcceptedBid(ctx context.Context, response auction.BidResponse) {
+	if g == nil || g.redis == nil || !isAcceptedBidResult(response.Result) || response.Seq <= 0 {
+		return
+	}
+	outcome := g.refreshAcceptedBidProjection(context.WithoutCancel(ctx), response)
+	if outcome == "error" {
+		go g.retryAcceptedBidProjection(response)
+	}
+}
+
+func (g *redisGuard) retryAcceptedBidProjection(response auction.BidResponse) {
+	for attempt := 0; attempt < redisGuardRefreshRetries; attempt++ {
+		time.Sleep(time.Duration(attempt+1) * 25 * time.Millisecond)
+		outcome := g.refreshAcceptedBidProjection(context.Background(), response)
+		if outcome != "error" {
+			return
+		}
+	}
+}
+
+func (g *redisGuard) refreshAcceptedBidProjection(ctx context.Context, response auction.BidResponse) string {
+	winnerID := ""
+	if response.CurrentWinnerID != nil {
+		winnerID = *response.CurrentWinnerID
+	}
+	endAtMS := int64(0)
+	if response.EndAt != nil {
+		endAtMS = response.EndAt.UTC().UnixMilli()
+	}
+	status := "ACTIVE"
+	if response.Result == auction.BidResultAcceptedSold {
+		status = "SOLD"
+	}
+	timeoutCtx, cancel := context.WithTimeout(ctx, g.cfg.BidRedisGuardTimeout)
+	defer cancel()
+	values, err := bidRedisGuardRefreshRunner.Run(
+		timeoutCtx,
+		g.redis,
+		[]string{redisx.BidGuardProjectionKey(response.AuctionID)},
+		response.Seq,
+		status,
+		response.CurrentPriceCents,
+		winnerID,
+		endAtMS,
+		time.Now().UTC().UnixMilli(),
+		int64(redisGuardProjectionTTL/time.Second),
+	).Slice()
+	if err != nil || len(values) == 0 {
+		observability.Inc("auction_bid_redis_guard_projection_update_total", map[string]string{"outcome": "error"})
+		return "error"
+	}
+	outcome := stringValue(values[0])
+	observability.Inc("auction_bid_redis_guard_projection_update_total", map[string]string{"outcome": outcome})
+	return outcome
+}
+
+func isAcceptedBidResult(result string) bool {
+	switch result {
+	case auction.BidResultAccepted, auction.BidResultAcceptedExtended, auction.BidResultAcceptedSold:
+		return true
+	default:
+		return false
+	}
 }
 
 func (g *redisGuard) recordReject(ctx context.Context, auctionID string, userID string, traceID string, code apierrors.Code, decision redisGuardDecision) error {

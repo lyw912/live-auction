@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -479,7 +480,7 @@ func TestRedisGuardRejectsClearlyTooLowBidBeforePostgresLane(t *testing.T) {
 	}
 }
 
-func TestRedisGuardMissingOrStaleProjectionFallsThroughToPostgresTruth(t *testing.T) {
+func TestRedisGuardMissingProjectionFallsThroughToPostgresTruth(t *testing.T) {
 	db := openMonitorDB(t)
 	rdb := openMonitorRedis(t)
 	auctionRow := createAdmissionAuction(t, db, "user_1")
@@ -512,17 +513,106 @@ func TestRedisGuardMissingOrStaleProjectionFallsThroughToPostgresTruth(t *testin
 	if missingResp.Result != auction.BidResultAccepted {
 		t.Fatalf("missing projection did not fall through to PG: %#v", missingResp)
 	}
+}
 
+func TestRedisGuardStaleProjectionRejectsAtOrBelowOldCurrentPrice(t *testing.T) {
+	observability.Default = observability.NewRegistry()
+	db := openMonitorDB(t)
+	rdb := openMonitorRedis(t)
+	auctionRow := createAdmissionAuction(t, db, "user_1")
+	cfg := admissionTestConfig()
+	cfg.BidEngineMode = bidEngineModeRedisGuard
+	cfg.BidRedisGuardMaxStaleness = 50 * time.Millisecond
+	repo := auction.NewRepository(db)
+	first := auction.BidInput{ClientBidID: "guard-stale-reject-first", AmountCents: 15_000}
+	if _, err := repo.PlaceBid(context.Background(), auctionRow.ID, "user_1", first.ClientBidID, first, "tr_guard_stale_reject_first"); err != nil {
+		t.Fatalf("seed first bid: %v", err)
+	}
+	if _, err := db.Exec(context.Background(), `INSERT INTO users (id, role, display_name) VALUES ('user_2', 'user', 'Guard User 2') ON CONFLICT DO NOTHING`); err != nil {
+		t.Fatalf("insert user_2: %v", err)
+	}
+	if _, err := db.Exec(context.Background(), `
+		INSERT INTO room_memberships (room_id, user_id, role, status)
+		SELECT room_id, 'user_2', 'viewer', 'ACTIVE'
+		FROM auctions WHERE id = $1
+		ON CONFLICT (room_id, user_id) DO UPDATE SET status = 'ACTIVE', left_at = NULL
+	`, auctionRow.ID); err != nil {
+		t.Fatalf("insert user_2 membership: %v", err)
+	}
 	seedRedisGuardProjection(t, rdb, auctionRow.ID, map[string]any{
 		"status":              "ACTIVE",
-		"current_price_cents": 100_000,
+		"current_price_cents": 15_000,
 		"start_price_cents":   10_000,
 		"increment_cents":     5_000,
 		"cap_price_cents":     0,
 		"end_at_ms":           time.Now().Add(time.Minute).UnixMilli(),
-		"seq":                 99,
-		"accepted_bid_count":  10,
-		"current_winner_id":   "user_2",
+		"seq":                 1,
+		"accepted_bid_count":  1,
+		"current_winner_id":   "user_1",
+		"projected_at_ms":     time.Now().Add(-time.Minute).UnixMilli(),
+	})
+	handler := AuctionHandler{
+		Config: cfg,
+		Deps:   &storage.Dependencies{Postgres: db, Redis: rdb},
+		Repo:   repo,
+		ACL:    newRoomACL(db),
+		Bids:   newBidAdmission(cfg, db, rdb),
+		Lanes:  newBidLaneManager(cfg, db),
+		Guard:  newRedisGuard(cfg, db, rdb),
+	}
+	router := chi.NewRouter()
+	router.Use(traceMiddleware)
+	router.Use(mockAuthMiddleware(cfg))
+	router.Post("/api/auctions/{id}/bids", handler.PlaceBid)
+
+	body := `{"client_bid_id":"guard-stale-too-low","amount_cents":15000,"client_seen_seq":0}`
+	rec := performBid(router, auctionRow.ID, body, "guard-stale-too-low", "user_2")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp auction.BidResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Result != auction.BidResultRejected || resp.RejectReason == nil || *resp.RejectReason != string(apierrors.CodeBidTooLow) {
+		t.Fatalf("unexpected stale guard response: %#v", resp)
+	}
+	var bidRows int
+	if err := db.QueryRow(context.Background(), `SELECT count(*) FROM bids WHERE auction_id = $1 AND client_bid_id = 'guard-stale-too-low'`, auctionRow.ID).Scan(&bidRows); err != nil {
+		t.Fatalf("count bids: %v", err)
+	}
+	if bidRows != 0 {
+		t.Fatalf("guard stale reject wrote %d bid rows, want 0", bidRows)
+	}
+	metrics := string(observability.Default.Render(context.Background()))
+	if !strings.Contains(metrics, `auction_bid_redis_guard_total{outcome="REJECT",reason="BID_TOO_LOW"} 1`) {
+		t.Fatalf("missing guard reject metric in:\n%s", metrics)
+	}
+}
+
+func TestRedisGuardStaleProjectionFallsThroughWhenBidMightStillWin(t *testing.T) {
+	db := openMonitorDB(t)
+	rdb := openMonitorRedis(t)
+	auctionRow := createAdmissionAuction(t, db, "user_1")
+	cfg := admissionTestConfig()
+	cfg.BidEngineMode = bidEngineModeRedisGuard
+	cfg.BidRedisGuardMaxStaleness = 50 * time.Millisecond
+	repo := auction.NewRepository(db)
+	first := auction.BidInput{ClientBidID: "guard-stale-first", AmountCents: 15_000}
+	if _, err := repo.PlaceBid(context.Background(), auctionRow.ID, "user_1", first.ClientBidID, first, "tr_guard_stale_first"); err != nil {
+		t.Fatalf("seed first bid: %v", err)
+	}
+
+	seedRedisGuardProjection(t, rdb, auctionRow.ID, map[string]any{
+		"status":              "ACTIVE",
+		"current_price_cents": 10_000,
+		"start_price_cents":   10_000,
+		"increment_cents":     5_000,
+		"cap_price_cents":     0,
+		"end_at_ms":           time.Now().Add(time.Minute).UnixMilli(),
+		"seq":                 0,
+		"accepted_bid_count":  0,
+		"current_winner_id":   "",
 		"projected_at_ms":     time.Now().Add(-time.Minute).UnixMilli(),
 	})
 	if _, err := db.Exec(context.Background(), `INSERT INTO users (id, role, display_name) VALUES ('user_2', 'user', 'Guard User 2') ON CONFLICT DO NOTHING`); err != nil {
@@ -536,6 +626,20 @@ func TestRedisGuardMissingOrStaleProjectionFallsThroughToPostgresTruth(t *testin
 	`, auctionRow.ID); err != nil {
 		t.Fatalf("insert user_2 membership: %v", err)
 	}
+	handler := AuctionHandler{
+		Config: cfg,
+		Deps:   &storage.Dependencies{Postgres: db, Redis: rdb},
+		Repo:   repo,
+		ACL:    newRoomACL(db),
+		Bids:   newBidAdmission(cfg, db, rdb),
+		Lanes:  newBidLaneManager(cfg, db),
+		Guard:  newRedisGuard(cfg, db, rdb),
+	}
+	router := chi.NewRouter()
+	router.Use(traceMiddleware)
+	router.Use(mockAuthMiddleware(cfg))
+	router.Post("/api/auctions/{id}/bids", handler.PlaceBid)
+
 	staleBody := `{"client_bid_id":"guard-stale","amount_cents":20000,"client_seen_seq":0}`
 	stale := performBid(router, auctionRow.ID, staleBody, "guard-stale", "user_2")
 	if stale.Code != http.StatusOK {
@@ -547,6 +651,105 @@ func TestRedisGuardMissingOrStaleProjectionFallsThroughToPostgresTruth(t *testin
 	}
 	if staleResp.Result != auction.BidResultAccepted {
 		t.Fatalf("stale projection blocked PG truth: %#v", staleResp)
+	}
+}
+
+func TestRedisGuardRefreshesProjectionAfterAcceptedBid(t *testing.T) {
+	db := openMonitorDB(t)
+	rdb := openMonitorRedis(t)
+	auctionRow := createAdmissionAuction(t, db, "user_1")
+	cfg := admissionTestConfig()
+	cfg.BidEngineMode = bidEngineModeRedisGuard
+	cfg.BidRedisGuardMaxStaleness = 50 * time.Millisecond
+	seedRedisGuardProjection(t, rdb, auctionRow.ID, map[string]any{
+		"status":              "ACTIVE",
+		"current_price_cents": 10_000,
+		"start_price_cents":   10_000,
+		"increment_cents":     5_000,
+		"cap_price_cents":     0,
+		"end_at_ms":           time.Now().Add(time.Minute).UnixMilli(),
+		"seq":                 0,
+		"accepted_bid_count":  0,
+		"current_winner_id":   "",
+		"projected_at_ms":     time.Now().Add(-time.Minute).UnixMilli(),
+	})
+	handler := AuctionHandler{
+		Config: cfg,
+		Deps:   &storage.Dependencies{Postgres: db, Redis: rdb},
+		Repo:   auction.NewRepository(db),
+		ACL:    newRoomACL(db),
+		Bids:   newBidAdmission(cfg, db, rdb),
+		Lanes:  newBidLaneManager(cfg, db),
+		Guard:  newRedisGuard(cfg, db, rdb),
+	}
+	router := chi.NewRouter()
+	router.Use(traceMiddleware)
+	router.Use(mockAuthMiddleware(cfg))
+	router.Post("/api/auctions/{id}/bids", handler.PlaceBid)
+
+	body := `{"client_bid_id":"guard-refresh-accepted","amount_cents":15000,"client_seen_seq":0}`
+	rec := performBid(router, auctionRow.ID, body, "guard-refresh-accepted", "user_1")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp auction.BidResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Result != auction.BidResultAccepted {
+		t.Fatalf("bid not accepted: %#v", resp)
+	}
+	projection, err := rdb.HGetAll(context.Background(), redisx.BidGuardProjectionKey(auctionRow.ID)).Result()
+	if err != nil {
+		t.Fatalf("read projection: %v", err)
+	}
+	if projection["current_price_cents"] != "15000" || projection["seq"] != strconv.FormatInt(resp.Seq, 10) || projection["current_winner_id"] != "user_1" {
+		t.Fatalf("projection not refreshed from accepted bid: %#v", projection)
+	}
+	if ttl := rdb.TTL(context.Background(), redisx.BidGuardProjectionKey(auctionRow.ID)).Val(); ttl <= 0 {
+		t.Fatalf("projection ttl = %s, want positive", ttl)
+	}
+}
+
+func TestRedisGuardRefreshDoesNotOverwriteNewerProjection(t *testing.T) {
+	observability.Default = observability.NewRegistry()
+	db := openMonitorDB(t)
+	rdb := openMonitorRedis(t)
+	auctionRow := createAdmissionAuction(t, db, "user_1")
+	cfg := admissionTestConfig()
+	cfg.BidEngineMode = bidEngineModeRedisGuard
+	cfg.BidRedisGuardMaxStaleness = 50 * time.Millisecond
+	seedRedisGuardProjection(t, rdb, auctionRow.ID, map[string]any{
+		"status":              "ACTIVE",
+		"current_price_cents": 30_000,
+		"start_price_cents":   10_000,
+		"increment_cents":     5_000,
+		"cap_price_cents":     0,
+		"end_at_ms":           time.Now().Add(time.Minute).UnixMilli(),
+		"seq":                 3,
+		"accepted_bid_count":  3,
+		"current_winner_id":   "user_3",
+		"projected_at_ms":     time.Now().UnixMilli(),
+	})
+	guard := newRedisGuard(cfg, db, rdb)
+	guard.RefreshAfterAcceptedBid(context.Background(), auction.BidResponse{
+		Result:            auction.BidResultAccepted,
+		AuctionID:         auctionRow.ID,
+		Seq:               2,
+		CurrentPriceCents: 20_000,
+		CurrentWinnerID:   ptrString("user_2"),
+		EndAt:             auctionRow.EndAt,
+	})
+	projection, err := rdb.HGetAll(context.Background(), redisx.BidGuardProjectionKey(auctionRow.ID)).Result()
+	if err != nil {
+		t.Fatalf("read projection: %v", err)
+	}
+	if projection["seq"] != "3" || projection["current_price_cents"] != "30000" || projection["current_winner_id"] != "user_3" {
+		t.Fatalf("older refresh overwrote newer projection: %#v", projection)
+	}
+	metrics := string(observability.Default.Render(context.Background()))
+	if !strings.Contains(metrics, `auction_bid_redis_guard_projection_update_total{outcome="stale"} 1`) {
+		t.Fatalf("missing stale projection refresh metric in:\n%s", metrics)
 	}
 }
 
@@ -658,6 +861,10 @@ func seedRedisGuardProjection(t *testing.T, rdb *redis.Client, auctionID string,
 	if err := rdb.Expire(context.Background(), key, time.Minute).Err(); err != nil {
 		t.Fatalf("expire guard projection: %v", err)
 	}
+}
+
+func ptrString(value string) *string {
+	return &value
 }
 
 func performBid(router http.Handler, auctionID string, body string, key string, userID string) *httptest.ResponseRecorder {
