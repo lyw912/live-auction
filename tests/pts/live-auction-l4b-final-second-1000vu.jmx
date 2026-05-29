@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
   <hashTree>
-    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="live-auction L4B Kafka final-second 100VU" enabled="true">
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="live-auction L4B Kafka final-second 1000VU" enabled="true">
       <stringProp name="TestPlan.comments">L4B Kafka final-second hotspot plan. Threads ramp up, wait at a shared barrier, then send one valid bid each against auc_live near the final second. Requires ALLOW_MOCK_AUTH=false, ADMISSION_ENABLED=false, BID_ENGINE_MODE=redis_ledger, Kafka topics ready, high auction cap, and no admission-control 429.</stringProp>
       <boolProp name="TestPlan.functional_mode">false</boolProp>
       <boolProp name="TestPlan.tearDown_on_shutdown">true</boolProp>
@@ -26,7 +26,7 @@
       <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="PTS real session token pool" enabled="true">
         <stringProp name="delimiter">,</stringProp>
         <stringProp name="fileEncoding">UTF-8</stringProp>
-        <stringProp name="filename">pts_l4b_final_second_100vu_sessions.csv</stringProp>
+        <stringProp name="filename">pts_l4b_final_second_1000vu_sessions.csv</stringProp>
         <boolProp name="ignoreFirstLine">true</boolProp>
         <boolProp name="quotedData">false</boolProp>
         <boolProp name="recycle">true</boolProp>
@@ -121,11 +121,11 @@
       </hashTree>
 
       <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="10 L4B final-second simultaneous bid burst" enabled="true">
-        <stringProp name="ThreadGroup.num_threads">100</stringProp>
+        <stringProp name="ThreadGroup.num_threads">1000</stringProp>
         <stringProp name="ThreadGroup.ramp_time">1</stringProp>
         <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
         <boolProp name="ThreadGroup.scheduler">true</boolProp>
-        <stringProp name="ThreadGroup.duration">660</stringProp>
+        <stringProp name="ThreadGroup.duration">360</stringProp>
         <stringProp name="ThreadGroup.delay">0</stringProp>
         <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" enabled="true">
           <boolProp name="LoopController.continue_forever">false</boolProp>
@@ -143,7 +143,7 @@
           <stringProp name="parameters"></stringProp>
           <stringProp name="scriptLanguage">groovy</stringProp>
           <stringProp name="script"><![CDATA[
-long burstWaitMS = Long.parseLong(props.getProperty('burst_wait_ms', '570000'))
+long burstWaitMS = Long.parseLong(props.getProperty('burst_wait_ms', '330000'))
 def target = props.get('l4b_final_second_target_ms') as java.util.concurrent.atomic.AtomicLong
 if (target == null) {
   target = new java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis() + burstWaitMS)

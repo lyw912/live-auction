@@ -1,4 +1,4 @@
-# L4B Final-Second Hotspot PTS Runbook
+# L4B Final-Second Hotspot 1000VU PTS Runbook
 
 Date: 2026-05-29
 
@@ -18,8 +18,8 @@ configuration contamination for this run.
 
 ## Artifacts
 
-- JMX: `tests/pts/live-auction-l4b-final-second-100vu.jmx`
-- CSV: `docs/perf/pts/pts_l4b_final_second_100vu_sessions.csv`
+- JMX: `tests/pts/live-auction-l4b-final-second-1000vu.jmx`
+- CSV: `docs/perf/pts/pts_l4b_final_second_1000vu_sessions.csv`
 - Reset: `tests/pts/reset-l4b-final-second-pressure.sh`
 
 ## PTS UI Configuration
@@ -28,22 +28,22 @@ configuration contamination for this run.
 |---|---|
 | Pressure mode | Virtual users |
 | Traffic model | Uniform ramp-up |
-| Maximum virtual users | 100 |
-| Test duration | 10 minutes |
-| Ramp-up duration | 10 minutes |
+| Maximum virtual users | 1000 |
+| Test duration | 6 minutes |
+| Ramp-up duration | 6 minutes |
 | Specify loop count | No |
 | Specified IP count | Leave default unless PTS quota requires otherwise |
 
-The PTS page still uses a 10-minute uniform ramp for comparable report metadata.
+The PTS page still uses a 6-minute uniform ramp for comparable report metadata.
 The JMX contains the actual burst barrier: bid threads start quickly, wait for a
-shared `burst_wait_ms=570000` target, about 9 minutes 30 seconds after the first
+shared `burst_wait_ms=330000` target, about 5 minutes 30 seconds after the first
 bid thread initializes, and issue one valid bid each against `auc_live`.
 
 ## Required Before Run
 
 ```bash
-SESSION_COUNT=512 bash tests/pts/reset-l4b-final-second-pressure.sh
-bash tests/pts/collect-server-evidence.sh before-l4b-final-second-100vu-YYYYMMDD-HHMM
+SESSION_COUNT=1000 bash tests/pts/reset-l4b-final-second-pressure.sh
+bash tests/pts/collect-server-evidence.sh before-l4b-final-second-1000vu-YYYYMMDD-HHMM
 ```
 
 Upload the JMX and CSV above to PTS. Do not reuse older `pts_hotspot_sessions.csv`

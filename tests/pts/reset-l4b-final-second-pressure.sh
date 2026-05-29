@@ -3,9 +3,9 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-export SESSION_COUNT="${SESSION_COUNT:-512}"
-export SESSION_CSV="${SESSION_CSV:-pts_l4b_final_second_100vu_sessions.csv}"
-export JMX_PATH="${JMX_PATH:-$ROOT_DIR/tests/pts/live-auction-l4b-final-second-100vu.jmx}"
+export SESSION_COUNT="${SESSION_COUNT:-1000}"
+export SESSION_CSV="${SESSION_CSV:-pts_l4b_final_second_1000vu_sessions.csv}"
+export JMX_PATH="${JMX_PATH:-$ROOT_DIR/tests/pts/live-auction-l4b-final-second-1000vu.jmx}"
 export REDIS_ADDR="${REDIS_ADDR:-localhost:6380}"
 export KAFKA_BROKERS="${KAFKA_BROKERS:-localhost:9092}"
 export BID_ENGINE_MODE="${BID_ENGINE_MODE:-redis_ledger}"
@@ -13,7 +13,7 @@ export ADMISSION_ENABLED=false
 export P1_LOAD_SEED_TIMEOUT="${P1_LOAD_SEED_TIMEOUT:-5m}"
 export P1_LOAD_AUC_LIVE_CAP_PRICE_CENTS="${P1_LOAD_AUC_LIVE_CAP_PRICE_CENTS:-100000000000000}"
 export P1_LOAD_AUC_SIDE_CAP_PRICE_CENTS="${P1_LOAD_AUC_SIDE_CAP_PRICE_CENTS:-100000000000000}"
-export P1_LOAD_AUCTION_END_MINUTES="${P1_LOAD_AUCTION_END_MINUTES:-30}"
+export P1_LOAD_AUCTION_END_MINUTES="${P1_LOAD_AUCTION_END_MINUTES:-90}"
 
 cd "$ROOT_DIR"
 
@@ -54,7 +54,7 @@ update auctions
 set status='ACTIVE',
     current_price_cents=start_price_cents,
     current_winner_id=null,
-    end_at=now() + interval '30 minutes',
+    end_at=now() + interval '90 minutes',
     accepted_bid_count=0,
     seq=0,
     engine_seq=0,
@@ -68,6 +68,6 @@ where id in ('auc_live','auc_side');
 
 echo "L4B final-second pressure data reset complete"
 echo "- Backend: http://47.113.223.90:18080"
-echo "- JMX: tests/pts/live-auction-l4b-final-second-100vu.jmx"
+echo "- JMX: tests/pts/live-auction-l4b-final-second-1000vu.jmx"
 echo "- CSV: docs/perf/pts/${SESSION_CSV}"
 echo "- Engine: BID_ENGINE_MODE=${BID_ENGINE_MODE}, ADMISSION_ENABLED=false, Redis=${REDIS_ADDR}, Kafka=${KAFKA_BROKERS}"
