@@ -46,6 +46,7 @@ bid thread initializes, and issue one valid bid each against `auc_live`.
 
 ```bash
 SESSION_COUNT=1000 bash tests/pts/reset-l4b-final-second-pressure.sh
+bash tests/pts/preflight-l4b-pts-guards.sh before-l4b-final-second-1000vu-YYYYMMDD-HHMM
 bash tests/pts/collect-server-evidence.sh before-l4b-final-second-1000vu-YYYYMMDD-HHMM
 bash tests/pts/verify-l4b-pts-correctness.sh before-l4b-final-second-1000vu-YYYYMMDD-HHMM
 ```
@@ -83,3 +84,21 @@ FINAL_WAIT_SECONDS=1800 bash tests/pts/verify-l4b-pts-correctness.sh after-REPOR
 
 Any P0 failure in `l4b-invariant-gates.tsv` blocks a performance claim even if
 PTS latency looks good.
+
+## Two-Layer Correctness Check
+
+Layer 1 checks whether the implementation and runtime environment contain the
+required protections before pressure starts:
+
+```bash
+bash tests/pts/preflight-l4b-pts-guards.sh before-l4b-final-second-1000vu-YYYYMMDD-HHMM
+```
+
+Layer 2 checks whether the pressure run actually exposed any correctness breach:
+
+```bash
+bash tests/pts/verify-l4b-pts-correctness.sh after-REPORTID-l4b-final-second-1000vu
+```
+
+Both scripts exit non-zero on P0 failures. A run is not usable as performance
+evidence unless both layers pass.

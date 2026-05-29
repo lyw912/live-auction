@@ -57,8 +57,18 @@ Minimum post-run SQL/metric checks:
 The executable gate is:
 
 ```bash
+bash tests/pts/preflight-l4b-pts-guards.sh before-l4b-final-second-1000vu-YYYYMMDD-HHMM
 bash tests/pts/verify-l4b-pts-correctness.sh after-REPORTID-l4b-final-second-1000vu
 ```
+
+These are two different checks:
+
+- preflight checks whether the implementation and runtime environment have the
+  necessary protections before the test starts;
+- post-run correctness checks whether the load test actually produced any
+  invariant violation.
+
+Both must pass before using a PTS report as performance evidence.
 
 For final consistency after a known settlement backlog, use:
 
@@ -77,17 +87,17 @@ semantics and event privacy.
 
 | Risk | PTS-1 Automatic Gate | Status |
 |---|---|---|
-| Redis/Kafka/PG/Outbox convergence | `redis_kafka_pg_accepted_match`, `auction_accepted_count_matches_pg`, `outbox_drained` | P0/P1 automated |
-| Redis accepted but Kafka append lost | `redis_pending_decisions_empty` plus settlement/Kafka-position gates | P0 automated; crash-before-append recovery still needs fault injection |
-| Money/order uniqueness and cap race | `at_most_one_order`, `increment_grid_valid`, `no_accepted_after_final_end` | P0 automated |
-| Seq continuity and audit recovery | `no_accepted_bid_seq_gap`, `no_auction_event_seq_gap` | P0 automated |
-| Clock/order inversion | `no_created_at_seq_inversion` | P0 automated |
-| Consumer offset and settlement correspondence | `kafka_position_present`, `kafka_offset_matches_engine_order`, `kafka_consumer_group_lag_zero`, consumer-group offset snapshot in report | P0 automated plus P1 lag gate |
-| Split-brain stale writer | `engine_epoch_seq_monotonic`; settlement code rejects stale `engine_epoch` | P0 automated for data; network partition requires fault injection |
-| Redis eviction | `redis_no_eviction`, `redis_noeviction_policy` | P0 automated |
-| Kafka reordering | `kafka_offset_matches_engine_order` | P0 automated |
-| Cross-auction contamination | `no_cross_auction_event_payload_leak` | P0 automated |
-| DLQ | `dlq_empty` | P0 automated |
+| Redis/Kafka/PG/Outbox convergence | Preflight: Kafka topic/index guards. Post-run: `redis_kafka_pg_accepted_match`, `auction_accepted_count_matches_pg`, `outbox_drained` | P0/P1 automated |
+| Redis accepted but Kafka append lost | Preflight: pending write/delete/recovery guards. Post-run: `redis_pending_decisions_empty` plus settlement/Kafka-position gates | P0 automated; crash-before-append recovery still needs fault injection |
+| Money/order uniqueness and cap race | Preflight: engine seq/order indexes. Post-run: `at_most_one_order`, `increment_grid_valid`, `no_accepted_after_final_end` | P0 automated |
+| Seq continuity and audit recovery | Preflight: DB unique engine seq indexes. Post-run: `no_accepted_bid_seq_gap`, `no_auction_event_seq_gap` | P0 automated |
+| Clock/order inversion | Post-run: `no_created_at_seq_inversion` | P0 automated |
+| Consumer offset and settlement correspondence | Preflight: Kafka all-acks/sync/key and offset index. Post-run: `kafka_position_present`, `kafka_offset_matches_engine_order`, `kafka_consumer_group_lag_zero`, consumer-group offset snapshot | P0 automated plus P1 lag gate |
+| Split-brain stale writer | Preflight: stale epoch rejection and CAS update guards. Post-run: `engine_epoch_seq_monotonic` | P0 automated for data; network partition requires fault injection |
+| Redis eviction | Preflight and post-run: `redis_no_eviction`, `redis_noeviction_policy` | P0 automated |
+| Kafka reordering | Preflight: `auction_id` message key and all-acks sync writer. Post-run: `kafka_offset_matches_engine_order` | P0 automated |
+| Cross-auction contamination | Post-run: `no_cross_auction_event_payload_leak` | P0 automated |
+| DLQ | Preflight: DLQ topic exists. Post-run: `dlq_empty` | P0 automated |
 
 Fault-injection workloads still required before a release-level resilience claim:
 
