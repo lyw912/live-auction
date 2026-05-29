@@ -40,11 +40,53 @@ outbox, and runtime evidence.
 | Region | cn-heyuan |
 | Target | `http://172.16.179.112:18080` |
 | PTS mode | virtual users |
-| Current quota | 1000 max concurrency |
-| Downstream pressure | `ADMISSION_ENABLED=false` |
+| Current quota | start with 1000 concurrency; raise only after bottleneck attribution is clear |
+| Downstream pressure | `ADMISSION_ENABLED=false`; `redis_guard` plus bounded per-auction lane for hotspot optimization validation |
 | Auth | real session CSV, no mock auth |
 | Evidence root | `docs/perf/pts/evidence/` |
-| Current focus | PTS-1 single-auction hotspot latency optimization |
+| Current focus | PTS-1/L4a post-`1L29X7UG` hotspot optimization validation, not final judge evidence |
+
+## Current Hotspot Optimization Policy
+
+The active phase is PTS-1/L4a post-`1L29X7UG` optimization validation. It is
+not a production-configuration review and not final evidence for judges. Final
+judge-facing performance claims will be produced later after fresh, clean
+pressure runs.
+
+The current objective is:
+
+```text
+Reduce invalid/stale traffic entering PostgreSQL, shorten Redis guard stale
+windows after accepted bids, and keep single-auction PostgreSQL concurrency
+bounded by the application lane.
+```
+
+Default validation profile:
+
+- `ADMISSION_ENABLED=false` is required.
+- `BID_ENGINE_MODE=redis_guard` is the default L4a path.
+- `BID_LANE_WORKERS=1`, `BID_LANE_QUEUE_SIZE=2048`, and
+  `BID_LANE_QUEUE_TIMEOUT=3s`.
+- `BID_AUCTION_TOO_HOT` and `BID_RETRY_LATER` are valid overload-protection
+  signals in this validation profile if they are measured together with queue
+  wait and downstream DB lock reduction.
+
+`1L29X7UG` is the failure baseline for this repair: Redis guard reported mostly
+`STALE`, `auction_bid_lock_wait_seconds_sum` reached about `40973s`, and DB pool
+wait reached about `236216s`. The next run must compare guard reject rate,
+projection update outcomes, queue wait/rejects, DB lock wait, tx duration, and
+outbox lag against that evidence.
+
+Use a high-lane diagnostic profile only when explicitly trying to expose a
+lower downstream limiter, and label that run `HARNESS_EXPLORATION`:
+
+```bash
+BID_LANE_WORKERS=256 BID_LANE_QUEUE_SIZE=100000 BID_LANE_QUEUE_TIMEOUT=10m \
+  bash tests/pts/prepare-cloud-pressure.sh
+```
+
+Do not use high-lane exploration numbers as user-facing latency or capacity
+claims.
 
 ## Workload Matrix
 
@@ -152,23 +194,24 @@ PTS generator is not the first saturated component.
 
 ## Recommended Execution Order
 
-Because PTS runs cost money, do not run every workload at low scale before
-increasing pressure. The current sequence is focused on making PTS-1 latency
-credible before expanding to platform throughput:
+For the current post-`1L29X7UG` validation phase, start with the bounded-lane
+hotspot profile and raise pressure only after the first run proves guard
+freshness, queue wait, DB lock wait, outbox lag, and correctness are
+interpretable. Protection responses are acceptable when they are explicit and
+measured; they are not a platform capacity claim.
 
 | Step | Workload | Scale | Why this order |
 |---|---|---:|---|
 | 1 | PTS-0 Auth/seed smoke | 10-50 VU, 1-3 min | Only after JMX, CSV, seed, auth, or deployment changes |
-| 2 | PTS-1 Single-auction hotspot | 1000 VU offered pressure, final-second focused | Current core task: reduce hotspot P99 from seconds toward a defensible millisecond target |
-| 3 | PTS-2 Multi-auction accepted throughput | 1000 VU, 5-6 min active pressure | Run only after PTS-1 no longer contradicts the realtime-latency story |
-| 4 | PTS-4 Outbox relay burst | Match the event rate found in steps 2-3 | Only needed if lag/backlog appears or claim needs stronger proof |
-| 5 | PTS-5 WS fanout | 500 -> 1000+ connections | Separate long-lived connection workload |
-| 6 | PTS-6 Reconnect storm | 500 -> 1000 reconnects | After fanout path is known stable |
-| 7 | PTS-7 Production guarded overload | Admission on | Shows graceful degradation, not downstream capacity |
+| 2 | PTS-1 Single-auction hotspot validation | 1000 VU | Compare against `1L29X7UG` for guard stale reduction, lock wait reduction, queue behavior, and correctness |
+| 3 | PTS-1 Single-auction hotspot validation | raise only if step 2 is stable | Find the bounded-lane user-facing overload point without hiding correctness failures |
+| 4 | PTS-1 high-lane diagnostic | explicit override only | Use only if a lower downstream limiter needs proof; label as `HARNESS_EXPLORATION` |
+| 5 | PTS-2 Multi-auction accepted throughput exploration | 10000 -> 30000 VU | Separate single-auction serialization limits from platform-wide throughput |
+| 6 | PTS-4/5/6 focused follow-ups | Match the bottleneck found above | Drill into outbox, WS fanout, reconnect, Redis, or runtime as indicated |
 
-If PTS-1 still shows second-level P99, stop and optimize before spending on
-other paid profiles. Do not hide this by switching to a multi-auction throughput
-claim.
+After validation is complete, run a separate final evidence sequence for
+judge-facing claims. Do not use repair-validation numbers as final capacity
+claims.
 
 ## Reporting Map
 
@@ -191,6 +234,8 @@ Use this map when writing README, slides, or defense notes.
 | `MBXPW75F` | partial hotspot/reject evidence | DB pool was still `8`; accepted ratio was mixed; useful before DB-pool comparison but not final capacity |
 | `KIXXW7AF` | harness gap for accepted hotspot | DB pool `90` improved surface TPS/P99, but `auc_live` had only about 4.6% accepted bids, so the run was mostly `BID_TOO_LOW` reject pressure |
 | `9VY7W7BF` | PTS-1 correctness pass, latency bottleneck found | 1000 VU hotspot kept seq/outbox correctness, but bid P99 was about 2265ms; bottleneck is DB row-lock/pool waiting |
+| `JB25X72G` | exploration harness gap | Bid sampler reached about 6000 TPS, but `BID_AUCTION_TOO_HOT`/429 dominated because bid-lane ceilings were too low for the exploration objective |
+| `1L29X7UG` | high-lane bottleneck proof | `redis_guard` was mostly `STALE`; `auction_bid_lock_wait_seconds_sum` was about `40973s`; DB pool wait was about `236216s`; useful as the failure baseline for this repair |
 
 The next task is not another paid repeat of the same PTS-1 profile. It is an
 architecture optimization round for PTS-1 hotspot latency, followed by the same
@@ -215,12 +260,23 @@ Not allowed:
 - Client-side optimistic bid success.
 - Direct WebSocket publish without committed outbox.
 
-Recommended next design:
+Current repair scope after `1L29X7UG`:
 
-1. Add a per-auction bounded in-process bid sequencer.
-2. Add hotspot admission when queue depth or queue wait exceeds threshold.
-3. Add metrics for queue depth, queue wait, rejected-by-hotspot count, DB tx
-   time, lock wait, and idempotency retry-later.
-4. Keep the bid transaction as the only truth mutation point.
-5. Re-run `tests/pts/live-auction-hotspot-pressure.jmx` against the optimized
-   server and compare against `9VY7W7BF`.
+1. Keep the existing per-auction bounded in-process bid lane enabled for
+   `postgres_lane` and `redis_guard`; use one worker per auction for optimized
+   single-auction validation.
+2. Use Redis guard to reject stale projections only when monotonic price proves
+   the bid cannot win, and fall through to PostgreSQL for uncertain stale cases.
+3. Refresh the Redis guard projection immediately after an accepted PostgreSQL
+   commit, with seq fencing and bounded best-effort retry, while keeping outbox
+   relay as the durable repair path.
+4. Keep SOLD order creation, auction event, outbox, bid row, and idempotency
+   completion inside one PostgreSQL transaction. Do not split order creation
+   into async settlement without a new product/API contract.
+5. Do not change `synchronous_commit` in the app by default. Test
+   `synchronous_commit=local/off` only as an explicitly labeled DB experiment
+   with crash-loss tolerance documented.
+6. Re-run `tests/pts/live-auction-hotspot-pressure.jmx` and compare against
+   `1L29X7UG` for guard stale ratio, guard reject count, projection update
+   outcomes, queue wait/rejects, DB pool wait, row-lock wait, tx duration,
+   outbox lag, and correctness invariants.

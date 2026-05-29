@@ -12,9 +12,10 @@ import (
 )
 
 const (
-	ScriptBidAdmissionGCRA = "bid_admission_gcra"
-	ScriptBidRedisGuard    = "bid_redis_guard"
-	ScriptWSTicketConsume  = "ws_ticket_consume"
+	ScriptBidAdmissionGCRA     = "bid_admission_gcra"
+	ScriptBidRedisGuard        = "bid_redis_guard"
+	ScriptBidRedisGuardRefresh = "bid_redis_guard_refresh"
+	ScriptWSTicketConsume      = "ws_ticket_consume"
 )
 
 const (
