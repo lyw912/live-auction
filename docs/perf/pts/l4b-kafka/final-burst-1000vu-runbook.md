@@ -40,6 +40,12 @@ The PTS page must finish bringing all 1000 VUs online before the burst barrier.
 Use a 1-minute ramp-up, or manual speed control that reaches 1000 VUs by minute
 1 and holds them until the burst. Do not use a 6-minute ramp-up for this
 workload; that can leave late VUs unstarted when the 5:30 barrier opens.
+
+This timing is based on the workload mechanics, not on the earlier suggestion
+that a test could be five or six minutes. The paid PTS runner needs enough time
+to allocate users and stabilize them before the JMX barrier. The pressure event
+itself is the one-shot release near 5:30, not a six-minute loop.
+
 The JMX contains the actual burst barrier: bid threads start quickly, wait for a
 shared `burst_wait_ms=330000` target, about 5 minutes 30 seconds after the first
 bid thread initializes, and issue one valid bid each against `auc_live`.

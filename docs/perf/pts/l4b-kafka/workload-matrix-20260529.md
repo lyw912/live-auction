@@ -157,7 +157,7 @@ Artifacts:
 - JMX: `tests/pts/live-auction-l4b-final-second-1000vu.jmx`
 - CSV: `docs/perf/pts/pts_l4b_final_second_1000vu_sessions.csv`
 - Reset: `tests/pts/reset-l4b-final-second-pressure.sh`
-- Runbook: `docs/perf/pts/l4b-final-second-1000vu-runbook.md`
+- Runbook: `docs/perf/pts/l4b-kafka/final-burst-1000vu-runbook.md`
 
 PTS UI:
 
@@ -174,6 +174,14 @@ PTS UI:
 The JMX barrier opens at about 5 minutes 30 seconds. The ramp-up must complete
 well before then; otherwise the report is not a true 1000-user simultaneous bid
 burst.
+
+The duration is intentionally longer than the offered bid traffic. PTS-1 is not
+trying to run six minutes of bid pressure; it is trying to prove that all 1000
+virtual users are already alive before the one-shot barrier release. The
+remaining time is observation margin for HTTP responses and early settlement
+state. A six-minute ramp-up would invalidate this workload because late users
+could miss the barrier and the result would no longer represent simultaneous
+contention.
 
 Primary verdict:
 

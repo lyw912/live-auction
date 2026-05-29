@@ -30,8 +30,8 @@ A run is useful only if it answers both questions:
 
 | Purpose | Path |
 |---|---|
-| Workload matrix | `docs/perf/pts/pts-workload-matrix-20260529.md` |
-| PTS-1 runbook | `docs/perf/pts/l4b-final-second-1000vu-runbook.md` |
+| Workload matrix | `docs/perf/pts/l4b-kafka/workload-matrix-20260529.md` |
+| PTS-1 runbook | `docs/perf/pts/l4b-kafka/final-burst-1000vu-runbook.md` |
 | PTS-1 JMX | `tests/pts/live-auction-l4b-final-second-1000vu.jmx` |
 | PTS-1 CSV | `docs/perf/pts/pts_l4b_final_second_1000vu_sessions.csv` |
 | Reset/seed | `tests/pts/reset-l4b-final-second-pressure.sh` |
@@ -101,6 +101,12 @@ the barrier when the explicit goal is soft-close/cap/end race validation.
 
 The ramp must finish before the JMX barrier opens. Do not set ramp-up to 6
 minutes for PTS-1; that can leave late VUs unstarted when the barrier opens.
+
+The `6 min / 1 min ramp / 5:30 barrier` shape is a harness decision, not a
+business claim that "last second" means 30 seconds. It gives Alibaba PTS time to
+start and hold 1000 VUs before a one-shot burst, then leaves about 30 seconds
+for responses and immediate settlement observation. If the specific claim is
+soft-close behavior inside the final 1-5 seconds, run PTS-1B instead.
 
 ## Risk Coverage
 
