@@ -35,6 +35,11 @@ These gates apply to every downstream-pressure run on the Kafka ledger branch.
 | Winner/order invariant | at most one final winner/order; cap/end/cancel terminal state is unique | Auction correctness broken regardless of latency. |
 | Realtime projection | Redis snapshot/history and outbox/fanout lag converge after the run | Browser can show stale or missing authoritative state. |
 | Reconciliation | no unreconciled accepted Redis/Kafka ledger rows after bounded settle window | L4B path lost or stranded accepted bids. |
+| Engine fencing | `engine_epoch` and `engine_seq` are monotonic; stale epoch settlement is rejected | Split-brain or stale engine writes can override current auction truth. |
+| Kafka ordering | `ledger_partition/ledger_offset` preserves `engine_seq` order for one auction | Producer retry, partitioning, or rebalance can reorder settlement. |
+| Soft close boundary | no accepted bid after final `end_at`; accepted deltas obey `increment_cents` | Redis and PG disagree about close time or rule enforcement. |
+| Redis memory safety | `evicted_keys=0` and `maxmemory_policy=noeviction` | Hot auction state can be evicted and reinitialized incorrectly. |
+| DLQ | `auction.dlq` offset sum is zero unless explicitly investigated | Settlement loss or poison was hidden behind successful PTS latency. |
 
 Minimum post-run SQL/metric checks:
 
@@ -48,6 +53,25 @@ Minimum post-run SQL/metric checks:
 - verify no duplicate `client_bid_id` for `auc_live`;
 - verify no duplicate order for `auc_live`;
 - wait for settlement/outbox lag to drain, then re-check.
+
+The executable gate is:
+
+```bash
+bash tests/pts/verify-l4b-pts-correctness.sh after-REPORTID-l4b-final-second-1000vu
+```
+
+For final consistency after a known settlement backlog, use:
+
+```bash
+FINAL_WAIT_SECONDS=300 bash tests/pts/verify-l4b-pts-correctness.sh after-REPORTID-l4b-final-second-1000vu-t5
+FINAL_WAIT_SECONDS=1800 bash tests/pts/verify-l4b-pts-correctness.sh after-REPORTID-l4b-final-second-1000vu-t30
+```
+
+The script writes `l4b-invariant-gates.tsv` and exits non-zero on any P0 gate
+failure. It is intentionally allowed to report P1 follow-up gates separately.
+P9 proxy/max-bid integrity is not part of the PTS-1 manual-bid workload; it must
+be covered by a dedicated max-bid workload because proxy bidding changes product
+semantics and event privacy.
 
 ## Why Both VU And RPS Modes Are Needed
 

@@ -47,6 +47,7 @@ bid thread initializes, and issue one valid bid each against `auc_live`.
 ```bash
 SESSION_COUNT=1000 bash tests/pts/reset-l4b-final-second-pressure.sh
 bash tests/pts/collect-server-evidence.sh before-l4b-final-second-1000vu-YYYYMMDD-HHMM
+bash tests/pts/verify-l4b-pts-correctness.sh before-l4b-final-second-1000vu-YYYYMMDD-HHMM
 ```
 
 Upload the JMX and CSV above to PTS. Do not reuse older `pts_hotspot_sessions.csv`
@@ -64,3 +65,21 @@ or `live-auction-hotspot-pressure.jmx` for this L4B final-second run.
 - Redis info and command stats;
 - DB wait/lock snapshot;
 - whether any 429/rate/admission result appeared.
+
+## Required After Run
+
+```bash
+bash tests/pts/collect-server-evidence.sh after-REPORTID-l4b-final-second-1000vu
+bash tests/pts/verify-l4b-pts-correctness.sh after-REPORTID-l4b-final-second-1000vu
+```
+
+If settlement or outbox backlog is still draining, rerun the correctness gate at
+T+5 minutes and T+30 minutes:
+
+```bash
+FINAL_WAIT_SECONDS=300 bash tests/pts/verify-l4b-pts-correctness.sh after-REPORTID-l4b-final-second-1000vu-t5
+FINAL_WAIT_SECONDS=1800 bash tests/pts/verify-l4b-pts-correctness.sh after-REPORTID-l4b-final-second-1000vu-t30
+```
+
+Any P0 failure in `l4b-invariant-gates.tsv` blocks a performance claim even if
+PTS latency looks good.
