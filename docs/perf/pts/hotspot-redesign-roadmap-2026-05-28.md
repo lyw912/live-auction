@@ -4,7 +4,7 @@ Date: 2026-05-28
 
 Status: proposed execution plan
 
-Supersession note, 2026-05-29: current L4b intentionally uses Kafka/Redpanda as the required durable ledger. Earlier roadmap text preferring Redis Streams first is superseded by the Redis hot state + Kafka ledger + PostgreSQL settlement implementation.
+Supersession note, 2026-05-29: current L4b intentionally uses Kafka as the required durable ledger. Earlier roadmap text preferring Redis Streams first is superseded by the Redis hot state + Kafka ledger + PostgreSQL settlement implementation.
 
 ## Goal
 
@@ -169,7 +169,7 @@ Deliberate exclusions:
 - multi-region;
 - real payment;
 - Flink stream processing; settlement remains app-owned.
-- multi-node production Kafka proof; local Redpanda is a functional test topology.
+- multi-node production Kafka proof; local Apache Kafka is a functional test topology.
 
 Expected result:
 
@@ -185,7 +185,7 @@ Concrete components:
 | `RedisGuard` | Reject clearly invalid/stale pressure before PG truth transaction. | No winner/order mutation. |
 | `RedisLedgerEngine` | Lua state transition and ledger append. | Manual bid only. |
 | Redis Lua script | Atomic rule validation, idempotency, current price/winner/end_at, cap sold, pending-decision marker. | No proxy/max-bid loop. |
-| `AuctionCommandLog` | Kafka/Redpanda durable ledger behind a small interface. | Local Redpanda for functional gates; production requires replicated brokers. |
+| `AuctionCommandLog` | Kafka durable ledger behind a small interface. | Local Apache Kafka for functional gates; production requires replicated brokers. |
 | Settlement worker | Consume ledger and write PostgreSQL bid/event/outbox/idempotency/order. | At-least-once, idempotent. |
 | Reconciler | Compare Redis state, ledger, DB, outbox. | pause on gap/poison/divergence. |
 | Gateway response adapter | Preserve old response where possible, add settlement fields. | `ENGINE_ACCEPTED`, `ENGINE_REJECTED`, `ENGINE_SOLD`. |

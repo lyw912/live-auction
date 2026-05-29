@@ -59,7 +59,7 @@ Decision:
 | Aggressive differentiator | `redis_ledger` | Move hot bid decision out of PG row lock using Redis Lua + ledger + settlement + reconciliation. | Same codebase behind feature flag until failure gates pass. |
 | Realtime proof | WS fanout/reconnect | Prove room-scoped long connection, heartbeat, slow-client, 1000+ watcher route. | Mainline delivery plane for both modes. |
 
-2026-05-29 update: L4b is implemented in mainline as Redis Lua hot state + Kafka/Redpanda durable bid ledger + PostgreSQL settlement truth. Local Docker Redis is exposed as `localhost:6380` and local Redpanda as `localhost:9092`. Evidence: `docs/evidence/pts-l4b-redis-ledger-engine-2026-05-29.md`.
+2026-05-29 update: L4b is implemented in mainline as Redis Lua hot state + Kafka durable bid ledger + PostgreSQL settlement truth. Local Docker Redis is exposed as `localhost:6380` and local Apache Kafka as `localhost:9092`. Evidence: `docs/evidence/pts-l4b-redis-ledger-engine-2026-05-29.md`.
 
 These are layers, not competing branches. Temporary branches can be used for review, but the target architecture is integrated.
 
@@ -174,7 +174,7 @@ Minimum implementation:
 - manual bid only;
 - no proxy/max-bid in Redis v1;
 - no real payment changes;
-- Kafka/Redpanda ledger required for L4b; local single-node Redpanda is test topology only;
+- Kafka ledger required for L4b; local single-node Apache Kafka is test topology only;
 - Redis keys hash-tagged by `{auction_id}`;
 - `engine_seq` and `engine_epoch`;
 - Redis idempotency key by client bid id + request hash;

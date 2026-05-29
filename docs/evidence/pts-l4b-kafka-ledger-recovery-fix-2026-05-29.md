@@ -15,7 +15,7 @@ Implemented changes:
 - Settlement no longer refuses existing Kafka ledger entries merely because the auction engine is paused. Pause remains a protection against new hot-engine bid decisions.
 - H5 renders `ENGINE_ACCEPTED` and `ENGINE_SOLD` with pending settlement as `ENGINE_PENDING`, with CTA disabled and settlement-specific copy.
 - H5 converts pending settlement to normal leading/settled UI only after settled outbox events arrive.
-- Kafka auto topic creation is disabled by default. The Redpanda integration test opts in explicitly.
+- Kafka auto topic creation is disabled by default. The Kafka integration test creates its test topics explicitly.
 
 ## Crash Window Policy
 
@@ -73,5 +73,5 @@ PASS
 
 - This is correctness and recovery evidence, not latency evidence.
 - Kafka topic replication/min-ISR is a deployment precondition. The application disables auto topic creation by default but does not yet inspect broker topic configs.
-- Local Redpanda is single-node functional evidence only.
+- Local Apache Kafka is single-node functional evidence only.
 - The Redis pending recovery path depends on Redis retaining pending state. Production Redis must use no-eviction and durable/HA configuration.

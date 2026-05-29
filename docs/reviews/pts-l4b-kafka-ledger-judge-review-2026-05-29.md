@@ -15,7 +15,7 @@ Scope:
 
 **BORDERLINE**
 
-L4b is no longer docs-only. The repo contains a real Redis Lua hot state machine, Kafka/Redpanda ledger interface, PostgreSQL settlement worker, fencing by `engine_epoch`/`engine_seq`, DLQ handling, reconciliation, and monitor surface.
+L4b is no longer docs-only. The repo contains a real Redis Lua hot state machine, Kafka ledger interface, PostgreSQL settlement worker, fencing by `engine_epoch`/`engine_seq`, DLQ handling, reconciliation, and monitor surface.
 
 It was still not acceptable to claim "fully complete and only PTS remains" before the follow-up fix because:
 
@@ -31,7 +31,7 @@ It was still not acceptable to claim "fully complete and only PTS remains" befor
 - [P0] Make engine pause block new hot-engine bids but not block settlement of already accepted ledger entries.
 - [P0] H5 must render `ENGINE_ACCEPTED` / `ENGINE_SOLD` with `settlement_status=PENDING` as pending settlement, not as DB-settled success.
 - [P1] Disable Kafka auto-topic creation by default; tests may opt in explicitly.
-- [P1] Evidence must say that pending recovery is a local single-node recovery mechanism and production still requires replicated Kafka/Redpanda, ISR monitoring, DLQ repair, and formal PTS evidence.
+- [P1] Evidence must say that pending recovery is a local single-node recovery mechanism and production still requires replicated Kafka, ISR monitoring, DLQ repair, and formal PTS evidence.
 
 ## Residual Risk
 

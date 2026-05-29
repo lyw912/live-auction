@@ -186,7 +186,7 @@ Optimistic locking in this stage means:
 
 ## Settlement Contract
 
-The settlement worker consumes the ledger in order per auction. Current L4b uses Kafka/Redpanda as the required durable ledger, not Redis Streams. Redis holds hot state and short idempotency replay only.
+The settlement worker consumes the ledger in order per auction. Current L4b uses Kafka as the required durable ledger, not Redis Streams. Redis holds hot state and short idempotency replay only.
 
 ```text
 AuctionCommandLog.Append(ctx, auctionID, entry)
@@ -198,11 +198,11 @@ Implementation policy:
 
 | Implementation | When to use | Why |
 |---|---|---|
-| Kafka / Redpanda | Current L4b runtime. | Dedicated append-only ledger, consumer group replay, and physical separation from Redis hot state. |
+| Kafka | Current L4b runtime. | Dedicated append-only ledger, consumer group replay, and physical separation from Redis hot state. |
 | PostgreSQL ledger/outbox table | Emergency fallback design only. | Strong single-DB durability, fewer moving parts, but higher DB write cost and reintroduces hot DB pressure. |
 | Redis Streams | Rejected for this upgraded L4b runtime. | It couples hot state and historical ledger in the same Redis failure domain. |
 
-On the local one-machine deployment, Kafka/Redpanda does not remove host-level failure domain. It is still used to prove runtime boundaries and failure gates; production must use replicated brokers, ISR, DLQ monitoring, and replay/reconciliation operations.
+On the local one-machine deployment, Kafka does not remove host-level failure domain. It is still used to prove runtime boundaries and failure gates; production must use replicated brokers, ISR, DLQ monitoring, and replay/reconciliation operations.
 
 Required DB guarantees:
 
@@ -253,7 +253,7 @@ Rejected for the main live auction path. It changes fairness and final-second se
 
 ### Kafka/Flink First
 
-Kafka/Redpanda is now accepted for the L4b durable ledger because Redis Stream would keep hot state and historical ledger in one Redis failure domain. Flink remains deferred; settlement is still an app-owned consumer group that writes PostgreSQL truth idempotently.
+Kafka is now accepted for the L4b durable ledger because Redis Stream would keep hot state and historical ledger in one Redis failure domain. Flink remains deferred; settlement is still an app-owned consumer group that writes PostgreSQL truth idempotently.
 
 ## Rollback
 

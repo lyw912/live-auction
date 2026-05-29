@@ -30,49 +30,43 @@ services:
       timeout: 3s
       retries: 20
 
-  redpanda:
-    image: docker.redpanda.com/redpandadata/redpanda:v24.2.13
-    container_name: live-auction-redpanda
-    command:
-      - redpanda
-      - start
-      - --overprovisioned
-      - --smp
-      - "1"
-      - --memory
-      - 512M
-      - --reserve-memory
-      - 0M
-      - --node-id
-      - "0"
-      - --check=false
-      - --kafka-addr
-      - PLAINTEXT://0.0.0.0:9092
-      - --advertise-kafka-addr
-      - PLAINTEXT://localhost:9092
+  kafka:
+    image: apache/kafka:3.9.1
+    container_name: live-auction-kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:29092,HOST://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,HOST:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
     ports:
       - "9092:9092"
-      - "9644:9644"
     volumes:
-      - redpanda-data:/var/lib/redpanda/data
+      - kafka-data:/var/lib/kafka/data
     healthcheck:
-      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true'"]
+      test: ["CMD-SHELL", "nc -z localhost 9092"]
       interval: 5s
-      timeout: 5s
+      timeout: 3s
       retries: 30
 
-  redpanda-init:
-    image: docker.redpanda.com/redpandadata/redpanda:v24.2.13
-    container_name: live-auction-redpanda-init
+  kafka-init:
+    image: apache/kafka:3.9.1
+    container_name: live-auction-kafka-init
     depends_on:
-      redpanda:
+      kafka:
         condition: service_healthy
     entrypoint:
       - /bin/sh
       - -c
       - |
-        rpk topic create auction.bid-events --brokers redpanda:9092 --partitions 16 --replicas 1 --if-not-exists
-        rpk topic create auction.dlq --brokers redpanda:9092 --partitions 16 --replicas 1 --if-not-exists
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic auction.bid-events --partitions 16 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic auction.dlq --partitions 16 --replication-factor 1
     restart: "no"
 
   minio:
@@ -141,7 +135,7 @@ services:
 volumes:
   postgres-data:
   redis-data:
-  redpanda-data:
+  kafka-data:
   minio-data:
   prometheus-data:
   grafana-data:

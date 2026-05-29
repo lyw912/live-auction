@@ -9,7 +9,7 @@ Source docs: `1d31bf9 docs: add PTS1-Refactoring docs`
 Implemented L4b as the hot bidding path with separated failure domains:
 
 - Redis Lua is the short atomic hot state machine. It validates auction status, winner, increment grid, cap, soft-close extension, idempotency, `engine_seq`, and `engine_epoch`.
-- Kafka/Redpanda is the durable bid ledger. The Go engine synchronously appends the Lua decision with required acknowledgements before returning `ENGINE_ACCEPTED`, `ENGINE_REJECTED`, or `ENGINE_SOLD`.
+- Kafka is the durable bid ledger. The Go engine synchronously appends the Lua decision with required acknowledgements before returning `ENGINE_ACCEPTED`, `ENGINE_REJECTED`, or `ENGINE_SOLD`.
 - PostgreSQL remains final settlement/audit/order truth. The settlement worker consumes Kafka by consumer group, fences by `engine_epoch`, enforces contiguous `engine_seq`, and writes `bids`, `idempotency_records`, `auction_events`, `outbox_events`, orders, and scheduler jobs.
 - Poison settlement has bounded retry, then writes `auction.dlq`, marks the PG settlement row with DLQ metadata, pauses the auction, and commits the Kafka offset so the partition can move.
 - Reconciliation runs periodically and by operator signal. It compares Redis engine seq, PostgreSQL settled seq, failed/DLQ rows, and pauses on unsafe drift.
@@ -19,12 +19,12 @@ Implemented L4b as the hot bidding path with separated failure domains:
 
 ## Environment Note
 
-Local testing runs Redis, Redpanda, PostgreSQL, and the app on one machine. That is a test topology only. Production requires Redis HA with no eviction and AOF policy, Kafka/Redpanda replicas with `acks=all`/ISR discipline, and PostgreSQL as the settlement truth.
+Local testing runs Redis, Apache Kafka, PostgreSQL, and the app on one machine. That is a test topology only. Production requires Redis HA with no eviction and AOF policy, Kafka replicas with `acks=all`/ISR discipline, and PostgreSQL as the settlement truth.
 
 Local infra:
 
 ```text
-docker compose -f infra/docker-compose.yml up -d postgres redis redpanda
+docker compose -f infra/docker-compose.yml up -d postgres redis kafka
 REDIS_ADDR=localhost:6380
 KAFKA_BROKERS=localhost:9092
 ```
@@ -65,10 +65,10 @@ REDIS_ADDR=localhost:6380 REDIS_STREAMS_ADDR=localhost:6380 go test -p 1 ./inter
 PASS
 ```
 
-Real Kafka-compatible ledger smoke against local Redpanda:
+Real Kafka ledger smoke against local Apache Kafka:
 
 ```text
-KAFKA_INTEGRATION=1 KAFKA_BROKERS=localhost:9092 go test ./internal/redisengine -run TestKafkaLedgerRedpandaIntegration -count=1 -v
+KAFKA_INTEGRATION=1 KAFKA_BROKERS=localhost:9092 go test ./internal/redisengine -run TestKafkaLedgerIntegration -count=1 -v
 PASS
 ```
 

@@ -90,7 +90,7 @@ Rebuild only becomes reasonable if all are true:
 
 - `outbox-hot-table` or relay polling is proven as the bottleneck under reproducible Linux baseline.
 - The project needs cross-service event consumption beyond browser realtime.
-- Kafka/Redpanda or another durable broker is accepted as a new explicit runtime dependency.
+- Kafka or another durable broker is accepted as a new explicit runtime dependency.
 - A new ADR defines offset storage, duplicate handling, schema history, replication slot operations, and recovery drills.
 
 ## Concrete Borrowing Plan
