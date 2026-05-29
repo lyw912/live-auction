@@ -1,0 +1,179 @@
+# PTS Workload Matrix
+
+Date: 2026-05-29
+
+## Goal
+
+PTS is used for bottleneck discovery and defensible evidence, not for proving a
+preselected number. The load plan follows the project brief:
+
+- complex auction correctness under final-second contention;
+- millisecond-level realtime recovery and fanout;
+- performance, stability, observability, and failure attribution evidence.
+
+The current branch has moved the bid hot path from PG-lane serialization to the
+L4B Redis Lua + Kafka ledger path. Therefore a PTS run is valid only if it proves
+performance and correctness together. A fast report is a failure if Redis
+accepted bids are not durably appended to Kafka, settled into PostgreSQL, exposed
+through ordered events, and reconciled without gaps or duplicates.
+
+All downstream-pressure workloads must run with `ADMISSION_ENABLED=false`.
+Any HTTP 429, `RATE_LIMITED`, or `BID_AUCTION_TOO_HOT` result invalidates a
+downstream bottleneck conclusion for that run.
+
+## L4B Correctness Gates
+
+These gates apply to every downstream-pressure run on the Kafka ledger branch.
+
+| Gate | Required Evidence | Failure Meaning |
+|---|---|---|
+| Redis ledger classification | `auction_bid_redis_ledger_total` by outcome plus PTS sampler distribution | Cannot explain whether requests were accepted, rejected, retried, or failed. |
+| Kafka durability | topic exists, DLQ empty or explained, no append failure delta | Redis accepted work may not be durable. |
+| PostgreSQL settlement | `redis_engine_settlements` terminal statuses match accepted ledger attempts | Fast Redis accepts are not enough; money/audit truth did not converge. |
+| Auction state continuity | `auctions.seq`, `auction_events.seq`, and accepted bid sequence are continuous | Client recovery and ordering are unsafe. |
+| Idempotency | no duplicate `client_bid_id` / idempotency conflict beyond expected replay | Load may have created duplicate logical bids. |
+| Winner/order invariant | at most one final winner/order; cap/end/cancel terminal state is unique | Auction correctness broken regardless of latency. |
+| Realtime projection | Redis snapshot/history and outbox/fanout lag converge after the run | Browser can show stale or missing authoritative state. |
+| Reconciliation | no unreconciled accepted Redis/Kafka ledger rows after bounded settle window | L4B path lost or stranded accepted bids. |
+
+Minimum post-run SQL/metric checks:
+
+- count PTS bid attempts by sampler result;
+- count Redis ledger accepted/rejected/error outcomes by metric delta;
+- count Kafka append failures and DLQ records;
+- count `redis_engine_settlements` by status for `auc_live`;
+- count `bids`, `auction_events`, `outbox_events`, and `outbox_delivery` for
+  `auc_live`;
+- verify `auction_events.seq` has no gaps for `auc_live`;
+- verify no duplicate `client_bid_id` for `auc_live`;
+- verify no duplicate order for `auc_live`;
+- wait for settlement/outbox lag to drain, then re-check.
+
+## Why Both VU And RPS Modes Are Needed
+
+Alibaba Cloud PTS exposes two useful pressure models:
+
+- VU mode: client-side concurrency/session behavior. Use it when the question is
+  "how many users are simultaneously online or act at the same time?"
+- RPS mode: server-side request arrival rate. Use it when the question is "at
+  what request rate does this endpoint or subsystem saturate?"
+
+For this project, VU mode is the right first choice for final-second auctions,
+watchers, reconnect storms, and slow consumers. RPS mode is the right follow-up
+for sustained bid/outbox throughput and snapshot endpoint saturation because it
+keeps offered load explicit even when response time increases.
+
+## Workload Priority
+
+| Priority | Workload | Main Challenge / Score Dimension | PTS Mode | Why It Matters First |
+|---:|---|---|---|---|
+| 1 | PTS-1 final-second single-hot-auction burst | Core challenge: final-second bid correctness; backend service; performance | VU | This is the hardest business moment: many real users submit valid bids against one auction at nearly the same time. It tests accepted latency, Redis Lua ledger, Kafka append, settlement, idempotency, seq continuity, and winner correctness. |
+| 2 | PTS-2 sustained accepted-bid/outbox saturation | Performance; stability; observability; data governance | RPS or parameterized JMeter thread pacing | Finds the real throughput knee: Redis command latency, Kafka append latency, settlement lag, DB writes, outbox/backlog, and runtime CPU/GC. This is the best bottleneck-discovery workload after PTS-1. |
+| 3 | PTS-3 watcher fanout under bid stream | Millisecond realtime sync; frontend interaction; system availability | VU / connection oriented | Tests whether accepted bid events reach many watchers without fanout lag, slow closes, goroutine/RSS growth, or queue buildup. |
+| 4 | PTS-4 reconnect storm with stale seq | Recoverable realtime; availability; stability | VU | Tests Redis history/snapshot fallback, snapshot rebuild semaphore, DB pressure, and whether clients recover to authoritative state. |
+| 5 | PTS-5 hot/cold multi-room isolation | Stability; core challenge optimization; observability | Mixed VU/RPS | Proves one hot auction does not corrupt or collapse cold-room latency/fanout, and that room-scoped diagnostics are useful. |
+| 6 | PTS-6 admission-on overload profile | Gateway; system availability | VU or RPS | This is not capacity discovery. It proves product protection behavior only after downstream bottlenecks are known. |
+
+## First Run: PTS-1 Final-Second 1000VU
+
+Use this run first because it maps directly to the official scene: a live room
+where many bidders wait and then bid near the hammer.
+
+Artifacts:
+
+- JMX: `tests/pts/live-auction-l4b-final-second-1000vu.jmx`
+- CSV: `docs/perf/pts/pts_l4b_final_second_1000vu_sessions.csv`
+- Reset: `tests/pts/reset-l4b-final-second-pressure.sh`
+- Runbook: `docs/perf/pts/l4b-final-second-1000vu-runbook.md`
+
+PTS UI:
+
+| Setting | Value |
+|---|---|
+| Pressure mode | Virtual users |
+| Traffic model | Manual speed or uniform ramp-up |
+| Maximum virtual users | 1000 |
+| Test duration | 6 minutes |
+| Ramp-up duration | 1 minute |
+| Specify loop count | No |
+| Specified IP count | Default unless PTS quota requires otherwise |
+
+The JMX barrier opens at about 5 minutes 30 seconds. The ramp-up must complete
+well before then; otherwise the report is not a true 1000-user simultaneous bid
+burst.
+
+Primary verdict:
+
+- `PASS`: no admission contamination, no server errors, 1000 bid attempts are
+  classified, invariants hold, and latency is within the measured target for
+  this environment.
+- `BOTTLENECK_FOUND`: Redis/Kafka/DB/runtime metrics identify the first limiting
+  subsystem.
+- `HARNESS_GAP`: PTS did not actually start/hold 1000 users before the barrier,
+  CSV/auth failed, or response classification is ambiguous.
+- `ENV_LIMIT`: PTS client, network, ECS, Docker, file descriptors, CPU, or disk
+  saturates before backend bottleneck metrics move.
+
+Required after-run checks:
+
+- PTS sampler distribution and p50/p90/p99 for `POST PTS-1 hotspot bid`;
+- zero HTTP 429 / `RATE_LIMITED` / `BID_AUCTION_TOO_HOT` delta;
+- accepted/rejected distribution from `auction_bid_redis_ledger_total`;
+- `auction_bid_redis_ledger_seconds`;
+- Kafka bid topic and DLQ status;
+- settlement rows and status counts;
+- Redis latency/memory/evictions/blocked clients;
+- DB pool/lock/slow query snapshot;
+- invariant check: seq continuity, no duplicate idempotency response, one final
+  winner/order if cap is reached, no unreconciled accepted Redis ledger rows.
+
+## Second Run: PTS-2 Sustained Accepted-Bid Saturation
+
+Run this after PTS-1 because a one-shot burst may show final-second latency but
+does not reveal the sustained throughput knee or backlog growth.
+
+Target:
+
+- Redis Lua ledger command latency;
+- Kafka append latency and topic backlog;
+- settlement worker lag;
+- PostgreSQL write pressure;
+- outbox/fanout lag;
+- Go CPU/GC/goroutines.
+
+Recommended shape:
+
+- start with 100 RPS equivalent accepted bid attempts for 2 minutes;
+- step to 200, 400, 600, 800, and 1000 if error and lag stay controlled;
+- stop at the first sustained growth in latency, Kafka backlog, settlement lag,
+  Redis latency, DB pool wait, or runtime saturation.
+
+Use RPS mode if PTS can parameterize the JMeter plan cleanly. If not, use the
+existing parameterized JMeter core-pressure plan with controlled thread count
+and bid pacing, but label it as closed-model pressure.
+
+## Third Run: Realtime And Recovery
+
+Only after the bid path is characterized should PTS focus on realtime:
+
+- watcher fanout with many sockets and a low accepted bid stream;
+- reconnect storm with stale `last_seq`;
+- slow consumer mix where some clients stop reading.
+
+These runs are scored heavily because the official challenge is not only "accept
+bids fast"; the browser must converge back to server-authoritative state under
+disconnects, gaps, and backpressure.
+
+## Evidence Discipline
+
+Every PTS run must record:
+
+- commit SHA;
+- JMX and CSV path;
+- PTS report id;
+- PTS mode and traffic model;
+- backend env proving `ADMISSION_ENABLED=false` for downstream pressure;
+- before/after `collect-server-evidence.sh` directories;
+- raw report details from `aliyun pts get-jmeter-report-details`;
+- verdict: `PASS`, `BOTTLENECK_FOUND`, `HARNESS_GAP`, or `ENV_LIMIT`;
+- exact next workload or diagnostic.

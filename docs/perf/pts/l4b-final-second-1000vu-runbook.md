@@ -27,14 +27,17 @@ configuration contamination for this run.
 | Setting | Value |
 |---|---|
 | Pressure mode | Virtual users |
-| Traffic model | Uniform ramp-up |
+| Traffic model | Manual or uniform ramp-up |
 | Maximum virtual users | 1000 |
 | Test duration | 6 minutes |
-| Ramp-up duration | 6 minutes |
+| Ramp-up duration | 1 minute |
 | Specify loop count | No |
 | Specified IP count | Leave default unless PTS quota requires otherwise |
 
-The PTS page still uses a 6-minute uniform ramp for comparable report metadata.
+The PTS page must finish bringing all 1000 VUs online before the burst barrier.
+Use a 1-minute ramp-up, or manual speed control that reaches 1000 VUs by minute
+1 and holds them until the burst. Do not use a 6-minute ramp-up for this
+workload; that can leave late VUs unstarted when the 5:30 barrier opens.
 The JMX contains the actual burst barrier: bid threads start quickly, wait for a
 shared `burst_wait_ms=330000` target, about 5 minutes 30 seconds after the first
 bid thread initializes, and issue one valid bid each against `auc_live`.
