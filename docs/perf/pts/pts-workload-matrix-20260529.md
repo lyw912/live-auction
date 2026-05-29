@@ -2,6 +2,8 @@
 
 Date: 2026-05-29
 
+Index: `docs/perf/pts/l4b-kafka/README.md`
+
 ## Goal
 
 PTS is used for bottleneck discovery and defensible evidence, not for proving a
@@ -131,17 +133,24 @@ keeps offered load explicit even when response time increases.
 
 | Priority | Workload | Main Challenge / Score Dimension | PTS Mode | Why It Matters First |
 |---:|---|---|---|---|
-| 1 | PTS-1 final-second single-hot-auction burst | Core challenge: final-second bid correctness; backend service; performance | VU | This is the hardest business moment: many real users submit valid bids against one auction at nearly the same time. It tests accepted latency, Redis Lua ledger, Kafka append, settlement, idempotency, seq continuity, and winner correctness. |
-| 2 | PTS-2 sustained accepted-bid/outbox saturation | Performance; stability; observability; data governance | RPS or parameterized JMeter thread pacing | Finds the real throughput knee: Redis command latency, Kafka append latency, settlement lag, DB writes, outbox/backlog, and runtime CPU/GC. This is the best bottleneck-discovery workload after PTS-1. |
-| 3 | PTS-3 watcher fanout under bid stream | Millisecond realtime sync; frontend interaction; system availability | VU / connection oriented | Tests whether accepted bid events reach many watchers without fanout lag, slow closes, goroutine/RSS growth, or queue buildup. |
+| 1 | PTS-1 final-burst single-hot-auction | Core challenge: final-second bid correctness; backend service; performance | VU | One-shot 1000VU bid burst against one auction. This validates the new L4B/Kafka hot path without turning the run into sustained looping pressure. |
+| 1B | PTS-1B true last-second soft-close sniper | Core challenge: soft close, cap/end race | VU | Same one-shot shape, but `end_at` is aligned with the barrier so bids land in the final 1-5 seconds. This is the explicit hammer-boundary test. |
+| 2 | PTS-2 sustained accepted-bid/outbox saturation | Performance; stability; observability; data governance | RPS or parameterized JMeter thread pacing | Finds the real throughput knee: Redis command latency, Kafka append latency, settlement lag, DB writes, outbox/backlog, and runtime CPU/GC. |
+| 3 | PTS-3 watcher fanout overlay | Millisecond realtime sync; frontend interaction; system availability | VU / connection oriented | Runs with real bid events when possible. Tests whether accepted bid events reach many watchers without fanout lag, slow closes, goroutine/RSS growth, or queue buildup. |
 | 4 | PTS-4 reconnect storm with stale seq | Recoverable realtime; availability; stability | VU | Tests Redis history/snapshot fallback, snapshot rebuild semaphore, DB pressure, and whether clients recover to authoritative state. |
 | 5 | PTS-5 hot/cold multi-room isolation | Stability; core challenge optimization; observability | Mixed VU/RPS | Proves one hot auction does not corrupt or collapse cold-room latency/fanout, and that room-scoped diagnostics are useful. |
 | 6 | PTS-6 admission-on overload profile | Gateway; system availability | VU or RPS | This is not capacity discovery. It proves product protection behavior only after downstream bottlenecks are known. |
 
-## First Run: PTS-1 Final-Second 1000VU
+## First Run: PTS-1 Final-Burst 1000VU
 
 Use this run first because it maps directly to the official scene: a live room
 where many bidders wait and then bid near the hammer.
+
+This prepared PTS-1 is a one-shot burst, not a loop. The bid thread group has
+`LoopController.loops=1`. The barrier opens around 5:30 in a 6-minute run and
+the remaining time is observation/response margin. It does not intentionally
+place bids in the final 1-5 seconds of `end_at`; PTS-1B owns that soft-close
+sniper case.
 
 Artifacts:
 

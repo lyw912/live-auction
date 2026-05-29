@@ -1,10 +1,12 @@
-# L4B Final-Second Hotspot 1000VU PTS Runbook
+# L4B Final-Burst Hotspot 1000VU PTS Runbook
 
 Date: 2026-05-29
 
+Index: `docs/perf/pts/l4b-kafka/README.md`
+
 ## Purpose
 
-This run measures single-auction final-second contention for the L4B engine:
+This run measures single-auction final-burst contention for the L4B engine:
 
 - Redis Lua hot state;
 - Apache Kafka durable bid ledger;
@@ -41,6 +43,12 @@ workload; that can leave late VUs unstarted when the 5:30 barrier opens.
 The JMX contains the actual burst barrier: bid threads start quickly, wait for a
 shared `burst_wait_ms=330000` target, about 5 minutes 30 seconds after the first
 bid thread initializes, and issue one valid bid each against `auc_live`.
+
+The bid thread group uses `LoopController.loops=1`; each VU submits exactly one
+bid after the barrier. The final 30 seconds are response/settlement observation
+margin, not continuous bid traffic. This run does not align `auc_live.end_at`
+with the barrier; a true final-1-to-5-second soft-close sniper test is tracked as
+PTS-1B in the L4B Kafka matrix.
 
 ## Required Before Run
 
