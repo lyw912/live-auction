@@ -7,22 +7,26 @@ MIGRATIONS_DIR="$BACKEND_DIR/migrations"
 OUT_DIR="$ROOT_DIR/docs/perf/pts"
 SESSION_CSV="${SESSION_CSV:-pts_sessions.csv}"
 JMX_PATH="${JMX_PATH:-$ROOT_DIR/tests/pts/live-auction-core-pressure.jmx}"
-TMP_SQL="/tmp/live-auction-migrations-up.sql"
 BOOTSTRAP_SQL="/tmp/live-auction-bootstrap-before-migrations.sql"
 DB_CONTAINER="${DB_CONTAINER:-live-auction-postgres}"
 REDIS_CONTAINER="${REDIS_CONTAINER:-live-auction-redis}"
+KAFKA_CONTAINER="${KAFKA_CONTAINER:-live-auction-kafka}"
 DB_USER="${DB_USER:-live_auction}"
 DB_NAME="${DB_NAME:-live_auction}"
 HTTP_ADDR="${HTTP_ADDR:-0.0.0.0:18080}"
 HTTP_PORT="${HTTP_ADDR##*:}"
 DATABASE_URL="${DATABASE_URL:-postgres://live_auction:live_auction@localhost:5432/live_auction?sslmode=disable}"
-REDIS_ADDR="${REDIS_ADDR:-localhost:6379}"
+REDIS_ADDR="${REDIS_ADDR:-localhost:6380}"
+KAFKA_BROKERS="${KAFKA_BROKERS:-localhost:9092}"
+KAFKA_BID_TOPIC="${KAFKA_BID_TOPIC:-auction.bid-events}"
+KAFKA_DLQ_TOPIC="${KAFKA_DLQ_TOPIC:-auction.dlq}"
+GOOSE_BIN="${GOOSE_BIN:-goose}"
 SESSION_COUNT="${SESSION_COUNT:-4096}"
 DB_MAX_CONNS="${DB_MAX_CONNS:-90}"
 DB_MIN_CONNS="${DB_MIN_CONNS:-16}"
 DB_MAX_CONN_LIFETIME="${DB_MAX_CONN_LIFETIME:-1h}"
 DB_MAX_CONN_IDLE_TIME="${DB_MAX_CONN_IDLE_TIME:-30m}"
-BID_ENGINE_MODE="${BID_ENGINE_MODE:-redis_guard}"
+BID_ENGINE_MODE="${BID_ENGINE_MODE:-redis_ledger}"
 BID_LANE_WORKERS="${BID_LANE_WORKERS:-1}"
 BID_LANE_QUEUE_SIZE="${BID_LANE_QUEUE_SIZE:-2048}"
 BID_LANE_QUEUE_TIMEOUT="${BID_LANE_QUEUE_TIMEOUT:-3s}"
@@ -30,7 +34,6 @@ BID_REDIS_GUARD_MAX_STALENESS="${BID_REDIS_GUARD_MAX_STALENESS:-1500ms}"
 BID_REDIS_GUARD_TIMEOUT="${BID_REDIS_GUARD_TIMEOUT:-30ms}"
 
 mkdir -p "$OUT_DIR"
-: > "$TMP_SQL"
 
 cat > "$BOOTSTRAP_SQL" <<'SQL'
 INSERT INTO users (id, role, display_name, city)
@@ -48,46 +51,25 @@ SET host_id = EXCLUDED.host_id,
     status = EXCLUDED.status;
 SQL
 
-for file in "$MIGRATIONS_DIR"/*.sql; do
-  awk '
-    /^-- \+goose Up/ { in_up = 1; next }
-    /^-- \+goose Down/ { in_up = 0; next }
-    in_up { print }
-  ' "$file" >> "$TMP_SQL"
-  printf '\n' >> "$TMP_SQL"
-done
-
-sed -i \
-  -e '/^CREATE TABLE IF NOT EXISTS /!s/^CREATE TABLE /CREATE TABLE IF NOT EXISTS /g' \
-  -e '/^CREATE UNIQUE INDEX IF NOT EXISTS /!s/^CREATE UNIQUE INDEX /CREATE UNIQUE INDEX IF NOT EXISTS /g' \
-  -e '/^CREATE INDEX IF NOT EXISTS /!s/^CREATE INDEX /CREATE INDEX IF NOT EXISTS /g' \
-  -e '/^CREATE EXTENSION IF NOT EXISTS /!s/^CREATE EXTENSION /CREATE EXTENSION IF NOT EXISTS /g' \
-  "$TMP_SQL"
-
-perl -0pi -e "s/ALTER TABLE orders\\s+DROP CONSTRAINT orders_status_check,\\s+ADD CONSTRAINT orders_status_check CHECK \\(status IN \\('ORDER_PENDING','PAYMENT_INITIATED','PAYMENT_SUCCEEDED','PAID','ORDER_EXPIRED'\\)\\);/DO \\$\\$ BEGIN\\n  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'orders_status_check') THEN\\n    ALTER TABLE orders DROP CONSTRAINT orders_status_check;\\n  END IF;\\n  ALTER TABLE orders ADD CONSTRAINT orders_status_check CHECK (status IN ('ORDER_PENDING','PAYMENT_INITIATED','PAYMENT_SUCCEEDED','PAID','ORDER_EXPIRED'));\\nEND \\$\\$;/s" "$TMP_SQL"
-
-perl -0pi -e "s/ALTER TABLE orders\\s+ADD COLUMN provider_payment_id text,\\s+ADD COLUMN payment_initiated_at timestamptz,\\s+ADD COLUMN payment_succeeded_at timestamptz;/ALTER TABLE orders ADD COLUMN IF NOT EXISTS provider_payment_id text;\\nALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_initiated_at timestamptz;\\nALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_succeeded_at timestamptz;/s" "$TMP_SQL"
-
-perl -0pi -e "s/ALTER TABLE outbox_delivery\\s+ADD COLUMN auction_id text,\\s+ADD COLUMN auction_seq bigint,\\s+ADD COLUMN event_created_at timestamptz;/ALTER TABLE outbox_delivery ADD COLUMN IF NOT EXISTS auction_id text;\\nALTER TABLE outbox_delivery ADD COLUMN IF NOT EXISTS auction_seq bigint;\\nALTER TABLE outbox_delivery ADD COLUMN IF NOT EXISTS event_created_at timestamptz;/s" "$TMP_SQL"
-
-perl -0pi -e "s/ALTER TABLE outbox_delivery\\s+ADD COLUMN shard_id int;/ALTER TABLE outbox_delivery ADD COLUMN IF NOT EXISTS shard_id int;/s" "$TMP_SQL"
-
-perl -0pi -e "s/CREATE TRIGGER trg_sync_outbox_delivery_event_fields\\nBEFORE INSERT ON outbox_delivery\\nFOR EACH ROW\\nEXECUTE FUNCTION sync_outbox_delivery_event_fields\\(\\);/DROP TRIGGER IF EXISTS trg_sync_outbox_delivery_event_fields ON outbox_delivery;\\nCREATE TRIGGER trg_sync_outbox_delivery_event_fields\\nBEFORE INSERT ON outbox_delivery\\nFOR EACH ROW\\nEXECUTE FUNCTION sync_outbox_delivery_event_fields();/s" "$TMP_SQL"
-
-perl -0pi -e "s/ALTER TABLE outbox_events\\s+ADD COLUMN event_schema_version int NOT NULL DEFAULT 1,\\s+ADD COLUMN event_key text,\\s+ADD COLUMN payload_sha256 text;/ALTER TABLE outbox_events ADD COLUMN IF NOT EXISTS event_schema_version int NOT NULL DEFAULT 1;\\nALTER TABLE outbox_events ADD COLUMN IF NOT EXISTS event_key text;\\nALTER TABLE outbox_events ADD COLUMN IF NOT EXISTS payload_sha256 text;/s" "$TMP_SQL"
-
-perl -0pi -e "s/ALTER TABLE outbox_delivery\\s+ADD COLUMN last_error_class text,\\s+ADD COLUMN last_error_retriable boolean,\\s+ADD COLUMN last_error_at timestamptz,\\s+ADD COLUMN last_published_watermark jsonb;/ALTER TABLE outbox_delivery ADD COLUMN IF NOT EXISTS last_error_class text;\\nALTER TABLE outbox_delivery ADD COLUMN IF NOT EXISTS last_error_retriable boolean;\\nALTER TABLE outbox_delivery ADD COLUMN IF NOT EXISTS last_error_at timestamptz;\\nALTER TABLE outbox_delivery ADD COLUMN IF NOT EXISTS last_published_watermark jsonb;/s" "$TMP_SQL"
-
-perl -0pi -e "s/ALTER TABLE bids\\s+ADD COLUMN source text NOT NULL DEFAULT 'MANUAL',\\s+ADD CONSTRAINT bids_source_check CHECK \\(source IN \\('MANUAL','AUTO_MAX_BID'\\)\\);/ALTER TABLE bids ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'MANUAL';\\nDO \\$\\$ BEGIN\\n  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'bids_source_check') THEN\\n    ALTER TABLE bids ADD CONSTRAINT bids_source_check CHECK (source IN ('MANUAL','AUTO_MAX_BID'));\\n  END IF;\\nEND \\$\\$;/s" "$TMP_SQL"
-
 echo "[1/7] Applying migrations to $DB_CONTAINER/$DB_NAME"
 docker cp "$BOOTSTRAP_SQL" "$DB_CONTAINER:/tmp/live-auction-bootstrap-before-migrations.sql"
 docker exec "$DB_CONTAINER" psql -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$DB_NAME" -f /tmp/live-auction-bootstrap-before-migrations.sql
-docker cp "$TMP_SQL" "$DB_CONTAINER:/tmp/live-auction-migrations-up.sql"
-docker exec "$DB_CONTAINER" psql -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$DB_NAME" -f /tmp/live-auction-migrations-up.sql
+if ! command -v "$GOOSE_BIN" >/dev/null 2>&1; then
+  if [ -x /root/go/bin/goose ]; then
+    GOOSE_BIN=/root/go/bin/goose
+  else
+    echo "goose is required; install with: go install github.com/pressly/goose/v3/cmd/goose@latest" >&2
+    exit 1
+  fi
+fi
+"$GOOSE_BIN" -dir "$MIGRATIONS_DIR" postgres "$DATABASE_URL" up
 
 echo "[2/7] Checking Redis"
 docker exec "$REDIS_CONTAINER" redis-cli ping
+
+echo "[2b/7] Checking Kafka topics"
+docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic "$KAFKA_BID_TOPIC" --partitions 16 --replication-factor 1
+docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic "$KAFKA_DLQ_TOPIC" --partitions 16 --replication-factor 1
 
 echo "[3/7] Seeding P1 pressure data"
 (
@@ -138,6 +120,9 @@ done < <(
   HTTP_ADDR="$HTTP_ADDR" \
   DATABASE_URL="$DATABASE_URL" \
   REDIS_ADDR="$REDIS_ADDR" \
+  KAFKA_BROKERS="$KAFKA_BROKERS" \
+  KAFKA_BID_TOPIC="$KAFKA_BID_TOPIC" \
+  KAFKA_DLQ_TOPIC="$KAFKA_DLQ_TOPIC" \
   DB_MAX_CONNS="$DB_MAX_CONNS" \
   DB_MIN_CONNS="$DB_MIN_CONNS" \
   DB_MAX_CONN_LIFETIME="$DB_MAX_CONN_LIFETIME" \
@@ -168,4 +153,4 @@ echo "- Backend: http://47.113.223.90:${HTTP_PORT}"
 echo "- JMX: $JMX_PATH"
 echo "- CSV: $OUT_DIR/$SESSION_CSV"
 echo "- Logs: $OUT_DIR/server.log and $OUT_DIR/server.err.log"
-echo "- Exploration profile: ADMISSION_ENABLED=false BID_ENGINE_MODE=$BID_ENGINE_MODE BID_LANE_WORKERS=$BID_LANE_WORKERS BID_LANE_QUEUE_SIZE=$BID_LANE_QUEUE_SIZE BID_LANE_QUEUE_TIMEOUT=$BID_LANE_QUEUE_TIMEOUT"
+echo "- Exploration profile: ADMISSION_ENABLED=false BID_ENGINE_MODE=$BID_ENGINE_MODE REDIS_ADDR=$REDIS_ADDR KAFKA_BROKERS=$KAFKA_BROKERS"
