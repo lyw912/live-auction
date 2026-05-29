@@ -56,7 +56,7 @@ func main() {
 		} else {
 			bidLedger = ledger
 			defer bidLedger.Close()
-			go redisengine.NewWorker(deps.Postgres, deps.Redis, bidLedger, settlementWorkerID).Run(ctx, 200*time.Millisecond)
+			go redisengine.NewWorker(deps.Postgres, deps.Redis, bidLedger, settlementWorkerID).WithLogger(log).Run(ctx, 200*time.Millisecond)
 		}
 	}
 

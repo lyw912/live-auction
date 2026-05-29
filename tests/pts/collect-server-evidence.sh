@@ -30,7 +30,8 @@ select id, status, current_price_cents, accepted_bid_count, seq, end_at from auc
 select count(*) as bids,
        count(*) filter (where status='ACCEPTED') as accepted,
        count(*) filter (where status='REJECTED') as rejected
-from bids;
+from bids
+where auction_id in ('auc_live','auc_side');
 select status, count(*) from outbox_delivery group by status order by status;
 select count(*) as pending,
        max(now() - event_created_at) as max_pending_age,

@@ -13,6 +13,12 @@ discussion.
 - The hot bid mode is `BID_ENGINE_MODE=redis_ledger`.
 - Admission is disabled for downstream-pressure discovery:
   `ADMISSION_ENABLED=false`.
+- The hot request path is Redis Lua plus Redis pending WAL, not request-thread
+  Kafka append. The worker pumps `bid:{auction}:engine:pending` to Kafka in
+  `engine_seq` order under a per-auction Redis lock and deletes each pending
+  decision only after Kafka append succeeds.
+- Redis AOF is a hard preflight gate because pending decisions are the recovery
+  buffer for the window between Redis decision and Kafka append.
 
 ## Why PTS-1 Comes First
 
@@ -30,15 +36,23 @@ closed-model pacing to find the throughput knee.
 The current PTS-1 is deliberately a one-shot burst validation:
 
 - ramp to 1000 VUs early;
-- hold them at a JMX barrier;
+- hold them at a JMX barrier for about 20 seconds;
 - release one bid per VU;
-- keep remaining time for response and settlement observation.
+- keep each VU alive until about 60 seconds after test start so Alibaba PTS does
+  not auto-end before the full cohort starts.
 
-The chosen `6 min / 1 min ramp / 5:30 barrier` is not a claim that the business
-hammer window is 30 seconds. It is a paid-cloud validation profile that gives PTS
-time to start all VUs and collect responses.
+Earlier `6 min / 1 min ramp / 5:30 barrier`, `5s barrier`, and old bid-only
+attempts were harness experiments, not current guidance. Current PTS-1 guidance
+uses named one-shot artifacts:
 
-For a true last-second sniper/soft-close test, create PTS-1B:
+- `PTS-1A`: `tests/pts/pts-1a-accepted-ladder-1000vu-1m.jmx`;
+- `PTS-1B`: `tests/pts/pts-1b-contention-burst-1000vu-1m.jmx`;
+- shared CSV: `docs/perf/pts/pts-1ab-1000vu-sessions.csv`.
+
+Both keep `LoopController.loops=1` and use a post-bid hold sampler so Alibaba
+PTS keeps the full cohort alive while still generating only one bid per user.
+
+For a true last-second sniper/soft-close test, create a separate PTS-1C:
 
 - set auction `end_at` close to the barrier;
 - open the barrier inside the final 1-5 seconds;

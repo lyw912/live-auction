@@ -32,11 +32,12 @@ These gates apply to every downstream-pressure run on the Kafka ledger branch.
 | Redis ledger classification | `auction_bid_redis_ledger_total` by outcome plus PTS sampler distribution | Cannot explain whether requests were accepted, rejected, retried, or failed. |
 | Kafka durability | topic exists, DLQ empty or explained, no append failure delta | Redis accepted work may not be durable. |
 | PostgreSQL settlement | `redis_engine_settlements` terminal statuses match accepted ledger attempts | Fast Redis accepts are not enough; money/audit truth did not converge. |
-| Auction state continuity | `auctions.seq`, `auction_events.seq`, and accepted bid sequence are continuous | Client recovery and ordering are unsafe. |
+| Auction state continuity | public `auction_events.seq` is continuous and accepted/sold settlements have matching public event rows | Client recovery and ordering are unsafe. |
 | Idempotency | no duplicate `client_bid_id` / idempotency conflict beyond expected replay | Load may have created duplicate logical bids. |
 | Winner/order invariant | at most one final winner/order; cap/end/cancel terminal state is unique | Auction correctness broken regardless of latency. |
 | Realtime projection | Redis snapshot/history and outbox/fanout lag converge after the run | Browser can show stale or missing authoritative state. |
 | Reconciliation | no unreconciled accepted Redis/Kafka ledger rows after bounded settle window | L4B path lost or stranded accepted bids. |
+| Engine pause | `engine_paused=false` after the run | The system fail-closed during pressure; the report is not performance evidence. |
 | Engine fencing | `engine_epoch` and `engine_seq` are monotonic; stale epoch settlement is rejected | Split-brain or stale engine writes can override current auction truth. |
 | Kafka ordering | `ledger_partition/ledger_offset` preserves `engine_seq` order for one auction | Producer retry, partitioning, or rebalance can reorder settlement. |
 | Soft close boundary | no accepted bid after final `end_at`; accepted deltas obey `increment_cents` | Redis and PG disagree about close time or rule enforcement. |
@@ -92,7 +93,7 @@ semantics and event privacy.
 | Redis/Kafka/PG/Outbox convergence | Preflight: Kafka topic/index guards. Post-run: `redis_kafka_pg_accepted_match`, `auction_accepted_count_matches_pg`, `outbox_drained` | P0/P1 automated |
 | Redis accepted but Kafka append lost | Preflight: pending write/delete/recovery guards. Post-run: `redis_pending_decisions_empty` plus settlement/Kafka-position gates | P0 automated; crash-before-append recovery still needs fault injection |
 | Money/order uniqueness and cap race | Preflight: engine seq/order indexes. Post-run: `at_most_one_order`, `increment_grid_valid`, `no_accepted_after_final_end` | P0 automated |
-| Seq continuity and audit recovery | Preflight: DB unique engine seq indexes. Post-run: `no_accepted_bid_seq_gap`, `no_auction_event_seq_gap` | P0 automated |
+| Seq continuity and audit recovery | Preflight: DB unique engine seq indexes. Post-run: `redis_engine_seq_matches_settlement`, `accepted_settlement_has_public_event`, `no_public_auction_event_seq_gap` | P0 automated |
 | Clock/order inversion | Post-run: `no_created_at_seq_inversion` | P0 automated |
 | Consumer offset and settlement correspondence | Preflight: Kafka all-acks/sync/key and offset index. Post-run: `kafka_position_present`, `kafka_offset_matches_engine_order`, `kafka_consumer_group_lag_zero`, consumer-group offset snapshot | P0 automated plus P1 lag gate |
 | Split-brain stale writer | Preflight: stale epoch rejection and CAS update guards. Post-run: `engine_epoch_seq_monotonic` | P0 automated for data; network partition requires fault injection |
@@ -133,29 +134,38 @@ keeps offered load explicit even when response time increases.
 
 | Priority | Workload | Main Challenge / Score Dimension | PTS Mode | Why It Matters First |
 |---:|---|---|---|---|
-| 1 | PTS-1 final-burst single-hot-auction | Core challenge: final-second bid correctness; backend service; performance | VU | One-shot 1000VU bid burst against one auction. This validates the new L4B/Kafka hot path without turning the run into sustained looping pressure. |
-| 1B | PTS-1B true last-second soft-close sniper | Core challenge: soft close, cap/end race | VU | Same one-shot shape, but `end_at` is aligned with the barrier so bids land in the final 1-5 seconds. This is the explicit hammer-boundary test. |
+| 1A | PTS-1A accepted ladder | Accepted hot path; Kafka/PG/outbox throughput under real rules | VU | 1000VU release as a small ordered ladder proves accepted throughput without disabling the low-price rule. |
+| 1B | PTS-1B contention burst | Core challenge: final-window bid correctness; backend service; performance | VU | 1000VU simultaneous bid pressure proves engine order, deterministic low-price rejects, and final highest-price winner. |
+| 1C | PTS-1C true last-second soft-close sniper | Core challenge: soft close, cap/end race | VU | Same one-shot shape, but `end_at` is aligned with the barrier so bids land in the final 1-5 seconds. This is the explicit hammer-boundary test. |
 | 2 | PTS-2 sustained accepted-bid/outbox saturation | Performance; stability; observability; data governance | RPS or parameterized JMeter thread pacing | Finds the real throughput knee: Redis command latency, Kafka append latency, settlement lag, DB writes, outbox/backlog, and runtime CPU/GC. |
 | 3 | PTS-3 watcher fanout overlay | Millisecond realtime sync; frontend interaction; system availability | VU / connection oriented | Runs with real bid events when possible. Tests whether accepted bid events reach many watchers without fanout lag, slow closes, goroutine/RSS growth, or queue buildup. |
 | 4 | PTS-4 reconnect storm with stale seq | Recoverable realtime; availability; stability | VU | Tests Redis history/snapshot fallback, snapshot rebuild semaphore, DB pressure, and whether clients recover to authoritative state. |
 | 5 | PTS-5 hot/cold multi-room isolation | Stability; core challenge optimization; observability | Mixed VU/RPS | Proves one hot auction does not corrupt or collapse cold-room latency/fanout, and that room-scoped diagnostics are useful. |
 | 6 | PTS-6 admission-on overload profile | Gateway; system availability | VU or RPS | This is not capacity discovery. It proves product protection behavior only after downstream bottlenecks are known. |
 
-## First Run: PTS-1 Final-Burst 1000VU
+## First Runs: PTS-1 Final-Second Evidence
 
 Use this run first because it maps directly to the official scene: a live room
 where many bidders wait and then bid near the hammer.
 
-This prepared PTS-1 is a one-shot burst, not a loop. The bid thread group has
-`LoopController.loops=1`. The barrier opens around 5:30 in a 6-minute run and
-the remaining time is observation/response margin. It does not intentionally
-place bids in the final 1-5 seconds of `end_at`; PTS-1B owns that soft-close
-sniper case.
+The final-second evidence is split into separate workloads because a real
+simultaneous auction and an all-accepted hot path answer different questions.
+When different prices arrive at the same time, the first high price can
+correctly make later lower prices `BID_TOO_LOW`; that proves contention
+semantics, not accepted throughput. The accepted ladder keeps the real
+low-price rule enabled but spaces bids narrowly enough that each bid should be
+valid in engine order.
+
+Prepared JMX files are one-shot bursts, not loops. The bid thread group has
+`LoopController.loops=1`. A post-bid hold sampler keeps each VU alive until
+about 60 seconds so Alibaba PTS does not auto-end after a partial one-shot
+cohort.
 
 Artifacts:
 
-- JMX: `tests/pts/live-auction-l4b-final-second-1000vu.jmx`
-- CSV: `docs/perf/pts/pts_l4b_final_second_1000vu_sessions.csv`
+- PTS-1A accepted ladder JMX: `tests/pts/pts-1a-accepted-ladder-1000vu-1m.jmx`
+- PTS-1B contention/reject JMX: `tests/pts/pts-1b-contention-burst-1000vu-1m.jmx`
+- CSV: `docs/perf/pts/pts-1ab-1000vu-sessions.csv`
 - Reset: `tests/pts/reset-l4b-final-second-pressure.sh`
 - Runbook: `docs/perf/pts/l4b-kafka/final-burst-1000vu-runbook.md`
 
@@ -166,22 +176,41 @@ PTS UI:
 | Pressure mode | Virtual users |
 | Traffic model | Manual speed or uniform ramp-up |
 | Maximum virtual users | 1000 |
-| Test duration | 6 minutes |
+| Test duration | 1 minute |
 | Ramp-up duration | 1 minute |
-| Specify loop count | No |
+| Specify loop count | Yes: 1 |
 | Specified IP count | Default unless PTS quota requires otherwise |
+| CSV data file | Enable Split File / 切分文件 |
 
-The JMX barrier opens at about 5 minutes 30 seconds. The ramp-up must complete
-well before then; otherwise the report is not a true 1000-user simultaneous bid
-burst.
+For PTS-1A, use manual speed with 100% start so all 1000 virtual users are alive
+before the one-shot barrier release. The current accepted ladder opens near the
+final 15 seconds of a 1-minute scene and uses `burst_wait_ms=40000`,
+`accepted_barrier_quantum_ms=10000`, and `accepted_ladder_step_ms=10`. The
+10-second wall-clock barrier aligns multiple PTS agents; the 40-second wait
+keeps the ladder away from scene teardown. The hold after the POSTs is only to
+keep the PTS scene alive; it is not additional bid traffic.
 
-The duration is intentionally longer than the offered bid traffic. PTS-1 is not
-trying to run six minutes of bid pressure; it is trying to prove that all 1000
-virtual users are already alive before the one-shot barrier release. The
-remaining time is observation margin for HTTP responses and early settlement
-state. A six-minute ramp-up would invalidate this workload because late users
-could miss the barrier and the result would no longer represent simultaneous
-contention.
+The bid amount and release offset are derived from each CSV `user_id`; they do
+not rely on a JMeter/JVM property counter as a global sequence. In PTS
+multi-agent execution, JMeter properties are process-local, so a property
+counter can generate duplicate or overlapping prices and convert an accepted-bid
+workload into a reject-dominant workload. `KY3UX7QG` also proved that 1ms was
+below real PTS/JMeter cross-agent scheduling precision: it produced 1000 unique
+bids but 251 were correctly rejected after arrival reordering. `TR3VX7RG`
+proved that a 10-second barrier quantum with a 54-second wait can also invalidate
+the run by pushing all business POSTs to the 60-second scene boundary.
+`WT3VX7WG` proved that lexical CSV ordering and a 1-second barrier still produce
+too much harness drift for accepted-hot-path evidence. `913WX7HG` proved that
+5ms still leaves too much cross-agent arrival inversion on PTS for an
+accepted-dominant workload, although the backend consistency gates pass. The CSV
+data file must be split across pressure agents; otherwise each agent starts at
+CSV line 1 and a 1000-sample report can still produce only about 500 unique
+business bids.
+
+Expected bid sampler count is approximately 1000. A report with a much larger
+`POST PTS-1 hotspot bid` count is not an extreme successful PTS-1 run; it is a
+harness mismatch and belongs either to PTS-2 sustained saturation or to a failed
+PTS-1 setup review.
 
 Primary verdict:
 
@@ -200,12 +229,14 @@ Required after-run checks:
 - PTS sampler distribution and p50/p90/p99 for `POST PTS-1 hotspot bid`;
 - zero HTTP 429 / `RATE_LIMITED` / `BID_AUCTION_TOO_HOT` delta;
 - accepted/rejected distribution from `auction_bid_redis_ledger_total`;
+- accepted/sold ratio high enough to prove this was the accepted hot-path run;
 - `auction_bid_redis_ledger_seconds`;
 - Kafka bid topic and DLQ status;
 - settlement rows and status counts;
 - Redis latency/memory/evictions/blocked clients;
 - DB pool/lock/slow query snapshot;
-- invariant check: seq continuity, no duplicate idempotency response, one final
+- invariant check: public event seq continuity, accepted settlement event
+  coverage, no duplicate idempotency response, one final
   winner/order if cap is reached, no unreconciled accepted Redis ledger rows.
 
 ## Second Run: PTS-2 Sustained Accepted-Bid Saturation

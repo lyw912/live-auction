@@ -33,7 +33,13 @@ func TestCheckerDetectsSeqGap(t *testing.T) {
 	ctx := context.Background()
 	auctionID := createCleanSoldAuction(t, db)
 
-	if _, err := db.Exec(ctx, `DELETE FROM outbox_delivery WHERE auction_id = $1 AND auction_seq = 2`, auctionID); err != nil {
+	if _, err := db.Exec(ctx, `
+		DELETE FROM outbox_delivery d
+		USING outbox_events e
+		WHERE e.id = d.outbox_id
+		  AND e.auction_id = $1
+		  AND e.seq = 2
+	`, auctionID); err != nil {
 		t.Fatalf("delete delivery: %v", err)
 	}
 	if _, err := db.Exec(ctx, `DELETE FROM outbox_events WHERE auction_id = $1 AND seq = 2`, auctionID); err != nil {
@@ -72,16 +78,37 @@ func TestCheckerDetectsOutboxOrderingAndDeliveryGaps(t *testing.T) {
 	auctionID := createCleanSoldAuction(t, db)
 
 	if _, err := db.Exec(ctx, `
-		UPDATE outbox_delivery
-		SET status = CASE WHEN auction_seq = 2 THEN 'PENDING' WHEN auction_seq = 3 THEN 'PUBLISHED' ELSE status END,
-		    published_at = CASE WHEN auction_seq = 3 THEN now() ELSE published_at END
-		WHERE auction_id = $1 AND auction_seq IN (2, 3)
+		WITH targets AS (
+			SELECT d.outbox_id, e.seq
+			FROM outbox_delivery d
+			JOIN outbox_events e ON e.id = d.outbox_id
+			WHERE e.auction_id = $1
+			  AND e.seq IN (2, 3)
+		)
+		UPDATE outbox_delivery d
+		SET status = CASE WHEN targets.seq = 2 THEN 'PENDING' WHEN targets.seq = 3 THEN 'PUBLISHED' ELSE d.status END,
+		    published_at = CASE WHEN targets.seq = 3 THEN now() ELSE d.published_at END
+		FROM targets
+		WHERE targets.outbox_id = d.outbox_id
 	`, auctionID); err != nil {
 		t.Fatalf("corrupt outbox delivery: %v", err)
 	}
+	var corrupted int
+	if err := db.QueryRow(ctx, `
+		SELECT count(*)
+		FROM outbox_events e
+		JOIN outbox_delivery d ON d.outbox_id = e.id
+		WHERE e.auction_id = $1
+		  AND ((e.seq = 2 AND d.status = 'PENDING') OR (e.seq = 3 AND d.status = 'PUBLISHED'))
+	`, auctionID).Scan(&corrupted); err != nil {
+		t.Fatalf("count corrupted delivery rows: %v", err)
+	}
+	if corrupted != 2 {
+		t.Fatalf("corrupted delivery rows = %d, want 2", corrupted)
+	}
 	if _, err := db.Exec(ctx, `
 		DELETE FROM outbox_delivery
-		WHERE outbox_id = (SELECT id FROM outbox_events WHERE auction_id = $1 AND seq = 4)
+		WHERE outbox_id = (SELECT id FROM outbox_events WHERE auction_id = $1 AND seq = 1)
 	`, auctionID); err != nil {
 		t.Fatalf("delete outbox delivery: %v", err)
 	}
@@ -309,10 +336,6 @@ func createCleanSoldAuction(t *testing.T, db *pgxpool.Pool) string {
 	now := time.Now().UTC()
 	bidHash := hashFixture(fmt.Sprintf("bid:v1|%s|%s|client_bid_1|2000", auctionID, userID))
 	bidResponse := fmt.Sprintf(`{"result":"ACCEPTED_SOLD","bid_id":"%s","auction_id":"%s","seq":4,"current_price_cents":2000,"current_winner_id":"%s","server_time_ms":%d}`, bidID, auctionID, userID, now.UnixMilli())
-	t.Cleanup(func() {
-		cleanupInvariantFixtures(t, db)
-	})
-
 	tx, err := db.Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
@@ -382,9 +405,9 @@ func createCleanSoldAuction(t *testing.T, db *pgxpool.Pool) string {
 			t.Fatalf("insert outbox event %d: %v", event.seq, err)
 		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO outbox_delivery (outbox_id, status, attempts, published_at)
-			VALUES ($1, 'PUBLISHED', 1, $2)
-		`, outboxID, now); err != nil {
+			INSERT INTO outbox_delivery (outbox_id, status, attempts, published_at, auction_id, auction_seq, event_created_at)
+			VALUES ($1, 'PUBLISHED', 1, $2, $3, $4, $2)
+		`, outboxID, now, auctionID, event.seq); err != nil {
 			t.Fatalf("insert outbox delivery %d: %v", event.seq, err)
 		}
 	}

@@ -1,0 +1,36 @@
+{
+	"ReportOverView": {
+		"AgentCount": 2,
+		"EndTime": "2026-05-30 02:45:16",
+		"ReportId": "U23XX73G",
+		"ReportName": "accepted-20260530024416",
+		"StartTime": "2026-05-30 02:44:16",
+		"Vum": 881
+	},
+	"RequestId": "18359F08-2465-5BA4-B9F8-4C02C4FBCFF1",
+	"SamplerMetricsList": [
+		{
+			"AllCount": 211,
+			"ApiName": "POST PTS-1 hotspot bid",
+			"AvgRt": 4.691943127962086,
+			"AvgTps": 3.9275192849721305,
+			"FailCountReq": 0,
+			"MaxRt": 24.0,
+			"MinRt": 3.0,
+			"Seg75Rt": 10.0,
+			"Seg90Rt": 14.0,
+			"Seg99Rt": 32.640000000000015,
+			"SuccessRateReq": 100.0
+		}
+	],
+	"SceneMetrics": {
+		"AllCount": 211,
+		"AvgRt": 4.691943127962086,
+		"AvgTps": 3.9275192849721305,
+		"FailCountReq": 0,
+		"Seg90Rt": 14.0,
+		"Seg99Rt": 32.640000000000015,
+		"SuccessRateReq": 100.0
+	},
+	"Success": true
+}

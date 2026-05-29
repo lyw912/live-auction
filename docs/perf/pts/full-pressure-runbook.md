@@ -157,6 +157,13 @@ Then preserve the PDF report in `docs/perf/pts/evidence/after-r2/`.
 Alibaba Cloud `GetJMeterSamplingLogs` gets JMeter sample logs by page.
 Required parameters are `ReportId`, `PageNumber`, and `PageSize`; useful filters
 include `SamplerId`, `Success`, `ResponseCode`, `BeginTime`, and `EndTime`.
+Alibaba Cloud PTS sampling logs are diagnostic samples, not the full request
+ledger. Official documentation states that sampling logs are collected at a
+default `1%` sampling rate and retained for 30 days; pay-as-you-go billing
+documentation also describes the pressure-log sampling rate as defaulting to
+`1%`. Use `GetJMeterSampleMetrics` or report details for PTS-side aggregate
+counts/RT/percentiles, use sampling logs for examples and failure diagnosis, and
+use server-side DB/Redis/Kafka evidence for full business correctness.
 
 If using OpenAPI Explorer:
 

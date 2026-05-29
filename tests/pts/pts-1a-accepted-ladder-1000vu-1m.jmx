@@ -1,0 +1,213 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
+  <hashTree>
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="PTS-1A accepted ladder 1000VU 1m" enabled="true">
+      <stringProp name="TestPlan.comments">L4B Kafka accepted hot-path ladder. Threads start at 1000VU, align all PTS agents on a shared 10s wall-clock barrier around the final 15 seconds of a 1-minute scene, then release one bid each in a 10ms ordered ladder derived from the CSV user_id rank so every bid is valid under the real low-price rejection rule. In Alibaba PTS, upload the CSV with Split File enabled so multiple pressure agents receive disjoint users. Requires ALLOW_MOCK_AUTH=false, ADMISSION_ENABLED=false, BID_ENGINE_MODE=redis_ledger, Kafka topics ready, high auction cap, and no admission-control 429.</stringProp>
+      <boolProp name="TestPlan.functional_mode">false</boolProp>
+      <boolProp name="TestPlan.tearDown_on_shutdown">true</boolProp>
+      <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
+      <elementProp name="TestPlan.user_defined_variables" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments" testname="User Defined Variables" enabled="true">
+        <collectionProp name="Arguments.arguments"/>
+      </elementProp>
+    </TestPlan>
+    <hashTree>
+      <ConfigTestElement guiclass="HttpDefaultsGui" testclass="ConfigTestElement" testname="HTTP Request Defaults" enabled="true">
+        <elementProp name="HTTPsampler.Arguments" elementType="Arguments" guiclass="HTTPArgumentsPanel" testclass="Arguments" enabled="true">
+          <collectionProp name="Arguments.arguments"/>
+        </elementProp>
+        <stringProp name="HTTPSampler.domain">172.16.179.112</stringProp>
+        <stringProp name="HTTPSampler.port">18080</stringProp>
+        <stringProp name="HTTPSampler.protocol">http</stringProp>
+        <stringProp name="HTTPSampler.contentEncoding">UTF-8</stringProp>
+        <stringProp name="HTTPSampler.connect_timeout">5000</stringProp>
+        <stringProp name="HTTPSampler.response_timeout">15000</stringProp>
+      </ConfigTestElement>
+      <hashTree/>
+      <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="PTS real session token pool" enabled="true">
+        <stringProp name="delimiter">,</stringProp>
+        <stringProp name="fileEncoding">UTF-8</stringProp>
+        <stringProp name="filename">pts-1ab-1000vu-sessions.csv</stringProp>
+        <boolProp name="ignoreFirstLine">true</boolProp>
+        <boolProp name="quotedData">false</boolProp>
+        <boolProp name="recycle">true</boolProp>
+        <stringProp name="shareMode">shareMode.all</stringProp>
+        <boolProp name="stopThread">false</boolProp>
+        <stringProp name="variableNames">user_id,token,role</stringProp>
+      </CSVDataSet>
+      <hashTree/>
+      <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="Auth JSON Headers" enabled="true">
+        <collectionProp name="HeaderManager.headers">
+          <elementProp name="" elementType="Header">
+            <stringProp name="Header.name">Content-Type</stringProp>
+            <stringProp name="Header.value">application/json</stringProp>
+          </elementProp>
+          <elementProp name="" elementType="Header">
+            <stringProp name="Header.name">Accept</stringProp>
+            <stringProp name="Header.value">application/json</stringProp>
+          </elementProp>
+          <elementProp name="" elementType="Header">
+            <stringProp name="Header.name">Authorization</stringProp>
+            <stringProp name="Header.value">Bearer ${token}</stringProp>
+          </elementProp>
+        </collectionProp>
+      </HeaderManager>
+      <hashTree/>
+
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="10 L4B ordered accepted ladder 1m" enabled="true">
+        <stringProp name="ThreadGroup.num_threads">1000</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">1</stringProp>
+        <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
+        <boolProp name="ThreadGroup.scheduler">true</boolProp>
+        <stringProp name="ThreadGroup.duration">60</stringProp>
+        <stringProp name="ThreadGroup.delay">0</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" enabled="true">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <stringProp name="LoopController.loops">1</stringProp>
+        </elementProp>
+      </ThreadGroup>
+      <hashTree>
+        <ConstantTimer guiclass="ConstantTimerGui" testclass="ConstantTimer" testname="bid pacing" enabled="true">
+          <stringProp name="ConstantTimer.delay">0</stringProp>
+        </ConstantTimer>
+        <hashTree/>
+        <JSR223PreProcessor guiclass="TestBeanGUI" testclass="JSR223PreProcessor" testname="compute ordered accepted bid" enabled="true">
+          <stringProp name="cacheKey">live-auction-compute-ordered-accepted-bid-v2</stringProp>
+          <stringProp name="filename"></stringProp>
+          <stringProp name="parameters"></stringProp>
+          <stringProp name="scriptLanguage">groovy</stringProp>
+          <stringProp name="script"><![CDATA[
+long burstWaitMS = Long.parseLong(props.getProperty('burst_wait_ms', '40000'))
+long barrierQuantumMS = Long.parseLong(props.getProperty('accepted_barrier_quantum_ms', '10000'))
+def target = props.get('l4b_final_second_target_ms') as java.util.concurrent.atomic.AtomicLong
+if (target == null) {
+  long now = System.currentTimeMillis()
+  long desired = now + burstWaitMS
+  long aligned = ((desired + barrierQuantumMS - 1L) / barrierQuantumMS) * barrierQuantumMS
+  target = new java.util.concurrent.atomic.AtomicLong(aligned)
+  def existingTarget = props.putIfAbsent('l4b_final_second_target_ms', target)
+  if (existingTarget != null) {
+    target = existingTarget as java.util.concurrent.atomic.AtomicLong
+  }
+}
+long base = Long.parseLong(props.getProperty('accepted_amount_base_cents', '10000'))
+long inc = Long.parseLong(props.getProperty('accepted_amount_increment_cents', '5000'))
+long stepMS = Long.parseLong(props.getProperty('accepted_ladder_step_ms', '10'))
+long localCount = Long.parseLong(vars.get('bid_local_count') ?: '0') + 1L
+vars.put('bid_local_count', Long.toString(localCount))
+
+String userID = vars.get('user_id') ?: 'unknown_user'
+def matcher = userID =~ /k6_bidder_(\d+)_(\d+)/
+long bucket = 0L
+long lane = 0L
+if (matcher.matches()) {
+  bucket = Long.parseLong(matcher.group(1))
+  lane = Long.parseLong(matcher.group(2))
+}
+long globalRank = Math.max(1L, (bucket - 1L) * 7L + lane + 1L)
+long releaseAtMS = target.get() + (globalRank - 1L) * stepMS
+long sleepMS = releaseAtMS - System.currentTimeMillis()
+if (sleepMS > 0L) {
+  Thread.sleep(sleepMS)
+}
+
+long amount = base + inc * globalRank
+String clientBidId = 'pts-accepted-' + userID + '-' + localCount + '-' + globalRank
+vars.put('amount_cents', Long.toString(amount))
+vars.put('client_bid_id', clientBidId)
+vars.put('idempotency_key', clientBidId)
+vars.put('client_seen_seq', Long.toString(Math.max(0L, globalRank - 1L)))
+          ]]></stringProp>
+        </JSR223PreProcessor>
+        <hashTree/>
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="POST PTS-1 hotspot bid" enabled="true">
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{"client_bid_id":"${client_bid_id}","amount_cents":${amount_cents},"client_seen_seq":${client_seen_seq}}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <stringProp name="HTTPSampler.path">/api/auctions/auc_live/bids</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">false</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="bid idempotency header" enabled="true">
+            <collectionProp name="HeaderManager.headers">
+              <elementProp name="" elementType="Header">
+                <stringProp name="Header.name">Idempotency-Key</stringProp>
+                <stringProp name="Header.value">${client_bid_id}</stringProp>
+              </elementProp>
+            </collectionProp>
+          </HeaderManager>
+          <hashTree/>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="bid HTTP 200 expected for business outcome" enabled="true">
+            <collectionProp name="Asserion.test_strings">
+              <stringProp name="49586">200</stringProp>
+            </collectionProp>
+            <stringProp name="Assertion.custom_message">Bid returned non-200. In PTS-1 this is a backend/gateway/idempotency conflict signal to classify after the run.</stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+            <boolProp name="Assertion.assume_success">false</boolProp>
+            <intProp name="Assertion.test_type">8</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+          <JSR223PostProcessor guiclass="TestBeanGUI" testclass="JSR223PostProcessor" testname="flag admission contamination" enabled="true">
+            <stringProp name="cacheKey">live-auction-flag-admission</stringProp>
+            <stringProp name="filename"></stringProp>
+            <stringProp name="parameters"></stringProp>
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="script"><![CDATA[
+if (prev.getResponseCode() == '429') {
+  prev.setSuccessful(false)
+  prev.setResponseMessage('ADMISSION_CONTAMINATION_HTTP_429')
+  return
+}
+def body = prev.getResponseDataAsString()
+if (body != null && body.length() > 0) {
+  try {
+    def json = new groovy.json.JsonSlurper().parseText(body)
+    def code = (json.code ?: json.result ?: '').toString()
+    if (code == 'RATE_LIMITED' || code == 'BID_AUCTION_TOO_HOT') {
+      prev.setSuccessful(false)
+      prev.setResponseMessage('ADMISSION_CONTAMINATION_' + code)
+    }
+  } catch (Throwable ignored) {
+  }
+}
+            ]]></stringProp>
+          </JSR223PostProcessor>
+          <hashTree/>
+        </hashTree>
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="hold VU after one-shot bid so PTS keeps full cohort" enabled="true">
+          <stringProp name="cacheKey">live-auction-hold-after-one-shot-bid</stringProp>
+          <stringProp name="filename"></stringProp>
+          <stringProp name="parameters"></stringProp>
+          <stringProp name="scriptLanguage">groovy</stringProp>
+          <stringProp name="script"><![CDATA[
+long holdUntilMS = Long.parseLong(props.getProperty('hold_until_ms', '60000'))
+def startedAt = props.get('l4b_plan_started_at_ms') as java.util.concurrent.atomic.AtomicLong
+if (startedAt == null) {
+  startedAt = new java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
+  def existing = props.putIfAbsent('l4b_plan_started_at_ms', startedAt)
+  if (existing != null) {
+    startedAt = existing as java.util.concurrent.atomic.AtomicLong
+  }
+}
+long sleepMS = startedAt.get() + holdUntilMS - System.currentTimeMillis()
+if (sleepMS > 0L) {
+  Thread.sleep(sleepMS)
+}
+SampleResult.setSuccessful(true)
+SampleResult.setResponseCode('200')
+SampleResult.setResponseMessage('HELD')
+          ]]></stringProp>
+        </JSR223Sampler>
+        <hashTree/>
+      </hashTree>
+    </hashTree>
+  </hashTree>
+</jmeterTestPlan>

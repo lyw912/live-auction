@@ -79,9 +79,9 @@ func NewKafkaLedger(cfg KafkaLedgerConfig) (*KafkaLedger, error) {
 		Async:                  false,
 		BatchSize:              1,
 		BatchTimeout:           10 * time.Millisecond,
-		WriteTimeout:           3 * time.Second,
+		WriteTimeout:           10 * time.Second,
 		ReadTimeout:            3 * time.Second,
-		MaxAttempts:            3,
+		MaxAttempts:            10,
 		AllowAutoTopicCreation: cfg.AllowAutoTopicCreation,
 	}
 	dlq := &kafka.Writer{
@@ -92,23 +92,22 @@ func NewKafkaLedger(cfg KafkaLedgerConfig) (*KafkaLedger, error) {
 		Async:                  false,
 		BatchSize:              1,
 		BatchTimeout:           10 * time.Millisecond,
-		WriteTimeout:           3 * time.Second,
+		WriteTimeout:           10 * time.Second,
 		ReadTimeout:            3 * time.Second,
-		MaxAttempts:            3,
+		MaxAttempts:            10,
 		AllowAutoTopicCreation: cfg.AllowAutoTopicCreation,
 	}
 	reader := kafka.NewReader(kafka.ReaderConfig{
-		Brokers:     cfg.Brokers,
-		Topic:       cfg.BidTopic,
-		GroupID:     cfg.ConsumerGroup,
-		GroupTopics: []string{cfg.BidTopic},
+		Brokers:  cfg.Brokers,
+		Topic:    cfg.BidTopic,
+		GroupID:  cfg.ConsumerGroup,
+		MinBytes: 1,
+		MaxBytes: 1 << 20,
+		MaxWait:  250 * time.Millisecond,
 		Dialer: &kafka.Dialer{
 			Timeout:  3 * time.Second,
 			ClientID: cfg.ClientID,
 		},
-		MinBytes: 1,
-		MaxBytes: 1 << 20,
-		MaxWait:  250 * time.Millisecond,
 	})
 	return &KafkaLedger{writer: writer, dlq: dlq, reader: reader, topic: cfg.BidTopic, dlqTopic: cfg.DLQTopic}, nil
 }

@@ -65,7 +65,8 @@ order by status, result, ledger_source;
 \echo '## invariant gates'
 with auction_row as (
   select id, status, current_price_cents, current_winner_id, accepted_bid_count,
-         seq, engine_seq, engine_epoch, end_at, cap_price_cents
+         seq, engine_seq, engine_epoch, end_at, cap_price_cents,
+         engine_paused, engine_pause_reason
   from auctions
   where id = :'auction_id'
 ),
@@ -85,25 +86,6 @@ bid_counts as (
   from bids
   where auction_id = :'auction_id'
 ),
-accepted_gap as (
-  with accepted as (
-    select seq
-    from bids
-    where auction_id = :'auction_id'
-      and status = 'ACCEPTED'
-      and seq is not null
-  ),
-  bounds as (
-    select min(seq) as min_seq, max(seq) as max_seq, count(*) as actual_count
-    from accepted
-  ),
-  expected as (
-    select generate_series((select min_seq from bounds), (select max_seq from bounds)) as seq
-  )
-  select coalesce(count(expected.seq) filter (where accepted.seq is null), 0) as missing_count
-  from expected
-  left join accepted using (seq)
-),
 event_gap as (
   with events as (
     select seq
@@ -120,6 +102,30 @@ event_gap as (
   select coalesce(count(expected.seq) filter (where events.seq is null), 0) as missing_count
   from expected
   left join events using (seq)
+),
+engine_seq_matches_settlement as (
+  select coalesce((select engine_seq from auction_row), 0) = coalesce(max(engine_seq) filter (where status = 'SETTLED'), 0) as pass
+  from redis_engine_settlements
+  where auction_id = :'auction_id'
+    and engine_epoch = (select engine_epoch from auction_row)
+),
+accepted_settlement_coverage as (
+  select count(*) as violations
+  from redis_engine_settlements s
+  left join bids b
+    on b.auction_id = s.auction_id
+   and b.engine_epoch = s.engine_epoch
+   and b.engine_seq = s.engine_seq
+   and b.status = 'ACCEPTED'
+  left join auction_events e
+    on e.auction_id = s.auction_id
+   and e.engine_epoch = s.engine_epoch
+   and e.engine_seq = s.engine_seq
+   and e.event_type in ('bid_accepted','auction_sold')
+  where s.auction_id = :'auction_id'
+    and s.status = 'SETTLED'
+    and s.result in ('ENGINE_ACCEPTED','ENGINE_SOLD')
+    and (b.id is null or e.id is null)
 ),
 duplicate_client_bid as (
   select count(*) as violations
@@ -237,13 +243,14 @@ select *
 from (
   values
     ('P0', 'auction_exists', (select count(*) = 1 from auction_row), 'auction row must exist'),
+    ('P0', 'engine_not_paused', (select not engine_paused from auction_row), 'auction engine must not be paused after a valid PTS run'),
     ('P0', 'no_non_terminal_settlements', (select non_terminal = 0 from settlement), 'no PROCESSING/FAILED/DLQ settlement rows after the chosen settle window'),
     ('P0', 'redis_kafka_pg_accepted_match', (select accepted_or_sold = accepted from settlement, bid_counts), 'accepted/sold Kafka ledger rows must match PG accepted bids'),
     ('P0', 'auction_accepted_count_matches_pg', (select accepted_bid_count = accepted from auction_row, bid_counts), 'auction accepted counter must match PG accepted bids'),
-    ('P0', 'auction_seq_matches_engine_seq', (select seq = engine_seq from auction_row), 'auction seq and engine_seq must converge'),
+    ('P0', 'redis_engine_seq_matches_settlement', (select pass from engine_seq_matches_settlement), 'auction engine_seq must equal the latest settled Redis/Kafka engine ledger seq'),
     ('P0', 'kafka_position_present', (select missing_kafka_position = 0 from settlement), 'every Kafka ledger settlement must record topic/partition/offset'),
-    ('P0', 'no_accepted_bid_seq_gap', (select missing_count = 0 from accepted_gap), 'accepted bid seq must be continuous'),
-    ('P0', 'no_auction_event_seq_gap', (select missing_count = 0 from event_gap), 'auction event seq must be continuous'),
+    ('P0', 'accepted_settlement_has_public_event', (select violations = 0 from accepted_settlement_coverage), 'accepted/sold settlements must have matching bid and public auction_event rows'),
+    ('P0', 'no_public_auction_event_seq_gap', (select missing_count = 0 from event_gap), 'public auction event seq must be continuous'),
     ('P0', 'no_duplicate_client_bid_id', (select violations = 0 from duplicate_client_bid), 'client_bid_id must not create duplicate bid rows'),
     ('P0', 'no_duplicate_engine_seq', (select violations = 0 from duplicate_engine_seq), 'engine_epoch/engine_seq must identify at most one accepted bid'),
     ('P0', 'engine_epoch_seq_monotonic', (select violations = 0 from epoch_seq_violations), 'engine_epoch/engine_seq must be monotonic'),
@@ -377,51 +384,7 @@ where (prev_engine_seq is not null and engine_seq <= prev_engine_seq)
    or (prev_offset_same_epoch is not null and ledger_offset <= prev_offset_same_epoch)
 limit 50;
 
-\echo '## accepted bid sequence gap count'
-with accepted as (
-  select seq
-  from bids
-  where auction_id = :'auction_id'
-    and status = 'ACCEPTED'
-    and seq is not null
-),
-bounds as (
-  select min(seq) as min_seq, max(seq) as max_seq, count(*) as actual_count
-  from accepted
-),
-expected as (
-  select generate_series((select min_seq from bounds), (select max_seq from bounds)) as seq
-)
-select (select min_seq from bounds) as min_seq,
-       (select max_seq from bounds) as max_seq,
-       (select actual_count from bounds) as actual_count,
-       count(expected.seq) filter (where accepted.seq is null) as missing_count
-from expected
-left join accepted using (seq);
-
-\echo '## accepted bid missing sequences'
-with accepted as (
-  select seq
-  from bids
-  where auction_id = :'auction_id'
-    and status = 'ACCEPTED'
-    and seq is not null
-),
-bounds as (
-  select min(seq) as min_seq, max(seq) as max_seq
-  from accepted
-),
-expected as (
-  select generate_series((select min_seq from bounds), (select max_seq from bounds)) as seq
-)
-select expected.seq
-from expected
-left join accepted using (seq)
-where accepted.seq is null
-order by expected.seq
-limit 50;
-
-\echo '## auction_events sequence gap count'
+\echo '## public auction_events sequence gap count'
 with events as (
   select seq
   from auction_events
@@ -440,6 +403,28 @@ select (select min_seq from bounds) as min_seq,
        count(expected.seq) filter (where events.seq is null) as missing_count
 from expected
 left join events using (seq);
+
+\echo '## accepted/sold settlement public event coverage'
+select s.engine_epoch, s.engine_seq, s.result,
+       b.id as bid_id, b.seq as bid_seq,
+       e.id as event_id, e.seq as event_seq, e.event_type
+from redis_engine_settlements s
+left join bids b
+  on b.auction_id = s.auction_id
+ and b.engine_epoch = s.engine_epoch
+ and b.engine_seq = s.engine_seq
+ and b.status = 'ACCEPTED'
+left join auction_events e
+  on e.auction_id = s.auction_id
+ and e.engine_epoch = s.engine_epoch
+ and e.engine_seq = s.engine_seq
+ and e.event_type in ('bid_accepted','auction_sold')
+where s.auction_id = :'auction_id'
+  and s.status = 'SETTLED'
+  and s.result in ('ENGINE_ACCEPTED','ENGINE_SOLD')
+  and (b.id is null or e.id is null)
+order by s.engine_epoch, s.engine_seq
+limit 50;
 
 \echo '## created_at inversion by seq'
 with ordered as (
@@ -512,6 +497,106 @@ where auction_id = :'auction_id'
   and (last_error is not null or dlq_error is not null or status in ('FAILED','DLQ'))
 order by updated_at desc
 limit 50;
+
+\echo '## auction winner/highest accepted consistency'
+with bid_counts as (
+  select count(*) filter (where status = 'ACCEPTED') as accepted
+  from bids
+  where auction_id = :'auction_id'
+),
+max_accepted as (
+  select user_id, amount_cents, engine_seq
+  from bids
+  where auction_id = :'auction_id'
+    and status = 'ACCEPTED'
+  order by amount_cents desc, engine_seq desc
+  limit 1
+)
+select a.current_winner_id, a.current_price_cents, a.accepted_bid_count,
+       m.user_id as highest_accepted_user,
+       m.amount_cents as highest_accepted_amount,
+       m.engine_seq as highest_accepted_engine_seq,
+       ((select accepted from bid_counts) = 0
+         or (a.current_winner_id = m.user_id and a.current_price_cents = m.amount_cents)) as winner_matches_highest_accepted
+from auctions a
+left join max_accepted m on true
+where a.id = :'auction_id';
+
+\echo '## engine sequence completeness'
+with auction_row as (
+  select engine_epoch, engine_seq
+  from auctions
+  where id = :'auction_id'
+),
+settlement_bounds as (
+  select min(engine_seq) as min_seq, max(engine_seq) as max_seq, count(*) as actual_count
+  from redis_engine_settlements
+  where auction_id = :'auction_id'
+    and engine_epoch = (select engine_epoch from auction_row)
+),
+expected as (
+  select generate_series(1, coalesce((select max_seq from settlement_bounds), 0)) as engine_seq
+)
+select (select min_seq from settlement_bounds) as min_seq,
+       (select max_seq from settlement_bounds) as max_seq,
+       (select actual_count from settlement_bounds) as actual_count,
+       (select engine_seq from auction_row) as auction_engine_seq,
+       count(expected.engine_seq) filter (where s.engine_seq is null) as missing_engine_seq
+from expected
+left join redis_engine_settlements s
+  on s.auction_id = :'auction_id'
+ and s.engine_epoch = (select engine_epoch from auction_row)
+ and s.engine_seq = expected.engine_seq;
+
+\echo '## BID_TOO_LOW justification violations'
+select b.id, b.client_bid_id, b.user_id, b.amount_cents, b.engine_seq,
+       b.reject_reason, prior.prior_price, a.start_price_cents, a.increment_cents
+from bids b
+join auctions a on a.id = b.auction_id
+left join lateral (
+  select max(prev.amount_cents) as prior_price
+  from bids prev
+  where prev.auction_id = b.auction_id
+    and prev.engine_epoch = b.engine_epoch
+    and prev.status = 'ACCEPTED'
+    and prev.engine_seq < b.engine_seq
+) prior on true
+where b.auction_id = :'auction_id'
+  and b.status = 'REJECTED'
+  and b.reject_reason = 'BID_TOO_LOW'
+  and b.amount_cents >= coalesce(prior.prior_price, a.start_price_cents) + a.increment_cents
+order by b.engine_seq
+limit 50;
+
+\echo '## idempotency response consistency violations'
+select b.engine_seq, b.status, b.client_bid_id, b.user_id,
+       i.status as idem_status, i.http_status, i.result_code,
+       i.response_json->>'result' as response_result,
+       i.response_json->>'amount_cents' as response_amount,
+       i.response_json->>'engine_seq' as response_engine_seq,
+       i.response_json->>'reject_reason' as response_reject_reason
+from bids b
+left join idempotency_records i
+  on i.scope_type = 'bid'
+ and i.scope_id = b.auction_id
+ and i.user_id = b.user_id
+ and i.idempotency_key = b.client_bid_id
+where b.auction_id = :'auction_id'
+  and (
+    i.idempotency_key is null
+    or i.status <> 'COMPLETED'
+    or i.http_status <> 200
+    or i.result_code is distinct from b.status
+    or i.response_json->>'result' is distinct from b.status
+    or i.response_json->>'bid_id' is distinct from b.id
+    or i.response_json->>'auction_id' is distinct from b.auction_id
+    or (i.response_json->>'amount_cents')::bigint is distinct from b.amount_cents
+    or (i.response_json->>'engine_seq')::bigint is distinct from b.engine_seq
+    or (i.response_json->>'engine_epoch')::bigint is distinct from b.engine_epoch
+    or i.response_json->>'reject_reason' is distinct from b.reject_reason
+  )
+order by b.engine_seq
+limit 50;
 SQL
 
   echo
@@ -520,7 +605,8 @@ SQL
     -v ON_ERROR_STOP=1 -v auction_id="$AUCTION_ID" -f - <<'SQL'
 with auction_row as (
   select id, status, current_price_cents, current_winner_id, accepted_bid_count,
-         seq, engine_seq, engine_epoch, end_at, cap_price_cents
+         seq, engine_seq, engine_epoch, end_at, cap_price_cents,
+         engine_paused, engine_pause_reason
   from auctions
   where id = :'auction_id'
 ),
@@ -538,25 +624,6 @@ bid_counts as (
   from bids
   where auction_id = :'auction_id'
 ),
-accepted_gap as (
-  with accepted as (
-    select seq
-    from bids
-    where auction_id = :'auction_id'
-      and status = 'ACCEPTED'
-      and seq is not null
-  ),
-  bounds as (
-    select min(seq) as min_seq, max(seq) as max_seq
-    from accepted
-  ),
-  expected as (
-    select generate_series((select min_seq from bounds), (select max_seq from bounds)) as seq
-  )
-  select coalesce(count(expected.seq) filter (where accepted.seq is null), 0) as missing_count
-  from expected
-  left join accepted using (seq)
-),
 event_gap as (
   with events as (
     select seq
@@ -573,6 +640,30 @@ event_gap as (
   select coalesce(count(expected.seq) filter (where events.seq is null), 0) as missing_count
   from expected
   left join events using (seq)
+),
+engine_seq_matches_settlement as (
+  select coalesce((select engine_seq from auction_row), 0) = coalesce(max(engine_seq) filter (where status = 'SETTLED'), 0) as pass
+  from redis_engine_settlements
+  where auction_id = :'auction_id'
+    and engine_epoch = (select engine_epoch from auction_row)
+),
+accepted_settlement_coverage as (
+  select count(*) as violations
+  from redis_engine_settlements s
+  left join bids b
+    on b.auction_id = s.auction_id
+   and b.engine_epoch = s.engine_epoch
+   and b.engine_seq = s.engine_seq
+   and b.status = 'ACCEPTED'
+  left join auction_events e
+    on e.auction_id = s.auction_id
+   and e.engine_epoch = s.engine_epoch
+   and e.engine_seq = s.engine_seq
+   and e.event_type in ('bid_accepted','auction_sold')
+  where s.auction_id = :'auction_id'
+    and s.status = 'SETTLED'
+    and s.result in ('ENGINE_ACCEPTED','ENGINE_SOLD')
+    and (b.id is null or e.id is null)
 ),
 duplicate_client_bid as (
   select count(*) as violations
@@ -690,13 +781,14 @@ select severity, name, case when pass then 'PASS' else 'FAIL' end as status, det
 from (
   values
     ('P0', 'auction_exists', (select count(*) = 1 from auction_row), 'auction row must exist'),
+    ('P0', 'engine_not_paused', (select not engine_paused from auction_row), 'auction engine must not be paused after a valid PTS run'),
     ('P0', 'no_non_terminal_settlements', (select non_terminal = 0 from settlement), 'no PROCESSING/FAILED/DLQ settlement rows after the chosen settle window'),
     ('P0', 'redis_kafka_pg_accepted_match', (select accepted_or_sold = accepted from settlement, bid_counts), 'accepted/sold Kafka ledger rows must match PG accepted bids'),
     ('P0', 'auction_accepted_count_matches_pg', (select accepted_bid_count = accepted from auction_row, bid_counts), 'auction accepted counter must match PG accepted bids'),
-    ('P0', 'auction_seq_matches_engine_seq', (select seq = engine_seq from auction_row), 'auction seq and engine_seq must converge'),
+    ('P0', 'redis_engine_seq_matches_settlement', (select pass from engine_seq_matches_settlement), 'auction engine_seq must equal the latest settled Redis/Kafka engine ledger seq'),
     ('P0', 'kafka_position_present', (select missing_kafka_position = 0 from settlement), 'every Kafka ledger settlement must record topic/partition/offset'),
-    ('P0', 'no_accepted_bid_seq_gap', (select missing_count = 0 from accepted_gap), 'accepted bid seq must be continuous'),
-    ('P0', 'no_auction_event_seq_gap', (select missing_count = 0 from event_gap), 'auction event seq must be continuous'),
+    ('P0', 'accepted_settlement_has_public_event', (select violations = 0 from accepted_settlement_coverage), 'accepted/sold settlements must have matching bid and public auction_event rows'),
+    ('P0', 'no_public_auction_event_seq_gap', (select missing_count = 0 from event_gap), 'public auction event seq must be continuous'),
     ('P0', 'no_duplicate_client_bid_id', (select violations = 0 from duplicate_client_bid), 'client_bid_id must not create duplicate bid rows'),
     ('P0', 'no_duplicate_engine_seq', (select violations = 0 from duplicate_engine_seq), 'engine_epoch/engine_seq must identify at most one accepted bid'),
     ('P0', 'engine_epoch_seq_monotonic', (select violations = 0 from epoch_seq_violations), 'engine_epoch/engine_seq must be monotonic'),
@@ -707,6 +799,176 @@ from (
     ('P0', 'at_most_one_order', (select orders <= 1 from orders_count), 'one auction can create at most one order'),
     ('P0', 'no_cross_auction_event_payload_leak', (select violations = 0 from cross_auction_mismatch), 'event payload bid_id/auction_id must belong to the same auction'),
     ('P1', 'outbox_drained', (select pending = 0 from outbox_not_published), 'outbox should drain after the chosen settle window')
+) as gates(severity, name, pass, detail)
+order by severity, name;
+SQL
+
+  docker exec -i "$DB_CONTAINER" psql -q -A -F $'\t' -U "$DB_USER" -d "$DB_NAME" \
+    -v ON_ERROR_STOP=1 -v auction_id="$AUCTION_ID" -f - <<'SQL'
+with auction_row as (
+  select id, current_price_cents, current_winner_id, accepted_bid_count,
+         engine_seq, engine_epoch
+  from auctions
+  where id = :'auction_id'
+),
+bid_counts as (
+  select count(*) as total,
+         count(*) filter (where status = 'ACCEPTED') as accepted
+  from bids
+  where auction_id = :'auction_id'
+),
+max_accepted as (
+  select user_id, amount_cents, engine_seq
+  from bids
+  where auction_id = :'auction_id'
+    and status = 'ACCEPTED'
+  order by amount_cents desc, engine_seq desc
+  limit 1
+),
+engine_seq_completeness as (
+  with bounds as (
+    select min(engine_seq) as min_seq, max(engine_seq) as max_seq, count(*) as actual_count
+    from redis_engine_settlements
+    where auction_id = :'auction_id'
+      and engine_epoch = (select engine_epoch from auction_row)
+  ),
+  expected as (
+    select generate_series(1, coalesce((select max_seq from bounds), 0)) as engine_seq
+  )
+  select (select min_seq from bounds) as min_seq,
+         (select max_seq from bounds) as max_seq,
+         (select actual_count from bounds) as actual_count,
+         coalesce(count(expected.engine_seq) filter (where s.engine_seq is null), 0) as missing_count
+  from expected
+  left join redis_engine_settlements s
+    on s.auction_id = :'auction_id'
+   and s.engine_epoch = (select engine_epoch from auction_row)
+   and s.engine_seq = expected.engine_seq
+),
+low_price_reject_violations as (
+  select count(*) as violations
+  from bids b
+  join auctions a on a.id = b.auction_id
+  left join lateral (
+    select max(prev.amount_cents) as prior_price
+    from bids prev
+    where prev.auction_id = b.auction_id
+      and prev.engine_epoch = b.engine_epoch
+      and prev.status = 'ACCEPTED'
+      and prev.engine_seq < b.engine_seq
+  ) prior on true
+  where b.auction_id = :'auction_id'
+    and b.status = 'REJECTED'
+    and b.reject_reason = 'BID_TOO_LOW'
+    and b.amount_cents >= coalesce(prior.prior_price, a.start_price_cents) + a.increment_cents
+),
+accepted_event_mismatch as (
+  select count(*) as violations
+  from bids b
+  left join auction_events e
+    on e.auction_id = b.auction_id
+   and e.engine_epoch = b.engine_epoch
+   and e.engine_seq = b.engine_seq
+   and e.event_type in ('bid_accepted','auction_sold')
+  where b.auction_id = :'auction_id'
+    and b.status = 'ACCEPTED'
+    and (
+      e.id is null
+      or e.payload_json->>'bid_id' is distinct from b.id
+      or e.payload_json->>'user_id' is distinct from b.user_id
+      or (e.payload_json->>'amount_cents')::bigint is distinct from b.amount_cents
+    )
+),
+public_event_outbox_mismatch as (
+  select count(*) as violations
+  from auction_events e
+  left join outbox_events o
+    on o.auction_id = e.auction_id
+   and o.seq = e.seq
+   and o.event_type = e.event_type
+  left join outbox_delivery d
+    on d.outbox_id = o.id
+   and d.status = 'PUBLISHED'
+  where e.auction_id = :'auction_id'
+    and (o.id is null or d.outbox_id is null)
+),
+settlement_mismatch as (
+  select count(*) as violations
+  from bids b
+  left join redis_engine_settlements s
+    on s.auction_id = b.auction_id
+   and s.engine_epoch = b.engine_epoch
+   and s.engine_seq = b.engine_seq
+  where b.auction_id = :'auction_id'
+    and (
+      s.id is null
+      or s.status <> 'SETTLED'
+      or (b.status = 'ACCEPTED' and s.result not in ('ENGINE_ACCEPTED','ENGINE_SOLD'))
+      or (b.status = 'REJECTED' and s.result <> 'ENGINE_REJECTED')
+    )
+),
+idempotency_response_mismatch as (
+  select count(*) as violations
+  from bids b
+  left join idempotency_records i
+    on i.scope_type = 'bid'
+   and i.scope_id = b.auction_id
+   and i.user_id = b.user_id
+   and i.idempotency_key = b.client_bid_id
+  where b.auction_id = :'auction_id'
+    and (
+      i.idempotency_key is null
+      or i.status <> 'COMPLETED'
+      or i.http_status <> 200
+      or i.result_code is distinct from b.status
+      or i.response_json->>'result' is distinct from b.status
+      or i.response_json->>'bid_id' is distinct from b.id
+      or i.response_json->>'auction_id' is distinct from b.auction_id
+      or (i.response_json->>'amount_cents')::bigint is distinct from b.amount_cents
+      or (i.response_json->>'engine_seq')::bigint is distinct from b.engine_seq
+      or (i.response_json->>'engine_epoch')::bigint is distinct from b.engine_epoch
+      or i.response_json->>'reject_reason' is distinct from b.reject_reason
+    )
+)
+select severity, name, case when pass then 'PASS' else 'FAIL' end as status, detail
+from (
+  values
+    ('P0', 'auction_winner_matches_highest_accepted',
+      ((select accepted from bid_counts) = 0
+        or exists (
+          select 1
+          from auction_row a, max_accepted m
+          where a.current_winner_id = m.user_id
+            and a.current_price_cents = m.amount_cents
+        )),
+      'auction winner/current price must equal the highest accepted bid'),
+    ('P0', 'engine_seq_complete',
+      ((select total from bid_counts) = 0
+        or exists (
+          select 1
+          from engine_seq_completeness c, auction_row a, bid_counts b
+          where c.min_seq = 1
+            and c.max_seq = b.total
+            and c.actual_count = b.total
+            and c.missing_count = 0
+            and a.engine_seq = b.total
+        )),
+      'settled engine_seq must be complete from 1 through total bid decisions'),
+    ('P0', 'bid_too_low_rejects_justified',
+      (select violations = 0 from low_price_reject_violations),
+      'each BID_TOO_LOW reject must be below the engine price floor at its engine_seq'),
+    ('P0', 'accepted_public_event_exact_mapping',
+      (select violations = 0 from accepted_event_mismatch),
+      'each accepted bid must have an exact public event payload match'),
+    ('P0', 'public_events_have_published_outbox',
+      (select violations = 0 from public_event_outbox_mismatch),
+      'each public auction_event must have a published outbox delivery'),
+    ('P0', 'every_bid_has_settled_ledger',
+      (select violations = 0 from settlement_mismatch),
+      'each bid decision must have a matching terminal Redis/Kafka settlement row'),
+    ('P0', 'idempotency_response_matches_bid',
+      (select violations = 0 from idempotency_response_mismatch),
+      'completed bid idempotency response_json must match the persisted bid decision')
 ) as gates(severity, name, pass, detail)
 order by severity, name;
 SQL
@@ -748,7 +1010,8 @@ docker exec -i "$DB_CONTAINER" psql -q -A -t -F $'\t' -U "$DB_USER" -d "$DB_NAME
   -v ON_ERROR_STOP=1 -v auction_id="$AUCTION_ID" -f - > "$OUT_DIR/l4b-invariant-gates.tsv" <<'SQL'
 with auction_row as (
   select id, status, current_price_cents, current_winner_id, accepted_bid_count,
-         seq, engine_seq, engine_epoch, end_at
+         seq, engine_seq, engine_epoch, end_at,
+         engine_paused, engine_pause_reason
   from auctions
   where id = :'auction_id'
 ),
@@ -766,19 +1029,6 @@ bid_counts as (
   from bids
   where auction_id = :'auction_id'
 ),
-accepted_gap as (
-  with accepted as (
-    select seq from bids where auction_id = :'auction_id' and status = 'ACCEPTED' and seq is not null
-  ),
-  bounds as (
-    select min(seq) as min_seq, max(seq) as max_seq from accepted
-  ),
-  expected as (
-    select generate_series((select min_seq from bounds), (select max_seq from bounds)) as seq
-  )
-  select coalesce(count(expected.seq) filter (where accepted.seq is null), 0) as missing_count
-  from expected left join accepted using (seq)
-),
 event_gap as (
   with events as (
     select seq from auction_events where auction_id = :'auction_id'
@@ -791,6 +1041,30 @@ event_gap as (
   )
   select coalesce(count(expected.seq) filter (where events.seq is null), 0) as missing_count
   from expected left join events using (seq)
+),
+engine_seq_matches_settlement as (
+  select coalesce((select engine_seq from auction_row), 0) = coalesce(max(engine_seq) filter (where status = 'SETTLED'), 0) as pass
+  from redis_engine_settlements
+  where auction_id = :'auction_id'
+    and engine_epoch = (select engine_epoch from auction_row)
+),
+accepted_settlement_coverage as (
+  select count(*) as violations
+  from redis_engine_settlements s
+  left join bids b
+    on b.auction_id = s.auction_id
+   and b.engine_epoch = s.engine_epoch
+   and b.engine_seq = s.engine_seq
+   and b.status = 'ACCEPTED'
+  left join auction_events e
+    on e.auction_id = s.auction_id
+   and e.engine_epoch = s.engine_epoch
+   and e.engine_seq = s.engine_seq
+   and e.event_type in ('bid_accepted','auction_sold')
+  where s.auction_id = :'auction_id'
+    and s.status = 'SETTLED'
+    and s.result in ('ENGINE_ACCEPTED','ENGINE_SOLD')
+    and (b.id is null or e.id is null)
 ),
 duplicate_client_bid as (
   select count(*) as violations from (
@@ -879,13 +1153,14 @@ select severity, name, case when pass then 'PASS' else 'FAIL' end as status, det
 from (
   values
     ('P0', 'auction_exists', (select count(*) = 1 from auction_row), 'auction row must exist'),
+    ('P0', 'engine_not_paused', (select not engine_paused from auction_row), 'auction engine must not be paused after a valid PTS run'),
     ('P0', 'no_non_terminal_settlements', (select non_terminal = 0 from settlement), 'no PROCESSING/FAILED/DLQ settlement rows after the chosen settle window'),
     ('P0', 'redis_kafka_pg_accepted_match', (select accepted_or_sold = accepted from settlement, bid_counts), 'accepted/sold Kafka ledger rows must match PG accepted bids'),
     ('P0', 'auction_accepted_count_matches_pg', (select accepted_bid_count = accepted from auction_row, bid_counts), 'auction accepted counter must match PG accepted bids'),
-    ('P0', 'auction_seq_matches_engine_seq', (select seq = engine_seq from auction_row), 'auction seq and engine_seq must converge'),
+    ('P0', 'redis_engine_seq_matches_settlement', (select pass from engine_seq_matches_settlement), 'auction engine_seq must equal the latest settled Redis/Kafka engine ledger seq'),
     ('P0', 'kafka_position_present', (select missing_kafka_position = 0 from settlement), 'every Kafka ledger settlement must record topic/partition/offset'),
-    ('P0', 'no_accepted_bid_seq_gap', (select missing_count = 0 from accepted_gap), 'accepted bid seq must be continuous'),
-    ('P0', 'no_auction_event_seq_gap', (select missing_count = 0 from event_gap), 'auction event seq must be continuous'),
+    ('P0', 'accepted_settlement_has_public_event', (select violations = 0 from accepted_settlement_coverage), 'accepted/sold settlements must have matching bid and public auction_event rows'),
+    ('P0', 'no_public_auction_event_seq_gap', (select missing_count = 0 from event_gap), 'public auction event seq must be continuous'),
     ('P0', 'no_duplicate_client_bid_id', (select violations = 0 from duplicate_client_bid), 'client_bid_id must not create duplicate bid rows'),
     ('P0', 'no_duplicate_engine_seq', (select violations = 0 from duplicate_engine_seq), 'engine_epoch/engine_seq must identify at most one accepted bid'),
     ('P0', 'engine_epoch_seq_monotonic', (select violations = 0 from epoch_seq_violations), 'engine_epoch/engine_seq must be monotonic'),
@@ -896,6 +1171,176 @@ from (
     ('P0', 'at_most_one_order', (select orders <= 1 from orders_count), 'one auction can create at most one order'),
     ('P0', 'no_cross_auction_event_payload_leak', (select violations = 0 from cross_auction_mismatch), 'event payload bid_id/auction_id must belong to the same auction'),
     ('P1', 'outbox_drained', (select pending = 0 from outbox_not_published), 'outbox should drain after the chosen settle window')
+) as gates(severity, name, pass, detail)
+order by severity, name;
+SQL
+
+docker exec -i "$DB_CONTAINER" psql -q -A -t -F $'\t' -U "$DB_USER" -d "$DB_NAME" \
+  -v ON_ERROR_STOP=1 -v auction_id="$AUCTION_ID" -f - >> "$OUT_DIR/l4b-invariant-gates.tsv" <<'SQL'
+with auction_row as (
+  select id, current_price_cents, current_winner_id, accepted_bid_count,
+         engine_seq, engine_epoch
+  from auctions
+  where id = :'auction_id'
+),
+bid_counts as (
+  select count(*) as total,
+         count(*) filter (where status = 'ACCEPTED') as accepted
+  from bids
+  where auction_id = :'auction_id'
+),
+max_accepted as (
+  select user_id, amount_cents, engine_seq
+  from bids
+  where auction_id = :'auction_id'
+    and status = 'ACCEPTED'
+  order by amount_cents desc, engine_seq desc
+  limit 1
+),
+engine_seq_completeness as (
+  with bounds as (
+    select min(engine_seq) as min_seq, max(engine_seq) as max_seq, count(*) as actual_count
+    from redis_engine_settlements
+    where auction_id = :'auction_id'
+      and engine_epoch = (select engine_epoch from auction_row)
+  ),
+  expected as (
+    select generate_series(1, coalesce((select max_seq from bounds), 0)) as engine_seq
+  )
+  select (select min_seq from bounds) as min_seq,
+         (select max_seq from bounds) as max_seq,
+         (select actual_count from bounds) as actual_count,
+         coalesce(count(expected.engine_seq) filter (where s.engine_seq is null), 0) as missing_count
+  from expected
+  left join redis_engine_settlements s
+    on s.auction_id = :'auction_id'
+   and s.engine_epoch = (select engine_epoch from auction_row)
+   and s.engine_seq = expected.engine_seq
+),
+low_price_reject_violations as (
+  select count(*) as violations
+  from bids b
+  join auctions a on a.id = b.auction_id
+  left join lateral (
+    select max(prev.amount_cents) as prior_price
+    from bids prev
+    where prev.auction_id = b.auction_id
+      and prev.engine_epoch = b.engine_epoch
+      and prev.status = 'ACCEPTED'
+      and prev.engine_seq < b.engine_seq
+  ) prior on true
+  where b.auction_id = :'auction_id'
+    and b.status = 'REJECTED'
+    and b.reject_reason = 'BID_TOO_LOW'
+    and b.amount_cents >= coalesce(prior.prior_price, a.start_price_cents) + a.increment_cents
+),
+accepted_event_mismatch as (
+  select count(*) as violations
+  from bids b
+  left join auction_events e
+    on e.auction_id = b.auction_id
+   and e.engine_epoch = b.engine_epoch
+   and e.engine_seq = b.engine_seq
+   and e.event_type in ('bid_accepted','auction_sold')
+  where b.auction_id = :'auction_id'
+    and b.status = 'ACCEPTED'
+    and (
+      e.id is null
+      or e.payload_json->>'bid_id' is distinct from b.id
+      or e.payload_json->>'user_id' is distinct from b.user_id
+      or (e.payload_json->>'amount_cents')::bigint is distinct from b.amount_cents
+    )
+),
+public_event_outbox_mismatch as (
+  select count(*) as violations
+  from auction_events e
+  left join outbox_events o
+    on o.auction_id = e.auction_id
+   and o.seq = e.seq
+   and o.event_type = e.event_type
+  left join outbox_delivery d
+    on d.outbox_id = o.id
+   and d.status = 'PUBLISHED'
+  where e.auction_id = :'auction_id'
+    and (o.id is null or d.outbox_id is null)
+),
+settlement_mismatch as (
+  select count(*) as violations
+  from bids b
+  left join redis_engine_settlements s
+    on s.auction_id = b.auction_id
+   and s.engine_epoch = b.engine_epoch
+   and s.engine_seq = b.engine_seq
+  where b.auction_id = :'auction_id'
+    and (
+      s.id is null
+      or s.status <> 'SETTLED'
+      or (b.status = 'ACCEPTED' and s.result not in ('ENGINE_ACCEPTED','ENGINE_SOLD'))
+      or (b.status = 'REJECTED' and s.result <> 'ENGINE_REJECTED')
+    )
+),
+idempotency_response_mismatch as (
+  select count(*) as violations
+  from bids b
+  left join idempotency_records i
+    on i.scope_type = 'bid'
+   and i.scope_id = b.auction_id
+   and i.user_id = b.user_id
+   and i.idempotency_key = b.client_bid_id
+  where b.auction_id = :'auction_id'
+    and (
+      i.idempotency_key is null
+      or i.status <> 'COMPLETED'
+      or i.http_status <> 200
+      or i.result_code is distinct from b.status
+      or i.response_json->>'result' is distinct from b.status
+      or i.response_json->>'bid_id' is distinct from b.id
+      or i.response_json->>'auction_id' is distinct from b.auction_id
+      or (i.response_json->>'amount_cents')::bigint is distinct from b.amount_cents
+      or (i.response_json->>'engine_seq')::bigint is distinct from b.engine_seq
+      or (i.response_json->>'engine_epoch')::bigint is distinct from b.engine_epoch
+      or i.response_json->>'reject_reason' is distinct from b.reject_reason
+    )
+)
+select severity, name, case when pass then 'PASS' else 'FAIL' end as status, detail
+from (
+  values
+    ('P0', 'auction_winner_matches_highest_accepted',
+      ((select accepted from bid_counts) = 0
+        or exists (
+          select 1
+          from auction_row a, max_accepted m
+          where a.current_winner_id = m.user_id
+            and a.current_price_cents = m.amount_cents
+        )),
+      'auction winner/current price must equal the highest accepted bid'),
+    ('P0', 'engine_seq_complete',
+      ((select total from bid_counts) = 0
+        or exists (
+          select 1
+          from engine_seq_completeness c, auction_row a, bid_counts b
+          where c.min_seq = 1
+            and c.max_seq = b.total
+            and c.actual_count = b.total
+            and c.missing_count = 0
+            and a.engine_seq = b.total
+        )),
+      'settled engine_seq must be complete from 1 through total bid decisions'),
+    ('P0', 'bid_too_low_rejects_justified',
+      (select violations = 0 from low_price_reject_violations),
+      'each BID_TOO_LOW reject must be below the engine price floor at its engine_seq'),
+    ('P0', 'accepted_public_event_exact_mapping',
+      (select violations = 0 from accepted_event_mismatch),
+      'each accepted bid must have an exact public event payload match'),
+    ('P0', 'public_events_have_published_outbox',
+      (select violations = 0 from public_event_outbox_mismatch),
+      'each public auction_event must have a published outbox delivery'),
+    ('P0', 'every_bid_has_settled_ledger',
+      (select violations = 0 from settlement_mismatch),
+      'each bid decision must have a matching terminal Redis/Kafka settlement row'),
+    ('P0', 'idempotency_response_matches_bid',
+      (select violations = 0 from idempotency_response_mismatch),
+      'completed bid idempotency response_json must match the persisted bid decision')
 ) as gates(severity, name, pass, detail)
 order by severity, name;
 SQL

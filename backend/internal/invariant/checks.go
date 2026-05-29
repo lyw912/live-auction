@@ -334,10 +334,13 @@ func (c *Checker) checkOutboxHeadOfLine(ctx context.Context, scopeSQL string, ar
 			FROM auctions a
 			%s
 		), ordered AS (
-			SELECT o.auction_id, o.seq, o.id AS outbox_id, d.status
+			SELECT o.auction_id, o.seq, o.id AS outbox_id,
+			       COALESCE(d.status, 'MISSING') AS status,
+			       d.auction_id AS delivery_auction_id,
+			       d.auction_seq AS delivery_auction_seq
 			FROM outbox_events o
 			JOIN scoped s ON s.id = o.auction_id
-			JOIN outbox_delivery d ON d.outbox_id = o.id
+			LEFT JOIN outbox_delivery d ON d.outbox_id = o.id
 			WHERE o.seq IS NOT NULL
 		), violations AS (
 			SELECT high.auction_id,
@@ -349,7 +352,7 @@ func (c *Checker) checkOutboxHeadOfLine(ctx context.Context, scopeSQL string, ar
 			FROM ordered high
 			JOIN ordered low ON low.auction_id = high.auction_id AND low.seq < high.seq
 			WHERE high.status = 'PUBLISHED'
-			  AND low.status IN ('PENDING','PUBLISHING','FAILED')
+			  AND low.status IN ('MISSING','PENDING','PUBLISHING','FAILED')
 		)
 		SELECT *, count(*) OVER() AS total
 		FROM violations

@@ -1093,7 +1093,9 @@ function App() {
     setCurrentPriceCents(acceptedPrice);
     setMinimumNextBidCents(acceptedPrice + activeIncrementCents);
     setNextBidCents(acceptedPrice + activeIncrementCents);
-    setLastSeq(payload.seq ?? payload.engine_seq ?? lastSeq);
+    if (!isEnginePending && !isEngineSoldPending) {
+      setLastSeq(payload.seq ?? lastSeq);
+    }
     if (payload.end_at) setAuctionEndAt(payload.end_at);
     if (payload.server_time_ms) setServerTimeMS(payload.server_time_ms);
     if (isEnginePending || isEngineSoldPending) {

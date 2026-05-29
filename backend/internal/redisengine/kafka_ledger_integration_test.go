@@ -8,6 +8,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/segmentio/kafka-go"
+
+	"live-auction/backend/internal/auction"
+	"live-auction/backend/internal/redisx"
 )
 
 func TestKafkaLedgerIntegration(t *testing.T) {
@@ -71,6 +74,80 @@ func TestKafkaLedgerIntegration(t *testing.T) {
 	if err := ledger.Commit(ctx, msg); err != nil {
 		t.Fatalf("Commit: %v", err)
 	}
+}
+
+func TestKafkaWorkerPumpsRedisPendingAfterInitialEmptyKafkaPoll(t *testing.T) {
+	if os.Getenv("KAFKA_INTEGRATION") != "1" {
+		t.Skip("set KAFKA_INTEGRATION=1 to run against local Kafka")
+	}
+	brokers := os.Getenv("KAFKA_BROKERS")
+	if brokers == "" {
+		brokers = "localhost:9092"
+	}
+	suffix := uuid.NewString()
+	bidTopic := "auction.bid-events.test." + suffix
+	dlqTopic := "auction.dlq.test." + suffix
+	ensureKafkaTopic(t, brokers, bidTopic)
+	ensureKafkaTopic(t, brokers, dlqTopic)
+
+	ledger, err := NewKafkaLedger(KafkaLedgerConfig{
+		Brokers:                parseKafkaBrokers(brokers),
+		BidTopic:               bidTopic,
+		DLQTopic:               dlqTopic,
+		ConsumerGroup:          "settlement-workers-test-" + suffix,
+		ClientID:               "redisengine-worker-test-" + suffix,
+		AllowAutoTopicCreation: true,
+	})
+	if err != nil {
+		t.Fatalf("NewKafkaLedger: %v", err)
+	}
+	t.Cleanup(func() { _ = ledger.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	auctionID := createEngineAuction(t, db, 20_000)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	engine := New(db, rdb, ledger)
+
+	if processed, err := worker.ProcessKafka(ctx, 1); err != nil || processed != 0 {
+		t.Fatalf("initial empty kafka poll processed=%d err=%v", processed, err)
+	}
+	response, err := engine.PlaceBid(ctx, auctionID, "user_1", "kafka-pump-"+suffix, auction.BidInput{
+		ClientBidID:   "kafka-pump-" + suffix,
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_"+suffix)
+	if err != nil {
+		t.Fatalf("place bid: %v", err)
+	}
+	if response.EngineSeq != 1 {
+		t.Fatalf("engine seq = %d, want 1", response.EngineSeq)
+	}
+	if indexed, err := rdb.SIsMember(ctx, redisx.BidEnginePendingAuctionsKey(), auctionID).Result(); err != nil || !indexed {
+		t.Fatalf("pending index member=%v err=%v", indexed, err)
+	}
+
+	appended, err := worker.ProcessPendingAppends(ctx, 100)
+	if err != nil {
+		t.Fatalf("ProcessPendingAppends: %v", err)
+	}
+	if appended != 1 {
+		t.Fatalf("pending appended=%d, want 1", appended)
+	}
+	if pending, err := rdb.HLen(ctx, redisx.BidEnginePendingKey(auctionID)).Result(); err != nil || pending != 0 {
+		t.Fatalf("pending hlen=%d err=%v, want 0", pending, err)
+	}
+
+	settled, err := worker.ProcessKafka(ctx, 1)
+	if err != nil {
+		t.Fatalf("ProcessKafka settle: %v", err)
+	}
+	if settled != 1 {
+		t.Fatalf("settled=%d, want 1", settled)
+	}
+	assertAuctionEngineSeq(t, db, auctionID, 1, 15_000, "ACTIVE")
 }
 
 func ensureKafkaTopic(t *testing.T, brokers string, topic string) {

@@ -30,6 +30,10 @@ func BidEnginePendingKey(auctionID string) string {
 	return fmt.Sprintf("bid:{%s}:engine:pending", auctionID)
 }
 
+func BidEnginePendingAuctionsKey() string {
+	return "bid:engine:pending:auctions"
+}
+
 func WSTicketKey(token string) string {
 	return "ws_ticket:" + token
 }
