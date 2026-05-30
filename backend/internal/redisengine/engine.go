@@ -44,7 +44,7 @@ const (
 const (
 	kafkaAppendStatusAcked   = "ACKED"
 	kafkaAppendStatusFailed  = "FAILED"
-	kafkaAppendStatusPending = "PENDING"
+	kafkaAppendStatusUnknown = "UNKNOWN"
 )
 
 var ledgerRunner = redisx.NewScriptRunner(redisx.ScriptBidRedisLedger, `
@@ -128,6 +128,9 @@ local function store_result(result)
   redis.call('HSET', idem_key, 'request_hash', request_hash)
   redis.call('HSET', idem_key, 'result_json', encoded)
   redis.call('HSET', idem_key, 'engine_seq', tostring(result['engine_seq'] or 0))
+  redis.call('HSET', idem_key, 'engine_epoch', tostring(result['engine_epoch'] or 0))
+  redis.call('HSET', idem_key, 'kafka_append_status', 'UNKNOWN')
+  redis.call('HSET', idem_key, 'expires_at_ms', tostring(now_ms + idem_ttl_ms))
   redis.call('PEXPIRE', idem_key, idem_ttl_ms)
   return encoded
 end
@@ -251,16 +254,10 @@ return {'OK', store_decision(result)}
 `)
 
 type Engine struct {
-	db      *pgxpool.Pool
-	redis   *redis.Client
-	ledger  BidLedger
-	options Options
-}
-
-type Options struct {
-	KafkaAckBeforeReturn bool
-	KafkaAppendTimeout   time.Duration
-	PauseOnAppendFailure bool
+	db                 *pgxpool.Pool
+	redis              *redis.Client
+	ledger             BidLedger
+	kafkaAppendTimeout time.Duration
 }
 
 type snapshot struct {
@@ -304,27 +301,40 @@ type engineResult struct {
 	RequestHash       string  `json:"request_hash"`
 }
 
+type redisIdempotencyReplay struct {
+	RequestHash       string
+	ResultJSON        string
+	KafkaAppendStatus string
+	EngineEpoch       int64
+	EngineSeq         int64
+	ExpiresAtMS       int64
+}
+
+type kafkaAppendFailureClass struct {
+	Status    string
+	Reason    string
+	APIError  apierrors.Code
+	Message   string
+	PauseType string
+}
+
+type redisIdempotencyReplayLoad struct {
+	Record redisIdempotencyReplay
+	Found  bool
+}
+
 func New(db *pgxpool.Pool, redisClient *redis.Client, ledger BidLedger) *Engine {
-	return &Engine{db: db, redis: redisClient, ledger: ledger, options: defaultOptions()}
+	return &Engine{db: db, redis: redisClient, ledger: ledger, kafkaAppendTimeout: defaultKafkaAppendTimeout}
 }
 
-func defaultOptions() Options {
-	return Options{
-		KafkaAckBeforeReturn: true,
-		KafkaAppendTimeout:   defaultKafkaAppendTimeout,
-		PauseOnAppendFailure: true,
-	}
-}
-
-func (e *Engine) WithOptions(options Options) *Engine {
+func (e *Engine) WithKafkaAppendTimeout(timeout time.Duration) *Engine {
 	if e == nil {
 		return nil
 	}
-	defaults := defaultOptions()
-	if options.KafkaAppendTimeout <= 0 {
-		options.KafkaAppendTimeout = defaults.KafkaAppendTimeout
+	if timeout <= 0 {
+		timeout = defaultKafkaAppendTimeout
 	}
-	e.options = options
+	e.kafkaAppendTimeout = timeout
 	return e
 }
 
@@ -341,6 +351,17 @@ func (e *Engine) PlaceBid(ctx context.Context, auctionID string, userID string, 
 	requestHash := requestHash(auctionID, userID, input.ClientBidID, input.AmountCents)
 	if replay, ok, err := e.completedReplay(ctx, auctionID, userID, idempotencyKey, requestHash); err != nil || ok {
 		return replay, err
+	}
+	if replay, ok, err := e.redisPreDecisionReplay(ctx, auctionID, input.ClientBidID, requestHash); err != nil || ok {
+		if err != nil {
+			var apiErr apierrors.APIError
+			if errors.As(err, &apiErr) {
+				return replay, err
+			}
+			_ = e.pause(ctx, auctionID, "REDIS_IDEMPOTENCY_REPLAY_FAILED", err.Error(), traceID)
+			return auction.BidResponse{}, apierrors.New(apierrors.CodeEnginePaused, "redis ledger engine idempotency state is invalid", http.StatusServiceUnavailable)
+		}
+		return replay, nil
 	}
 
 	snap, err := e.loadSnapshot(ctx, auctionID)
@@ -391,25 +412,13 @@ func (e *Engine) PlaceBid(ctx context.Context, auctionID string, userID string, 
 	ledgerRunner.Record("ok", redisElapsed)
 	recordDecision(result.Result, redisElapsed)
 	recordHTTPStage("redis_lua", result.Result, "ok", redisElapsed)
-	if e.options.KafkaAckBeforeReturn {
-		if status == "REPLAY" {
-			appendStatus, err := e.kafkaAppendStatus(ctx, auctionID, input.ClientBidID)
-			if err != nil {
-				return auction.BidResponse{}, err
-			}
-			switch appendStatus {
-			case kafkaAppendStatusAcked:
-				recordHTTPStage("total", result.Result, "ok", time.Since(totalStart))
-				return result.response(), nil
-			case kafkaAppendStatusFailed:
-				recordHTTPStage("total", result.Result, "kafka_append_failed", time.Since(totalStart))
-				return auction.BidResponse{}, apierrors.New(apierrors.CodeEngineReconciling, "bid engine decision is recovering; retry with the same idempotency key", http.StatusConflict)
-			}
-		}
-		if err := e.appendDecisionBeforeReturn(ctx, auctionID, input.ClientBidID, result, traceID); err != nil {
-			recordHTTPStage("total", result.Result, "kafka_append_failed", time.Since(totalStart))
-			return auction.BidResponse{}, err
-		}
+	if status == "REPLAY" {
+		resp, err := e.redisIdempotencyReplayResponse(ctx, auctionID, input.ClientBidID, requestHash, result, totalStart)
+		return resp, err
+	}
+	if err := e.appendDecisionBeforeReturn(ctx, auctionID, input.ClientBidID, result, traceID); err != nil {
+		recordHTTPStage("total", result.Result, "kafka_append_failed", time.Since(totalStart))
+		return auction.BidResponse{}, err
 	}
 	recordHTTPStage("total", result.Result, "ok", time.Since(totalStart))
 	return result.response(), nil
@@ -417,20 +426,22 @@ func (e *Engine) PlaceBid(ctx context.Context, auctionID string, userID string, 
 
 func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID string, clientBidID string, result engineResult, traceID string) error {
 	idemKey := redisx.BidEngineIdempotencyKey(auctionID, clientBidID)
-	_ = e.redis.HSet(ctx, idemKey, "kafka_append_status", kafkaAppendStatusPending).Err()
-	appendCtx, cancel := context.WithTimeout(ctx, e.options.KafkaAppendTimeout)
+	appendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
 	start := time.Now()
 	message, err := e.ledger.Append(appendCtx, result)
 	cancel()
 	elapsed := time.Since(start)
 	if err != nil {
+		failure := classifyKafkaAppendFailure(err)
 		recordKafkaAppend(result.Result, "error", elapsed)
-		observability.Inc("auction_bid_kafka_append_fail_total", map[string]string{"reason": classifyKafkaAppendFailure(err)})
-		_ = e.redis.HSet(ctx, idemKey, "kafka_append_status", kafkaAppendStatusFailed, "kafka_append_error", err.Error()).Err()
-		if e.options.PauseOnAppendFailure {
-			_ = e.pause(ctx, auctionID, "KAFKA_APPEND_FAILED_BEFORE_RETURN", err.Error(), traceID)
-		}
-		return apierrors.New(apierrors.CodeEngineReconciling, "bid engine decision is recovering; retry with the same idempotency key", http.StatusConflict)
+		observability.Inc("auction_bid_kafka_append_fail_total", map[string]string{"reason": failure.Reason})
+		markerCtx, markerCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
+		_ = e.redis.HSet(markerCtx, idemKey, "kafka_append_status", failure.Status, "kafka_append_error", err.Error()).Err()
+		markerCancel()
+		pauseCtx, pauseCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
+		defer pauseCancel()
+		_ = e.pause(pauseCtx, auctionID, failure.PauseType, err.Error(), traceID)
+		return apierrors.New(failure.APIError, failure.Message, http.StatusConflict)
 	}
 	recordKafkaAppend(result.Result, "ok", elapsed)
 	recordHTTPStage("kafka_append", result.Result, "ok", elapsed)
@@ -441,16 +452,96 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 	if message.Partition >= 0 && message.Offset >= 0 {
 		fields = append(fields, "kafka_partition", message.Partition, "kafka_offset", message.Offset)
 	}
-	_ = e.redis.HSet(ctx, idemKey, fields...).Err()
+	markerCtx, markerCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
+	if err := e.redis.HSet(markerCtx, idemKey, fields...).Err(); err != nil {
+		markerCancel()
+		recordHTTPStage("kafka_append_marker", result.Result, "error", time.Since(start))
+		observability.Inc("auction_bid_kafka_append_marker_fail_total", map[string]string{"reason": "redis"})
+		pauseCtx, pauseCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
+		defer pauseCancel()
+		_ = e.pause(pauseCtx, auctionID, "KAFKA_APPEND_ACK_MARKER_FAILED", err.Error(), traceID)
+		return apierrors.New(apierrors.CodeProcessingRetryLater, "bid confirmation is pending; retry with the same idempotency key", http.StatusConflict)
+	}
+	markerCancel()
 	return nil
 }
 
-func (e *Engine) kafkaAppendStatus(ctx context.Context, auctionID string, clientBidID string) (string, error) {
-	status, err := e.redis.HGet(ctx, redisx.BidEngineIdempotencyKey(auctionID, clientBidID), "kafka_append_status").Result()
-	if errors.Is(err, redis.Nil) {
-		return "", nil
+func (e *Engine) redisIdempotencyReplayResponse(ctx context.Context, auctionID string, clientBidID string, requestHash string, result engineResult, totalStart time.Time) (auction.BidResponse, error) {
+	load, err := e.loadRedisIdempotencyReplay(ctx, auctionID, clientBidID)
+	if err != nil {
+		return auction.BidResponse{}, err
 	}
-	return status, err
+	if !load.Found {
+		return auction.BidResponse{}, apierrors.New(apierrors.CodeProcessingRetryLater, "bid confirmation state is unavailable; retry with the same idempotency key", http.StatusConflict)
+	}
+	replay := load.Record
+	if replay.RequestHash != requestHash {
+		return auction.BidResponse{}, apierrors.New(apierrors.CodeIdempotencyKeyReusedWithDifferentRequest, "idempotency key reused with different request", http.StatusConflict)
+	}
+	return e.redisIdempotencyReplayResponseFromRecord(replay, result, totalStart)
+}
+
+func (e *Engine) redisIdempotencyReplayResponseFromRecord(replay redisIdempotencyReplay, result engineResult, totalStart time.Time) (auction.BidResponse, error) {
+	status := replay.KafkaAppendStatus
+	if status == "" {
+		status = kafkaAppendStatusUnknown
+	}
+	switch status {
+	case kafkaAppendStatusAcked:
+		recordHTTPStage("total", result.Result, "ok", time.Since(totalStart))
+		return result.response(), nil
+	case kafkaAppendStatusFailed:
+		recordHTTPStage("total", result.Result, "kafka_append_failed", time.Since(totalStart))
+		return auction.BidResponse{}, apierrors.New(apierrors.CodeEngineReconciling, "bid engine decision is recovering; retry with the same idempotency key", http.StatusConflict)
+	case kafkaAppendStatusUnknown:
+		recordHTTPStage("total", result.Result, "kafka_append_unknown", time.Since(totalStart))
+		return auction.BidResponse{}, apierrors.New(apierrors.CodeProcessingRetryLater, "bid confirmation is pending; retry with the same idempotency key", http.StatusConflict)
+	default:
+		recordHTTPStage("total", result.Result, "kafka_append_unknown", time.Since(totalStart))
+		return auction.BidResponse{}, apierrors.New(apierrors.CodeProcessingRetryLater, "bid confirmation state is unknown; retry with the same idempotency key", http.StatusConflict)
+	}
+}
+
+func (e *Engine) loadRedisIdempotencyReplay(ctx context.Context, auctionID string, clientBidID string) (redisIdempotencyReplayLoad, error) {
+	values, err := e.redis.HGetAll(ctx, redisx.BidEngineIdempotencyKey(auctionID, clientBidID)).Result()
+	if err != nil {
+		return redisIdempotencyReplayLoad{}, err
+	}
+	if len(values) == 0 {
+		return redisIdempotencyReplayLoad{}, nil
+	}
+	replay := redisIdempotencyReplay{
+		RequestHash:       values["request_hash"],
+		ResultJSON:        values["result_json"],
+		KafkaAppendStatus: values["kafka_append_status"],
+		EngineEpoch:       parseInt64(values["engine_epoch"]),
+		EngineSeq:         parseInt64(values["engine_seq"]),
+		ExpiresAtMS:       parseInt64(values["expires_at_ms"]),
+	}
+	if replay.RequestHash == "" || replay.ResultJSON == "" {
+		return redisIdempotencyReplayLoad{}, fmt.Errorf("redis engine idempotency record %s is missing request_hash/result_json", redisx.BidEngineIdempotencyKey(auctionID, clientBidID))
+	}
+	return redisIdempotencyReplayLoad{Record: replay, Found: true}, nil
+}
+
+func (e *Engine) redisPreDecisionReplay(ctx context.Context, auctionID string, clientBidID string, requestHash string) (auction.BidResponse, bool, error) {
+	load, err := e.loadRedisIdempotencyReplay(ctx, auctionID, clientBidID)
+	if err != nil {
+		return auction.BidResponse{}, false, err
+	}
+	if !load.Found {
+		return auction.BidResponse{}, false, nil
+	}
+	replay := load.Record
+	if replay.RequestHash != requestHash {
+		return auction.BidResponse{}, true, apierrors.New(apierrors.CodeIdempotencyKeyReusedWithDifferentRequest, "idempotency key reused with different request", http.StatusConflict)
+	}
+	var result engineResult
+	if err := json.Unmarshal([]byte(replay.ResultJSON), &result); err != nil {
+		return auction.BidResponse{}, true, err
+	}
+	resp, err := e.redisIdempotencyReplayResponseFromRecord(replay, result, time.Now())
+	return resp, true, err
 }
 
 type pendingDecision struct {
@@ -676,6 +767,21 @@ func stringValue(value any) string {
 	}
 }
 
+func parseInt64(value string) int64 {
+	if value == "" {
+		return 0
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return parsed
+}
+
+func isUnknownKafkaAppendFailure(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
+}
+
 func recordDecision(result string, elapsed time.Duration) {
 	observability.Inc("auction_bid_redis_ledger_total", map[string]string{"result": result})
 	observability.Observe("auction_bid_redis_ledger_seconds", elapsed.Seconds(), map[string]string{"result": result}, observability.DefaultLatencyBuckets)
@@ -690,17 +796,30 @@ func recordHTTPStage(stage string, result string, status string, elapsed time.Du
 	observability.Observe("auction_bid_http_stage_seconds", elapsed.Seconds(), map[string]string{"stage": stage, "result": result, "status": status}, observability.DefaultLatencyBuckets)
 }
 
-func classifyKafkaAppendFailure(err error) string {
-	if err == nil {
-		return "none"
+func classifyKafkaAppendFailure(err error) kafkaAppendFailureClass {
+	if isUnknownKafkaAppendFailure(err) {
+		reason := "unknown"
+		if errors.Is(err, context.DeadlineExceeded) {
+			reason = "timeout"
+		}
+		if errors.Is(err, context.Canceled) {
+			reason = "canceled"
+		}
+		return kafkaAppendFailureClass{
+			Status:    kafkaAppendStatusUnknown,
+			Reason:    reason,
+			APIError:  apierrors.CodeProcessingRetryLater,
+			Message:   "bid confirmation is pending; retry with the same idempotency key",
+			PauseType: "KAFKA_APPEND_UNKNOWN_BEFORE_RETURN",
+		}
 	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return "timeout"
+	return kafkaAppendFailureClass{
+		Status:    kafkaAppendStatusFailed,
+		Reason:    "error",
+		APIError:  apierrors.CodeEngineReconciling,
+		Message:   "bid engine decision is recovering; retry with the same idempotency key",
+		PauseType: "KAFKA_APPEND_FAILED_BEFORE_RETURN",
 	}
-	if errors.Is(err, context.Canceled) {
-		return "canceled"
-	}
-	return "error"
 }
 
 type Worker struct {

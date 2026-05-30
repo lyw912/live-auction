@@ -271,6 +271,174 @@ func TestRedisLedgerDuplicateReplayAndReconcilePause(t *testing.T) {
 	}
 }
 
+func TestRedisLedgerReplayBeforeSettlementUsesAppendStatus(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	auctionID := createEngineAuction(t, db, 0)
+
+	first, err := engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-phase2-acked", auction.BidInput{
+		ClientBidID:   "redis-ledger-phase2-acked",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_phase2_acked")
+	if err != nil {
+		t.Fatalf("first bid: %v", err)
+	}
+	if ledger.Len() != 1 {
+		t.Fatalf("ledger len after first = %d, want 1", ledger.Len())
+	}
+	replay, err := engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-phase2-acked", auction.BidInput{
+		ClientBidID:   "redis-ledger-phase2-acked",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_phase2_acked_retry")
+	if err != nil {
+		t.Fatalf("acked replay: %v", err)
+	}
+	if replay.BidID != first.BidID || replay.EngineSeq != first.EngineSeq {
+		t.Fatalf("replay = %#v want same bid/engine seq as %#v", replay, first)
+	}
+	if ledger.Len() != 1 {
+		t.Fatalf("ledger len after acked replay = %d, want no duplicate append", ledger.Len())
+	}
+}
+
+func TestRedisLedgerReplayUnknownAndFailedAppendStatusDoesNotAppendAgain(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	auctionID := createEngineAuction(t, db, 0)
+
+	_, err := engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-phase2-status", auction.BidInput{
+		ClientBidID:   "redis-ledger-phase2-status",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_phase2_status")
+	if err != nil {
+		t.Fatalf("first bid: %v", err)
+	}
+	idemKey := redisx.BidEngineIdempotencyKey(auctionID, "redis-ledger-phase2-status")
+	if err := rdb.HSet(ctx, idemKey, "kafka_append_status", kafkaAppendStatusUnknown).Err(); err != nil {
+		t.Fatalf("set unknown status: %v", err)
+	}
+	_, err = engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-phase2-status", auction.BidInput{
+		ClientBidID:   "redis-ledger-phase2-status",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_phase2_status_unknown")
+	assertAPIErrorCode(t, err, apierrors.CodeProcessingRetryLater)
+	if ledger.Len() != 1 {
+		t.Fatalf("ledger len after UNKNOWN replay = %d, want no duplicate append", ledger.Len())
+	}
+	if err := rdb.HSet(ctx, idemKey, "kafka_append_status", kafkaAppendStatusFailed).Err(); err != nil {
+		t.Fatalf("set failed status: %v", err)
+	}
+	_, err = engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-phase2-status", auction.BidInput{
+		ClientBidID:   "redis-ledger-phase2-status",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_phase2_status_failed")
+	assertAPIErrorCode(t, err, apierrors.CodeEngineReconciling)
+	if ledger.Len() != 1 {
+		t.Fatalf("ledger len after FAILED replay = %d, want no duplicate append", ledger.Len())
+	}
+	_, err = engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-phase2-status", auction.BidInput{
+		ClientBidID:   "redis-ledger-phase2-status",
+		AmountCents:   20_000,
+		ClientSeenSeq: 0,
+	}, "tr_phase2_status_conflict")
+	assertAPIErrorCode(t, err, apierrors.CodeIdempotencyKeyReusedWithDifferentRequest)
+}
+
+func TestRedisLedgerAppendTimeoutAfterWriteIsUnknownAndReplayDoesNotAppendAgain(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := newAppendThenTimeoutLedger()
+	engine := New(db, rdb, ledger)
+	auctionID := createEngineAuction(t, db, 0)
+
+	_, err := engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-phase2-timeout", auction.BidInput{
+		ClientBidID:   "redis-ledger-phase2-timeout",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_phase2_timeout")
+	assertAPIErrorCode(t, err, apierrors.CodeProcessingRetryLater)
+	if ledger.Len() != 1 {
+		t.Fatalf("ledger len after write-then-timeout = %d, want 1 durable-but-unknown append", ledger.Len())
+	}
+	assertEnginePaused(t, db, auctionID, "KAFKA_APPEND_UNKNOWN_BEFORE_RETURN")
+	var appendStatus string
+	if err := rdb.HGet(ctx, redisx.BidEngineIdempotencyKey(auctionID, "redis-ledger-phase2-timeout"), "kafka_append_status").Scan(&appendStatus); err != nil {
+		t.Fatalf("load append status: %v", err)
+	}
+	if appendStatus != kafkaAppendStatusUnknown {
+		t.Fatalf("append status = %q, want %q", appendStatus, kafkaAppendStatusUnknown)
+	}
+	_, err = engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-phase2-timeout", auction.BidInput{
+		ClientBidID:   "redis-ledger-phase2-timeout",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_phase2_timeout_retry")
+	assertAPIErrorCode(t, err, apierrors.CodeProcessingRetryLater)
+	if ledger.Len() != 1 {
+		t.Fatalf("ledger len after UNKNOWN replay = %d, want no duplicate append", ledger.Len())
+	}
+}
+
+func TestRedisLedgerKafkaAckMarkerFailureDoesNotReturnSuccess(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := newAppendThenCloseRedisLedger(rdb)
+	engine := New(db, rdb, ledger)
+	auctionID := createEngineAuction(t, db, 0)
+
+	resp, err := engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-phase2-marker-fail", auction.BidInput{
+		ClientBidID:   "redis-ledger-phase2-marker-fail",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_phase2_marker_fail")
+	assertAPIErrorCode(t, err, apierrors.CodeProcessingRetryLater)
+	if resp.Result != "" {
+		t.Fatalf("response = %#v, want no engine success when Kafka ACK marker is not durable", resp)
+	}
+	if ledger.Len() != 1 {
+		t.Fatalf("ledger len after ack-marker failure = %d, want Kafka decision retained", ledger.Len())
+	}
+	assertEnginePaused(t, db, auctionID, "KAFKA_APPEND_ACK_MARKER_FAILED")
+}
+
+func TestRedisLedgerCorruptIdempotencyReplayPausesInsteadOfNewDecision(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	auctionID := createEngineAuction(t, db, 0)
+	clientBidID := "redis-ledger-phase2-corrupt-replay"
+	requestHash := requestHash(auctionID, "user_1", clientBidID, 15_000)
+
+	if err := rdb.HSet(ctx, redisx.BidEngineIdempotencyKey(auctionID, clientBidID), "request_hash", requestHash).Err(); err != nil {
+		t.Fatalf("seed corrupt idempotency record: %v", err)
+	}
+	_, err := engine.PlaceBid(ctx, auctionID, "user_1", clientBidID, auction.BidInput{
+		ClientBidID:   clientBidID,
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_phase2_corrupt_replay")
+	assertAPIErrorCode(t, err, apierrors.CodeEnginePaused)
+	if ledger.Len() != 0 {
+		t.Fatalf("ledger len after corrupt replay = %d, want no new decision", ledger.Len())
+	}
+	assertEnginePaused(t, db, auctionID, "REDIS_IDEMPOTENCY_REPLAY_FAILED")
+}
+
 func TestRedisLedgerStartsAfterExistingAuctionSeq(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
@@ -429,7 +597,7 @@ func TestKafkaSettlementDuplicateMessageIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestKafkaAckBeforeReturnKeepsPendingAndWorkerDuplicateIsIdempotent(t *testing.T) {
+func TestKafkaAckedDecisionKeepsPendingAndWorkerDuplicateIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 	rdb := openStreamsRedis(t)
@@ -887,6 +1055,37 @@ func (failingLedger) Commit(context.Context, LedgerMessage) error          { ret
 func (failingLedger) WriteDLQ(context.Context, LedgerMessage, error) error { return nil }
 func (failingLedger) Close() error                                         { return nil }
 
+type appendThenTimeoutLedger struct {
+	*MemoryLedger
+}
+
+func newAppendThenTimeoutLedger() *appendThenTimeoutLedger {
+	return &appendThenTimeoutLedger{MemoryLedger: NewMemoryLedger()}
+}
+
+func (l *appendThenTimeoutLedger) Append(ctx context.Context, result engineResult) (LedgerMessage, error) {
+	_, _ = l.MemoryLedger.Append(ctx, result)
+	return LedgerMessage{}, context.DeadlineExceeded
+}
+
+type appendThenCloseRedisLedger struct {
+	*MemoryLedger
+	redis *redis.Client
+}
+
+func newAppendThenCloseRedisLedger(redisClient *redis.Client) *appendThenCloseRedisLedger {
+	return &appendThenCloseRedisLedger{MemoryLedger: NewMemoryLedger(), redis: redisClient}
+}
+
+func (l *appendThenCloseRedisLedger) Append(ctx context.Context, result engineResult) (LedgerMessage, error) {
+	msg, err := l.MemoryLedger.Append(ctx, result)
+	if err != nil {
+		return LedgerMessage{}, err
+	}
+	_ = l.redis.Close()
+	return msg, nil
+}
+
 func processPendingAppends(t *testing.T, worker *Worker, ctx context.Context, auctionID string, want int) {
 	t.Helper()
 	processed, err := worker.appendPendingDecisions(ctx, auctionID, want)
@@ -895,6 +1094,14 @@ func processPendingAppends(t *testing.T, worker *Worker, ctx context.Context, au
 	}
 	if processed != want {
 		t.Fatalf("pending appended = %d, want %d", processed, want)
+	}
+}
+
+func assertAPIErrorCode(t *testing.T, err error, want apierrors.Code) {
+	t.Helper()
+	var apiErr apierrors.APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != want {
+		t.Fatalf("error = %v, want API code %s", err, want)
 	}
 }
 
