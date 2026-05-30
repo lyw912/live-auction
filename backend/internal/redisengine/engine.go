@@ -486,7 +486,9 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 		attribute.String("auction.id", auctionID),
 		attribute.Int64("bid.engine_seq", result.EngineSeq),
 	)
+	waitStart := time.Now()
 	waitResult := e.waitForPendingAppendTurn(ctx, auctionID, clientBidID, result.EngineSeq)
+	waitElapsed := time.Since(waitStart)
 	if waitResult.Status == appendDecisionStatusAlreadyAcked {
 		stageSpan.SetAttributes(attribute.String("bid.append_order_wait.outcome", string(waitResult.Status)))
 		apptracing.End(stageSpan, nil)
@@ -498,7 +500,7 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 		stageSpan.SetAttributes(attribute.String("bid.append_order_wait.outcome", string(waitResult.Status)))
 		apptracing.End(stageSpan, waitResult.Err)
 		recordKafkaAppend(result.Result, "error", 0)
-		recordHTTPStage("append_order_wait", result.Result, "missing_pending_decision", 0)
+		recordHTTPStage("append_order_wait", result.Result, "missing_pending_decision", waitElapsed)
 		observability.Inc("auction_bid_kafka_append_fail_total", map[string]string{"reason": "pending_decision_missing"})
 		markerCtx, markerCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
 		_ = e.redis.HSet(markerCtx, idemKey,
@@ -517,7 +519,7 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 		stageSpan.SetAttributes(attribute.String("bid.append_order_wait.outcome", string(waitResult.Status)))
 		apptracing.End(stageSpan, waitResult.Err)
 		recordKafkaAppend(result.Result, "pending_worker", 0)
-		recordHTTPStage("append_order_wait", result.Result, "pending_worker", e.kafkaAppendTimeout)
+		recordHTTPStage("append_order_wait", result.Result, "pending_worker", waitElapsed)
 		observability.Inc("auction_bid_kafka_append_deferred_total", map[string]string{"reason": "pending_order"})
 		markerCtx, markerCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
 		_ = e.redis.HSet(markerCtx, idemKey,
@@ -632,54 +634,35 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 }
 
 func (e *Engine) waitForPendingAppendTurn(ctx context.Context, auctionID string, clientBidID string, engineSeq int64) appendDecisionWaitResult {
-	deadline := time.NewTimer(e.kafkaAppendTimeout)
-	defer deadline.Stop()
-	ticker := time.NewTicker(time.Millisecond)
-	defer ticker.Stop()
 	pendingKey := redisx.BidEnginePendingKey(auctionID)
-	for {
-		locked, err := e.redis.Exists(ctx, pendingAppendLockKey(auctionID)).Result()
-		if err != nil {
-			return appendDecisionWaitResult{Err: err}
-		}
-		if locked > 0 {
-			select {
-			case <-ctx.Done():
-				return appendDecisionWaitResult{Err: ctx.Err()}
-			case <-deadline.C:
-				return appendDecisionWaitResult{Status: appendDecisionStatusPendingWorker, Err: fmt.Errorf("pending append worker owns append lock auction=%s engine_seq=%d", auctionID, engineSeq)}
-			case <-ticker.C:
-				continue
-			}
-		}
-		status, err := e.redis.HGet(ctx, redisx.BidEngineIdempotencyKey(auctionID, clientBidID), "kafka_append_status").Result()
-		if err != nil && !errors.Is(err, redis.Nil) {
-			return appendDecisionWaitResult{Err: err}
-		}
-		if status == kafkaAppendStatusAcked {
-			return appendDecisionWaitResult{Status: appendDecisionStatusAlreadyAcked}
-		}
-		decision, ok, err := nextPendingDecision(ctx, e.redis, auctionID, pendingKey)
-		if err != nil {
-			return appendDecisionWaitResult{Err: err}
-		}
-		if !ok {
-			return appendDecisionWaitResult{Status: appendDecisionStatusMissing, Err: fmt.Errorf("pending decision missing without kafka ack auction=%s engine_seq=%d", auctionID, engineSeq)}
-		}
-		if decision.seq == engineSeq {
-			return appendDecisionWaitResult{Status: appendDecisionStatusTurnReady}
-		}
-		if decision.seq > engineSeq {
-			return appendDecisionWaitResult{Status: appendDecisionStatusMissing, Err: fmt.Errorf("pending decision skipped current engine seq without kafka ack auction=%s engine_seq=%d min_pending_seq=%d", auctionID, engineSeq, decision.seq)}
-		}
-		select {
-		case <-ctx.Done():
-			return appendDecisionWaitResult{Err: ctx.Err()}
-		case <-deadline.C:
-			return appendDecisionWaitResult{Status: appendDecisionStatusPendingWorker, Err: fmt.Errorf("pending decision order wait timeout auction=%s engine_seq=%d min_pending_seq=%d", auctionID, engineSeq, decision.seq)}
-		case <-ticker.C:
-		}
+	status, err := e.redis.HGet(ctx, redisx.BidEngineIdempotencyKey(auctionID, clientBidID), "kafka_append_status").Result()
+	if err != nil && !errors.Is(err, redis.Nil) {
+		return appendDecisionWaitResult{Err: err}
 	}
+	if status == kafkaAppendStatusAcked {
+		return appendDecisionWaitResult{Status: appendDecisionStatusAlreadyAcked}
+	}
+	locked, err := e.redis.Exists(ctx, pendingAppendLockKey(auctionID)).Result()
+	if err != nil {
+		return appendDecisionWaitResult{Err: err}
+	}
+	if locked > 0 {
+		return appendDecisionWaitResult{Status: appendDecisionStatusPendingWorker, Err: fmt.Errorf("pending append writer owns append lock auction=%s engine_seq=%d", auctionID, engineSeq)}
+	}
+	decision, ok, err := nextPendingDecision(ctx, e.redis, auctionID, pendingKey)
+	if err != nil {
+		return appendDecisionWaitResult{Err: err}
+	}
+	if !ok {
+		return appendDecisionWaitResult{Status: appendDecisionStatusMissing, Err: fmt.Errorf("pending decision missing without kafka ack auction=%s engine_seq=%d", auctionID, engineSeq)}
+	}
+	if decision.seq == engineSeq {
+		return appendDecisionWaitResult{Status: appendDecisionStatusTurnReady}
+	}
+	if decision.seq > engineSeq {
+		return appendDecisionWaitResult{Status: appendDecisionStatusMissing, Err: fmt.Errorf("pending decision skipped current engine seq without kafka ack auction=%s engine_seq=%d min_pending_seq=%d", auctionID, engineSeq, decision.seq)}
+	}
+	return appendDecisionWaitResult{Status: appendDecisionStatusPendingWorker, Err: fmt.Errorf("pending decision order not ready auction=%s engine_seq=%d min_pending_seq=%d", auctionID, engineSeq, decision.seq)}
 }
 
 func (e *Engine) nextUnackedPendingDecision(ctx context.Context, auctionID string, pendingKey string) (pendingDecision, bool, error) {
