@@ -15,6 +15,7 @@ KAFKA_BID_TOPIC="${KAFKA_BID_TOPIC:-auction.bid-events}"
 KAFKA_DLQ_TOPIC="${KAFKA_DLQ_TOPIC:-auction.dlq}"
 KAFKA_CONSUMER_GROUP="${KAFKA_CONSUMER_GROUP:-settlement-workers}"
 FINAL_WAIT_SECONDS="${FINAL_WAIT_SECONDS:-0}"
+EXPECTED_UNIQUE_BIDS="${EXPECTED_UNIQUE_BIDS:-${EXPECTED_BIDS:-}}"
 
 mkdir -p "$OUT_DIR"
 
@@ -29,6 +30,7 @@ fi
   echo "# L4B PTS correctness verification"
   echo "label=$LABEL"
   echo "auction_id=$AUCTION_ID"
+  echo "expected_unique_bids=${EXPECTED_UNIQUE_BIDS:-disabled}"
   echo "collected_at=$(date -Is)"
   echo
 
@@ -602,7 +604,7 @@ SQL
   echo
   echo "## machine-readable invariant gates"
   docker exec -i "$DB_CONTAINER" psql -q -A -F $'\t' -U "$DB_USER" -d "$DB_NAME" \
-    -v ON_ERROR_STOP=1 -v auction_id="$AUCTION_ID" -f - <<'SQL'
+    -v ON_ERROR_STOP=1 -v auction_id="$AUCTION_ID" -v expected_unique_bids="$EXPECTED_UNIQUE_BIDS" -f - <<'SQL'
 with auction_row as (
   select id, status, current_price_cents, current_winner_id, accepted_bid_count,
          seq, engine_seq, engine_epoch, end_at, cap_price_cents,
@@ -621,6 +623,13 @@ settlement as (
 bid_counts as (
   select count(*) filter (where status = 'ACCEPTED') as accepted,
          count(*) filter (where status = 'ACCEPTED' and settlement_status <> 'SETTLED') as accepted_not_settled
+  from bids
+  where auction_id = :'auction_id'
+),
+bid_identity as (
+  select count(*) as total,
+         count(distinct user_id) as unique_users,
+         count(distinct client_bid_id) as unique_client_bid_ids
   from bids
   where auction_id = :'auction_id'
 ),
@@ -790,6 +799,15 @@ from (
     ('P0', 'accepted_settlement_has_public_event', (select violations = 0 from accepted_settlement_coverage), 'accepted/sold settlements must have matching bid and public auction_event rows'),
     ('P0', 'no_public_auction_event_seq_gap', (select missing_count = 0 from event_gap), 'public auction event seq must be continuous'),
     ('P0', 'no_duplicate_client_bid_id', (select violations = 0 from duplicate_client_bid), 'client_bid_id must not create duplicate bid rows'),
+    ('P0', 'pts_expected_unique_users',
+      (case when nullif(:'expected_unique_bids', '') is null then true else (select unique_users = (:'expected_unique_bids')::bigint from bid_identity) end),
+      'PTS post-run gate: distinct user_id count must match expected_unique_bids; detects disabled Alibaba PTS CSV split'),
+    ('P0', 'pts_expected_unique_client_bid_ids',
+      (case when nullif(:'expected_unique_bids', '') is null then true else (select unique_client_bid_ids = (:'expected_unique_bids')::bigint from bid_identity) end),
+      'PTS post-run gate: distinct client_bid_id count must match expected_unique_bids; detects duplicated CSV rows/idempotency replay workload'),
+    ('P0', 'pts_expected_total_bid_rows',
+      (case when nullif(:'expected_unique_bids', '') is null then true else (select total = (:'expected_unique_bids')::bigint from bid_identity) end),
+      'PTS post-run gate: total persisted bid decisions must match expected_unique_bids'),
     ('P0', 'no_duplicate_engine_seq', (select violations = 0 from duplicate_engine_seq), 'engine_epoch/engine_seq must identify at most one accepted bid'),
     ('P0', 'engine_epoch_seq_monotonic', (select violations = 0 from epoch_seq_violations), 'engine_epoch/engine_seq must be monotonic'),
     ('P0', 'kafka_offset_matches_engine_order', (select violations = 0 from kafka_order_violations), 'Kafka offset order must preserve engine_seq order for the auction partition'),
@@ -1069,7 +1087,7 @@ SQL
 } > "$OUT_DIR/l4b-correctness.txt"
 
 docker exec -i "$DB_CONTAINER" psql -q -A -t -F $'\t' -U "$DB_USER" -d "$DB_NAME" \
-  -v ON_ERROR_STOP=1 -v auction_id="$AUCTION_ID" -f - > "$OUT_DIR/l4b-invariant-gates.tsv" <<'SQL'
+  -v ON_ERROR_STOP=1 -v auction_id="$AUCTION_ID" -v expected_unique_bids="$EXPECTED_UNIQUE_BIDS" -f - > "$OUT_DIR/l4b-invariant-gates.tsv" <<'SQL'
 with auction_row as (
   select id, status, current_price_cents, current_winner_id, accepted_bid_count,
          seq, engine_seq, engine_epoch, end_at,
@@ -1088,6 +1106,13 @@ settlement as (
 bid_counts as (
   select count(*) filter (where status = 'ACCEPTED') as accepted,
          count(*) filter (where status = 'ACCEPTED' and settlement_status <> 'SETTLED') as accepted_not_settled
+  from bids
+  where auction_id = :'auction_id'
+),
+bid_identity as (
+  select count(*) as total,
+         count(distinct user_id) as unique_users,
+         count(distinct client_bid_id) as unique_client_bid_ids
   from bids
   where auction_id = :'auction_id'
 ),
@@ -1224,6 +1249,15 @@ from (
     ('P0', 'accepted_settlement_has_public_event', (select violations = 0 from accepted_settlement_coverage), 'accepted/sold settlements must have matching bid and public auction_event rows'),
     ('P0', 'no_public_auction_event_seq_gap', (select missing_count = 0 from event_gap), 'public auction event seq must be continuous'),
     ('P0', 'no_duplicate_client_bid_id', (select violations = 0 from duplicate_client_bid), 'client_bid_id must not create duplicate bid rows'),
+    ('P0', 'pts_expected_unique_users',
+      (case when nullif(:'expected_unique_bids', '') is null then true else (select unique_users = (:'expected_unique_bids')::bigint from bid_identity) end),
+      'PTS post-run gate: distinct user_id count must match expected_unique_bids; detects disabled Alibaba PTS CSV split'),
+    ('P0', 'pts_expected_unique_client_bid_ids',
+      (case when nullif(:'expected_unique_bids', '') is null then true else (select unique_client_bid_ids = (:'expected_unique_bids')::bigint from bid_identity) end),
+      'PTS post-run gate: distinct client_bid_id count must match expected_unique_bids; detects duplicated CSV rows/idempotency replay workload'),
+    ('P0', 'pts_expected_total_bid_rows',
+      (case when nullif(:'expected_unique_bids', '') is null then true else (select total = (:'expected_unique_bids')::bigint from bid_identity) end),
+      'PTS post-run gate: total persisted bid decisions must match expected_unique_bids'),
     ('P0', 'no_duplicate_engine_seq', (select violations = 0 from duplicate_engine_seq), 'engine_epoch/engine_seq must identify at most one accepted bid'),
     ('P0', 'engine_epoch_seq_monotonic', (select violations = 0 from epoch_seq_violations), 'engine_epoch/engine_seq must be monotonic'),
     ('P0', 'kafka_offset_matches_engine_order', (select violations = 0 from kafka_order_violations), 'Kafka offset order must preserve engine_seq order for the auction partition'),

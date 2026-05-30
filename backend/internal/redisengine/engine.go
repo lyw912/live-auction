@@ -47,6 +47,8 @@ const (
 	kafkaAppendStatusAcked   = "ACKED"
 	kafkaAppendStatusFailed  = "FAILED"
 	kafkaAppendStatusUnknown = "UNKNOWN"
+	kafkaAppendAttempted     = "1"
+	kafkaAppendNotAttempted  = "0"
 )
 
 var ledgerRunner = redisx.NewScriptRunner(redisx.ScriptBidRedisLedger, `
@@ -132,6 +134,7 @@ local function store_result(result)
   redis.call('HSET', idem_key, 'engine_seq', tostring(result['engine_seq'] or 0))
   redis.call('HSET', idem_key, 'engine_epoch', tostring(result['engine_epoch'] or 0))
   redis.call('HSET', idem_key, 'kafka_append_status', 'UNKNOWN')
+  redis.call('HSET', idem_key, 'kafka_append_attempted', '0')
   redis.call('HSET', idem_key, 'expires_at_ms', tostring(now_ms + idem_ttl_ms))
   redis.call('PEXPIRE', idem_key, idem_ttl_ms)
   return encoded
@@ -327,6 +330,20 @@ type redisIdempotencyReplayLoad struct {
 	Found  bool
 }
 
+type appendDecisionStatus string
+
+const (
+	appendDecisionStatusTurnReady     appendDecisionStatus = "TURN_READY"
+	appendDecisionStatusAlreadyAcked  appendDecisionStatus = "ALREADY_ACKED"
+	appendDecisionStatusPendingWorker appendDecisionStatus = "PENDING_WORKER"
+	appendDecisionStatusMissing       appendDecisionStatus = "MISSING_PENDING"
+)
+
+type appendDecisionWaitResult struct {
+	Status appendDecisionStatus
+	Err    error
+}
+
 func New(db *pgxpool.Pool, redisClient *redis.Client, ledger BidLedger) *Engine {
 	return &Engine{db: db, redis: redisClient, ledger: ledger, kafkaAppendTimeout: defaultKafkaAppendTimeout}
 }
@@ -469,17 +486,53 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 		attribute.String("auction.id", auctionID),
 		attribute.Int64("bid.engine_seq", result.EngineSeq),
 	)
-	if err := e.waitForPendingAppendTurn(ctx, auctionID, result.EngineSeq); err != nil {
-		apptracing.End(stageSpan, err)
+	waitResult := e.waitForPendingAppendTurn(ctx, auctionID, clientBidID, result.EngineSeq)
+	if waitResult.Status == appendDecisionStatusAlreadyAcked {
+		stageSpan.SetAttributes(attribute.String("bid.append_order_wait.outcome", string(waitResult.Status)))
+		apptracing.End(stageSpan, nil)
+		recordKafkaAppend(result.Result, "already_acked", 0)
+		recordHTTPStage("kafka_append", result.Result, "already_acked", 0)
+		return nil
+	}
+	if waitResult.Status == appendDecisionStatusMissing {
+		stageSpan.SetAttributes(attribute.String("bid.append_order_wait.outcome", string(waitResult.Status)))
+		apptracing.End(stageSpan, waitResult.Err)
 		recordKafkaAppend(result.Result, "error", 0)
-		observability.Inc("auction_bid_kafka_append_fail_total", map[string]string{"reason": "pending_order"})
+		recordHTTPStage("append_order_wait", result.Result, "missing_pending_decision", 0)
+		observability.Inc("auction_bid_kafka_append_fail_total", map[string]string{"reason": "pending_decision_missing"})
 		markerCtx, markerCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
-		_ = e.redis.HSet(markerCtx, idemKey, "kafka_append_status", kafkaAppendStatusUnknown, "kafka_append_error", err.Error()).Err()
-		_ = e.recordAuctionAppendStats(markerCtx, auctionID, kafkaAppendStatusUnknown, result.EngineSeq)
+		_ = e.redis.HSet(markerCtx, idemKey,
+			"kafka_append_status", kafkaAppendStatusFailed,
+			"kafka_append_error", waitResult.Err.Error(),
+			"kafka_append_attempted", kafkaAppendNotAttempted,
+		).Err()
+		_ = e.recordAuctionAppendStats(markerCtx, auctionID, kafkaAppendStatusFailed, result.EngineSeq)
 		markerCancel()
 		pauseCtx, pauseCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
 		defer pauseCancel()
-		_ = e.pause(pauseCtx, auctionID, "KAFKA_APPEND_ORDER_WAIT_FAILED", err.Error(), traceID)
+		_ = e.pause(pauseCtx, auctionID, "KAFKA_APPEND_PENDING_DECISION_MISSING", waitResult.Err.Error(), traceID)
+		return apierrors.New(apierrors.CodeEngineReconciling, "bid engine decision is recovering; retry with the same idempotency key", http.StatusConflict)
+	}
+	if waitResult.Status == appendDecisionStatusPendingWorker {
+		stageSpan.SetAttributes(attribute.String("bid.append_order_wait.outcome", string(waitResult.Status)))
+		apptracing.End(stageSpan, waitResult.Err)
+		recordKafkaAppend(result.Result, "pending_worker", 0)
+		recordHTTPStage("append_order_wait", result.Result, "pending_worker", e.kafkaAppendTimeout)
+		observability.Inc("auction_bid_kafka_append_deferred_total", map[string]string{"reason": "pending_order"})
+		markerCtx, markerCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
+		_ = e.redis.HSet(markerCtx, idemKey,
+			"kafka_append_status", kafkaAppendStatusUnknown,
+			"kafka_append_error", waitResult.Err.Error(),
+			"kafka_append_attempted", kafkaAppendNotAttempted,
+		).Err()
+		_ = e.recordAuctionAppendStats(markerCtx, auctionID, kafkaAppendStatusUnknown, result.EngineSeq)
+		markerCancel()
+		return apierrors.New(apierrors.CodeProcessingRetryLater, "bid confirmation is pending; retry with the same idempotency key", http.StatusConflict)
+	}
+	if waitResult.Err != nil {
+		apptracing.End(stageSpan, waitResult.Err)
+		recordKafkaAppend(result.Result, "error", 0)
+		observability.Inc("auction_bid_kafka_append_fail_total", map[string]string{"reason": "pending_order_read"})
 		return apierrors.New(apierrors.CodeProcessingRetryLater, "bid confirmation is pending; retry with the same idempotency key", http.StatusConflict)
 	}
 	apptracing.End(stageSpan, nil)
@@ -490,6 +543,20 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 		attribute.String("bid.result", result.Result),
 	)
 	appendCtx, cancel := context.WithTimeout(kafkaCtx, e.kafkaAppendTimeout)
+	attemptCtx, attemptCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
+	if err := e.redis.HSet(attemptCtx, idemKey, "kafka_append_attempted", kafkaAppendAttempted).Err(); err != nil {
+		attemptCancel()
+		cancel()
+		apptracing.End(stageSpan, err)
+		recordKafkaAppend(result.Result, "error", 0)
+		recordHTTPStage("kafka_append", result.Result, "attempt_marker_failed", time.Since(start))
+		observability.Inc("auction_bid_kafka_append_fail_total", map[string]string{"reason": "attempt_marker"})
+		pauseCtx, pauseCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
+		defer pauseCancel()
+		_ = e.pause(pauseCtx, auctionID, "KAFKA_APPEND_ATTEMPT_MARKER_FAILED", err.Error(), traceID)
+		return apierrors.New(apierrors.CodeProcessingRetryLater, "bid confirmation is pending; retry with the same idempotency key", http.StatusConflict)
+	}
+	attemptCancel()
 	message, err := e.ledger.Append(appendCtx, result)
 	cancel()
 	elapsed := time.Since(start)
@@ -499,7 +566,11 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 		recordKafkaAppend(result.Result, "error", elapsed)
 		observability.Inc("auction_bid_kafka_append_fail_total", map[string]string{"reason": failure.Reason})
 		markerCtx, markerCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
-		_ = e.redis.HSet(markerCtx, idemKey, "kafka_append_status", failure.Status, "kafka_append_error", err.Error()).Err()
+		_ = e.redis.HSet(markerCtx, idemKey,
+			"kafka_append_status", failure.Status,
+			"kafka_append_error", err.Error(),
+			"kafka_append_attempted", kafkaAppendAttempted,
+		).Err()
 		_ = e.recordAuctionAppendStats(markerCtx, auctionID, failure.Status, result.EngineSeq)
 		markerCancel()
 		pauseCtx, pauseCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
@@ -515,20 +586,12 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 	apptracing.End(stageSpan, nil)
 	recordKafkaAppend(result.Result, "ok", elapsed)
 	recordHTTPStage("kafka_append", result.Result, "ok", elapsed)
-	fields := []any{
-		"kafka_append_status", kafkaAppendStatusAcked,
-		"kafka_topic", message.Topic,
-	}
-	if message.Partition >= 0 && message.Offset >= 0 {
-		fields = append(fields, "kafka_partition", message.Partition, "kafka_offset", message.Offset)
-	}
-	expiresAtMS := time.Now().UTC().Add(idempotencyTTL).UnixMilli()
 	markerCtx, markerCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
 	_, stageSpan = apptracing.Start(traceCtx, "bid.redis_marker",
 		attribute.String("auction.id", auctionID),
 		attribute.Int64("bid.engine_seq", result.EngineSeq),
 	)
-	if err := e.redis.HSet(markerCtx, idemKey, fields...).Err(); err != nil {
+	if err := e.markKafkaAppendAcked(markerCtx, auctionID, clientBidID, result, message, traceID); err != nil {
 		markerCancel()
 		apptracing.End(stageSpan, err)
 		recordHTTPStage("kafka_append_marker", result.Result, "error", time.Since(start))
@@ -538,71 +601,57 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 		_ = e.pause(pauseCtx, auctionID, "KAFKA_APPEND_ACK_MARKER_FAILED", err.Error(), traceID)
 		return apierrors.New(apierrors.CodeProcessingRetryLater, "bid confirmation is pending; retry with the same idempotency key", http.StatusConflict)
 	}
-	auctionMarkerFields := []any{
-		"kafka_append_status", kafkaAppendStatusAcked,
-		"kafka_topic", message.Topic,
-		"engine_epoch", result.EngineEpoch,
-		"engine_seq", result.EngineSeq,
-		"client_bid_id", clientBidID,
-		"result", result.Result,
-		"server_time_ms", result.ServerTimeMS,
-		"trace_id", traceID,
-		"expires_at_ms", expiresAtMS,
-	}
-	if message.Partition >= 0 && message.Offset >= 0 {
-		auctionMarkerFields = append(auctionMarkerFields, "kafka_partition", message.Partition, "kafka_offset", message.Offset)
-	}
-	if err := e.redis.HSet(markerCtx, redisx.BidEngineAppendMarkerKey(auctionID), auctionMarkerFields...).Err(); err != nil {
-		markerCancel()
-		apptracing.End(stageSpan, err)
-		recordHTTPStage("kafka_append_marker", result.Result, "error", time.Since(start))
-		observability.Inc("auction_bid_kafka_append_marker_fail_total", map[string]string{"reason": "redis"})
-		pauseCtx, pauseCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
-		defer pauseCancel()
-		_ = e.pause(pauseCtx, auctionID, "KAFKA_APPEND_AUCTION_MARKER_FAILED", err.Error(), traceID)
-		return apierrors.New(apierrors.CodeProcessingRetryLater, "bid confirmation is pending; retry with the same idempotency key", http.StatusConflict)
-	}
-	if err := e.redis.PExpire(markerCtx, redisx.BidEngineAppendMarkerKey(auctionID), idempotencyTTL).Err(); err != nil {
-		markerCancel()
-		apptracing.End(stageSpan, err)
-		recordHTTPStage("kafka_append_marker", result.Result, "error", time.Since(start))
-		observability.Inc("auction_bid_kafka_append_marker_fail_total", map[string]string{"reason": "redis_ttl"})
-		pauseCtx, pauseCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
-		defer pauseCancel()
-		_ = e.pause(pauseCtx, auctionID, "KAFKA_APPEND_AUCTION_MARKER_TTL_FAILED", err.Error(), traceID)
-		return apierrors.New(apierrors.CodeProcessingRetryLater, "bid confirmation is pending; retry with the same idempotency key", http.StatusConflict)
-	}
-	if err := e.recordAuctionAppendStats(markerCtx, auctionID, kafkaAppendStatusAcked, result.EngineSeq); err != nil {
-		recordHTTPStage("kafka_append_marker", result.Result, "error", time.Since(start))
-		observability.Inc("auction_bid_kafka_append_marker_fail_total", map[string]string{"reason": "redis_stats"})
-	}
 	markerCancel()
 	apptracing.End(stageSpan, nil)
 	return nil
 }
 
-func (e *Engine) waitForPendingAppendTurn(ctx context.Context, auctionID string, engineSeq int64) error {
+func (e *Engine) waitForPendingAppendTurn(ctx context.Context, auctionID string, clientBidID string, engineSeq int64) appendDecisionWaitResult {
 	deadline := time.NewTimer(e.kafkaAppendTimeout)
 	defer deadline.Stop()
 	ticker := time.NewTicker(time.Millisecond)
 	defer ticker.Stop()
 	pendingKey := redisx.BidEnginePendingKey(auctionID)
 	for {
-		decision, ok, err := e.nextUnackedPendingDecision(ctx, auctionID, pendingKey)
+		locked, err := e.redis.Exists(ctx, pendingAppendLockKey(auctionID)).Result()
 		if err != nil {
-			return err
+			return appendDecisionWaitResult{Err: err}
+		}
+		if locked > 0 {
+			select {
+			case <-ctx.Done():
+				return appendDecisionWaitResult{Err: ctx.Err()}
+			case <-deadline.C:
+				return appendDecisionWaitResult{Status: appendDecisionStatusPendingWorker, Err: fmt.Errorf("pending append worker owns append lock auction=%s engine_seq=%d", auctionID, engineSeq)}
+			case <-ticker.C:
+				continue
+			}
+		}
+		status, err := e.redis.HGet(ctx, redisx.BidEngineIdempotencyKey(auctionID, clientBidID), "kafka_append_status").Result()
+		if err != nil && !errors.Is(err, redis.Nil) {
+			return appendDecisionWaitResult{Err: err}
+		}
+		if status == kafkaAppendStatusAcked {
+			return appendDecisionWaitResult{Status: appendDecisionStatusAlreadyAcked}
+		}
+		decision, ok, err := nextPendingDecision(ctx, e.redis, auctionID, pendingKey)
+		if err != nil {
+			return appendDecisionWaitResult{Err: err}
 		}
 		if !ok {
-			return fmt.Errorf("pending decision missing before kafka append auction=%s engine_seq=%d", auctionID, engineSeq)
+			return appendDecisionWaitResult{Status: appendDecisionStatusMissing, Err: fmt.Errorf("pending decision missing without kafka ack auction=%s engine_seq=%d", auctionID, engineSeq)}
 		}
 		if decision.seq == engineSeq {
-			return nil
+			return appendDecisionWaitResult{Status: appendDecisionStatusTurnReady}
+		}
+		if decision.seq > engineSeq {
+			return appendDecisionWaitResult{Status: appendDecisionStatusMissing, Err: fmt.Errorf("pending decision skipped current engine seq without kafka ack auction=%s engine_seq=%d min_pending_seq=%d", auctionID, engineSeq, decision.seq)}
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return appendDecisionWaitResult{Err: ctx.Err()}
 		case <-deadline.C:
-			return fmt.Errorf("pending decision order wait timeout auction=%s engine_seq=%d min_pending_seq=%d", auctionID, engineSeq, decision.seq)
+			return appendDecisionWaitResult{Status: appendDecisionStatusPendingWorker, Err: fmt.Errorf("pending decision order wait timeout auction=%s engine_seq=%d min_pending_seq=%d", auctionID, engineSeq, decision.seq)}
 		case <-ticker.C:
 		}
 	}
@@ -624,6 +673,51 @@ func (e *Engine) nextUnackedPendingDecision(ctx context.Context, auctionID strin
 		return decision, true, nil
 	}
 	return pendingDecision{}, false, nil
+}
+
+func (e *Engine) markKafkaAppendAcked(ctx context.Context, auctionID string, clientBidID string, result engineResult, message LedgerMessage, traceID string) error {
+	if e == nil || e.redis == nil {
+		return nil
+	}
+	idemKey := redisx.BidEngineIdempotencyKey(auctionID, clientBidID)
+	fields := []any{
+		"kafka_append_status", kafkaAppendStatusAcked,
+		"kafka_append_attempted", kafkaAppendAttempted,
+		"kafka_topic", message.Topic,
+	}
+	if message.Partition >= 0 && message.Offset >= 0 {
+		fields = append(fields, "kafka_partition", message.Partition, "kafka_offset", message.Offset)
+	}
+	expiresAtMS := time.Now().UTC().Add(idempotencyTTL).UnixMilli()
+	auctionMarkerFields := []any{
+		"kafka_append_status", kafkaAppendStatusAcked,
+		"kafka_topic", message.Topic,
+		"engine_epoch", result.EngineEpoch,
+		"engine_seq", result.EngineSeq,
+		"client_bid_id", clientBidID,
+		"result", result.Result,
+		"server_time_ms", result.ServerTimeMS,
+		"trace_id", traceID,
+		"expires_at_ms", expiresAtMS,
+	}
+	if message.Partition >= 0 && message.Offset >= 0 {
+		auctionMarkerFields = append(auctionMarkerFields, "kafka_partition", message.Partition, "kafka_offset", message.Offset)
+	}
+	pipe := e.redis.TxPipeline()
+	pipe.HSet(ctx, idemKey, fields...)
+	pipe.HDel(ctx, redisx.BidEnginePendingKey(auctionID), strconv.FormatInt(result.EngineSeq, 10))
+	pipe.HSet(ctx, redisx.BidEngineAppendMarkerKey(auctionID), auctionMarkerFields...)
+	pipe.PExpire(ctx, redisx.BidEngineAppendMarkerKey(auctionID), idempotencyTTL)
+	pipe.HIncrBy(ctx, redisx.BidEngineAppendStatsKey(auctionID), "success_count", 1)
+	pipe.HSet(ctx, redisx.BidEngineAppendStatsKey(auctionID),
+		"last_status", kafkaAppendStatusAcked,
+		"last_engine_seq", result.EngineSeq,
+		"last_updated_ms", time.Now().UTC().UnixMilli(),
+		"expires_at_ms", expiresAtMS,
+	)
+	pipe.PExpire(ctx, redisx.BidEngineAppendStatsKey(auctionID), idempotencyTTL)
+	_, err := pipe.Exec(ctx)
+	return err
 }
 
 func (e *Engine) recordAuctionAppendStats(ctx context.Context, auctionID string, status string, engineSeq int64) error {
@@ -1240,8 +1334,32 @@ return 0
 			}
 			return processed, err
 		}
-		if _, err := w.ledger.Append(ctx, decision.result); err != nil {
+		idemKey := redisx.BidEngineIdempotencyKey(auctionID, decision.result.ClientBidID)
+		status, err := w.redis.HGet(ctx, idemKey, "kafka_append_status").Result()
+		if err != nil && !errors.Is(err, redis.Nil) {
 			return processed, err
+		}
+		attempted, err := w.redis.HGet(ctx, idemKey, "kafka_append_attempted").Result()
+		if err != nil && !errors.Is(err, redis.Nil) {
+			return processed, err
+		}
+		if status != kafkaAppendStatusAcked && attempted == kafkaAppendAttempted {
+			err := fmt.Errorf("pending decision has prior kafka append attempt with status=%s auction=%s engine_seq=%d client_bid_id=%s", status, auctionID, decision.seq, decision.result.ClientBidID)
+			_ = w.pause(ctx, auctionID, "KAFKA_APPEND_ATTEMPT_OUTCOME_UNKNOWN", err.Error(), decision.result.TraceID, map[string]any{
+				"engine_seq":          decision.seq,
+				"client_bid_id":       decision.result.ClientBidID,
+				"kafka_append_status": status,
+			})
+			return processed, err
+		}
+		if status != kafkaAppendStatusAcked {
+			message, err := w.ledger.Append(ctx, decision.result)
+			if err != nil {
+				return processed, err
+			}
+			if err := w.markKafkaAppendAcked(ctx, auctionID, decision.result.ClientBidID, decision.result, message, decision.result.TraceID); err != nil {
+				return processed, err
+			}
 		}
 		owned, err = w.pendingAppendLockOwned(ctx, lockKey, lockToken)
 		if err != nil || !owned {
@@ -1314,6 +1432,11 @@ func (w *Worker) pendingAppendLockOwned(ctx context.Context, lockKey string, loc
 		return false, err
 	}
 	return value == lockToken, nil
+}
+
+func (w *Worker) markKafkaAppendAcked(ctx context.Context, auctionID string, clientBidID string, result engineResult, message LedgerMessage, traceID string) error {
+	engine := Engine{redis: w.redis}
+	return engine.markKafkaAppendAcked(ctx, auctionID, clientBidID, result, message, traceID)
 }
 
 func (w *Worker) logger() *slog.Logger {

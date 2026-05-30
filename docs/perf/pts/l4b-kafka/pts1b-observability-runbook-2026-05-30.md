@@ -43,6 +43,13 @@ load model: 1000 VU, 1 second ramp, 60 second duration, one bid per VU,
 diagnosis, change only the PTS pressure-log sampling rate to `100%`; changing
 the load shape at the same time invalidates comparison with prior PTS-1B runs.
 
+For Alibaba Cloud multi-agent PTS, enable CSV splitting for
+`pts-1ab-1000vu-sessions.csv`. This is a hard gate, not an optimization. Without
+split/disjoint data, each pressure agent starts from row 1 and duplicates
+`user_id`, `client_bid_id`, and `Idempotency-Key`, which turns the run into an
+idempotency replay test instead of a 1000-user hotspot test. Reject the report if
+PostgreSQL has fewer than 1000 distinct `client_bid_id` rows for `auc_live`.
+
 If running the backend manually instead of using the reset script, start it with
 tracing enabled during the diagnostic run:
 
@@ -69,6 +76,9 @@ Use 100% trace sampling only for short PTS-1B investigations. For longer runs, l
 
 - PTS raw sampling logs with 100% sampling and request/response headers.
 - PTS summary p50/p95/p99 and error classification.
+- PostgreSQL uniqueness evidence:
+  `count(distinct user_id)=1000` and `count(distinct client_bid_id)=1000` for
+  `bids where auction_id='auc_live'`.
 - Grafana screenshot/export of `Live Auction PTS1-B Bottlenecks`.
 - Prometheus snapshot or query export for the PromQL below.
 - At least 3 Tempo traces for p99-ish requests, using the response `X-Trace-Id`.
