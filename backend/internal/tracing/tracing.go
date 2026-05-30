@@ -31,6 +31,7 @@ func Init(ctx context.Context, log *slog.Logger) ShutdownFunc {
 	if !envBool("OTEL_TRACES_ENABLED", false) {
 		return func(context.Context) error { return nil }
 	}
+	normalizeOTLPDurationEnv("OTEL_EXPORTER_OTLP_TIMEOUT")
 	exporter, err := otlptracehttp.New(ctx,
 		otlptracehttp.WithEndpoint(envEndpoint("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4318")),
 		otlptracehttp.WithInsecure(),
@@ -153,4 +154,19 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return parsed
+}
+
+func normalizeOTLPDurationEnv(key string) {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return
+	}
+	if _, err := strconv.Atoi(value); err == nil {
+		return
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return
+	}
+	_ = os.Setenv(key, strconv.FormatInt(parsed.Milliseconds(), 10))
 }

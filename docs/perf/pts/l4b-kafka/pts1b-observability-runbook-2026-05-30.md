@@ -22,7 +22,29 @@ Prometheus/Grafana answers where the population is slow. Tempo answers why a sam
 docker compose -f infra/docker-compose.yml up -d prometheus grafana tempo otel-collector pyroscope
 ```
 
-Start the backend with tracing enabled during the diagnostic run:
+For the standard PTS-1B cloud workload, reset the pressure data and start the
+backend through the PTS reset script so the JMX, CSV, database, Redis, Kafka
+topics, and backend environment stay in one audited path:
+
+```bash
+OTEL_TRACES_ENABLED=true \
+OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4318 \
+OTEL_TRACES_SAMPLER_RATIO=1 \
+OTEL_SERVICE_NAME=live-auction-backend \
+L4B_PROFILE=pts-1b \
+SESSION_COUNT=1000 \
+SESSION_CSV=pts-1ab-1000vu-sessions.csv \
+bash tests/pts/reset-l4b-final-second-pressure.sh
+```
+
+The PTS workload should keep the existing `pts-1b-contention-burst-1000vu-1m.jmx`
+load model: 1000 VU, 1 second ramp, 60 second duration, one bid per VU,
+`ADMISSION_ENABLED=false`, and `BID_ENGINE_MODE=redis_ledger`. During p99
+diagnosis, change only the PTS pressure-log sampling rate to `100%`; changing
+the load shape at the same time invalidates comparison with prior PTS-1B runs.
+
+If running the backend manually instead of using the reset script, start it with
+tracing enabled during the diagnostic run:
 
 ```bash
 OTEL_TRACES_ENABLED=true \

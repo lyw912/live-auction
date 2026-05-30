@@ -103,7 +103,13 @@ SQL
   require_rg "empty_pending_index_entry_is_cleaned" "len\\(decisions\\) == 0" "$ROOT_DIR/backend/internal/redisengine/engine.go"
   require_rg "reconciler_recovers_pending" "recoverPendingDecisions" "$ROOT_DIR/backend/internal/redisengine/engine.go"
   require_rg "settlement_rejects_stale_epoch" "result\\.EngineEpoch != dbEpoch" "$ROOT_DIR/backend/internal/redisengine/engine.go"
-  require_rg "settlement_enforces_seq_next" "result\\.EngineSeq != dbSeq\\+1" "$ROOT_DIR/backend/internal/redisengine/engine.go"
+  if rg -q "result\\.EngineSeq != dbSeq\\+1" "$ROOT_DIR/backend/internal/redisengine/engine.go" ||
+     (rg -q "result\\.EngineSeq > dbSeq\\+1" "$ROOT_DIR/backend/internal/redisengine/engine.go" &&
+      rg -q "result\\.EngineSeq <= dbSeq" "$ROOT_DIR/backend/internal/redisengine/engine.go"); then
+    printf 'P0\tsettlement_enforces_seq_next\tPASS\tsettlement accepts only the next engine_seq\n'
+  else
+    printf 'P0\tsettlement_enforces_seq_next\tFAIL\tmissing next engine_seq enforcement\n'
+  fi
   require_rg "accepted_settlement_fenced_update" 'WHERE id = \$1 AND engine_epoch = \$7 AND engine_seq = \$6 - 1' "$ROOT_DIR/backend/internal/redisengine/engine.go"
   require_rg "soft_close_extends_from_previous_end_at" "local candidate = end_at_ms \\+ extend_by_ms" "$ROOT_DIR/backend/internal/redisengine/engine.go"
   require_rg "cap_is_terminal_before_soft_close" "amount == cap" "$ROOT_DIR/backend/internal/redisengine/engine.go"
