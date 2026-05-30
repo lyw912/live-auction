@@ -979,29 +979,49 @@ cap_terminal_violations as (
 ),
 soft_close_extension_violations as (
   select count(*) as violations
-  from bids b
+  from redis_engine_settlements s
+  join bids b
+    on b.auction_id = s.auction_id
+   and b.engine_epoch = s.engine_epoch
+   and b.engine_seq = s.engine_seq
   join auctions a on a.id = b.auction_id
   join auction_rules ar on ar.auction_id = a.id and ar.rule_version = a.rule_version
   where b.auction_id = :'auction_id'
+    and s.status = 'SETTLED'
+    and s.result in ('ENGINE_ACCEPTED','ENGINE_SOLD')
+    and (s.payload_json->>'end_at_ms') ~ '^[0-9]+$'
     and b.status = 'ACCEPTED'
     and b.engine_seq is not null
     and b.engine_seq > 1
     and exists (
       select 1
-      from bids prev
-      where prev.auction_id = b.auction_id
+      from redis_engine_settlements prev_s
+      join bids prev
+        on prev.auction_id = prev_s.auction_id
+       and prev.engine_epoch = prev_s.engine_epoch
+       and prev.engine_seq = prev_s.engine_seq
+      where prev_s.auction_id = s.auction_id
+        and prev_s.status = 'SETTLED'
+        and prev_s.result in ('ENGINE_ACCEPTED','ENGINE_SOLD')
         and prev.status = 'ACCEPTED'
         and prev.engine_seq < b.engine_seq
-        and prev.end_at = b.end_at
+        and prev_s.payload_json->>'end_at_ms' = s.payload_json->>'end_at_ms'
     )
     and exists (
       select 1
-      from bids later
-      where later.auction_id = b.auction_id
+      from redis_engine_settlements later_s
+      join bids later
+        on later.auction_id = later_s.auction_id
+       and later.engine_epoch = later_s.engine_epoch
+       and later.engine_seq = later_s.engine_seq
+      where later_s.auction_id = s.auction_id
+        and later_s.status = 'SETTLED'
+        and later_s.result in ('ENGINE_ACCEPTED','ENGINE_SOLD')
+        and (later_s.payload_json->>'end_at_ms') ~ '^[0-9]+$'
         and later.status = 'ACCEPTED'
         and later.engine_seq > b.engine_seq
-        and later.end_at > b.end_at
-        and later.end_at < b.end_at + make_interval(secs => ar.extend_by_seconds)
+        and to_timestamp((later_s.payload_json->>'end_at_ms')::double precision / 1000.0) > to_timestamp((s.payload_json->>'end_at_ms')::double precision / 1000.0)
+        and to_timestamp((later_s.payload_json->>'end_at_ms')::double precision / 1000.0) < to_timestamp((s.payload_json->>'end_at_ms')::double precision / 1000.0) + make_interval(secs => ar.extend_by_seconds)
     )
 )
 select severity, name, case when pass then 'PASS' else 'FAIL' end as status, detail
@@ -1429,29 +1449,49 @@ cap_terminal_violations as (
 ),
 soft_close_extension_violations as (
   select count(*) as violations
-  from bids b
+  from redis_engine_settlements s
+  join bids b
+    on b.auction_id = s.auction_id
+   and b.engine_epoch = s.engine_epoch
+   and b.engine_seq = s.engine_seq
   join auctions a on a.id = b.auction_id
   join auction_rules ar on ar.auction_id = a.id and ar.rule_version = a.rule_version
   where b.auction_id = :'auction_id'
+    and s.status = 'SETTLED'
+    and s.result in ('ENGINE_ACCEPTED','ENGINE_SOLD')
+    and (s.payload_json->>'end_at_ms') ~ '^[0-9]+$'
     and b.status = 'ACCEPTED'
     and b.engine_seq is not null
     and b.engine_seq > 1
     and exists (
       select 1
-      from bids prev
-      where prev.auction_id = b.auction_id
+      from redis_engine_settlements prev_s
+      join bids prev
+        on prev.auction_id = prev_s.auction_id
+       and prev.engine_epoch = prev_s.engine_epoch
+       and prev.engine_seq = prev_s.engine_seq
+      where prev_s.auction_id = s.auction_id
+        and prev_s.status = 'SETTLED'
+        and prev_s.result in ('ENGINE_ACCEPTED','ENGINE_SOLD')
         and prev.status = 'ACCEPTED'
         and prev.engine_seq < b.engine_seq
-        and prev.end_at = b.end_at
+        and prev_s.payload_json->>'end_at_ms' = s.payload_json->>'end_at_ms'
     )
     and exists (
       select 1
-      from bids later
-      where later.auction_id = b.auction_id
+      from redis_engine_settlements later_s
+      join bids later
+        on later.auction_id = later_s.auction_id
+       and later.engine_epoch = later_s.engine_epoch
+       and later.engine_seq = later_s.engine_seq
+      where later_s.auction_id = s.auction_id
+        and later_s.status = 'SETTLED'
+        and later_s.result in ('ENGINE_ACCEPTED','ENGINE_SOLD')
+        and (later_s.payload_json->>'end_at_ms') ~ '^[0-9]+$'
         and later.status = 'ACCEPTED'
         and later.engine_seq > b.engine_seq
-        and later.end_at > b.end_at
-        and later.end_at < b.end_at + make_interval(secs => ar.extend_by_seconds)
+        and to_timestamp((later_s.payload_json->>'end_at_ms')::double precision / 1000.0) > to_timestamp((s.payload_json->>'end_at_ms')::double precision / 1000.0)
+        and to_timestamp((later_s.payload_json->>'end_at_ms')::double precision / 1000.0) < to_timestamp((s.payload_json->>'end_at_ms')::double precision / 1000.0) + make_interval(secs => ar.extend_by_seconds)
     )
 )
 select severity, name, case when pass then 'PASS' else 'FAIL' end as status, detail

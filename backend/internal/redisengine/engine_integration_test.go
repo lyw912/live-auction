@@ -965,6 +965,64 @@ func TestPendingAppendAttemptedUnknownFailsClosedWithoutDuplicateWorkerAppend(t 
 	assertEnginePaused(t, db, auctionID, "KAFKA_APPEND_ATTEMPT_OUTCOME_UNKNOWN")
 }
 
+func TestHTTPAppendLockPreventsWorkerMisclassifyingInFlightAttempt(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := newSlowMemoryLedger(40 * time.Millisecond)
+	engine := New(db, rdb, ledger)
+	engine.kafkaAppendTimeout = 200 * time.Millisecond
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-http-lock", auction.BidInput{
+			ClientBidID:   "redis-ledger-http-lock",
+			AmountCents:   15_000,
+			ClientSeenSeq: 0,
+		}, "tr_http_lock")
+		done <- err
+	}()
+	deadline := time.After(time.Second)
+	for {
+		attempted, err := rdb.HGet(ctx, redisx.BidEngineIdempotencyKey(auctionID, "redis-ledger-http-lock"), "kafka_append_attempted").Result()
+		if err != nil && !errors.Is(err, redis.Nil) {
+			t.Fatalf("load attempted marker: %v", err)
+		}
+		if attempted == kafkaAppendAttempted {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for HTTP append attempt marker")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	processed, err := worker.appendPendingDecisions(ctx, auctionID, 1)
+	if err != nil {
+		t.Fatalf("worker saw in-flight HTTP append as hard failure: %v", err)
+	}
+	if processed != 0 {
+		t.Fatalf("worker processed while HTTP owned append lock = %d, want 0", processed)
+	}
+	assertEngineNotPaused(t, db, auctionID)
+	if err := <-done; err != nil {
+		t.Fatalf("HTTP append result: %v", err)
+	}
+	assertEngineNotPaused(t, db, auctionID)
+	if ledger.Len() != 1 {
+		t.Fatalf("ledger len = %d, want single HTTP append", ledger.Len())
+	}
+	pending, err := rdb.HLen(ctx, redisx.BidEnginePendingKey(auctionID)).Result()
+	if err != nil {
+		t.Fatalf("count pending: %v", err)
+	}
+	if pending != 0 {
+		t.Fatalf("pending = %d, want cleared by HTTP ACK", pending)
+	}
+}
+
 func TestPendingDecisionMissingWithoutAckPausesEngine(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
@@ -2097,6 +2155,9 @@ func createEngineAuction(t *testing.T, db *pgxpool.Pool, capCents int64) string 
 	`, auctionID, roomID, itemID, capArg, endAt); err != nil {
 		t.Fatalf("insert auction: %v", err)
 	}
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), `UPDATE auctions SET status = 'ENDED', updated_at = now() WHERE id = $1 AND status = 'ACTIVE'`, auctionID)
+	})
 	if _, err := db.Exec(ctx, `
 		INSERT INTO auction_rules (
 		  auction_id, rule_version, duration_seconds, extend_window_seconds,

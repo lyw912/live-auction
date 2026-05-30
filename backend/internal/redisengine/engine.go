@@ -537,6 +537,31 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 	}
 	apptracing.End(stageSpan, nil)
 	start := time.Now()
+	lockKey := pendingAppendLockKey(auctionID)
+	lockToken := "http:" + uuid.NewString()
+	locked, err := e.redis.SetNX(ctx, lockKey, lockToken, pendingAppendLockTTL).Result()
+	if err != nil {
+		recordKafkaAppend(result.Result, "error", 0)
+		recordHTTPStage("append_order_wait", result.Result, "lock_error", time.Since(start))
+		observability.Inc("auction_bid_kafka_append_fail_total", map[string]string{"reason": "pending_lock"})
+		return apierrors.New(apierrors.CodeProcessingRetryLater, "bid confirmation is pending; retry with the same idempotency key", http.StatusConflict)
+	}
+	if !locked {
+		recordKafkaAppend(result.Result, "pending_worker", 0)
+		recordHTTPStage("append_order_wait", result.Result, "lock_busy", time.Since(start))
+		observability.Inc("auction_bid_kafka_append_deferred_total", map[string]string{"reason": "pending_lock"})
+		markerCtx, markerCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
+		_ = e.redis.HSet(markerCtx, idemKey,
+			"kafka_append_status", kafkaAppendStatusUnknown,
+			"kafka_append_error", "pending append lock is owned by another writer",
+			"kafka_append_attempted", kafkaAppendNotAttempted,
+		).Err()
+		_ = e.recordAuctionAppendStats(markerCtx, auctionID, kafkaAppendStatusUnknown, result.EngineSeq)
+		markerCancel()
+		return apierrors.New(apierrors.CodeProcessingRetryLater, "bid confirmation is pending; retry with the same idempotency key", http.StatusConflict)
+	}
+	defer releasePendingAppendLock(context.Background(), e.redis, lockKey, lockToken)
+
 	kafkaCtx, stageSpan := apptracing.Start(traceCtx, "bid.kafka_append",
 		attribute.String("auction.id", auctionID),
 		attribute.Int64("bid.engine_seq", result.EngineSeq),
@@ -877,6 +902,18 @@ func pendingDecisions(ctx context.Context, redisClient *redis.Client, auctionID 
 
 func pendingAppendLockKey(auctionID string) string {
 	return fmt.Sprintf("bid:{%s}:engine:pending:append-lock", auctionID)
+}
+
+func releasePendingAppendLock(ctx context.Context, redisClient *redis.Client, lockKey string, lockToken string) {
+	if redisClient == nil || lockKey == "" || lockToken == "" {
+		return
+	}
+	_ = redisClient.Eval(ctx, `
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('DEL', KEYS[1])
+end
+return 0
+`, []string{lockKey}, lockToken).Err()
 }
 
 func (e *Engine) completedReplay(ctx context.Context, auctionID string, userID string, idempotencyKey string, requestHash string) (auction.BidResponse, bool, error) {
@@ -1305,14 +1342,7 @@ func (w *Worker) appendPendingDecisions(ctx context.Context, auctionID string, l
 	lockCtx, stopRefreshingLock := context.WithCancel(ctx)
 	defer stopRefreshingLock()
 	go w.refreshPendingAppendLock(lockCtx, lockKey, lockToken)
-	defer func() {
-		_ = w.redis.Eval(context.Background(), `
-if redis.call('GET', KEYS[1]) == ARGV[1] then
-  return redis.call('DEL', KEYS[1])
-end
-return 0
-`, []string{lockKey}, lockToken).Err()
-	}()
+	defer releasePendingAppendLock(context.Background(), w.redis, lockKey, lockToken)
 
 	pendingKey := redisx.BidEnginePendingKey(auctionID)
 	decisions, err := pendingDecisions(ctx, w.redis, auctionID, pendingKey, limit)
