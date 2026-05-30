@@ -105,9 +105,15 @@ SQL
   require_rg "settlement_rejects_stale_epoch" "result\\.EngineEpoch != dbEpoch" "$ROOT_DIR/backend/internal/redisengine/engine.go"
   require_rg "settlement_enforces_seq_next" "result\\.EngineSeq != dbSeq\\+1" "$ROOT_DIR/backend/internal/redisengine/engine.go"
   require_rg "accepted_settlement_fenced_update" 'WHERE id = \$1 AND engine_epoch = \$7 AND engine_seq = \$6 - 1' "$ROOT_DIR/backend/internal/redisengine/engine.go"
+  require_rg "soft_close_extends_from_previous_end_at" "local candidate = end_at_ms \\+ extend_by_ms" "$ROOT_DIR/backend/internal/redisengine/engine.go"
+  require_rg "cap_is_terminal_before_soft_close" "amount == cap" "$ROOT_DIR/backend/internal/redisengine/engine.go"
+  require_rg "redis_replay_unknown_not_success" "CodeProcessingRetryLater" "$ROOT_DIR/backend/internal/redisengine/engine.go"
+  require_rg "redis_replay_acked_returns_engine_result" "case kafkaAppendStatusAcked" "$ROOT_DIR/backend/internal/redisengine/engine.go"
   require_rg "kafka_writer_requires_all_acks" "RequiredAcks:\\s+kafka\\.RequireAll" "$ROOT_DIR/backend/internal/redisengine/kafka_ledger.go"
   require_rg "kafka_writer_is_synchronous" "Async:\\s+false" "$ROOT_DIR/backend/internal/redisengine/kafka_ledger.go"
   require_rg "kafka_writer_retries_transient_failures" "MaxAttempts:\\s+10" "$ROOT_DIR/backend/internal/redisengine/kafka_ledger.go"
+  require_rg "kafka_writer_has_write_timeout" "WriteTimeout:\\s+10 \\* time\\.Second" "$ROOT_DIR/backend/internal/redisengine/kafka_ledger.go"
+  require_rg "kafka_reader_consumer_group" "GroupID:\\s+cfg\\.ConsumerGroup" "$ROOT_DIR/backend/internal/redisengine/kafka_ledger.go"
   require_rg "kafka_message_key_auction_id" "key := result\\.AuctionID" "$ROOT_DIR/backend/internal/redisengine/kafka_ledger.go"
   require_rg "kafka_headers_include_engine_epoch" "Key: \"engine_epoch\"" "$ROOT_DIR/backend/internal/redisengine/kafka_ledger.go"
   require_rg "kafka_headers_include_engine_seq" "Key: \"engine_seq\"" "$ROOT_DIR/backend/internal/redisengine/kafka_ledger.go"
@@ -146,8 +152,27 @@ SQL
   bid_topic_desc="$(docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-topics.sh --bootstrap-server "$KAFKA_BOOTSTRAP" --describe --topic "$KAFKA_BID_TOPIC" 2>/dev/null || true)"
   dlq_topic_desc="$(docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-topics.sh --bootstrap-server "$KAFKA_BOOTSTRAP" --describe --topic "$KAFKA_DLQ_TOPIC" 2>/dev/null || true)"
   bid_topic_partitions="$(printf '%s\n' "$bid_topic_desc" | awk -F'PartitionCount: ' '/PartitionCount:/ {split($2, a, "\t"); print a[1]; exit}')"
+  bid_topic_replication="$(printf '%s\n' "$bid_topic_desc" | awk -F'ReplicationFactor: ' '/ReplicationFactor:/ {split($2, a, "\t"); print a[1]; exit}')"
+  bid_topic_under_replicated="$(printf '%s\n' "$bid_topic_desc" | awk '/Leader:/ && /Replicas:/ && /Isr:/ {
+    replicas=""; isr="";
+    for (i=1; i<=NF; i++) {
+      if ($i ~ /^Replicas:/) { replicas=$(i+1) }
+      if ($i ~ /^Isr:/) { isr=$(i+1) }
+    }
+    gsub(",", " ", replicas); gsub(",", " ", isr);
+    nr=split(replicas, r, " "); ni=split(isr, s, " ");
+    if (ni < nr) bad++;
+  } END { print bad + 0 }')"
+  bid_topic_min_isr="$(printf '%s\n' "$bid_topic_desc" | awk '{
+    for (i=1; i<=NF; i++) {
+      if ($i ~ /^min.insync.replicas=/) { split($i, a, "="); print a[2]; found=1 }
+    }
+  } END { if (!found) print "" }' | tail -n 1)"
   printf 'P0\tkafka_bid_topic_exists\t%s\tbid ledger topic must exist\n' "$([[ "$bid_topic_desc" == *"Topic: $KAFKA_BID_TOPIC"* ]] && echo PASS || echo FAIL)"
   printf 'P0\tkafka_bid_topic_partitions_16\t%s\tbid ledger topic must have 16 partitions before PTS\n' "$([ "${bid_topic_partitions:-}" = "16" ] && echo PASS || echo FAIL)"
+  printf 'P0\tkafka_bid_topic_replication_ge_1\t%s\tbid ledger topic replication factor must be explicit\n' "$([ "${bid_topic_replication:-0}" -ge 1 ] && echo PASS || echo FAIL)"
+  printf 'P0\tkafka_bid_topic_isr_full\t%s\tacks=all requires every partition ISR to match replicas before formal PTS\n' "$([ "${bid_topic_under_replicated:-1}" = "0" ] && echo PASS || echo FAIL)"
+  printf 'P1\tkafka_bid_topic_min_isr_documented\t%s\tmin.insync.replicas should be visible in topic describe or broker config evidence\n' "$([ -n "${bid_topic_min_isr:-}" ] && echo PASS || echo FAIL)"
   printf 'P0\tkafka_dlq_topic_exists\t%s\tDLQ topic must exist\n' "$([[ "$dlq_topic_desc" == *"Topic: $KAFKA_DLQ_TOPIC"* ]] && echo PASS || echo FAIL)"
 } > "$gate_file"
 

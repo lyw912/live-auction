@@ -929,6 +929,62 @@ idempotency_response_mismatch as (
       or (i.response_json->>'engine_epoch')::bigint is distinct from b.engine_epoch
       or i.response_json->>'reject_reason' is distinct from b.reject_reason
     )
+),
+cap_terminal_violations as (
+  select count(*) as violations
+  from auctions a
+  where a.id = :'auction_id'
+    and a.cap_price_cents is not null
+    and exists (
+      select 1
+      from redis_engine_settlements s
+      where s.auction_id = a.id
+        and s.result = 'ENGINE_SOLD'
+        and s.status = 'SETTLED'
+    )
+    and (
+      (select count(*)
+       from redis_engine_settlements s
+       where s.auction_id = a.id
+         and s.result = 'ENGINE_SOLD'
+         and s.status = 'SETTLED') <> 1
+      or exists (
+        select 1
+        from bids b
+        where b.auction_id = a.id
+          and b.status = 'REJECTED'
+          and b.amount_cents = a.cap_price_cents
+          and b.reject_reason = 'BID_TOO_LOW'
+      )
+      or (select count(*) from orders o where o.auction_id = a.id) <> 1
+    )
+),
+soft_close_extension_violations as (
+  select count(*) as violations
+  from bids b
+  join auctions a on a.id = b.auction_id
+  join auction_rules ar on ar.auction_id = a.id and ar.rule_version = a.rule_version
+  where b.auction_id = :'auction_id'
+    and b.status = 'ACCEPTED'
+    and b.engine_seq is not null
+    and b.engine_seq > 1
+    and exists (
+      select 1
+      from bids prev
+      where prev.auction_id = b.auction_id
+        and prev.status = 'ACCEPTED'
+        and prev.engine_seq < b.engine_seq
+        and prev.end_at = b.end_at
+    )
+    and exists (
+      select 1
+      from bids later
+      where later.auction_id = b.auction_id
+        and later.status = 'ACCEPTED'
+        and later.engine_seq > b.engine_seq
+        and later.end_at > b.end_at
+        and later.end_at < b.end_at + make_interval(secs => ar.extend_by_seconds)
+    )
 )
 select severity, name, case when pass then 'PASS' else 'FAIL' end as status, detail
 from (
@@ -968,7 +1024,13 @@ from (
       'each bid decision must have a matching terminal Redis/Kafka settlement row'),
     ('P0', 'idempotency_response_matches_bid',
       (select violations = 0 from idempotency_response_mismatch),
-      'completed bid idempotency response_json must match the persisted bid decision')
+      'completed bid idempotency response_json must match the persisted bid decision'),
+    ('P0', 'cap_terminal_single_sold_order',
+      (select violations = 0 from cap_terminal_violations),
+      'cap price is terminal: exactly one ENGINE_SOLD/order, no equal-cap loser misclassified as BID_TOO_LOW'),
+    ('P0', 'soft_close_no_stacked_subwindow_extension',
+      (select violations = 0 from soft_close_extension_violations),
+      'soft close must not stack multiple extensions inside one old end_at window')
 ) as gates(severity, name, pass, detail)
 order by severity, name;
 SQL
@@ -1301,6 +1363,62 @@ idempotency_response_mismatch as (
       or (i.response_json->>'engine_epoch')::bigint is distinct from b.engine_epoch
       or i.response_json->>'reject_reason' is distinct from b.reject_reason
     )
+),
+cap_terminal_violations as (
+  select count(*) as violations
+  from auctions a
+  where a.id = :'auction_id'
+    and a.cap_price_cents is not null
+    and exists (
+      select 1
+      from redis_engine_settlements s
+      where s.auction_id = a.id
+        and s.result = 'ENGINE_SOLD'
+        and s.status = 'SETTLED'
+    )
+    and (
+      (select count(*)
+       from redis_engine_settlements s
+       where s.auction_id = a.id
+         and s.result = 'ENGINE_SOLD'
+         and s.status = 'SETTLED') <> 1
+      or exists (
+        select 1
+        from bids b
+        where b.auction_id = a.id
+          and b.status = 'REJECTED'
+          and b.amount_cents = a.cap_price_cents
+          and b.reject_reason = 'BID_TOO_LOW'
+      )
+      or (select count(*) from orders o where o.auction_id = a.id) <> 1
+    )
+),
+soft_close_extension_violations as (
+  select count(*) as violations
+  from bids b
+  join auctions a on a.id = b.auction_id
+  join auction_rules ar on ar.auction_id = a.id and ar.rule_version = a.rule_version
+  where b.auction_id = :'auction_id'
+    and b.status = 'ACCEPTED'
+    and b.engine_seq is not null
+    and b.engine_seq > 1
+    and exists (
+      select 1
+      from bids prev
+      where prev.auction_id = b.auction_id
+        and prev.status = 'ACCEPTED'
+        and prev.engine_seq < b.engine_seq
+        and prev.end_at = b.end_at
+    )
+    and exists (
+      select 1
+      from bids later
+      where later.auction_id = b.auction_id
+        and later.status = 'ACCEPTED'
+        and later.engine_seq > b.engine_seq
+        and later.end_at > b.end_at
+        and later.end_at < b.end_at + make_interval(secs => ar.extend_by_seconds)
+    )
 )
 select severity, name, case when pass then 'PASS' else 'FAIL' end as status, detail
 from (
@@ -1340,7 +1458,13 @@ from (
       'each bid decision must have a matching terminal Redis/Kafka settlement row'),
     ('P0', 'idempotency_response_matches_bid',
       (select violations = 0 from idempotency_response_mismatch),
-      'completed bid idempotency response_json must match the persisted bid decision')
+      'completed bid idempotency response_json must match the persisted bid decision'),
+    ('P0', 'cap_terminal_single_sold_order',
+      (select violations = 0 from cap_terminal_violations),
+      'cap price is terminal: exactly one ENGINE_SOLD/order, no equal-cap loser misclassified as BID_TOO_LOW'),
+    ('P0', 'soft_close_no_stacked_subwindow_extension',
+      (select violations = 0 from soft_close_extension_violations),
+      'soft close must not stack multiple extensions inside one old end_at window')
 ) as gates(severity, name, pass, detail)
 order by severity, name;
 SQL

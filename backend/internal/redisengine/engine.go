@@ -212,7 +212,7 @@ if cap > 0 and amount == cap then
   new_status = 'SOLD'
 else
   if extend_count < max_extend_count and (end_at_ms - now_ms) <= extend_window_ms then
-    local candidate = now_ms + extend_by_ms
+    local candidate = end_at_ms + extend_by_ms
     if candidate > end_at_ms then
       new_end_at_ms = candidate
       new_extend_count = extend_count + 1
@@ -246,6 +246,7 @@ local result = {
   current_price_cents = amount,
   current_winner_id = user_id,
   end_at_ms = new_end_at_ms,
+  extend_count = new_extend_count,
   server_time_ms = now_ms,
   trace_id = trace_id,
   request_hash = request_hash
@@ -296,6 +297,7 @@ type engineResult struct {
 	CurrentPriceCents int64   `json:"current_price_cents"`
 	CurrentWinnerID   string  `json:"current_winner_id,omitempty"`
 	EndAtMS           int64   `json:"end_at_ms"`
+	ExtendCount       int     `json:"extend_count"`
 	ServerTimeMS      int64   `json:"server_time_ms"`
 	TraceID           string  `json:"trace_id"`
 	RequestHash       string  `json:"request_hash"`
@@ -426,6 +428,18 @@ func (e *Engine) PlaceBid(ctx context.Context, auctionID string, userID string, 
 
 func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID string, clientBidID string, result engineResult, traceID string) error {
 	idemKey := redisx.BidEngineIdempotencyKey(auctionID, clientBidID)
+	if err := e.waitForPendingAppendTurn(ctx, auctionID, result.EngineSeq); err != nil {
+		recordKafkaAppend(result.Result, "error", 0)
+		observability.Inc("auction_bid_kafka_append_fail_total", map[string]string{"reason": "pending_order"})
+		markerCtx, markerCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
+		_ = e.redis.HSet(markerCtx, idemKey, "kafka_append_status", kafkaAppendStatusUnknown, "kafka_append_error", err.Error()).Err()
+		_ = e.recordAuctionAppendStats(markerCtx, auctionID, kafkaAppendStatusUnknown, result.EngineSeq)
+		markerCancel()
+		pauseCtx, pauseCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
+		defer pauseCancel()
+		_ = e.pause(pauseCtx, auctionID, "KAFKA_APPEND_ORDER_WAIT_FAILED", err.Error(), traceID)
+		return apierrors.New(apierrors.CodeProcessingRetryLater, "bid confirmation is pending; retry with the same idempotency key", http.StatusConflict)
+	}
 	appendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
 	start := time.Now()
 	message, err := e.ledger.Append(appendCtx, result)
@@ -502,6 +516,51 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 	}
 	markerCancel()
 	return nil
+}
+
+func (e *Engine) waitForPendingAppendTurn(ctx context.Context, auctionID string, engineSeq int64) error {
+	deadline := time.NewTimer(e.kafkaAppendTimeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	pendingKey := redisx.BidEnginePendingKey(auctionID)
+	for {
+		decision, ok, err := e.nextUnackedPendingDecision(ctx, auctionID, pendingKey)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("pending decision missing before kafka append auction=%s engine_seq=%d", auctionID, engineSeq)
+		}
+		if decision.seq == engineSeq {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return fmt.Errorf("pending decision order wait timeout auction=%s engine_seq=%d min_pending_seq=%d", auctionID, engineSeq, decision.seq)
+		case <-ticker.C:
+		}
+	}
+}
+
+func (e *Engine) nextUnackedPendingDecision(ctx context.Context, auctionID string, pendingKey string) (pendingDecision, bool, error) {
+	decisions, err := pendingDecisions(ctx, e.redis, auctionID, pendingKey, 0)
+	if err != nil || len(decisions) == 0 {
+		return pendingDecision{}, false, err
+	}
+	for _, decision := range decisions {
+		status, err := e.redis.HGet(ctx, redisx.BidEngineIdempotencyKey(auctionID, decision.result.ClientBidID), "kafka_append_status").Result()
+		if err != nil && !errors.Is(err, redis.Nil) {
+			return pendingDecision{}, false, err
+		}
+		if status == kafkaAppendStatusAcked {
+			continue
+		}
+		return decision, true, nil
+	}
+	return pendingDecision{}, false, nil
 }
 
 func (e *Engine) recordAuctionAppendStats(ctx context.Context, auctionID string, status string, engineSeq int64) error {
@@ -1778,6 +1837,7 @@ func settleAccepted(ctx context.Context, tx pgx.Tx, result engineResult) (int64,
 		    current_price_cents = $3,
 		    current_winner_id = $4,
 		    end_at = COALESCE($5, end_at),
+		    extend_count = GREATEST(extend_count, $8),
 		    accepted_bid_count = accepted_bid_count + 1,
 		    seq = seq + 1,
 		    engine_seq = $6,
@@ -1786,7 +1846,7 @@ func settleAccepted(ctx context.Context, tx pgx.Tx, result engineResult) (int64,
 		    updated_at = now()
 		WHERE id = $1 AND engine_epoch = $7 AND engine_seq = $6 - 1
 		RETURNING seq
-	`, result.AuctionID, newStatus, result.AmountCents, result.UserID, endAt, result.EngineSeq, result.EngineEpoch).Scan(&publicSeq)
+	`, result.AuctionID, newStatus, result.AmountCents, result.UserID, endAt, result.EngineSeq, result.EngineEpoch, result.ExtendCount).Scan(&publicSeq)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, fmt.Errorf("accepted settlement fenced out auction=%s epoch=%d seq=%d", result.AuctionID, result.EngineEpoch, result.EngineSeq)
 	}

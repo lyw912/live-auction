@@ -414,6 +414,94 @@ test('H5 bid stays pending until authoritative accepted response', async ({ page
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
 });
 
+test('H5 local bid lock suppresses rapid duplicate clicks', async ({ page }) => {
+  let bidRequests = 0;
+  let releaseBid: (value?: unknown) => void = () => undefined;
+  await page.route('/api/auctions/auc_live/bids', async (route) => {
+    bidRequests += 1;
+    await new Promise((release) => {
+      releaseBid = release;
+    });
+    await route.fulfill({
+      json: {
+        result: 'ENGINE_ACCEPTED',
+        bid_id: 'bid_rapid',
+        auction_id: 'auc_live',
+        seq: 41,
+        engine_seq: 42,
+        settlement_status: 'PENDING',
+        current_price_cents: 40000,
+        current_winner_id: 'user_1',
+        end_at: '2099-05-22T14:00:00Z',
+        server_time_ms: Date.parse('2099-05-22T13:59:00Z'),
+        reject_reason: null
+      }
+    });
+  });
+
+  await page.goto('/?stateMatrix=1');
+  await page.getByRole('button', { name: '竞价中' }).click();
+  const bidCTA = page.getByTestId('bid-cta');
+  await Promise.all([
+    bidCTA.click({ force: true }),
+    bidCTA.click({ force: true }),
+    bidCTA.click({ force: true })
+  ]);
+  await expect(bidCTA).toBeDisabled();
+  await expect(page.getByText('等待服务端确认')).toBeVisible();
+  await page.waitForTimeout(100);
+  expect(bidRequests).toBe(1);
+
+  releaseBid();
+  await expect(page.getByText('热引擎已接收，等待账本结算 seq 42')).toBeVisible();
+  expect(bidRequests).toBe(1);
+});
+
+test('H5 network retry reuses original bid idempotency key', async ({ page }) => {
+  const requests: Array<{ idempotencyKey: string | null; body: Record<string, unknown> }> = [];
+  await page.route('/api/auctions/auc_live/bids', async (route) => {
+    const request = route.request();
+    requests.push({
+      idempotencyKey: request.headers()['idempotency-key'] ?? null,
+      body: JSON.parse(request.postData() ?? '{}') as Record<string, unknown>
+    });
+    if (requests.length === 1) {
+      await route.abort('failed');
+      return;
+    }
+    await route.fulfill({
+      json: {
+        result: 'ENGINE_ACCEPTED',
+        bid_id: 'bid_network_retry',
+        auction_id: 'auc_live',
+        seq: 41,
+        engine_seq: 42,
+        settlement_status: 'PENDING',
+        current_price_cents: 40000,
+        current_winner_id: 'user_1',
+        end_at: '2099-05-22T14:00:00Z',
+        server_time_ms: Date.parse('2099-05-22T13:59:00Z'),
+        reject_reason: null
+      }
+    });
+  });
+
+  await page.goto('/?stateMatrix=1');
+  await page.getByRole('button', { name: '竞价中' }).click();
+  const bidCTA = page.getByTestId('bid-cta');
+  await bidCTA.click();
+  await expect(page.getByText('响应丢失，使用同一请求确认结果')).toBeVisible();
+  await expect(bidCTA).toHaveText(/用原请求重试/);
+
+  await bidCTA.click();
+  await expect(page.getByText('热引擎已接收，等待账本结算 seq 42')).toBeVisible();
+  expect(requests).toHaveLength(2);
+  expect(requests[1].idempotencyKey).toBe(requests[0].idempotencyKey);
+  expect(requests[1].body.client_bid_id).toBe(requests[0].body.client_bid_id);
+  expect(requests[1].body.amount_cents).toBe(requests[0].body.amount_cents);
+  expect(requests[1].body.client_seen_seq).toBe(requests[0].body.client_seen_seq);
+});
+
 test('H5 engine sold pending waits for settlement before payment copy', async ({ page }) => {
   await page.route('/api/auctions/auc_live/bids', async (route) => {
     await route.fulfill({

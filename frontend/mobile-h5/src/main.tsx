@@ -47,7 +47,7 @@ type BidderRequirement = {
   reason?: string;
 };
 
-type BidPhase = 'idle' | 'pending' | 'engine_pending' | 'engine_sold_pending' | 'accepted' | 'rejected' | 'confirm_required' | 'confirming';
+type BidPhase = 'idle' | 'pending' | 'engine_pending' | 'engine_sold_pending' | 'accepted' | 'rejected' | 'uncertain' | 'confirm_required' | 'confirming';
 type PaymentPhase = 'idle' | 'pending' | 'paid' | 'failed' | 'expired';
 type RecoveryPhase = 'idle' | 'recovering';
 type ConnectionPhase = 'connecting' | 'connected' | 'recovering' | 'disconnected';
@@ -88,6 +88,13 @@ type BidResponse = {
     retry_after_ms?: number;
     retry_after_secs?: number;
   };
+};
+
+type PendingBidRequest = {
+  auctionID: string;
+  clientBidID: string;
+  amountCents: number;
+  clientSeenSeq: number;
 };
 
 type AuctionRealtimeEvent = {
@@ -456,6 +463,8 @@ function rejectCopy(code?: string | null) {
       return '竞拍已结束，正在同步结果';
     case 'FORBIDDEN_ROOM':
       return '无法进入该直播间';
+    case 'NETWORK_ERROR':
+      return '网络异常，结果不确定';
     default:
       return '出价未通过，请重试';
   }
@@ -495,6 +504,8 @@ function riskActionCopy(code?: string | null) {
       return '按服务端给出的最低有效价和加价幅度调整';
     case 'AUCTION_ENDED':
       return '等待服务端结果同步，当前不要继续提交';
+    case 'NETWORK_ERROR':
+      return '响应丢失不代表请求失败，请用同一请求重试确认';
     default:
       return '本次未成交，按当前权威价格重新确认';
   }
@@ -621,6 +632,7 @@ function App() {
   const [bidderRequirement, setBidderRequirement] = useState<BidderRequirement | null>(null);
   const paymentInFlight = useRef(false);
   const bidInFlightRef = useRef(false);
+  const pendingBidRef = useRef<PendingBidRequest | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const reconnectAttemptRef = useRef(0);
@@ -1072,6 +1084,20 @@ function App() {
         feedback: countdownExpired ? '到点同步服务端结果' : bidFeedback,
         countdown: countdownCopy,
         cta: countdownExpired ? '同步中' : `出价 ${formatCents(nextBidCents)}`,
+        ctaDisabled: countdownExpired,
+        rejected: true
+      };
+    }
+    if (bidPhase === 'uncertain') {
+      return {
+        key: 'rejected' as AuctionState,
+        title: '结果不确定',
+        status: 'UNCERTAIN',
+        price: formatCents(currentPriceCents),
+        leader: `${leaderMasked} 领先`,
+        feedback: bidFeedback,
+        countdown: countdownCopy,
+        cta: '用原请求重试',
         ctaDisabled: countdownExpired,
         rejected: true
       };
@@ -1594,29 +1620,40 @@ function App() {
 
   const submitBid = async () => {
     const auctionID = activeAuctionIDRef.current;
-    if (selected !== 'active_bids' || scenario.ctaDisabled || !auctionID) return;
+    const canRetryPendingBid = Boolean(pendingBidRef.current && pendingBidRef.current.auctionID === auctionID && (bidPhase === 'uncertain' || riskCode === 'PROCESSING_RETRY_LATER'));
+    if (selected !== 'active_bids' || (!canRetryPendingBid && scenario.ctaDisabled) || !auctionID) return;
     if (bidInFlightRef.current || bidCooldownUntilMS > Date.now()) return;
     bidInFlightRef.current = true;
-    const clientBidID = createClientBidID();
+    const pending = pendingBidRef.current;
+    const bidRequest = pending && pending.auctionID === auctionID
+      ? pending
+      : {
+          auctionID,
+          clientBidID: createClientBidID(),
+          amountCents: nextBidCents,
+          clientSeenSeq: lastSeq
+        };
+    pendingBidRef.current = bidRequest;
     setBidPhase('pending');
     try {
       const response = await fetch(`/api/auctions/${auctionID}/bids`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Idempotency-Key': clientBidID
+          'Idempotency-Key': bidRequest.clientBidID
         },
         body: JSON.stringify({
-          client_bid_id: clientBidID,
-          amount_cents: nextBidCents,
-          client_seen_seq: lastSeq
+          client_bid_id: bidRequest.clientBidID,
+          amount_cents: bidRequest.amountCents,
+          client_seen_seq: bidRequest.clientSeenSeq
         })
       });
       const payload = await response.json() as BidResponse;
       if (payload.result === 'FAT_FINGER_CONFIRM_REQUIRED' && payload.confirm_token) {
         setConfirmToken(payload.confirm_token);
-        setConfirmIdempotencyKey(clientBidID);
-        setConfirmAmountCents(payload.amount_cents ?? nextBidCents);
+        setConfirmIdempotencyKey(bidRequest.clientBidID);
+        setConfirmAmountCents(payload.amount_cents ?? bidRequest.amountCents);
+        pendingBidRef.current = null;
         setBidFeedback('高额出价需要二次确认');
         setBidPhase('confirm_required');
         return;
@@ -1629,16 +1666,20 @@ function App() {
         }
         setRiskCode(code);
         setBidFeedback(rejectCopy(code));
+        if (code !== 'PROCESSING_RETRY_LATER') {
+          pendingBidRef.current = null;
+        }
         setBidPhase('rejected');
         return;
       }
       setRiskCode('');
       setBidCooldownUntilMS(0);
+      pendingBidRef.current = null;
       applyAcceptedBid(payload);
     } catch {
       setRiskCode('NETWORK_ERROR');
-      setBidFeedback('网络异常，请重试');
-      setBidPhase('rejected');
+      setBidFeedback('响应丢失，使用同一请求确认结果');
+      setBidPhase('uncertain');
     } finally {
       bidInFlightRef.current = false;
     }

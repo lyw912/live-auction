@@ -154,6 +154,166 @@ func TestRedisLedgerConcurrentAppendRecordsEveryEngineSeq(t *testing.T) {
 			t.Fatalf("missing engine_seq=%d in ledger", seq)
 		}
 	}
+	for i := 0; i < bidders; i++ {
+		msg, ok := ledger.Message(i)
+		if !ok {
+			t.Fatalf("missing ordered ledger message %d", i)
+		}
+		var result engineResult
+		if err := json.Unmarshal(msg.Value, &result); err != nil {
+			t.Fatalf("decode ordered ledger message %d: %v", i, err)
+		}
+		wantSeq := int64(i + 1)
+		if result.EngineSeq != wantSeq {
+			t.Fatalf("ledger offset %d engine_seq=%d, want Kafka offset order to match engine_seq=%d", i, result.EngineSeq, wantSeq)
+		}
+	}
+}
+
+func TestRedisLedgerConcurrentSoftCloseExtendsOnlyOnce(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+
+	var originalEndAt time.Time
+	if err := db.QueryRow(ctx, `SELECT end_at FROM auctions WHERE id = $1`, auctionID).Scan(&originalEndAt); err != nil {
+		t.Fatalf("load original end_at: %v", err)
+	}
+
+	const bidders = 8
+	insertEngineUsers(t, db, "user_soft_", bidders)
+	errCh := make(chan error, bidders)
+	start := make(chan struct{})
+	for i := 0; i < bidders; i++ {
+		i := i
+		go func() {
+			<-start
+			clientBidID := "redis-ledger-soft-close-" + uuid.NewString()
+			_, err := engine.PlaceBid(ctx, auctionID, "user_soft_"+strconv.Itoa(i), clientBidID, auction.BidInput{
+				ClientBidID:   clientBidID,
+				AmountCents:   15_000 + int64(i)*5_000,
+				ClientSeenSeq: 0,
+			}, "tr_soft_close")
+			errCh <- err
+		}()
+	}
+	close(start)
+	for i := 0; i < bidders; i++ {
+		if err := <-errCh; err != nil {
+			t.Fatalf("concurrent soft-close bid %d failed: %v", i, err)
+		}
+	}
+	settleAllLedgerMessages(t, ctx, worker, bidders)
+
+	var endAt time.Time
+	var extendCount int
+	var acceptedBidCount int64
+	if err := db.QueryRow(ctx, `SELECT end_at, extend_count, accepted_bid_count FROM auctions WHERE id = $1`, auctionID).Scan(&endAt, &extendCount, &acceptedBidCount); err != nil {
+		t.Fatalf("load soft-close auction: %v", err)
+	}
+	wantEndAt := time.UnixMilli(originalEndAt.UnixMilli()).UTC().Add(10 * time.Second)
+	if !endAt.Equal(wantEndAt) {
+		t.Fatalf("end_at = %s, want one extension to %s", endAt.Format(time.RFC3339Nano), wantEndAt.Format(time.RFC3339Nano))
+	}
+	if extendCount != 1 {
+		t.Fatalf("extend_count = %d, want 1 under concurrent final-window bids", extendCount)
+	}
+	var settledAccepted int64
+	if err := db.QueryRow(ctx, `
+		SELECT count(*)
+		FROM redis_engine_settlements
+		WHERE auction_id = $1
+		  AND status = 'SETTLED'
+		  AND result IN ('ENGINE_ACCEPTED', 'ENGINE_SOLD')
+	`, auctionID).Scan(&settledAccepted); err != nil {
+		t.Fatalf("count accepted settlements: %v", err)
+	}
+	if settledAccepted == 0 {
+		t.Fatalf("settled accepted decisions = 0, want at least one accepted soft-close bid")
+	}
+	if acceptedBidCount != settledAccepted {
+		t.Fatalf("accepted_bid_count = %d, want settled accepted decisions %d", acceptedBidCount, settledAccepted)
+	}
+}
+
+func TestRedisLedgerConcurrentCapOnlyOneSoldAndLoserSeesTerminal(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 15_000)
+
+	type bidOutcome struct {
+		resp auction.BidResponse
+		err  error
+	}
+	outcomes := make(chan bidOutcome, 2)
+	start := make(chan struct{})
+	for _, userID := range []string{"user_1", "user_2"} {
+		userID := userID
+		go func() {
+			<-start
+			clientBidID := "redis-ledger-cap-race-" + userID
+			resp, err := engine.PlaceBid(ctx, auctionID, userID, clientBidID, auction.BidInput{
+				ClientBidID:   clientBidID,
+				AmountCents:   15_000,
+				ClientSeenSeq: 0,
+			}, "tr_cap_race")
+			outcomes <- bidOutcome{resp: resp, err: err}
+		}()
+	}
+	close(start)
+
+	sold := 0
+	terminalReject := 0
+	for i := 0; i < 2; i++ {
+		out := <-outcomes
+		if out.err != nil {
+			t.Fatalf("cap race bid returned transport/API error: %v", out.err)
+		}
+		switch out.resp.Result {
+		case auction.BidResultEngineSold:
+			sold++
+		case auction.BidResultEngineRejected:
+			if out.resp.RejectReason == nil {
+				t.Fatalf("cap loser reject missing reason: %#v", out.resp)
+			}
+			if *out.resp.RejectReason == "BID_TOO_LOW" {
+				t.Fatalf("cap loser was misclassified as BID_TOO_LOW: %#v", out.resp)
+			}
+			if *out.resp.RejectReason != "AUCTION_NOT_ACTIVE" {
+				t.Fatalf("cap loser reject reason = %q, want AUCTION_NOT_ACTIVE", *out.resp.RejectReason)
+			}
+			terminalReject++
+		default:
+			t.Fatalf("unexpected cap race result: %#v", out.resp)
+		}
+	}
+	if sold != 1 || terminalReject != 1 {
+		t.Fatalf("cap race sold=%d terminalReject=%d, want 1/1", sold, terminalReject)
+	}
+	settleAllLedgerMessages(t, ctx, worker, 2)
+	var orders int
+	var soldSettlements int
+	var tooLow int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM orders WHERE auction_id = $1`, auctionID).Scan(&orders); err != nil {
+		t.Fatalf("count cap race orders: %v", err)
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM redis_engine_settlements WHERE auction_id = $1 AND result = 'ENGINE_SOLD' AND status = 'SETTLED'`, auctionID).Scan(&soldSettlements); err != nil {
+		t.Fatalf("count sold settlements: %v", err)
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM bids WHERE auction_id = $1 AND reject_reason = 'BID_TOO_LOW'`, auctionID).Scan(&tooLow); err != nil {
+		t.Fatalf("count too-low rejects: %v", err)
+	}
+	if orders != 1 || soldSettlements != 1 || tooLow != 0 {
+		t.Fatalf("orders=%d soldSettlements=%d tooLowRejects=%d, want 1/1/0", orders, soldSettlements, tooLow)
+	}
 }
 
 func TestPendingAppendUsesRedisAuctionIndexWhenPgActiveListIsNoisy(t *testing.T) {
@@ -1736,6 +1896,36 @@ func assertBidPublicSeq(t *testing.T, db *pgxpool.Pool, auctionID string, client
 			t.Fatalf("bid public seq = nil, want %d", *wantSeq)
 		}
 		t.Fatalf("bid public seq = %d, want %d", *seq, *wantSeq)
+	}
+}
+
+func settleAllLedgerMessages(t *testing.T, ctx context.Context, worker *Worker, want int) {
+	t.Helper()
+	processed := 0
+	var lastErr error
+	for attempts := 0; processed < want && attempts < want*want+20; attempts++ {
+		n, err := worker.ProcessKafka(ctx, 1)
+		if err != nil && !isTransientSettlementError(err) {
+			t.Fatalf("settle ledger message: %v", err)
+		}
+		if err != nil {
+			lastErr = err
+		}
+		processed += n
+	}
+	if processed != want {
+		t.Fatalf("settled ledger messages = %d, want %d, last transient error: %v", processed, want, lastErr)
+	}
+}
+
+func insertEngineUsers(t *testing.T, db *pgxpool.Pool, prefix string, count int) {
+	t.Helper()
+	ctx := context.Background()
+	for i := 0; i < count; i++ {
+		userID := prefix + strconv.Itoa(i)
+		if _, err := db.Exec(ctx, `INSERT INTO users (id, role, display_name) VALUES ($1, 'user', $2) ON CONFLICT DO NOTHING`, userID, userID); err != nil {
+			t.Fatalf("insert engine user %s: %v", userID, err)
+		}
 	}
 }
 
