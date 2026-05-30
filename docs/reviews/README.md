@@ -35,6 +35,7 @@ authority. For current bid-path, performance, and PTS-1B claims, read:
 | P3 borrowing reviews | `p3-04-*`, `p3-06-*`, `p3-07-*`, `p3-08-*` | engineering references; runtime decisions are historical if they assume PG-lane money truth |
 | Rejected-bid realtime policy | `p3-18-*` | still useful for public realtime/noise policy, subject to current engine outcome semantics |
 | L4b Kafka judge review | `pts-l4b-kafka-ledger-judge-review-2026-05-29.md` | current-adjacent pre-fix review; not PTS-1B success evidence |
+| PTS-1B independent TikTok judge review | `pts1b-independent-tiktok-judge-review-2026-05-31.md` | current-adjacent hostile review focused on Redis/Kafka/PG hot-path correctness and PTS-1B performance claims; not PTS-1B success evidence |
 
 ## Red Flags
 
