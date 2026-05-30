@@ -778,6 +778,11 @@ func parseInt64(value string) int64 {
 	return parsed
 }
 
+func sha256Hex(payload []byte) string {
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
+}
+
 func isUnknownKafkaAppendFailure(err error) bool {
 	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
 }
@@ -1129,6 +1134,13 @@ func (w *Worker) ProcessKafka(ctx context.Context, limit int) (int, error) {
 			return processed, err
 		}
 		if err := w.settleLedgerMessage(ctx, message); err != nil {
+			if isSettlementIdentityConflictError(err) {
+				if err := w.ledger.Commit(ctx, message); err != nil {
+					return processed, err
+				}
+				processed++
+				continue
+			}
 			if isTransientSettlementError(err) {
 				return processed, err
 			}
@@ -1422,12 +1434,32 @@ func (w *Worker) settlePayload(ctx context.Context, auctionID string, ledgerID s
 		publicSeq, err = settleAccepted(ctx, tx, result)
 		if err != nil {
 			_ = markSettlementFailed(ctx, tx, auctionID, ledgerID, err.Error())
+			if isPermanentSettlementError(err) || isSettlementIdentityConflictError(err) {
+				_ = pauseTx(ctx, tx, auctionID, "KAFKA_LEDGER_SETTLEMENT_IDENTITY_CONFLICT", err.Error(), map[string]any{
+					"ledger_id":     ledgerID,
+					"engine_epoch":  result.EngineEpoch,
+					"engine_seq":    result.EngineSeq,
+					"client_bid_id": result.ClientBidID,
+					"request_hash":  result.RequestHash,
+				})
+				_ = tx.Commit(ctx)
+			}
 			return err
 		}
 	case resultRejected:
 		publicSeq, err = settleRejected(ctx, tx, result)
 		if err != nil {
 			_ = markSettlementFailed(ctx, tx, auctionID, ledgerID, err.Error())
+			if isPermanentSettlementError(err) || isSettlementIdentityConflictError(err) {
+				_ = pauseTx(ctx, tx, auctionID, "KAFKA_LEDGER_SETTLEMENT_IDENTITY_CONFLICT", err.Error(), map[string]any{
+					"ledger_id":     ledgerID,
+					"engine_epoch":  result.EngineEpoch,
+					"engine_seq":    result.EngineSeq,
+					"client_bid_id": result.ClientBidID,
+					"request_hash":  result.RequestHash,
+				})
+				_ = tx.Commit(ctx)
+			}
 			return err
 		}
 	default:
@@ -1456,6 +1488,7 @@ func (w *Worker) recordSettlementAttempt(ctx context.Context, auctionID string, 
 	if err != nil {
 		return settlementAttempt{}, err
 	}
+	payloadHash := sha256Hex(payload)
 	ledgerSource := "redis_stream"
 	if message.Topic != "" && strings.HasPrefix(message.ID, "kafka:") {
 		ledgerSource = "kafka"
@@ -1464,43 +1497,162 @@ func (w *Worker) recordSettlementAttempt(ctx context.Context, auctionID string, 
 	err = w.db.QueryRow(ctx, `
 		INSERT INTO redis_engine_settlements (
 		  auction_id, stream_id, engine_epoch, engine_seq, result, status, attempts, payload_json,
-		  ledger_source, ledger_topic, ledger_partition, ledger_offset, ledger_key
+		  payload_sha256, ledger_source, ledger_topic, ledger_partition, ledger_offset, ledger_key
 		)
-		VALUES ($1, $2, $3, $4, $5, 'PROCESSING', 1, $6, $7, $8, $9, $10, $11)
+		VALUES ($1, $2, $3, $4, $5, 'PROCESSING', 1, $6, $7, $8, $9, $10, $11, $12)
 		ON CONFLICT (auction_id, stream_id) DO UPDATE
 		SET attempts = CASE
-		      WHEN redis_engine_settlements.status IN ('SETTLED','SKIPPED') THEN redis_engine_settlements.attempts
-		      ELSE redis_engine_settlements.attempts + 1
-		    END,
+	      WHEN redis_engine_settlements.status IN ('SETTLED','SKIPPED') THEN redis_engine_settlements.attempts
+	      ELSE redis_engine_settlements.attempts + 1
+	    END,
 		    status = CASE
 		      WHEN redis_engine_settlements.status IN ('SETTLED','SKIPPED') THEN redis_engine_settlements.status
-		      ELSE 'PROCESSING'
-		    END,
+	      ELSE 'PROCESSING'
+	    END,
+		    last_error = CASE
+	      WHEN redis_engine_settlements.payload_sha256 <> EXCLUDED.payload_sha256 THEN 'stream payload hash changed for existing settlement'
+	      ELSE redis_engine_settlements.last_error
+	    END,
 		    updated_at = now()
+		WHERE redis_engine_settlements.payload_sha256 = EXCLUDED.payload_sha256
 		RETURNING attempts, status
-	`, auctionID, streamID, result.EngineEpoch, result.EngineSeq, result.Result, payload, ledgerSource, message.Topic, message.Partition, message.Offset, message.Key).Scan(&attempt.attempts, &attempt.status)
+	`, auctionID, streamID, result.EngineEpoch, result.EngineSeq, result.Result, payload, payloadHash, ledgerSource, message.Topic, message.Partition, message.Offset, message.Key).Scan(&attempt.attempts, &attempt.status)
 	if isUniqueViolation(err) {
-		return w.existingSettlementAttempt(ctx, auctionID, streamID, result)
+		return w.existingSettlementAttempt(ctx, auctionID, streamID, result, message, payloadHash)
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return settlementAttempt{}, w.markSettlementIdentityConflict(ctx, auctionID, result, streamID, message, payloadHash, "same stream id has different payload")
 	}
 	return attempt, err
 }
 
-func (w *Worker) existingSettlementAttempt(ctx context.Context, auctionID string, streamID string, result engineResult) (settlementAttempt, error) {
+func (w *Worker) existingSettlementAttempt(ctx context.Context, auctionID string, streamID string, result engineResult, message LedgerMessage, payloadHash string) (settlementAttempt, error) {
 	var attempt settlementAttempt
 	var existingStreamID string
 	var existingRequestHash string
+	var existingPayloadHash string
+	var conflictScope string
 	err := w.db.QueryRow(ctx, `
-		SELECT stream_id, attempts, status, COALESCE(payload_json->>'request_hash', '')
-		FROM redis_engine_settlements
-		WHERE auction_id = $1 AND engine_epoch = $2 AND engine_seq = $3
-	`, auctionID, result.EngineEpoch, result.EngineSeq).Scan(&existingStreamID, &attempt.attempts, &attempt.status, &existingRequestHash)
+		SELECT stream_id, attempts, status, COALESCE(payload_json->>'request_hash', ''), payload_sha256, conflict_scope
+		FROM (
+		  SELECT stream_id, attempts, status, payload_json, payload_sha256, 'stream_id' AS conflict_scope, 1 AS priority
+		  FROM redis_engine_settlements
+		  WHERE auction_id = $1 AND stream_id = $4
+		  UNION ALL
+		  SELECT stream_id, attempts, status, payload_json, payload_sha256, 'kafka_offset' AS conflict_scope, 2 AS priority
+		  FROM redis_engine_settlements
+		  WHERE ledger_source = 'kafka'
+		    AND ledger_topic = $5
+		    AND ledger_partition = $6
+		    AND ledger_offset = $7
+		    AND $5 <> ''
+		    AND $6 >= 0
+		    AND $7 >= 0
+		  UNION ALL
+		  SELECT stream_id, attempts, status, payload_json, payload_sha256, 'engine_seq' AS conflict_scope, 3 AS priority
+		  FROM redis_engine_settlements
+		  WHERE auction_id = $1 AND engine_epoch = $2 AND engine_seq = $3
+		) matches
+		ORDER BY priority
+		LIMIT 1
+	`, auctionID, result.EngineEpoch, result.EngineSeq, streamID, message.Topic, message.Partition, message.Offset).Scan(&existingStreamID, &attempt.attempts, &attempt.status, &existingRequestHash, &existingPayloadHash, &conflictScope)
 	if err != nil {
 		return settlementAttempt{}, err
 	}
-	if existingRequestHash != result.RequestHash {
-		return settlementAttempt{}, permanentSettlementError{err: fmt.Errorf("engine seq conflict auction=%s epoch=%d seq=%d existing_stream=%s new_stream=%s", auctionID, result.EngineEpoch, result.EngineSeq, existingStreamID, streamID)}
+	if existingPayloadHash == payloadHash {
+		if attempt.status == "SETTLED" || attempt.status == "SKIPPED" {
+			return attempt, nil
+		}
+		return attempt, transientSettlementError{err: fmt.Errorf("duplicate settlement waiting for first attempt auction=%s epoch=%d seq=%d existing_stream=%s new_stream=%s status=%s", auctionID, result.EngineEpoch, result.EngineSeq, existingStreamID, streamID, attempt.status)}
 	}
-	return attempt, nil
+	reason := "engine seq payload hash conflict"
+	if conflictScope == "stream_id" {
+		reason = "stream payload hash conflict"
+	}
+	if conflictScope == "kafka_offset" {
+		reason = "kafka offset payload hash conflict"
+	}
+	if existingRequestHash != "" && existingRequestHash != result.RequestHash {
+		reason = conflictScope + " request hash conflict"
+	}
+	return settlementAttempt{}, w.markSettlementIdentityConflict(ctx, auctionID, result, streamID, message, payloadHash, reason)
+}
+
+func (w *Worker) markSettlementIdentityConflict(ctx context.Context, auctionID string, result engineResult, streamID string, message LedgerMessage, payloadHash string, reason string) error {
+	tx, err := w.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var existingStreamID string
+	var existingPayloadHash string
+	var existingStatus string
+	err = tx.QueryRow(ctx, `
+		WITH target AS (
+		  SELECT stream_id, 1 AS priority
+		  FROM redis_engine_settlements
+		  WHERE auction_id = $1 AND stream_id = $4
+		  UNION ALL
+		  SELECT stream_id, 2 AS priority
+		  FROM redis_engine_settlements
+		  WHERE ledger_source = 'kafka'
+		    AND ledger_topic = $5
+		    AND ledger_partition = $6
+		    AND ledger_offset = $7
+		    AND $5 <> ''
+		    AND $6 >= 0
+		    AND $7 >= 0
+		  UNION ALL
+		  SELECT stream_id, 3 AS priority
+		  FROM redis_engine_settlements
+		  WHERE auction_id = $1 AND engine_epoch = $2 AND engine_seq = $3
+		  ORDER BY priority
+		  LIMIT 1
+		)
+		SELECT s.stream_id, s.payload_sha256, s.status
+		FROM redis_engine_settlements s
+		JOIN target t ON t.stream_id = s.stream_id
+		FOR UPDATE
+	`, auctionID, result.EngineEpoch, result.EngineSeq, streamID, message.Topic, message.Partition, message.Offset).Scan(&existingStreamID, &existingPayloadHash, &existingStatus)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE redis_engine_settlements
+		SET status = 'FAILED',
+		    last_error = $3,
+		    conflict_stream_id = $4,
+		    conflict_payload_sha256 = $5,
+		    updated_at = now()
+		WHERE auction_id = $1 AND stream_id = $2
+	`, auctionID, existingStreamID, reason, streamID, payloadHash); err != nil {
+		return err
+	}
+	if err := pauseTx(ctx, tx, auctionID, "KAFKA_LEDGER_SETTLEMENT_IDENTITY_CONFLICT", reason, map[string]any{
+		"existing_stream_id":           existingStreamID,
+		"existing_payload_sha256":      existingPayloadHash,
+		"existing_status":              existingStatus,
+		"conflicting_stream_id":        streamID,
+		"conflicting_payload_sha256":   payloadHash,
+		"conflicting_ledger_topic":     message.Topic,
+		"conflicting_ledger_partition": message.Partition,
+		"conflicting_ledger_offset":    message.Offset,
+		"auction_id":                   auctionID,
+		"engine_epoch":                 result.EngineEpoch,
+		"engine_seq":                   result.EngineSeq,
+		"client_bid_id":                result.ClientBidID,
+		"request_hash":                 result.RequestHash,
+	}); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	if w.redis != nil {
+		_ = w.redis.HSet(ctx, redisx.BidEngineStateKey(auctionID), "paused", 1, "pause_reason", "KAFKA_LEDGER_SETTLEMENT_IDENTITY_CONFLICT").Err()
+	}
+	observability.Inc("auction_bid_engine_pause_total", map[string]string{"reason": "KAFKA_LEDGER_SETTLEMENT_IDENTITY_CONFLICT"})
+	return settlementIdentityConflictError{err: fmt.Errorf("%s auction=%s epoch=%d seq=%d existing_stream=%s new_stream=%s", reason, auctionID, result.EngineEpoch, result.EngineSeq, existingStreamID, streamID)}
 }
 
 func (w *Worker) refreshRedisPublicSeq(ctx context.Context, auctionID string, publicSeq int64) {
@@ -1642,20 +1794,32 @@ func settleRejected(ctx context.Context, tx pgx.Tx, result engineResult) (int64,
 }
 
 func insertBid(ctx context.Context, tx pgx.Tx, result engineResult, seq *int64, status string, rejectReason *string, responseJSON []byte) error {
-	_, err := tx.Exec(ctx, `
+	tag, err := tx.Exec(ctx, `
 		INSERT INTO bids (
 		  id, auction_id, user_id, client_bid_id, amount_cents, seq, status,
 		  reject_reason, request_hash, response_json, trace_id, source,
 		  engine_epoch, engine_seq, settlement_status
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'SETTLED')
-		ON CONFLICT (auction_id, user_id, client_bid_id) DO NOTHING
+		ON CONFLICT (auction_id, user_id, client_bid_id) DO UPDATE
+		SET response_json = bids.response_json
+		WHERE bids.request_hash = EXCLUDED.request_hash
+		  AND bids.amount_cents = EXCLUDED.amount_cents
+		  AND bids.status = EXCLUDED.status
+		  AND COALESCE(bids.engine_epoch, 0) = COALESCE(EXCLUDED.engine_epoch, 0)
+		  AND COALESCE(bids.engine_seq, 0) = COALESCE(EXCLUDED.engine_seq, 0)
 	`, result.BidID, result.AuctionID, result.UserID, result.ClientBidID, result.AmountCents, seq, status, rejectReason, result.RequestHash, responseJSON, result.TraceID, auction.BidSourceManual, result.EngineEpoch, result.EngineSeq)
-	return err
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return settlementIdentityConflictError{err: fmt.Errorf("bid idempotency conflict auction=%s user=%s client_bid_id=%s request_hash=%s", result.AuctionID, result.UserID, result.ClientBidID, result.RequestHash)}
+	}
+	return nil
 }
 
 func completeIdem(ctx context.Context, tx pgx.Tx, result engineResult, resultCode string, responseJSON []byte) error {
-	_, err := tx.Exec(ctx, `
+	tag, err := tx.Exec(ctx, `
 		INSERT INTO idempotency_records (
 		  scope_type, scope_id, user_id, idempotency_key, request_hash, status,
 		  attempts, http_status, result_code, response_json, completed_at
@@ -1670,7 +1834,13 @@ func completeIdem(ctx context.Context, tx pgx.Tx, result engineResult, resultCod
 		    locked_until = NULL
 		WHERE idempotency_records.request_hash = EXCLUDED.request_hash
 	`, result.AuctionID, result.UserID, result.ClientBidID, result.RequestHash, resultCode, responseJSON)
-	return err
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return settlementIdentityConflictError{err: fmt.Errorf("idempotency record conflict auction=%s user=%s client_bid_id=%s request_hash=%s", result.AuctionID, result.UserID, result.ClientBidID, result.RequestHash)}
+	}
+	return nil
 }
 
 func appendEvent(ctx context.Context, tx pgx.Tx, auctionID string, seq int64, epoch int64, engineSeq int64, eventType string, traceID string, payload map[string]any) error {
@@ -1803,6 +1973,10 @@ type permanentSettlementError struct {
 	err error
 }
 
+type settlementIdentityConflictError struct {
+	err error
+}
+
 type transientSettlementError struct {
 	err error
 }
@@ -1817,6 +1991,19 @@ func (e permanentSettlementError) Unwrap() error {
 
 func isPermanentSettlementError(err error) bool {
 	var target permanentSettlementError
+	return errors.As(err, &target)
+}
+
+func (e settlementIdentityConflictError) Error() string {
+	return e.err.Error()
+}
+
+func (e settlementIdentityConflictError) Unwrap() error {
+	return e.err
+}
+
+func isSettlementIdentityConflictError(err error) bool {
+	var target settlementIdentityConflictError
 	return errors.As(err, &target)
 }
 

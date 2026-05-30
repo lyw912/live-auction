@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -685,6 +686,193 @@ func TestKafkaSettlementUniqueSeqConflictWithSamePayloadIsIdempotent(t *testing.
 	}
 	if rows != 1 {
 		t.Fatalf("settlement rows = %d, want 1", rows)
+	}
+}
+
+func TestKafkaSettlementSameSeqDifferentPayloadFailsAndPauses(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+
+	if _, err := engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-seq-payload-conflict", auction.BidInput{
+		ClientBidID:   "redis-ledger-seq-payload-conflict",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_seq_payload_conflict"); err != nil {
+		t.Fatalf("place bid: %v", err)
+	}
+	msg, ok := ledger.Message(0)
+	if !ok {
+		t.Fatalf("missing memory ledger message")
+	}
+	if err := worker.settleLedgerMessage(ctx, msg); err != nil {
+		t.Fatalf("first settlement: %v", err)
+	}
+	var conflicting engineResult
+	if err := json.Unmarshal(msg.Value, &conflicting); err != nil {
+		t.Fatalf("decode original payload: %v", err)
+	}
+	conflicting.AmountCents = 20_000
+	conflicting.RequestHash = requestHash(auctionID, "user_1", conflicting.ClientBidID, 20_000)
+	conflicting.CurrentPriceCents = 20_000
+	payload, err := json.Marshal(conflicting)
+	if err != nil {
+		t.Fatalf("encode conflicting payload: %v", err)
+	}
+	conflictMsg := msg
+	conflictMsg.ID = "kafka:auction.bid-events:0:9998"
+	conflictMsg.Offset = 9998
+	conflictMsg.Value = payload
+
+	err = worker.settleLedgerMessage(ctx, conflictMsg)
+	if !isSettlementIdentityConflictError(err) {
+		t.Fatalf("conflicting duplicate err = %v, want settlement identity conflict", err)
+	}
+	assertEnginePaused(t, db, auctionID, "KAFKA_LEDGER_SETTLEMENT_IDENTITY_CONFLICT")
+	var status string
+	var conflictStream string
+	var conflictHash string
+	if err := db.QueryRow(ctx, `
+		SELECT status, COALESCE(conflict_stream_id, ''), COALESCE(conflict_payload_sha256, '')
+		FROM redis_engine_settlements
+		WHERE auction_id = $1 AND engine_seq = 1
+	`, auctionID).Scan(&status, &conflictStream, &conflictHash); err != nil {
+		t.Fatalf("load settlement conflict marker: %v", err)
+	}
+	if status != "FAILED" || conflictStream != conflictMsg.ID || conflictHash == "" {
+		t.Fatalf("settlement status=%q conflictStream=%q conflictHash=%q, want FAILED with conflict details", status, conflictStream, conflictHash)
+	}
+}
+
+func TestKafkaSettlementSameOffsetDifferentPayloadFailsAndPauses(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+
+	if _, err := engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-offset-payload-conflict", auction.BidInput{
+		ClientBidID:   "redis-ledger-offset-payload-conflict",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_offset_payload_conflict"); err != nil {
+		t.Fatalf("place bid: %v", err)
+	}
+	msg, ok := ledger.Message(0)
+	if !ok {
+		t.Fatalf("missing memory ledger message")
+	}
+	if err := worker.settleLedgerMessage(ctx, msg); err != nil {
+		t.Fatalf("first settlement: %v", err)
+	}
+	var conflicting engineResult
+	if err := json.Unmarshal(msg.Value, &conflicting); err != nil {
+		t.Fatalf("decode original payload: %v", err)
+	}
+	conflicting.EngineSeq = 2
+	conflicting.BidID = "bid_offset_conflict_" + uuid.NewString()
+	conflicting.ClientBidID = "redis-ledger-offset-payload-conflict-2"
+	conflicting.AmountCents = 20_000
+	conflicting.CurrentPriceCents = 20_000
+	conflicting.RequestHash = requestHash(auctionID, "user_1", conflicting.ClientBidID, 20_000)
+	payload, err := json.Marshal(conflicting)
+	if err != nil {
+		t.Fatalf("encode conflicting payload: %v", err)
+	}
+	conflictMsg := msg
+	conflictMsg.Value = payload
+
+	err = worker.settleLedgerMessage(ctx, conflictMsg)
+	if !isSettlementIdentityConflictError(err) {
+		t.Fatalf("same offset different payload err = %v, want settlement identity conflict", err)
+	}
+	assertEnginePaused(t, db, auctionID, "KAFKA_LEDGER_SETTLEMENT_IDENTITY_CONFLICT")
+	var lastErr string
+	if err := db.QueryRow(ctx, `
+		SELECT COALESCE(last_error, '')
+		FROM redis_engine_settlements
+		WHERE auction_id = $1 AND engine_seq = 1
+	`, auctionID).Scan(&lastErr); err != nil {
+		t.Fatalf("load settlement conflict marker: %v", err)
+	}
+	if !strings.Contains(lastErr, "stream") && !strings.Contains(lastErr, "offset") {
+		t.Fatalf("lastErr=%q, want stream/offset payload conflict", lastErr)
+	}
+}
+
+func TestKafkaSettlementSameClientBidDifferentRequestHashFailsAndPauses(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+	clientBidID := "redis-ledger-client-hash-conflict"
+	first := engineResult{
+		Result:            resultAccepted,
+		BidID:             "bid_client_hash_1_" + uuid.NewString(),
+		AuctionID:         auctionID,
+		UserID:            "user_1",
+		ClientBidID:       clientBidID,
+		AmountCents:       15_000,
+		EngineSeq:         1,
+		EngineEpoch:       1,
+		SettlementStatus:  auction.SettlementStatusPending,
+		CurrentPriceCents: 15_000,
+		CurrentWinnerID:   "user_1",
+		EndAtMS:           time.Now().UTC().Add(time.Minute).UnixMilli(),
+		ServerTimeMS:      time.Now().UTC().UnixMilli(),
+		TraceID:           "tr_client_hash_1",
+		RequestHash:       requestHash(auctionID, "user_1", clientBidID, 15_000),
+	}
+	second := first
+	second.BidID = "bid_client_hash_2_" + uuid.NewString()
+	second.AmountCents = 20_000
+	second.EngineSeq = 2
+	second.CurrentPriceCents = 20_000
+	second.TraceID = "tr_client_hash_2"
+	second.RequestHash = requestHash(auctionID, "user_1", clientBidID, 20_000)
+	if _, err := ledger.Append(ctx, first); err != nil {
+		t.Fatalf("append first: %v", err)
+	}
+	if _, err := ledger.Append(ctx, second); err != nil {
+		t.Fatalf("append second: %v", err)
+	}
+	if _, err := worker.ProcessKafka(ctx, 1); err != nil {
+		t.Fatalf("settle first: %v", err)
+	}
+	processed, err := worker.ProcessKafka(ctx, 1)
+	if err != nil {
+		t.Fatalf("process client hash conflict: %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("processed = %d, want conflict offset committed", processed)
+	}
+	assertEnginePaused(t, db, auctionID, "KAFKA_LEDGER_SETTLEMENT_IDENTITY_CONFLICT")
+	var status string
+	var lastErr string
+	if err := db.QueryRow(ctx, `
+		SELECT status, COALESCE(last_error, '')
+		FROM redis_engine_settlements
+		WHERE auction_id = $1 AND engine_seq = 2
+	`, auctionID).Scan(&status, &lastErr); err != nil {
+		t.Fatalf("load second settlement: %v", err)
+	}
+	if status != "FAILED" || !strings.Contains(lastErr, "bid idempotency conflict") {
+		t.Fatalf("second settlement status=%q lastErr=%q, want FAILED bid idempotency conflict", status, lastErr)
+	}
+	var bids int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM bids WHERE auction_id = $1 AND client_bid_id = $2`, auctionID, clientBidID).Scan(&bids); err != nil {
+		t.Fatalf("count bids: %v", err)
+	}
+	if bids != 1 {
+		t.Fatalf("bids = %d, want original bid only", bids)
 	}
 }
 
