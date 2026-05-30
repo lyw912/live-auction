@@ -41,7 +41,6 @@ func TestRedisLedgerAcceptSettleRejectSoftCloseAndCap(t *testing.T) {
 	if first.Seq != 0 {
 		t.Fatalf("first pending public seq = %d, want snapshot seq 0", first.Seq)
 	}
-	processPendingAppends(t, worker, ctx, auctionID, 1)
 	if _, err := worker.ProcessKafka(ctx, 1); err != nil {
 		t.Fatalf("settle first: %v", err)
 	}
@@ -62,7 +61,6 @@ func TestRedisLedgerAcceptSettleRejectSoftCloseAndCap(t *testing.T) {
 	if low.Seq != 1 || low.EngineSeq != 2 {
 		t.Fatalf("low response seq=%d engine_seq=%d, want public seq 1 engine seq 2", low.Seq, low.EngineSeq)
 	}
-	processPendingAppends(t, worker, ctx, auctionID, 1)
 	if _, err := worker.ProcessKafka(ctx, 1); err != nil {
 		t.Fatalf("settle low: %v", err)
 	}
@@ -84,7 +82,6 @@ func TestRedisLedgerAcceptSettleRejectSoftCloseAndCap(t *testing.T) {
 	if sold.Seq != 1 {
 		t.Fatalf("sold pending public seq = %d, want snapshot seq 1 before settlement", sold.Seq)
 	}
-	processPendingAppends(t, worker, ctx, auctionID, 1)
 	if _, err := worker.ProcessKafka(ctx, 1); err != nil {
 		t.Fatalf("settle sold: %v", err)
 	}
@@ -100,7 +97,7 @@ func TestRedisLedgerAcceptSettleRejectSoftCloseAndCap(t *testing.T) {
 	}
 }
 
-func TestRedisLedgerConcurrentAppendPreservesEngineSeqOrder(t *testing.T) {
+func TestRedisLedgerConcurrentAppendRecordsEveryEngineSeq(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 	rdb := openStreamsRedis(t)
@@ -130,11 +127,10 @@ func TestRedisLedgerConcurrentAppendPreservesEngineSeqOrder(t *testing.T) {
 			t.Fatalf("concurrent bid %d failed: %v", i, err)
 		}
 	}
-	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
-	processPendingAppends(t, worker, ctx, auctionID, bidders)
 	if ledger.Len() != bidders {
 		t.Fatalf("ledger messages = %d, want %d", ledger.Len(), bidders)
 	}
+	seen := make(map[int64]bool, bidders)
 	for i := 0; i < bidders; i++ {
 		msg, ok := ledger.Message(i)
 		if !ok {
@@ -144,9 +140,17 @@ func TestRedisLedgerConcurrentAppendPreservesEngineSeqOrder(t *testing.T) {
 		if err := json.Unmarshal(msg.Value, &result); err != nil {
 			t.Fatalf("decode ledger message %d: %v", i, err)
 		}
-		wantSeq := int64(i + 1)
-		if result.EngineSeq != wantSeq {
-			t.Fatalf("ledger offset %d has engine_seq=%d, want %d", i, result.EngineSeq, wantSeq)
+		if result.EngineSeq < 1 || result.EngineSeq > bidders {
+			t.Fatalf("ledger offset %d has engine_seq=%d outside 1..%d", i, result.EngineSeq, bidders)
+		}
+		if seen[result.EngineSeq] {
+			t.Fatalf("duplicate engine_seq=%d in ledger", result.EngineSeq)
+		}
+		seen[result.EngineSeq] = true
+	}
+	for seq := int64(1); seq <= bidders; seq++ {
+		if !seen[seq] {
+			t.Fatalf("missing engine_seq=%d in ledger", seq)
 		}
 	}
 }
@@ -299,7 +303,6 @@ func TestRedisLedgerStartsAfterExistingAuctionSeq(t *testing.T) {
 	if resp.EngineSeq != 6 {
 		t.Fatalf("engine seq = %d, want 6", resp.EngineSeq)
 	}
-	processPendingAppends(t, worker, ctx, auctionID, 1)
 	if _, err := worker.ProcessKafka(ctx, 1); err != nil {
 		t.Fatalf("settle after legacy seq: %v", err)
 	}
@@ -358,7 +361,6 @@ func TestRedisLedgerLeavesPendingWhenKafkaAppendFails(t *testing.T) {
 	db := openTestDB(t)
 	rdb := openStreamsRedis(t)
 	engine := New(db, rdb, failingLedger{})
-	worker := NewWorker(db, rdb, failingLedger{}, "test-"+uuid.NewString())
 	auctionID := createEngineAuction(t, db, 0)
 
 	resp, err := engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-kafka-fail", auction.BidInput{
@@ -366,18 +368,12 @@ func TestRedisLedgerLeavesPendingWhenKafkaAppendFails(t *testing.T) {
 		AmountCents:   15_000,
 		ClientSeenSeq: 0,
 	}, "tr_kafka_fail")
-	if err != nil {
-		t.Fatalf("place bid should not block on kafka append: %v", err)
+	var apiErr apierrors.APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != apierrors.CodeEngineReconciling {
+		t.Fatalf("place bid error = %v, want ENGINE_RECONCILING", err)
 	}
-	if resp.Result != auction.BidResultEngineAccepted || resp.SettlementStatus != auction.SettlementStatusPending {
-		t.Fatalf("response = %#v", resp)
-	}
-	n, err := worker.appendPendingDecisions(ctx, auctionID, 10)
-	if err == nil {
-		t.Fatalf("append pending should fail when kafka is unavailable")
-	}
-	if n != 0 {
-		t.Fatalf("processed pending = %d, want 0", n)
+	if resp.Result != "" {
+		t.Fatalf("response = %#v, want no engine success", resp)
 	}
 	pending, err := rdb.HLen(ctx, redisx.BidEnginePendingKey(auctionID)).Result()
 	if err != nil {
@@ -385,6 +381,14 @@ func TestRedisLedgerLeavesPendingWhenKafkaAppendFails(t *testing.T) {
 	}
 	if pending != 1 {
 		t.Fatalf("pending decisions = %d, want 1", pending)
+	}
+	assertEnginePaused(t, db, auctionID, "KAFKA_APPEND_FAILED_BEFORE_RETURN")
+	var appendStatus string
+	if err := rdb.HGet(ctx, redisx.BidEngineIdempotencyKey(auctionID, "redis-ledger-kafka-fail"), "kafka_append_status").Scan(&appendStatus); err != nil {
+		t.Fatalf("load append status: %v", err)
+	}
+	if appendStatus != kafkaAppendStatusFailed {
+		t.Fatalf("append status = %q, want %q", appendStatus, kafkaAppendStatusFailed)
 	}
 }
 
@@ -405,7 +409,6 @@ func TestKafkaSettlementDuplicateMessageIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("place bid: %v", err)
 	}
-	processPendingAppends(t, worker, ctx, auctionID, 1)
 	msg, ok := ledger.Message(0)
 	if !ok {
 		t.Fatalf("missing memory ledger message")
@@ -419,6 +422,60 @@ func TestKafkaSettlementDuplicateMessageIsIdempotent(t *testing.T) {
 	assertAuctionEngineSeq(t, db, auctionID, resp.EngineSeq, 15_000, "ACTIVE")
 	var bids int
 	if err := db.QueryRow(ctx, `SELECT count(*) FROM bids WHERE auction_id = $1 AND client_bid_id = $2`, auctionID, "redis-ledger-dup-kafka").Scan(&bids); err != nil {
+		t.Fatalf("count bids: %v", err)
+	}
+	if bids != 1 {
+		t.Fatalf("bids = %d, want 1", bids)
+	}
+}
+
+func TestKafkaAckBeforeReturnKeepsPendingAndWorkerDuplicateIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+
+	resp, err := engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-sync-ack-pending", auction.BidInput{
+		ClientBidID:   "redis-ledger-sync-ack-pending",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_sync_ack_pending")
+	if err != nil {
+		t.Fatalf("place bid: %v", err)
+	}
+	if resp.Result != auction.BidResultEngineAccepted || resp.SettlementStatus != auction.SettlementStatusPending {
+		t.Fatalf("response = %#v", resp)
+	}
+	if ledger.Len() != 1 {
+		t.Fatalf("ledger len after HTTP return = %d, want 1", ledger.Len())
+	}
+	pending, err := rdb.HLen(ctx, redisx.BidEnginePendingKey(auctionID)).Result()
+	if err != nil {
+		t.Fatalf("count pending: %v", err)
+	}
+	if pending != 1 {
+		t.Fatalf("pending after HTTP return = %d, want 1", pending)
+	}
+	var appendStatus string
+	if err := rdb.HGet(ctx, redisx.BidEngineIdempotencyKey(auctionID, "redis-ledger-sync-ack-pending"), "kafka_append_status").Scan(&appendStatus); err != nil {
+		t.Fatalf("load append status: %v", err)
+	}
+	if appendStatus != kafkaAppendStatusAcked {
+		t.Fatalf("append status = %q, want %q", appendStatus, kafkaAppendStatusAcked)
+	}
+	processPendingAppends(t, worker, ctx, auctionID, 1)
+	if ledger.Len() != 2 {
+		t.Fatalf("ledger len after pending drain = %d, want duplicate append len 2", ledger.Len())
+	}
+	if _, err := worker.ProcessKafka(ctx, 2); err != nil {
+		t.Fatalf("settle duplicate kafka decisions: %v", err)
+	}
+	assertAuctionEngineSeq(t, db, auctionID, resp.EngineSeq, 15_000, "ACTIVE")
+	var bids int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM bids WHERE auction_id = $1 AND client_bid_id = $2`, auctionID, "redis-ledger-sync-ack-pending").Scan(&bids); err != nil {
 		t.Fatalf("count bids: %v", err)
 	}
 	if bids != 1 {
@@ -442,7 +499,6 @@ func TestKafkaSettlementUniqueSeqConflictWithSamePayloadIsIdempotent(t *testing.
 	}, "tr_seq_conflict"); err != nil {
 		t.Fatalf("place bid: %v", err)
 	}
-	processPendingAppends(t, worker, ctx, auctionID, 1)
 	msg, ok := ledger.Message(0)
 	if !ok {
 		t.Fatalf("missing memory ledger message")
@@ -464,19 +520,52 @@ func TestKafkaSettlementUniqueSeqConflictWithSamePayloadIsIdempotent(t *testing.
 	}
 }
 
-func TestKafkaSettlementGapAndStaleEpochPause(t *testing.T) {
+func TestKafkaSettlementStaleEpochPauses(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 	rdb := openStreamsRedis(t)
 	ledger := NewMemoryLedger()
 	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
-	gapAuctionID := createEngineAuction(t, db, 0)
-	gapResult := engineResult{
+	staleAuctionID := createEngineAuction(t, db, 0)
+	staleResult := engineResult{
 		Result:            resultAccepted,
-		BidID:             "bid_gap_" + uuid.NewString(),
-		AuctionID:         gapAuctionID,
+		BidID:             "bid_stale_" + uuid.NewString(),
+		AuctionID:         staleAuctionID,
 		UserID:            "user_1",
-		ClientBidID:       "gap-bid",
+		ClientBidID:       "stale-bid",
+		AmountCents:       15_000,
+		EngineSeq:         1,
+		EngineEpoch:       0,
+		SettlementStatus:  auction.SettlementStatusPending,
+		CurrentPriceCents: 15_000,
+		CurrentWinnerID:   "user_1",
+		EndAtMS:           time.Now().UTC().Add(time.Minute).UnixMilli(),
+		ServerTimeMS:      time.Now().UTC().UnixMilli(),
+		TraceID:           "tr_stale",
+		RequestHash:       requestHash(staleAuctionID, "user_1", "stale-bid", 15_000),
+	}
+	if _, err := ledger.Append(ctx, staleResult); err != nil {
+		t.Fatalf("append stale: %v", err)
+	}
+	if _, err := worker.ProcessKafka(ctx, 1); err != nil {
+		t.Fatalf("process stale: %v", err)
+	}
+	assertEnginePaused(t, db, staleAuctionID, "REDIS_ENGINE_STALE_EPOCH")
+}
+
+func TestKafkaSettlementFutureSeqIsTransientAndKeepsOffsetUncommitted(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+	result := engineResult{
+		Result:            resultAccepted,
+		BidID:             "bid_future_" + uuid.NewString(),
+		AuctionID:         auctionID,
+		UserID:            "user_1",
+		ClientBidID:       "future-bid",
 		AmountCents:       15_000,
 		EngineSeq:         2,
 		EngineEpoch:       1,
@@ -485,33 +574,37 @@ func TestKafkaSettlementGapAndStaleEpochPause(t *testing.T) {
 		CurrentWinnerID:   "user_1",
 		EndAtMS:           time.Now().UTC().Add(time.Minute).UnixMilli(),
 		ServerTimeMS:      time.Now().UTC().UnixMilli(),
-		TraceID:           "tr_gap",
-		RequestHash:       requestHash(gapAuctionID, "user_1", "gap-bid", 15_000),
+		TraceID:           "tr_future",
+		RequestHash:       requestHash(auctionID, "user_1", "future-bid", 15_000),
 	}
-	_, err := ledger.Append(ctx, gapResult)
-	if err != nil {
-		t.Fatalf("append gap: %v", err)
+	if _, err := ledger.Append(ctx, result); err != nil {
+		t.Fatalf("append future seq: %v", err)
 	}
-	if _, err := worker.ProcessKafka(ctx, 1); err != nil {
-		t.Fatalf("process gap: %v", err)
+	processed, err := worker.ProcessKafka(ctx, 1)
+	if !isTransientSettlementError(err) {
+		t.Fatalf("process future seq err = %v, want transient", err)
 	}
-	assertEnginePaused(t, db, gapAuctionID, "REDIS_ENGINE_LEDGER_GAP")
-
-	staleAuctionID := createEngineAuction(t, db, 0)
-	staleResult := gapResult
-	staleResult.BidID = "bid_stale_" + uuid.NewString()
-	staleResult.AuctionID = staleAuctionID
-	staleResult.ClientBidID = "stale-bid"
-	staleResult.EngineSeq = 1
-	staleResult.EngineEpoch = 0
-	staleResult.RequestHash = requestHash(staleAuctionID, "user_1", "stale-bid", 15_000)
-	if _, err := ledger.Append(ctx, staleResult); err != nil {
-		t.Fatalf("append stale: %v", err)
+	if processed != 0 {
+		t.Fatalf("processed = %d, want 0", processed)
 	}
-	if _, err := worker.ProcessKafka(ctx, 1); err != nil {
-		t.Fatalf("process stale: %v", err)
+	if ledger.next != 0 {
+		t.Fatalf("ledger next = %d, want uncommitted offset 0", ledger.next)
 	}
-	assertEnginePaused(t, db, staleAuctionID, "REDIS_ENGINE_STALE_EPOCH")
+	var paused bool
+	if err := db.QueryRow(ctx, `SELECT engine_paused FROM auctions WHERE id = $1`, auctionID).Scan(&paused); err != nil {
+		t.Fatalf("load paused: %v", err)
+	}
+	if paused {
+		t.Fatalf("future seq should not pause auction")
+	}
+	var status string
+	var lastErr string
+	if err := db.QueryRow(ctx, `SELECT status, COALESCE(last_error, '') FROM redis_engine_settlements WHERE auction_id = $1 AND engine_seq = 2`, auctionID).Scan(&status, &lastErr); err != nil {
+		t.Fatalf("load settlement attempt: %v", err)
+	}
+	if status != "PROCESSING" || lastErr == "" {
+		t.Fatalf("settlement status=%q lastErr=%q, want PROCESSING with waiting reason", status, lastErr)
+	}
 }
 
 func TestKafkaSettlementRetriesThenDLQAndReconcilePause(t *testing.T) {

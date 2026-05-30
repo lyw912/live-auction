@@ -29,6 +29,7 @@ import (
 const (
 	engineStateTTL             = 30 * time.Minute
 	idempotencyTTL             = 24 * time.Hour
+	defaultKafkaAppendTimeout  = 750 * time.Millisecond
 	maxSettleAttempts          = 3
 	kafkaFetchTimeout          = 2 * time.Second
 	pendingAppendLockTTL       = 2 * time.Minute
@@ -38,6 +39,12 @@ const (
 	resultRejected             = "ENGINE_REJECTED"
 	resultSold                 = "ENGINE_SOLD"
 	resultReconciling          = "RECONCILING"
+)
+
+const (
+	kafkaAppendStatusAcked   = "ACKED"
+	kafkaAppendStatusFailed  = "FAILED"
+	kafkaAppendStatusPending = "PENDING"
 )
 
 var ledgerRunner = redisx.NewScriptRunner(redisx.ScriptBidRedisLedger, `
@@ -244,9 +251,16 @@ return {'OK', store_decision(result)}
 `)
 
 type Engine struct {
-	db     *pgxpool.Pool
-	redis  *redis.Client
-	ledger BidLedger
+	db      *pgxpool.Pool
+	redis   *redis.Client
+	ledger  BidLedger
+	options Options
+}
+
+type Options struct {
+	KafkaAckBeforeReturn bool
+	KafkaAppendTimeout   time.Duration
+	PauseOnAppendFailure bool
 }
 
 type snapshot struct {
@@ -291,7 +305,27 @@ type engineResult struct {
 }
 
 func New(db *pgxpool.Pool, redisClient *redis.Client, ledger BidLedger) *Engine {
-	return &Engine{db: db, redis: redisClient, ledger: ledger}
+	return &Engine{db: db, redis: redisClient, ledger: ledger, options: defaultOptions()}
+}
+
+func defaultOptions() Options {
+	return Options{
+		KafkaAckBeforeReturn: true,
+		KafkaAppendTimeout:   defaultKafkaAppendTimeout,
+		PauseOnAppendFailure: true,
+	}
+}
+
+func (e *Engine) WithOptions(options Options) *Engine {
+	if e == nil {
+		return nil
+	}
+	defaults := defaultOptions()
+	if options.KafkaAppendTimeout <= 0 {
+		options.KafkaAppendTimeout = defaults.KafkaAppendTimeout
+	}
+	e.options = options
+	return e
 }
 
 func (e *Engine) PlaceBid(ctx context.Context, auctionID string, userID string, idempotencyKey string, input auction.BidInput, traceID string) (auction.BidResponse, error) {
@@ -319,6 +353,7 @@ func (e *Engine) PlaceBid(ctx context.Context, auctionID string, userID string, 
 	if err != nil {
 		return auction.BidResponse{}, err
 	}
+	totalStart := time.Now()
 	start := time.Now()
 	cmd := ledgerRunner.Run(ctx, e.redis, []string{
 		redisx.BidEngineStateKey(auctionID),
@@ -352,9 +387,70 @@ func (e *Engine) PlaceBid(ctx context.Context, auctionID string, userID string, 
 		_ = e.pause(ctx, auctionID, "REDIS_ENGINE_RESULT_DECODE_FAILED", err.Error(), traceID)
 		return auction.BidResponse{}, err
 	}
-	ledgerRunner.Record("ok", time.Since(start))
-	recordDecision(result.Result, time.Since(start))
+	redisElapsed := time.Since(start)
+	ledgerRunner.Record("ok", redisElapsed)
+	recordDecision(result.Result, redisElapsed)
+	recordHTTPStage("redis_lua", result.Result, "ok", redisElapsed)
+	if e.options.KafkaAckBeforeReturn {
+		if status == "REPLAY" {
+			appendStatus, err := e.kafkaAppendStatus(ctx, auctionID, input.ClientBidID)
+			if err != nil {
+				return auction.BidResponse{}, err
+			}
+			switch appendStatus {
+			case kafkaAppendStatusAcked:
+				recordHTTPStage("total", result.Result, "ok", time.Since(totalStart))
+				return result.response(), nil
+			case kafkaAppendStatusFailed:
+				recordHTTPStage("total", result.Result, "kafka_append_failed", time.Since(totalStart))
+				return auction.BidResponse{}, apierrors.New(apierrors.CodeEngineReconciling, "bid engine decision is recovering; retry with the same idempotency key", http.StatusConflict)
+			}
+		}
+		if err := e.appendDecisionBeforeReturn(ctx, auctionID, input.ClientBidID, result, traceID); err != nil {
+			recordHTTPStage("total", result.Result, "kafka_append_failed", time.Since(totalStart))
+			return auction.BidResponse{}, err
+		}
+	}
+	recordHTTPStage("total", result.Result, "ok", time.Since(totalStart))
 	return result.response(), nil
+}
+
+func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID string, clientBidID string, result engineResult, traceID string) error {
+	idemKey := redisx.BidEngineIdempotencyKey(auctionID, clientBidID)
+	_ = e.redis.HSet(ctx, idemKey, "kafka_append_status", kafkaAppendStatusPending).Err()
+	appendCtx, cancel := context.WithTimeout(ctx, e.options.KafkaAppendTimeout)
+	start := time.Now()
+	message, err := e.ledger.Append(appendCtx, result)
+	cancel()
+	elapsed := time.Since(start)
+	if err != nil {
+		recordKafkaAppend(result.Result, "error", elapsed)
+		observability.Inc("auction_bid_kafka_append_fail_total", map[string]string{"reason": classifyKafkaAppendFailure(err)})
+		_ = e.redis.HSet(ctx, idemKey, "kafka_append_status", kafkaAppendStatusFailed, "kafka_append_error", err.Error()).Err()
+		if e.options.PauseOnAppendFailure {
+			_ = e.pause(ctx, auctionID, "KAFKA_APPEND_FAILED_BEFORE_RETURN", err.Error(), traceID)
+		}
+		return apierrors.New(apierrors.CodeEngineReconciling, "bid engine decision is recovering; retry with the same idempotency key", http.StatusConflict)
+	}
+	recordKafkaAppend(result.Result, "ok", elapsed)
+	recordHTTPStage("kafka_append", result.Result, "ok", elapsed)
+	fields := []any{
+		"kafka_append_status", kafkaAppendStatusAcked,
+		"kafka_topic", message.Topic,
+	}
+	if message.Partition >= 0 && message.Offset >= 0 {
+		fields = append(fields, "kafka_partition", message.Partition, "kafka_offset", message.Offset)
+	}
+	_ = e.redis.HSet(ctx, idemKey, fields...).Err()
+	return nil
+}
+
+func (e *Engine) kafkaAppendStatus(ctx context.Context, auctionID string, clientBidID string) (string, error) {
+	status, err := e.redis.HGet(ctx, redisx.BidEngineIdempotencyKey(auctionID, clientBidID), "kafka_append_status").Result()
+	if errors.Is(err, redis.Nil) {
+		return "", nil
+	}
+	return status, err
 }
 
 type pendingDecision struct {
@@ -521,6 +617,7 @@ func (e *Engine) pause(ctx context.Context, auctionID string, reason string, mes
 	if e.redis != nil {
 		_ = e.redis.HSet(ctx, redisx.BidEngineStateKey(auctionID), "paused", 1, "pause_reason", reason).Err()
 	}
+	observability.Inc("auction_bid_engine_pause_total", map[string]string{"reason": reason})
 	return nil
 }
 
@@ -582,6 +679,28 @@ func stringValue(value any) string {
 func recordDecision(result string, elapsed time.Duration) {
 	observability.Inc("auction_bid_redis_ledger_total", map[string]string{"result": result})
 	observability.Observe("auction_bid_redis_ledger_seconds", elapsed.Seconds(), map[string]string{"result": result}, observability.DefaultLatencyBuckets)
+}
+
+func recordKafkaAppend(result string, status string, elapsed time.Duration) {
+	observability.Inc("auction_bid_kafka_append_total", map[string]string{"result": result, "status": status})
+	observability.Observe("auction_bid_kafka_append_seconds", elapsed.Seconds(), map[string]string{"result": result, "status": status}, observability.DefaultLatencyBuckets)
+}
+
+func recordHTTPStage(stage string, result string, status string, elapsed time.Duration) {
+	observability.Observe("auction_bid_http_stage_seconds", elapsed.Seconds(), map[string]string{"stage": stage, "result": result, "status": status}, observability.DefaultLatencyBuckets)
+}
+
+func classifyKafkaAppendFailure(err error) string {
+	if err == nil {
+		return "none"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "canceled"
+	}
+	return "error"
 }
 
 type Worker struct {
@@ -891,6 +1010,9 @@ func (w *Worker) ProcessKafka(ctx context.Context, limit int) (int, error) {
 			return processed, err
 		}
 		if err := w.settleLedgerMessage(ctx, message); err != nil {
+			if isTransientSettlementError(err) {
+				return processed, err
+			}
 			if err := w.retryOrDLQ(ctx, message, err); err != nil {
 				return processed, err
 			}
@@ -1160,7 +1282,12 @@ func (w *Worker) settlePayload(ctx context.Context, auctionID string, ledgerID s
 		})
 		return tx.Commit(ctx)
 	}
-	if result.EngineSeq != dbSeq+1 {
+	if result.EngineSeq > dbSeq+1 {
+		_ = markSettlementDelayed(ctx, tx, auctionID, ledgerID, fmt.Sprintf("engine seq waiting for predecessor redis=%d db_next=%d", result.EngineSeq, dbSeq+1))
+		_ = tx.Commit(ctx)
+		return transientSettlementError{err: fmt.Errorf("engine seq waiting for predecessor auction=%s redis=%d db_next=%d", auctionID, result.EngineSeq, dbSeq+1)}
+	}
+	if result.EngineSeq <= dbSeq {
 		_ = markSettlementFailed(ctx, tx, auctionID, ledgerID, fmt.Sprintf("engine seq gap redis=%d db_next=%d", result.EngineSeq, dbSeq+1))
 		_ = pauseTx(ctx, tx, auctionID, "REDIS_ENGINE_LEDGER_GAP", "settlement detected engine seq gap", map[string]any{
 			"redis_engine_seq": result.EngineSeq,
@@ -1514,6 +1641,15 @@ func markSettlementFailed(ctx context.Context, tx pgx.Tx, auctionID string, stre
 	return err
 }
 
+func markSettlementDelayed(ctx context.Context, tx pgx.Tx, auctionID string, streamID string, message string) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE redis_engine_settlements
+		SET status = 'PROCESSING', last_error = $3, updated_at = now()
+		WHERE auction_id = $1 AND stream_id = $2
+	`, auctionID, streamID, message)
+	return err
+}
+
 func (w *Worker) settlementAttempts(ctx context.Context, message LedgerMessage) int {
 	if w == nil || w.db == nil {
 		return 0
@@ -1548,6 +1684,10 @@ type permanentSettlementError struct {
 	err error
 }
 
+type transientSettlementError struct {
+	err error
+}
+
 func (e permanentSettlementError) Error() string {
 	return e.err.Error()
 }
@@ -1558,6 +1698,19 @@ func (e permanentSettlementError) Unwrap() error {
 
 func isPermanentSettlementError(err error) bool {
 	var target permanentSettlementError
+	return errors.As(err, &target)
+}
+
+func (e transientSettlementError) Error() string {
+	return e.err.Error()
+}
+
+func (e transientSettlementError) Unwrap() error {
+	return e.err
+}
+
+func isTransientSettlementError(err error) bool {
+	var target transientSettlementError
 	return errors.As(err, &target)
 }
 
@@ -1580,6 +1733,7 @@ func (w *Worker) pause(ctx context.Context, auctionID string, reason string, mes
 	if w.redis != nil {
 		_ = w.redis.HSet(ctx, redisx.BidEngineStateKey(auctionID), "paused", 1, "pause_reason", reason).Err()
 	}
+	observability.Inc("auction_bid_engine_pause_total", map[string]string{"reason": reason})
 	return nil
 }
 

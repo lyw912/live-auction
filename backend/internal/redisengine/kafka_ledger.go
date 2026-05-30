@@ -126,16 +126,21 @@ func (l *KafkaLedger) Append(ctx context.Context, result engineResult) (LedgerMe
 		Value: value,
 		Time:  time.UnixMilli(result.ServerTimeMS).UTC(),
 		Headers: []kafka.Header{
+			{Key: "decision_id", Value: []byte(result.ledgerID())},
 			{Key: "auction_id", Value: []byte(result.AuctionID)},
 			{Key: "engine_epoch", Value: []byte(strconv.FormatInt(result.EngineEpoch, 10))},
 			{Key: "engine_seq", Value: []byte(strconv.FormatInt(result.EngineSeq, 10))},
+			{Key: "client_bid_id", Value: []byte(result.ClientBidID)},
+			{Key: "request_hash", Value: []byte(result.RequestHash)},
+			{Key: "trace_id", Value: []byte(result.TraceID)},
 			{Key: "result", Value: []byte(result.Result)},
+			{Key: "server_time_ms", Value: []byte(strconv.FormatInt(result.ServerTimeMS, 10))},
 		},
 	}
 	if err := l.writer.WriteMessages(ctx, msg); err != nil {
 		return LedgerMessage{}, err
 	}
-	return LedgerMessage{ID: result.ledgerID(), Topic: l.topic, Key: key, Value: value}, nil
+	return LedgerMessage{ID: result.ledgerID(), Topic: l.topic, Partition: -1, Offset: -1, Key: key, Value: value}, nil
 }
 
 func (l *KafkaLedger) Fetch(ctx context.Context) (LedgerMessage, error) {
