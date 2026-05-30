@@ -37,7 +37,6 @@ func TestMonitorRoutesReturnRealDBRowsAndRequireHost(t *testing.T) {
 	assertMonitorHasItems(t, router, "/api/monitor/anomalies", "type", "MONITOR_TEST")
 	assertMonitorHasItems(t, router, "/api/monitor/outbox", "aggregate_id", row.ID)
 	assertMonitorHasItems(t, router, "/api/monitor/outbox", "delivery_state", "READY")
-	assertMonitorHasItems(t, router, "/api/monitor/outbox/watermarks", "shard_id", float64(0))
 	assertMonitorHasItems(t, router, "/api/monitor/outbox/watermarks", "ack_pending_count", float64(1))
 	assertMonitorHasItems(t, router, "/api/monitor/scheduler", "target_id", row.ID)
 	assertMonitorHasItems(t, router, "/api/monitor/rejects", "auction_id", row.ID)
@@ -353,20 +352,31 @@ func forceMonitorSchedulerJob(t *testing.T, db *pgxpool.Pool, auctionID string) 
 func seedMonitorDebeziumDiagnostics(t *testing.T, db *pgxpool.Pool, auctionID string) {
 	t.Helper()
 	ctx := context.Background()
+	var shardID int
+	if err := db.QueryRow(ctx, `
+		SELECT d.shard_id
+		FROM outbox_delivery d
+		JOIN outbox_events e ON e.id = d.outbox_id
+		WHERE e.auction_id = $1
+		ORDER BY d.outbox_id
+		LIMIT 1
+	`, auctionID).Scan(&shardID); err != nil {
+		t.Fatalf("select monitor outbox shard: %v", err)
+	}
 	if _, err := db.Exec(ctx, `
 		INSERT INTO outbox_relay_watermarks (
 		  shard_id, owner_id, last_published_outbox_id, last_published_auction_id,
 		  last_published_seq, last_published_at, oldest_ready_age_ms,
 		  ready_count, publishing_count, dead_count
 		)
-		VALUES (0, 'monitor-worker', 1, $1, 1, now(), 0, 1, 1, 0)
+		VALUES ($2, 'monitor-worker', 1, $1, 1, now(), 0, 1, 1, 0)
 		ON CONFLICT (shard_id) DO UPDATE
 		SET owner_id = EXCLUDED.owner_id,
 		    last_published_auction_id = EXCLUDED.last_published_auction_id,
 		    ready_count = EXCLUDED.ready_count,
 		    publishing_count = EXCLUDED.publishing_count,
 		    updated_at = now()
-	`, auctionID); err != nil {
+	`, auctionID, shardID); err != nil {
 		t.Fatalf("seed watermarks: %v", err)
 	}
 	if _, err := db.Exec(ctx, `

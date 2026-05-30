@@ -224,7 +224,40 @@ func createActiveAuctionForReconcile(t *testing.T, repo *auction.Repository, db 
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
+	isolateReconcileAuction(t, db, started.ID)
 	return started
+}
+
+func isolateReconcileAuction(t *testing.T, db *pgxpool.Pool, auctionID string) {
+	t.Helper()
+	if _, err := db.Exec(context.Background(), `
+		UPDATE outbox_delivery d
+		SET status = 'PUBLISHED',
+		    published_at = COALESCE(published_at, now()),
+		    locked_by = NULL,
+		    locked_until = NULL
+		FROM outbox_events e
+		WHERE e.id = d.outbox_id
+		  AND (e.auction_id IS DISTINCT FROM $1)
+		  AND d.status NOT IN ('PUBLISHED','DEAD')
+	`, auctionID); err != nil {
+		t.Fatalf("quiesce reconcile outbox: %v", err)
+	}
+	if _, err := db.Exec(context.Background(), `
+		INSERT INTO outbox_relay_shard_leases (shard_id, owner_id, lease_until)
+		SELECT DISTINCT shard_id, 'reconcile-test-isolation', now() + interval '30 seconds'
+		FROM outbox_delivery
+		WHERE auction_id = $1
+		ON CONFLICT (shard_id) DO UPDATE
+		SET owner_id = EXCLUDED.owner_id,
+		    lease_until = EXCLUDED.lease_until,
+		    renewed_at = now()
+	`, auctionID); err != nil {
+		t.Fatalf("reserve reconcile shard leases: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), `DELETE FROM outbox_relay_shard_leases WHERE owner_id = 'reconcile-test-isolation'`)
+	})
 }
 
 func prioritizeReconcileOutbox(t *testing.T, db *pgxpool.Pool, auctionID string) {

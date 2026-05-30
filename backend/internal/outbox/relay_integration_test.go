@@ -1082,7 +1082,39 @@ func createActiveAuctionForRelay(t *testing.T, repo *auction.Repository, db *pgx
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
+	isolateRelayTestAuction(t, db, started.ID)
 	return started
+}
+
+func isolateRelayTestAuction(t *testing.T, db *pgxpool.Pool, auctionID string) {
+	t.Helper()
+	quiesceOutboxExcept(t, db, auctionID)
+	if _, err := db.Exec(context.Background(), `
+		INSERT INTO outbox_relay_shard_leases (shard_id, owner_id, lease_until)
+		SELECT DISTINCT shard_id, 'relay-test-isolation', now() + interval '30 seconds'
+		FROM outbox_delivery
+		WHERE auction_id = $1
+		ON CONFLICT (shard_id) DO UPDATE
+		SET owner_id = EXCLUDED.owner_id,
+		    lease_until = EXCLUDED.lease_until,
+		    renewed_at = now()
+	`, auctionID); err != nil {
+		t.Fatalf("reserve relay test shard leases: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), `DELETE FROM outbox_relay_shard_leases WHERE owner_id = 'relay-test-isolation'`)
+	})
+	if _, err := db.Exec(context.Background(), `
+		UPDATE system_control_signals
+		SET status = 'FAILED',
+		    processed_at = COALESCE(processed_at, now()),
+		    locked_by = NULL,
+		    locked_until = NULL,
+		    error_message = COALESCE(error_message, 'test isolation cleanup')
+		WHERE status IN ('PENDING','PROCESSING')
+	`); err != nil {
+		t.Fatalf("quiesce pending control signals: %v", err)
+	}
 }
 
 func prioritizeOutboxForAuction(t *testing.T, db *pgxpool.Pool, auctionID string) {
