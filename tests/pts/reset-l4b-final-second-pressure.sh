@@ -54,9 +54,7 @@ docker exec live-auction-postgres psql -U live_auction -d live_auction -v ON_ERR
 create temporary table pts_reset_auctions(id text primary key) on commit drop;
 insert into pts_reset_auctions(id)
 select id from auctions
-where id in ('auc_live','auc_side')
-   or id like 'auc_engine_%'
-   or id like 'auc_inv_%';
+where id is not null;
 
 delete from system_anomaly_events
 where auction_id in (select id from pts_reset_auctions)
@@ -78,12 +76,14 @@ delete from payment_events
 where order_id in (select id from orders where auction_id in (select id from pts_reset_auctions));
 delete from orders where auction_id in (select id from pts_reset_auctions);
 delete from max_bid_intents where auction_id in (select id from pts_reset_auctions);
+delete from auction_engine_checkpoints where auction_id in (select id from pts_reset_auctions);
 delete from realtime_stream_epochs where auction_id in (select id from pts_reset_auctions);
 delete from snapshot_rebuild_events where auction_id in (select id from pts_reset_auctions);
 delete from auction_rules where auction_id in (select id from pts_reset_auctions) and auction_id not in ('auc_live','auc_side');
 delete from auctions where id in (select id from pts_reset_auctions) and id not in ('auc_live','auc_side');
 "
 
+docker exec live-auction-redis sh -c "redis-cli --scan --pattern 'bid:{auc_*}:*' | xargs -r redis-cli del" >/dev/null
 docker exec live-auction-redis sh -c "redis-cli --scan --pattern 'bid:{auc_live}:*' | xargs -r redis-cli del" >/dev/null
 docker exec live-auction-redis sh -c "redis-cli --scan --pattern 'bid:{auc_side}:*' | xargs -r redis-cli del" >/dev/null
 docker exec live-auction-redis sh -c "redis-cli --scan --pattern 'bid:{auc_engine_*}:*' | xargs -r redis-cli del" >/dev/null

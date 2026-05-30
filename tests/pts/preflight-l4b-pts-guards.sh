@@ -153,6 +153,58 @@ where indexname in (
   'ux_redis_engine_settlements_kafka_offset',
   'ix_redis_engine_settlements_ledger_lag'
 );
+
+with state as (
+  select
+    count(*) filter (where id in ('auc_live','auc_side')) as target_auctions,
+    count(*) filter (where id not in ('auc_live','auc_side')) as extra_auctions,
+    count(*) filter (
+      where id in ('auc_live','auc_side')
+        and status = 'ACTIVE'
+        and seq = 0
+        and engine_seq = 0
+        and engine_paused = false
+        and current_winner_id is null
+        and accepted_bid_count = 0
+    ) as clean_targets
+  from auctions
+),
+dirty as (
+  select
+    (select count(*) from bids) as bids,
+    (select count(*) from redis_engine_settlements) as settlements,
+    (select count(*) from auction_engine_checkpoints) as checkpoints,
+    (select count(*) from system_anomaly_events) as anomalies
+)
+select 'P0', 'pts_target_auctions_clean',
+       case when target_auctions = 2 and clean_targets = 2 then 'PASS' else 'FAIL' end,
+       'auc_live and auc_side must be ACTIVE with seq=0, engine_seq=0, no pause, no winner'
+from state
+union all
+select 'P0', 'pts_no_extra_auctions',
+       case when extra_auctions = 0 then 'PASS' else 'FAIL' end,
+       'formal PTS reset must remove non-target test/demo auctions'
+from state
+union all
+select 'P0', 'pts_no_historical_bids',
+       case when bids = 0 then 'PASS' else 'FAIL' end,
+       'formal PTS reset must start with zero bids'
+from dirty
+union all
+select 'P0', 'pts_no_historical_redis_settlements',
+       case when settlements = 0 then 'PASS' else 'FAIL' end,
+       'formal PTS reset must start with zero redis ledger settlements'
+from dirty
+union all
+select 'P0', 'pts_no_historical_checkpoints',
+       case when checkpoints = 0 then 'PASS' else 'FAIL' end,
+       'formal PTS reset must start with zero redis engine checkpoints'
+from dirty
+union all
+select 'P0', 'pts_no_historical_anomalies',
+       case when anomalies = 0 then 'PASS' else 'FAIL' end,
+       'formal PTS reset must start with zero anomaly events'
+from dirty;
 SQL
 
   bid_topic_desc="$(docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-topics.sh --bootstrap-server "$KAFKA_BOOTSTRAP" --describe --topic "$KAFKA_BID_TOPIC" 2>/dev/null || true)"
