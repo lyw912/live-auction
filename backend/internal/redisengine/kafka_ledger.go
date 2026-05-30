@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/segmentio/kafka-go"
+
+	apptracing "live-auction/backend/internal/tracing"
 )
 
 const (
@@ -137,6 +139,13 @@ func (l *KafkaLedger) Append(ctx context.Context, result engineResult) (LedgerMe
 			{Key: "result", Value: []byte(result.Result)},
 			{Key: "server_time_ms", Value: []byte(strconv.FormatInt(result.ServerTimeMS, 10))},
 		},
+	}
+	traceHeaders := map[string][]string{}
+	apptracing.InjectHTTP(ctx, traceHeaders)
+	for key, values := range traceHeaders {
+		for _, value := range values {
+			msg.Headers = append(msg.Headers, kafka.Header{Key: key, Value: []byte(value)})
+		}
 	}
 	if err := l.writer.WriteMessages(ctx, msg); err != nil {
 		return LedgerMessage{}, err

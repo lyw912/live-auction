@@ -18,6 +18,7 @@ import (
 	"live-auction/backend/internal/redisengine"
 	"live-auction/backend/internal/scheduler"
 	"live-auction/backend/internal/storage"
+	"live-auction/backend/internal/tracing"
 )
 
 func main() {
@@ -26,6 +27,14 @@ func main() {
 
 	cfg := config.Load()
 	log := logger.New(cfg.AppEnv)
+	shutdownTracing := tracing.Init(ctx, log)
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := shutdownTracing(shutdownCtx); err != nil {
+			log.Error("shutdown tracing", slog.String("error", err.Error()))
+		}
+	}()
 
 	deps, err := storage.Open(ctx, cfg, log)
 	if err != nil {

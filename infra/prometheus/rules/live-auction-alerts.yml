@@ -77,3 +77,63 @@ groups:
           summary: "Slow WebSocket consumers are being disconnected"
           description: "At least one slow consumer was closed in the last 5 minutes."
           runbook: "docs/runbooks/alerts.md#liveauctionslowconsumerdisconnects"
+
+      - alert: LiveAuctionPTS1BBidGatewayP99High
+        expr: histogram_quantile(0.99, sum by (le) (rate(auction_bid_gateway_stage_seconds_bucket{stage="total",mode="redis_ledger"}[2m]))) > 0.75
+        for: 1m
+        labels:
+          severity: warning
+          component: bid-gateway
+          scenario: pts-1b
+        annotations:
+          summary: "PTS-1B bid gateway p99 exceeded the hot-path budget"
+          description: "Redis-ledger bid handler p99 is above 750ms. Compare stage p99 with PTS sampled RTT before claiming a backend bottleneck."
+          runbook: "docs/perf/pts/l4b-kafka/pts1b-observability-runbook-2026-05-30.md#triage-matrix"
+
+      - alert: LiveAuctionPTS1BRedisLuaP99High
+        expr: histogram_quantile(0.99, sum by (le) (rate(auction_bid_http_stage_seconds_bucket{stage="redis_lua"}[2m]))) > 0.1
+        for: 1m
+        labels:
+          severity: warning
+          component: redis-engine
+          scenario: pts-1b
+        annotations:
+          summary: "PTS-1B Redis Lua p99 is elevated"
+          description: "Redis decision Lua p99 is above 100ms, indicating Redis CPU/contention or oversized script work."
+          runbook: "docs/perf/pts/l4b-kafka/pts1b-observability-runbook-2026-05-30.md#triage-matrix"
+
+      - alert: LiveAuctionPTS1BKafkaAppendP99High
+        expr: histogram_quantile(0.99, sum by (le) (rate(auction_bid_kafka_append_seconds_bucket{status="ok"}[2m]))) > 0.75
+        for: 1m
+        labels:
+          severity: warning
+          component: kafka
+          scenario: pts-1b
+        annotations:
+          summary: "PTS-1B Kafka append p99 exceeded the sync-ack budget"
+          description: "Kafka sync append p99 is above 750ms. Check broker health, ISR/min.insync settings, append timeouts, and pending-order wait."
+          runbook: "docs/perf/pts/l4b-kafka/pts1b-observability-runbook-2026-05-30.md#triage-matrix"
+
+      - alert: LiveAuctionPTS1BEnginePaused
+        expr: increase(auction_bid_engine_pause_total[2m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          component: redis-engine
+          scenario: pts-1b
+        annotations:
+          summary: "Redis ledger engine paused during PTS-1B"
+          description: "Any engine pause invalidates a performance-only conclusion. Inspect pause_reason, pending decisions, Kafka append markers, and DLQ."
+          runbook: "docs/perf/pts/l4b-kafka/pts1b-observability-runbook-2026-05-30.md#triage-matrix"
+
+      - alert: LiveAuctionPTS1BPendingDecisionsStuck
+        expr: max(auction_bid_redis_pending_decisions) > 0
+        for: 2m
+        labels:
+          severity: critical
+          component: redis-engine
+          scenario: pts-1b
+        annotations:
+          summary: "Redis ledger pending decisions did not drain"
+          description: "Pending decisions remaining after the burst means Kafka append or settlement recovery is incomplete."
+          runbook: "docs/perf/pts/l4b-kafka/pts1b-observability-runbook-2026-05-30.md#triage-matrix"

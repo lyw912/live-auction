@@ -19,11 +19,13 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel/attribute"
 
 	"live-auction/backend/internal/auction"
 	"live-auction/backend/internal/observability"
 	apierrors "live-auction/backend/internal/platform/errors"
 	"live-auction/backend/internal/redisx"
+	apptracing "live-auction/backend/internal/tracing"
 )
 
 const (
@@ -351,10 +353,25 @@ func (e *Engine) PlaceBid(ctx context.Context, auctionID string, userID string, 
 		return auction.BidResponse{}, apierrors.New(apierrors.CodeInvalidArgument, "Idempotency-Key must equal client_bid_id", http.StatusBadRequest)
 	}
 	requestHash := requestHash(auctionID, userID, input.ClientBidID, input.AmountCents)
+	traceCtx := ctx
+	var stageErr error
+	_, stageSpan := apptracing.Start(traceCtx, "bid.idempotency.pg", attribute.String("auction.id", auctionID))
 	if replay, ok, err := e.completedReplay(ctx, auctionID, userID, idempotencyKey, requestHash); err != nil || ok {
+		stageErr = err
+		if ok {
+			stageSpan.SetAttributes(attribute.Bool("bid.idempotency.replay", true))
+		}
+		apptracing.End(stageSpan, stageErr)
 		return replay, err
 	}
+	apptracing.End(stageSpan, nil)
+	_, stageSpan = apptracing.Start(traceCtx, "bid.idempotency.redis", attribute.String("auction.id", auctionID))
 	if replay, ok, err := e.redisPreDecisionReplay(ctx, auctionID, input.ClientBidID, requestHash); err != nil || ok {
+		stageErr = err
+		if ok {
+			stageSpan.SetAttributes(attribute.Bool("bid.idempotency.replay", true))
+		}
+		apptracing.End(stageSpan, stageErr)
 		if err != nil {
 			var apiErr apierrors.APIError
 			if errors.As(err, &apiErr) {
@@ -365,11 +382,15 @@ func (e *Engine) PlaceBid(ctx context.Context, auctionID string, userID string, 
 		}
 		return replay, nil
 	}
+	apptracing.End(stageSpan, nil)
 
+	_, stageSpan = apptracing.Start(traceCtx, "bid.snapshot_load", attribute.String("auction.id", auctionID))
 	snap, err := e.loadSnapshot(ctx, auctionID)
 	if err != nil {
+		apptracing.End(stageSpan, err)
 		return auction.BidResponse{}, err
 	}
+	apptracing.End(stageSpan, nil)
 	nowMS := time.Now().UTC().UnixMilli()
 	bidID := "bid_" + uuid.NewString()
 	stateJSON, err := json.Marshal(snap)
@@ -378,6 +399,7 @@ func (e *Engine) PlaceBid(ctx context.Context, auctionID string, userID string, 
 	}
 	totalStart := time.Now()
 	start := time.Now()
+	_, stageSpan = apptracing.Start(traceCtx, "bid.redis_lua", attribute.String("auction.id", auctionID))
 	cmd := ledgerRunner.Run(ctx, e.redis, []string{
 		redisx.BidEngineStateKey(auctionID),
 		redisx.BidEngineIdempotencyKey(auctionID, input.ClientBidID),
@@ -386,17 +408,22 @@ func (e *Engine) PlaceBid(ctx context.Context, auctionID string, userID string, 
 	}, nowMS, auctionID, userID, input.ClientBidID, input.AmountCents, requestHash, traceID, bidID, string(stateJSON), engineStateTTL.Milliseconds(), idempotencyTTL.Milliseconds())
 	values, err := cmd.Slice()
 	if err != nil {
+		apptracing.End(stageSpan, err)
 		ledgerRunner.Record(redisx.ClassifyScriptError(err), time.Since(start))
 		_ = e.pause(ctx, auctionID, "REDIS_ENGINE_SCRIPT_ERROR", err.Error(), traceID)
 		return auction.BidResponse{}, apierrors.New(apierrors.CodeEnginePaused, "redis ledger engine paused after script failure: "+err.Error(), http.StatusServiceUnavailable)
 	}
 	if len(values) < 2 {
+		err := fmt.Errorf("redis ledger engine returned invalid result: %v", values)
+		apptracing.End(stageSpan, err)
 		_ = e.pause(ctx, auctionID, "REDIS_ENGINE_BAD_SCRIPT_RESULT", fmt.Sprintf("%v", values), traceID)
 		return auction.BidResponse{}, apierrors.New(apierrors.CodeEnginePaused, "redis ledger engine returned invalid result", http.StatusServiceUnavailable)
 	}
 	status := stringValue(values[0])
 	if status == "ERROR" {
 		code := apierrors.Code(stringValue(values[1]))
+		err := apierrors.New(code, "redis ledger engine rejected request", http.StatusConflict)
+		apptracing.End(stageSpan, err)
 		if code == apierrors.CodeEngineReconciling {
 			return auction.BidResponse{}, apierrors.New(apierrors.CodeEngineReconciling, "auction is reconciling", http.StatusConflict)
 		}
@@ -407,15 +434,24 @@ func (e *Engine) PlaceBid(ctx context.Context, auctionID string, userID string, 
 	}
 	var result engineResult
 	if err := json.Unmarshal([]byte(stringValue(values[1])), &result); err != nil {
+		apptracing.End(stageSpan, err)
 		_ = e.pause(ctx, auctionID, "REDIS_ENGINE_RESULT_DECODE_FAILED", err.Error(), traceID)
 		return auction.BidResponse{}, err
 	}
+	stageSpan.SetAttributes(
+		attribute.String("bid.result", result.Result),
+		attribute.Int64("bid.engine_seq", result.EngineSeq),
+		attribute.Int64("bid.engine_epoch", result.EngineEpoch),
+	)
+	apptracing.End(stageSpan, nil)
 	redisElapsed := time.Since(start)
 	ledgerRunner.Record("ok", redisElapsed)
 	recordDecision(result.Result, redisElapsed)
 	recordHTTPStage("redis_lua", result.Result, "ok", redisElapsed)
 	if status == "REPLAY" {
+		_, stageSpan = apptracing.Start(traceCtx, "bid.redis_replay_response", attribute.String("auction.id", auctionID))
 		resp, err := e.redisIdempotencyReplayResponse(ctx, auctionID, input.ClientBidID, requestHash, result, totalStart)
+		apptracing.End(stageSpan, err)
 		return resp, err
 	}
 	if err := e.appendDecisionBeforeReturn(ctx, auctionID, input.ClientBidID, result, traceID); err != nil {
@@ -428,7 +464,13 @@ func (e *Engine) PlaceBid(ctx context.Context, auctionID string, userID string, 
 
 func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID string, clientBidID string, result engineResult, traceID string) error {
 	idemKey := redisx.BidEngineIdempotencyKey(auctionID, clientBidID)
+	traceCtx := ctx
+	_, stageSpan := apptracing.Start(traceCtx, "bid.append_order_wait",
+		attribute.String("auction.id", auctionID),
+		attribute.Int64("bid.engine_seq", result.EngineSeq),
+	)
 	if err := e.waitForPendingAppendTurn(ctx, auctionID, result.EngineSeq); err != nil {
+		apptracing.End(stageSpan, err)
 		recordKafkaAppend(result.Result, "error", 0)
 		observability.Inc("auction_bid_kafka_append_fail_total", map[string]string{"reason": "pending_order"})
 		markerCtx, markerCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
@@ -440,12 +482,19 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 		_ = e.pause(pauseCtx, auctionID, "KAFKA_APPEND_ORDER_WAIT_FAILED", err.Error(), traceID)
 		return apierrors.New(apierrors.CodeProcessingRetryLater, "bid confirmation is pending; retry with the same idempotency key", http.StatusConflict)
 	}
-	appendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
+	apptracing.End(stageSpan, nil)
 	start := time.Now()
+	kafkaCtx, stageSpan := apptracing.Start(traceCtx, "bid.kafka_append",
+		attribute.String("auction.id", auctionID),
+		attribute.Int64("bid.engine_seq", result.EngineSeq),
+		attribute.String("bid.result", result.Result),
+	)
+	appendCtx, cancel := context.WithTimeout(kafkaCtx, e.kafkaAppendTimeout)
 	message, err := e.ledger.Append(appendCtx, result)
 	cancel()
 	elapsed := time.Since(start)
 	if err != nil {
+		apptracing.End(stageSpan, err)
 		failure := classifyKafkaAppendFailure(err)
 		recordKafkaAppend(result.Result, "error", elapsed)
 		observability.Inc("auction_bid_kafka_append_fail_total", map[string]string{"reason": failure.Reason})
@@ -458,6 +507,12 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 		_ = e.pause(pauseCtx, auctionID, failure.PauseType, err.Error(), traceID)
 		return apierrors.New(failure.APIError, failure.Message, http.StatusConflict)
 	}
+	stageSpan.SetAttributes(
+		attribute.String("messaging.system", "kafka"),
+		attribute.String("messaging.destination.name", message.Topic),
+		attribute.String("messaging.message.id", message.ID),
+	)
+	apptracing.End(stageSpan, nil)
 	recordKafkaAppend(result.Result, "ok", elapsed)
 	recordHTTPStage("kafka_append", result.Result, "ok", elapsed)
 	fields := []any{
@@ -469,8 +524,13 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 	}
 	expiresAtMS := time.Now().UTC().Add(idempotencyTTL).UnixMilli()
 	markerCtx, markerCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
+	_, stageSpan = apptracing.Start(traceCtx, "bid.redis_marker",
+		attribute.String("auction.id", auctionID),
+		attribute.Int64("bid.engine_seq", result.EngineSeq),
+	)
 	if err := e.redis.HSet(markerCtx, idemKey, fields...).Err(); err != nil {
 		markerCancel()
+		apptracing.End(stageSpan, err)
 		recordHTTPStage("kafka_append_marker", result.Result, "error", time.Since(start))
 		observability.Inc("auction_bid_kafka_append_marker_fail_total", map[string]string{"reason": "redis"})
 		pauseCtx, pauseCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
@@ -494,6 +554,7 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 	}
 	if err := e.redis.HSet(markerCtx, redisx.BidEngineAppendMarkerKey(auctionID), auctionMarkerFields...).Err(); err != nil {
 		markerCancel()
+		apptracing.End(stageSpan, err)
 		recordHTTPStage("kafka_append_marker", result.Result, "error", time.Since(start))
 		observability.Inc("auction_bid_kafka_append_marker_fail_total", map[string]string{"reason": "redis"})
 		pauseCtx, pauseCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
@@ -503,6 +564,7 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 	}
 	if err := e.redis.PExpire(markerCtx, redisx.BidEngineAppendMarkerKey(auctionID), idempotencyTTL).Err(); err != nil {
 		markerCancel()
+		apptracing.End(stageSpan, err)
 		recordHTTPStage("kafka_append_marker", result.Result, "error", time.Since(start))
 		observability.Inc("auction_bid_kafka_append_marker_fail_total", map[string]string{"reason": "redis_ttl"})
 		pauseCtx, pauseCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
@@ -515,6 +577,7 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 		observability.Inc("auction_bid_kafka_append_marker_fail_total", map[string]string{"reason": "redis_stats"})
 	}
 	markerCancel()
+	apptracing.End(stageSpan, nil)
 	return nil
 }
 

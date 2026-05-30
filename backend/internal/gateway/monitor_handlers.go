@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"live-auction/backend/internal/observability"
 	apierrors "live-auction/backend/internal/platform/errors"
 	"live-auction/backend/internal/redisx"
 	"live-auction/backend/internal/storage"
@@ -793,6 +794,7 @@ func enrichRedisEngineRuntime(r *http.Request, deps *storage.Dependencies, row *
 	ctx := r.Context()
 	if pending, err := deps.Redis.HLen(ctx, redisx.BidEnginePendingKey(row.AuctionID)).Result(); err == nil {
 		row.RedisPendingDecisions = pending
+		observability.Set("auction_bid_redis_pending_decisions", float64(pending), map[string]string{"auction_id": row.AuctionID})
 	}
 	values, err := deps.Redis.HGetAll(ctx, redisx.BidEngineAppendMarkerKey(row.AuctionID)).Result()
 	if err == nil && len(values) > 0 && values["kafka_append_status"] != "" {

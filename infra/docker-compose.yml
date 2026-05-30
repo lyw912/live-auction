@@ -102,6 +102,32 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
+  tempo:
+    image: grafana/tempo:2.6.0
+    container_name: live-auction-tempo
+    command: ["-config.file=/etc/tempo/tempo.yml"]
+    ports:
+      - "3200:3200"
+    volumes:
+      - ./tempo/tempo.yml:/etc/tempo/tempo.yml:ro
+      - tempo-data:/tmp/tempo
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    container_name: live-auction-otel-collector
+    command: ["--config=/etc/otelcol/config.yml"]
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "8889:8889"
+    volumes:
+      - ./otel/collector.yml:/etc/otelcol/config.yml:ro
+    depends_on:
+      tempo:
+        condition: service_started
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
   grafana:
     image: grafana/grafana:11.2.0
     container_name: live-auction-grafana
@@ -118,6 +144,20 @@ services:
     depends_on:
       prometheus:
         condition: service_started
+      tempo:
+        condition: service_started
+      pyroscope:
+        condition: service_started
+
+  pyroscope:
+    image: grafana/pyroscope:1.10.0
+    container_name: live-auction-pyroscope
+    ports:
+      - "4040:4040"
+    command:
+      - "server"
+    volumes:
+      - pyroscope-data:/var/lib/pyroscope
 
   # toxiproxy:
   #   image: ghcr.io/shopify/toxiproxy:2.9.0
@@ -139,3 +179,5 @@ volumes:
   minio-data:
   prometheus-data:
   grafana-data:
+  tempo-data:
+  pyroscope-data:
