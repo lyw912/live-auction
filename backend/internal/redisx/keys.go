@@ -30,6 +30,14 @@ func BidEnginePendingKey(auctionID string) string {
 	return fmt.Sprintf("bid:{%s}:engine:pending", auctionID)
 }
 
+func BidEngineAppendMarkerKey(auctionID string) string {
+	return fmt.Sprintf("bid:{%s}:engine:append-marker", auctionID)
+}
+
+func BidEngineAppendStatsKey(auctionID string) string {
+	return fmt.Sprintf("bid:{%s}:engine:append-stats", auctionID)
+}
+
 func BidEnginePendingAuctionsKey() string {
 	return "bid:engine:pending:auctions"
 }

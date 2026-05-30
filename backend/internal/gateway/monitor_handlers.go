@@ -9,6 +9,7 @@ import (
 	"time"
 
 	apierrors "live-auction/backend/internal/platform/errors"
+	"live-auction/backend/internal/redisx"
 	"live-auction/backend/internal/storage"
 )
 
@@ -233,19 +234,45 @@ type monitorSignalRow struct {
 }
 
 type monitorRedisEngineRow struct {
-	AuctionID          string     `json:"auction_id"`
-	Status             string     `json:"status"`
-	CurrentPrice       int64      `json:"current_price_cents"`
-	CurrentWinnerID    *string    `json:"current_winner_id,omitempty"`
-	Seq                int64      `json:"seq"`
-	EngineEpoch        int64      `json:"engine_epoch"`
-	EngineSeq          int64      `json:"engine_seq"`
-	EnginePaused       bool       `json:"engine_paused"`
-	EnginePauseReason  *string    `json:"engine_pause_reason,omitempty"`
-	EnginePausedAt     *time.Time `json:"engine_paused_at,omitempty"`
-	PendingSettlements int64      `json:"pending_settlements"`
-	FailedSettlements  int64      `json:"failed_settlements"`
-	LastSettledAt      *time.Time `json:"last_settled_at,omitempty"`
+	AuctionID             string     `json:"auction_id"`
+	EngineMode            string     `json:"engine_mode"`
+	Status                string     `json:"status"`
+	CurrentPrice          int64      `json:"current_price_cents"`
+	CurrentWinnerID       *string    `json:"current_winner_id,omitempty"`
+	Seq                   int64      `json:"seq"`
+	EngineEpoch           int64      `json:"engine_epoch"`
+	EngineSeq             int64      `json:"engine_seq"`
+	EnginePaused          bool       `json:"engine_paused"`
+	EnginePauseReason     *string    `json:"engine_pause_reason,omitempty"`
+	EnginePausedAt        *time.Time `json:"engine_paused_at,omitempty"`
+	PendingSettlements    int64      `json:"pending_settlements"`
+	FailedSettlements     int64      `json:"failed_settlements"`
+	RedisPendingDecisions int64      `json:"redis_pending_decisions"`
+	SettlementLagP50MS    int64      `json:"settlement_lag_p50_ms"`
+	SettlementLagP95MS    int64      `json:"settlement_lag_p95_ms"`
+	SettlementLagP99MS    int64      `json:"settlement_lag_p99_ms"`
+	SettlementLagMaxMS    int64      `json:"settlement_lag_max_ms"`
+	LastSettledAt         *time.Time `json:"last_settled_at,omitempty"`
+	CheckpointTopic       *string    `json:"checkpoint_topic,omitempty"`
+	CheckpointPartition   *int       `json:"checkpoint_partition,omitempty"`
+	CheckpointNextOffset  *int64     `json:"checkpoint_next_offset,omitempty"`
+	LastKafkaTopic        *string    `json:"last_kafka_topic,omitempty"`
+	LastKafkaPartition    *int       `json:"last_kafka_partition,omitempty"`
+	LastKafkaOffset       *int64     `json:"last_kafka_offset,omitempty"`
+	LastKafkaSettlementID *string    `json:"last_kafka_settlement_id,omitempty"`
+	LastKafkaSettledAt    *time.Time `json:"last_kafka_settled_at,omitempty"`
+	LatestAppendTopic     *string    `json:"latest_append_topic,omitempty"`
+	LatestAppendPartition *int       `json:"latest_append_partition,omitempty"`
+	LatestAppendOffset    *int64     `json:"latest_append_offset,omitempty"`
+	LatestAppendEngineSeq *int64     `json:"latest_append_engine_seq,omitempty"`
+	LatestAppendStatus    *string    `json:"latest_append_status,omitempty"`
+	LatestAppendClientBid *string    `json:"latest_append_client_bid_id,omitempty"`
+	LatestAppendExpiresMS *int64     `json:"latest_append_expires_at_ms,omitempty"`
+	AppendSuccessCount    int64      `json:"append_success_count"`
+	AppendFailureCount    int64      `json:"append_failure_count"`
+	AppendUnknownCount    int64      `json:"append_unknown_count"`
+	AppendStatsStatus     *string    `json:"append_stats_last_status,omitempty"`
+	AppendStatsEngineSeq  *int64     `json:"append_stats_last_engine_seq,omitempty"`
 }
 
 type createSignalRequest struct {
@@ -676,18 +703,66 @@ func (h MonitorHandler) Signals(w http.ResponseWriter, r *http.Request) {
 
 func (h MonitorHandler) RedisEngine(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.Deps.Postgres.Query(r.Context(), `
-		SELECT a.id, a.status, a.current_price_cents, a.current_winner_id, a.seq,
+		WITH candidate_auctions AS (
+		  SELECT id, status, current_price_cents, current_winner_id, seq,
+		         engine_epoch, engine_seq, engine_paused, engine_pause_reason,
+		         engine_paused_at, updated_at
+		  FROM auctions
+		  WHERE engine_seq > 0 OR engine_paused OR status = 'ACTIVE'
+		  ORDER BY updated_at DESC
+		  LIMIT $1
+		),
+		settlement_lag AS (
+		  SELECT s.auction_id,
+		         count(*) FILTER (WHERE s.status = 'PROCESSING') AS pending_settlements,
+		         count(*) FILTER (WHERE s.status = 'FAILED') AS failed_settlements,
+		         max(s.settled_at) AS last_settled_at,
+		         percentile_cont(0.50) WITHIN GROUP (
+		           ORDER BY EXTRACT(EPOCH FROM (COALESCE(s.settled_at, s.updated_at, now()) - s.created_at)) * 1000
+		         ) FILTER (WHERE s.status IN ('PROCESSING','SETTLED','SKIPPED')) AS lag_p50_ms,
+		         percentile_cont(0.95) WITHIN GROUP (
+		           ORDER BY EXTRACT(EPOCH FROM (COALESCE(s.settled_at, s.updated_at, now()) - s.created_at)) * 1000
+		         ) FILTER (WHERE s.status IN ('PROCESSING','SETTLED','SKIPPED')) AS lag_p95_ms,
+		         percentile_cont(0.99) WITHIN GROUP (
+		           ORDER BY EXTRACT(EPOCH FROM (COALESCE(s.settled_at, s.updated_at, now()) - s.created_at)) * 1000
+		         ) FILTER (WHERE s.status IN ('PROCESSING','SETTLED','SKIPPED')) AS lag_p99_ms,
+		         max(EXTRACT(EPOCH FROM (COALESCE(s.settled_at, s.updated_at, now()) - s.created_at)) * 1000)
+		           FILTER (WHERE s.status IN ('PROCESSING','SETTLED','SKIPPED')) AS lag_max_ms
+		  FROM redis_engine_settlements s
+		  JOIN candidate_auctions ca ON ca.id = s.auction_id
+		  GROUP BY s.auction_id
+		),
+		last_kafka AS (
+		  SELECT DISTINCT ON (s.auction_id)
+		         s.auction_id, s.stream_id, s.ledger_topic, s.ledger_partition, s.ledger_offset, s.settled_at
+		  FROM redis_engine_settlements s
+		  JOIN candidate_auctions ca ON ca.id = s.auction_id
+		  WHERE s.ledger_source = 'kafka'
+		  ORDER BY s.auction_id, s.settled_at DESC NULLS LAST, s.updated_at DESC
+		)
+		SELECT a.id,
+		       CASE
+		         WHEN a.engine_seq > 0 OR a.engine_paused OR sl.auction_id IS NOT NULL OR c.auction_id IS NOT NULL THEN 'redis_ledger'
+		         ELSE 'postgres_lane_or_uninitialized'
+		       END AS engine_mode,
+		       a.status, a.current_price_cents, a.current_winner_id, a.seq,
 		       a.engine_epoch, a.engine_seq, a.engine_paused, a.engine_pause_reason,
 		       a.engine_paused_at,
-		       COALESCE(count(s.id) FILTER (WHERE s.status = 'PROCESSING'), 0) AS pending_settlements,
-		       COALESCE(count(s.id) FILTER (WHERE s.status = 'FAILED'), 0) AS failed_settlements,
-		       max(s.settled_at) AS last_settled_at
-		FROM auctions a
-		LEFT JOIN redis_engine_settlements s ON s.auction_id = a.id
-		WHERE a.engine_seq > 0 OR a.engine_paused OR a.status = 'ACTIVE'
-		GROUP BY a.id
+		       COALESCE(sl.pending_settlements, 0) AS pending_settlements,
+		       COALESCE(sl.failed_settlements, 0) AS failed_settlements,
+		       0::bigint AS redis_pending_decisions,
+		       COALESCE(sl.lag_p50_ms, 0)::bigint AS settlement_lag_p50_ms,
+		       COALESCE(sl.lag_p95_ms, 0)::bigint AS settlement_lag_p95_ms,
+		       COALESCE(sl.lag_p99_ms, 0)::bigint AS settlement_lag_p99_ms,
+		       COALESCE(sl.lag_max_ms, 0)::bigint AS settlement_lag_max_ms,
+		       sl.last_settled_at,
+		       c.decision_topic, c.decision_partition, c.next_decision_offset,
+		       lk.ledger_topic, lk.ledger_partition, lk.ledger_offset, lk.stream_id, lk.settled_at
+		FROM candidate_auctions a
+		LEFT JOIN settlement_lag sl ON sl.auction_id = a.id
+		LEFT JOIN auction_engine_checkpoints c ON c.auction_id = a.id
+		LEFT JOIN last_kafka lk ON lk.auction_id = a.id
 		ORDER BY a.updated_at DESC
-		LIMIT $1
 	`, monitorLimit(r))
 	if err != nil {
 		writeError(w, r, internalMonitorError(err))
@@ -697,10 +772,11 @@ func (h MonitorHandler) RedisEngine(w http.ResponseWriter, r *http.Request) {
 	result := []monitorRedisEngineRow{}
 	for rows.Next() {
 		var row monitorRedisEngineRow
-		if err := rows.Scan(&row.AuctionID, &row.Status, &row.CurrentPrice, &row.CurrentWinnerID, &row.Seq, &row.EngineEpoch, &row.EngineSeq, &row.EnginePaused, &row.EnginePauseReason, &row.EnginePausedAt, &row.PendingSettlements, &row.FailedSettlements, &row.LastSettledAt); err != nil {
+		if err := rows.Scan(&row.AuctionID, &row.EngineMode, &row.Status, &row.CurrentPrice, &row.CurrentWinnerID, &row.Seq, &row.EngineEpoch, &row.EngineSeq, &row.EnginePaused, &row.EnginePauseReason, &row.EnginePausedAt, &row.PendingSettlements, &row.FailedSettlements, &row.RedisPendingDecisions, &row.SettlementLagP50MS, &row.SettlementLagP95MS, &row.SettlementLagP99MS, &row.SettlementLagMaxMS, &row.LastSettledAt, &row.CheckpointTopic, &row.CheckpointPartition, &row.CheckpointNextOffset, &row.LastKafkaTopic, &row.LastKafkaPartition, &row.LastKafkaOffset, &row.LastKafkaSettlementID, &row.LastKafkaSettledAt); err != nil {
 			writeError(w, r, internalMonitorError(err))
 			return
 		}
+		enrichRedisEngineRuntime(r, h.Deps, &row)
 		result = append(result, row)
 	}
 	if err := rows.Err(); err != nil {
@@ -708,6 +784,61 @@ func (h MonitorHandler) RedisEngine(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": result})
+}
+
+func enrichRedisEngineRuntime(r *http.Request, deps *storage.Dependencies, row *monitorRedisEngineRow) {
+	if deps == nil || deps.Redis == nil || row == nil || row.AuctionID == "" {
+		return
+	}
+	ctx := r.Context()
+	if pending, err := deps.Redis.HLen(ctx, redisx.BidEnginePendingKey(row.AuctionID)).Result(); err == nil {
+		row.RedisPendingDecisions = pending
+	}
+	values, err := deps.Redis.HGetAll(ctx, redisx.BidEngineAppendMarkerKey(row.AuctionID)).Result()
+	if err == nil && len(values) > 0 && values["kafka_append_status"] != "" {
+		latest := redisAppendDiagnostic{
+			status:      values["kafka_append_status"],
+			topic:       values["kafka_topic"],
+			clientBidID: values["client_bid_id"],
+			partition:   parseOptionalInt(values["kafka_partition"]),
+			offset:      parseOptionalInt64(values["kafka_offset"]),
+			engineSeq:   parseOptionalInt64(values["engine_seq"]),
+			expiresAtMS: parseOptionalInt64(values["expires_at_ms"]),
+		}
+		row.LatestAppendStatus = &latest.status
+		if latest.topic != "" {
+			row.LatestAppendTopic = &latest.topic
+		}
+		row.LatestAppendPartition = latest.partition
+		row.LatestAppendOffset = latest.offset
+		row.LatestAppendEngineSeq = latest.engineSeq
+		if latest.clientBidID != "" {
+			row.LatestAppendClientBid = &latest.clientBidID
+		}
+		row.LatestAppendExpiresMS = latest.expiresAtMS
+	}
+
+	stats, err := deps.Redis.HGetAll(ctx, redisx.BidEngineAppendStatsKey(row.AuctionID)).Result()
+	if err != nil || len(stats) == 0 {
+		return
+	}
+	row.AppendSuccessCount = parseOptionalInt64Value(stats["success_count"])
+	row.AppendFailureCount = parseOptionalInt64Value(stats["failure_count"])
+	row.AppendUnknownCount = parseOptionalInt64Value(stats["unknown_count"])
+	if stats["last_status"] != "" {
+		row.AppendStatsStatus = ptrMonitorString(stats["last_status"])
+	}
+	row.AppendStatsEngineSeq = parseOptionalInt64(stats["last_engine_seq"])
+}
+
+type redisAppendDiagnostic struct {
+	status      string
+	topic       string
+	clientBidID string
+	partition   *int
+	offset      *int64
+	engineSeq   *int64
+	expiresAtMS *int64
 }
 
 func (h MonitorHandler) CreateSignal(w http.ResponseWriter, r *http.Request) {
@@ -989,6 +1120,40 @@ func monitorTimelineLimit(r *http.Request) int {
 		return 100
 	}
 	return limit
+}
+
+func parseOptionalInt(value string) *int {
+	if value == "" {
+		return nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return nil
+	}
+	return &parsed
+}
+
+func parseOptionalInt64(value string) *int64 {
+	if value == "" {
+		return nil
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return nil
+	}
+	return &parsed
+}
+
+func parseOptionalInt64Value(value string) int64 {
+	parsed := parseOptionalInt64(value)
+	if parsed == nil {
+		return 0
+	}
+	return *parsed
+}
+
+func ptrMonitorString(value string) *string {
+	return &value
 }
 
 func internalMonitorError(err error) apierrors.APIError {

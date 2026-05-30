@@ -16,6 +16,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"live-auction/backend/internal/auction"
+	"live-auction/backend/internal/redisx"
 	"live-auction/backend/internal/storage"
 )
 
@@ -28,6 +29,7 @@ func TestMonitorRoutesReturnRealDBRowsAndRequireHost(t *testing.T) {
 	insertMonitorAnomaly(t, db, row.ID)
 	forceMonitorSchedulerJob(t, db, row.ID)
 	seedMonitorDebeziumDiagnostics(t, db, row.ID)
+	seedRedisEngineMonitorDiagnostics(t, db, rdb, row.ID)
 
 	router := NewRouter(testConfig(), deps, slog.Default())
 	assertMonitorForbiddenForUser(t, router, "/api/monitor/auctions")
@@ -43,6 +45,7 @@ func TestMonitorRoutesReturnRealDBRowsAndRequireHost(t *testing.T) {
 	assertMonitorHasItems(t, router, "/api/monitor/recovery", "max_queue_bytes", float64(65536))
 	assertMonitorHasItems(t, router, "/api/monitor/snapshots", "auction_id", row.ID)
 	assertMonitorHasItems(t, router, "/api/monitor/signals", "target_id", row.ID)
+	assertRedisEngineMonitor(t, router, row.ID)
 	assertMonitorCreateSignal(t, router, row.ID)
 	assertMonitorFlightRecorder(t, router, row.ID)
 }
@@ -94,7 +97,7 @@ func assertMonitorForbiddenForUser(t *testing.T, router http.Handler, path strin
 
 func assertMonitorHasItems(t *testing.T, router http.Handler, path string, field string, want any) {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, path+"?limit=20", nil)
+	req := httptest.NewRequest(http.MethodGet, path+"?limit=100", nil)
 	req.Header.Set("X-Mock-Role", "host")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -113,6 +116,48 @@ func assertMonitorHasItems(t *testing.T, router http.Handler, path string, field
 		}
 	}
 	t.Fatalf("%s missing %s=%v in %#v", path, field, want, body.Items)
+}
+
+func assertRedisEngineMonitor(t *testing.T, router http.Handler, auctionID string) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/monitor/redis-engine?limit=100", nil)
+	req.Header.Set("X-Mock-Role", "host")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/api/monitor/redis-engine status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode redis-engine monitor: %v", err)
+	}
+	for _, item := range body.Items {
+		if item["auction_id"] != auctionID {
+			continue
+		}
+		if item["engine_mode"] != "redis_ledger" {
+			t.Fatalf("redis-engine engine_mode=%v, want redis_ledger in %#v", item["engine_mode"], item)
+		}
+		if item["redis_pending_decisions"] != float64(2) {
+			t.Fatalf("redis-engine pending=%v, want 2 in %#v", item["redis_pending_decisions"], item)
+		}
+		if item["pending_settlements"] != float64(1) || item["failed_settlements"] != float64(1) {
+			t.Fatalf("redis-engine settlement counts got pending=%v failed=%v in %#v", item["pending_settlements"], item["failed_settlements"], item)
+		}
+		if item["settlement_lag_max_ms"] == nil || item["checkpoint_topic"] != "auction.bid-events" || item["checkpoint_next_offset"] != float64(43) {
+			t.Fatalf("redis-engine checkpoint/lag missing in %#v", item)
+		}
+		if item["latest_append_status"] != "ACKED" || item["latest_append_engine_seq"] != float64(42) || item["latest_append_client_bid_id"] != "monitor-client-bid" {
+			t.Fatalf("redis-engine append marker missing in %#v", item)
+		}
+		if item["append_success_count"] != float64(7) || item["append_failure_count"] != float64(1) || item["append_unknown_count"] != float64(2) {
+			t.Fatalf("redis-engine append stats missing in %#v", item)
+		}
+		return
+	}
+	t.Fatalf("/api/monitor/redis-engine missing auction_id=%s in %#v", auctionID, body.Items)
 }
 
 func assertMonitorCreateSignal(t *testing.T, router http.Handler, auctionID string) {
@@ -355,4 +400,84 @@ func seedMonitorDebeziumDiagnostics(t *testing.T, db *pgxpool.Pool, auctionID st
 	`, auctionID); err != nil {
 		t.Fatalf("seed signals: %v", err)
 	}
+}
+
+func seedRedisEngineMonitorDiagnostics(t *testing.T, db *pgxpool.Pool, rdb *redis.Client, auctionID string) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := db.Exec(ctx, `
+		UPDATE auctions
+		SET engine_epoch = 1, engine_seq = 42, updated_at = now()
+		WHERE id = $1
+	`, auctionID); err != nil {
+		t.Fatalf("seed redis engine auction fields: %v", err)
+	}
+	payload := `{"result":"ENGINE_ACCEPTED","auction_id":"` + auctionID + `","engine_epoch":1,"engine_seq":41,"request_hash":"monitor-hash"}`
+	settledID := "monitor-settled-" + auctionID
+	processingID := "monitor-processing-" + auctionID
+	failedID := "monitor-failed-" + auctionID
+	baseOffset := time.Now().UTC().UnixNano()
+	tag, err := db.Exec(ctx, `
+		INSERT INTO redis_engine_settlements (
+		  auction_id, stream_id, engine_epoch, engine_seq, result, status, attempts,
+		  payload_json, payload_sha256, ledger_source, ledger_topic, ledger_partition,
+		  ledger_offset, ledger_key, settled_at, created_at, updated_at
+		)
+		VALUES
+		  ($1, $3, 1, 41, 'ENGINE_ACCEPTED', 'SETTLED', 1, $2::jsonb, $6, 'kafka', 'auction.bid-events', 0, $9, $1, now(), now() - interval '20 milliseconds', now()),
+		  ($1, $4, 1, 42, 'ENGINE_ACCEPTED', 'PROCESSING', 1, $2::jsonb, $7, 'kafka', 'auction.bid-events', 0, $10, $1, NULL, now() - interval '120 milliseconds', now()),
+		  ($1, $5, 1, 43, 'ENGINE_REJECTED', 'FAILED', 3, $2::jsonb, $8, 'kafka', 'auction.bid-events', 0, $11, $1, NULL, now() - interval '200 milliseconds', now())
+	`, auctionID, payload, settledID, processingID, failedID, "monitor-sha-41-"+auctionID, "monitor-sha-42-"+auctionID, "monitor-sha-43-"+auctionID, baseOffset+41, baseOffset+42, baseOffset+43)
+	if err != nil {
+		t.Fatalf("seed redis engine settlements: %v", err)
+	}
+	if tag.RowsAffected() != 3 {
+		t.Fatalf("seed redis engine settlements rows=%d, want 3", tag.RowsAffected())
+	}
+	if _, err := db.Exec(ctx, `
+		INSERT INTO auction_engine_checkpoints (
+		  auction_id, engine_epoch, engine_seq, decision_topic, decision_partition,
+		  next_decision_offset, state_hash, snapshot_json
+		)
+		VALUES ($1, 1, 42, 'auction.bid-events', 0, 43, 'monitor-state-hash', '{"auction_id":"monitor"}')
+		ON CONFLICT (auction_id) DO UPDATE
+		SET engine_epoch = EXCLUDED.engine_epoch,
+		    engine_seq = EXCLUDED.engine_seq,
+		    decision_topic = EXCLUDED.decision_topic,
+		    decision_partition = EXCLUDED.decision_partition,
+		    next_decision_offset = EXCLUDED.next_decision_offset,
+		    state_hash = EXCLUDED.state_hash,
+		    snapshot_json = EXCLUDED.snapshot_json,
+		    updated_at = now()
+	`, auctionID); err != nil {
+		t.Fatalf("seed engine checkpoint: %v", err)
+	}
+	if err := rdb.HSet(ctx, redisx.BidEnginePendingKey(auctionID), "42", "{}", "43", "{}").Err(); err != nil {
+		t.Fatalf("seed pending redis decisions: %v", err)
+	}
+	if err := rdb.HSet(ctx, redisx.BidEngineAppendMarkerKey(auctionID),
+		"kafka_append_status", "ACKED",
+		"kafka_topic", "auction.bid-events",
+		"engine_epoch", 1,
+		"engine_seq", 42,
+		"client_bid_id", "monitor-client-bid",
+		"result", "ENGINE_ACCEPTED",
+		"server_time_ms", time.Now().UTC().UnixMilli(),
+		"trace_id", "tr_monitor_append",
+	).Err(); err != nil {
+		t.Fatalf("seed append marker: %v", err)
+	}
+	if err := rdb.HSet(ctx, redisx.BidEngineAppendStatsKey(auctionID),
+		"success_count", 7,
+		"failure_count", 1,
+		"unknown_count", 2,
+		"last_status", "ACKED",
+		"last_engine_seq", 42,
+		"last_updated_ms", time.Now().UTC().UnixMilli(),
+	).Err(); err != nil {
+		t.Fatalf("seed append stats: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = rdb.Del(context.Background(), redisx.BidEnginePendingKey(auctionID), redisx.BidEngineAppendMarkerKey(auctionID), redisx.BidEngineAppendStatsKey(auctionID)).Err()
+	})
 }

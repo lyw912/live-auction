@@ -47,7 +47,7 @@ type BidderRequirement = {
   reason?: string;
 };
 
-type BidPhase = 'idle' | 'pending' | 'engine_pending' | 'accepted' | 'rejected' | 'confirm_required' | 'confirming';
+type BidPhase = 'idle' | 'pending' | 'engine_pending' | 'engine_sold_pending' | 'accepted' | 'rejected' | 'confirm_required' | 'confirming';
 type PaymentPhase = 'idle' | 'pending' | 'paid' | 'failed' | 'expired';
 type RecoveryPhase = 'idle' | 'recovering';
 type ConnectionPhase = 'connecting' | 'connected' | 'recovering' | 'disconnected';
@@ -1008,6 +1008,20 @@ function App() {
         pending: true
       };
     }
+    if (bidPhase === 'engine_sold_pending') {
+      return {
+        key: 'pending' as AuctionState,
+        title: '落锤结算中',
+        status: 'ENGINE_SOLD_PENDING',
+        price: formatCents(currentPriceCents),
+        leader: leaderMasked ? `${leaderMasked} 拍中` : '热引擎已落锤',
+        feedback: bidFeedback || '等待订单结算确认',
+        countdown: '订单同步中',
+        cta: '等待订单',
+        ctaDisabled: true,
+        pending: true
+      };
+    }
     if (bidPhase === 'confirming') {
       return {
         key: 'pending' as AuctionState,
@@ -1042,7 +1056,7 @@ function App() {
         status: 'ACTIVE',
         price: formatCents(currentPriceCents),
         leader: '你已领先',
-        feedback: `已结算 seq ${lastSeq}`,
+        feedback: bidFeedback || `已结算 seq ${lastSeq}`,
         countdown: countdownCopy,
         cta: '已领先',
         ctaDisabled: true
@@ -1102,7 +1116,7 @@ function App() {
       setBidFeedback(isEngineSoldPending
         ? `热引擎已落锤，等待订单结算 seq ${payload.engine_seq ?? payload.seq ?? lastSeq}`
         : `热引擎已接收，等待账本结算 seq ${payload.engine_seq ?? payload.seq ?? lastSeq}`);
-      setBidPhase('engine_pending');
+      setBidPhase(isEngineSoldPending ? 'engine_sold_pending' : 'engine_pending');
       showAtmosphere({
         kind: 'leading',
         title: isEngineSoldPending ? '落锤结算中' : '出价已接收',
@@ -1151,6 +1165,7 @@ function App() {
       return;
     }
     if (acceptedWinnerID === currentUserID) {
+      setBidFeedback(`服务端确认 seq ${payload.seq ?? lastSeq}`);
       showAtmosphere({
         kind: 'leading',
         title: '领先！',
@@ -1280,7 +1295,6 @@ function App() {
       return;
     }
     if (detail.event_type === 'redis_engine_paused' || detail.event_type === 'redis_engine_reconciling') {
-      setBidPhase('engine_pending');
       setBidFeedback(detail.event_type === 'redis_engine_paused' ? '拍卖引擎已暂停，等待结算恢复' : '拍卖引擎对账中');
       setConnectionPhase('recovering');
       return;

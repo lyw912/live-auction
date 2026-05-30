@@ -78,6 +78,34 @@ type MonitorPayload = {
   items: Array<Record<string, unknown>>;
 };
 
+type RedisEngineMonitorPayload = MonitorPayload & {
+  summary?: {
+    active_rows: number;
+    paused_auctions: number;
+    pending_redis_decisions: number;
+    pending_settlements: number;
+    failed_settlements: number;
+    append_success_count: number;
+    append_failure_count: number;
+    append_unknown_count: number;
+    settlement_lag_max_ms: number;
+    latest_append?: Record<string, unknown>;
+  };
+};
+
+type RedisEngineSummary = {
+  active_rows: number;
+  paused_auctions: number;
+  pending_redis_decisions: number;
+  pending_settlements: number;
+  failed_settlements: number;
+  append_success_count: number;
+  append_failure_count: number;
+  append_unknown_count: number;
+  settlement_lag_max_ms: number;
+  latest_append?: Record<string, unknown>;
+};
+
 type FlightRecorderPayload = {
   summary?: FlightRecorderSummary;
   rules?: Array<Record<string, unknown>>;
@@ -325,6 +353,38 @@ function connectionLabel(monitor: Record<string, MonitorPayload>, roomID: string
   return '恢复链路正常';
 }
 
+function redisEngineSummary(payload?: MonitorPayload): RedisEngineSummary {
+  const rows = payload?.items ?? [];
+  const initial: RedisEngineSummary = {
+    active_rows: 0,
+    paused_auctions: 0,
+    pending_redis_decisions: 0,
+    pending_settlements: 0,
+    failed_settlements: 0,
+    append_success_count: 0,
+    append_failure_count: 0,
+    append_unknown_count: 0,
+    settlement_lag_max_ms: 0
+  };
+  return rows.reduce<RedisEngineSummary>((acc, row) => {
+    acc.active_rows += 1;
+    if (row.engine_paused) acc.paused_auctions += 1;
+    acc.pending_redis_decisions += Number(row.redis_pending_decisions ?? 0);
+    acc.pending_settlements += Number(row.pending_settlements ?? 0);
+    acc.failed_settlements += Number(row.failed_settlements ?? 0);
+    acc.append_success_count += Number(row.append_success_count ?? 0);
+    acc.append_failure_count += Number(row.append_failure_count ?? 0);
+    acc.append_unknown_count += Number(row.append_unknown_count ?? 0);
+    acc.settlement_lag_max_ms = Math.max(acc.settlement_lag_max_ms, Number(row.settlement_lag_max_ms ?? 0));
+    const appendSeq = Number(row.latest_append_engine_seq ?? 0);
+    const previousSeq = Number(acc.latest_append?.latest_append_engine_seq ?? 0);
+    if (appendSeq >= previousSeq && row.latest_append_status) {
+      acc.latest_append = row;
+    }
+    return acc;
+  }, initial);
+}
+
 function rowSourceURL(sourceKey: string, record: Record<string, unknown>) {
   const auctionID = String(record.auction_id ?? record.aggregate_id ?? record.target_id ?? '');
   if (auctionID && (sourceKey === 'auction_id' || sourceKey === 'trace_id' || sourceKey === 'outbox_id' || sourceKey === 'job_id' || sourceKey === 'request_id' || sourceKey === 'id')) {
@@ -537,10 +597,11 @@ function App() {
         ?? roomRows.find((room) => room.id === defaultRoomID)?.id
         ?? roomRows[0]?.id
         ?? roomID;
-      const [auctionRows, orderRows, auctionsDiag, anomalies, outbox, outboxWatermarks, snapshots, signals, scheduler, rejects, recovery] = await Promise.all([
+      const [auctionRows, orderRows, auctionsDiag, redisEngine, anomalies, outbox, outboxWatermarks, snapshots, signals, scheduler, rejects, recovery] = await Promise.all([
         fetch(`/api/auctions?room_id=${nextRoomID}`).then((r) => readJSON<Auction[]>(r)),
         fetch('/api/orders').then((r) => readJSON<Order[]>(r)),
         fetch('/api/monitor/auctions').then((r) => readJSON<MonitorPayload>(r)),
+        fetch('/api/monitor/redis-engine').then((r) => readJSON<RedisEngineMonitorPayload>(r)),
         fetch(`/api/monitor/anomalies?${monitorQuery(nextRoomID, monitorFilter)}`).then((r) => readJSON<MonitorPayload>(r)),
         fetch('/api/monitor/outbox').then((r) => readJSON<MonitorPayload>(r)),
         fetch('/api/monitor/outbox/watermarks').then((r) => readJSON<MonitorPayload>(r)),
@@ -554,7 +615,7 @@ function App() {
       if (nextRoomID !== roomID) setRoomID(nextRoomID);
       setAuctions(auctionRows);
       setOrders(orderRows);
-      setMonitor({ auctions: auctionsDiag, anomalies, outbox, outboxWatermarks, snapshots, signals, scheduler, rejects, recovery });
+      setMonitor({ auctions: auctionsDiag, redisEngine, anomalies, outbox, outboxWatermarks, snapshots, signals, scheduler, rejects, recovery });
       const nextSelected = auctionRows.find((row) => row.id === selectedAuctionID)?.id ?? auctionRows.find((row) => row.status === 'ACTIVE')?.id ?? sortedAuctions(auctionRows)[0]?.id ?? '';
       setSelectedAuctionID(nextSelected);
       setItems(auctionRows.map((auction) => auction.item).filter(Boolean));
@@ -1791,11 +1852,25 @@ function DiagnosticsPanel({
   onOpenFlightRecorder: (auctionID: string) => void;
   onFilterChange: React.Dispatch<React.SetStateAction<{ type: string; auctionID: string; userID: string; traceID: string }>>;
 }) {
+  const engineSummary = redisEngineSummary(monitor.redisEngine);
+  const latestAppend = engineSummary.latest_append;
+  const latestAppendLabel = latestAppend
+    ? `${latestAppend.latest_append_status ?? '-'} · seq ${latestAppend.latest_append_engine_seq ?? '-'} · ${latestAppend.latest_append_topic ?? '-'}:${latestAppend.latest_append_partition ?? '-'}:${latestAppend.latest_append_offset ?? '-'}`
+    : '暂无 append marker';
   return (
     <section className="band diagnostics" data-testid="diagnostics">
       <div className="section-title">
         <h2>诊断</h2>
         <span><Database size={16} /> API</span>
+      </div>
+      <div className="engine-diagnostics" data-testid="redis-engine-summary">
+        <span><RadioTower size={14} /> redis_ledger</span>
+        <span>pending Redis {engineSummary.pending_redis_decisions}</span>
+        <span>append {engineSummary.append_success_count}/{engineSummary.append_failure_count}/{engineSummary.append_unknown_count}</span>
+        <span>settlement {engineSummary.pending_settlements}/{engineSummary.failed_settlements}</span>
+        <span>lag max {engineSummary.settlement_lag_max_ms}ms</span>
+        <span>paused {engineSummary.paused_auctions}</span>
+        <span>{latestAppendLabel}</span>
       </div>
       <div className="monitor-filter" aria-label="monitor-filter">
         <select
@@ -1819,6 +1894,7 @@ function DiagnosticsPanel({
       </div>
       <Tabs defaultActiveTab="auctions">
         <Tabs.TabPane key="auctions" title="Auctions"><MonitorTable payload={monitor.auctions} empty="暂无竞拍诊断数据" sourceKey="auction_id" onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
+        <Tabs.TabPane key="redisEngine" title="Redis Engine"><MonitorTable payload={monitor.redisEngine} empty="暂无 redis engine 数据" sourceKey="auction_id" onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
         <Tabs.TabPane key="rejects" title="Rejects"><MonitorTable payload={monitor.rejects} empty="暂无拒绝出价" sourceKey="trace_id" icon={<AlertTriangle size={16} />} onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
         <Tabs.TabPane key="recovery" title="Recovery"><MonitorTable payload={monitor.recovery} empty="暂无恢复数据" sourceKey="room_id" onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
         <Tabs.TabPane key="anomalies" title="Anomalies"><MonitorTable payload={monitor.anomalies} empty="暂无异常" sourceKey="id" icon={<AlertTriangle size={16} />} onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
@@ -1864,6 +1940,26 @@ function MonitorTable({ payload, empty, icon, sourceKey, onOpenFlightRecorder }:
   if (rows.length === 0) return <div className="empty-state">{icon}{empty}</div>;
   const priorityKeys = [
     sourceKey,
+    'engine_mode',
+    'engine_seq',
+    'db_engine_seq',
+    'redis_pending_decisions',
+    'pending_settlements',
+    'failed_settlements',
+    'settlement_lag_p99_ms',
+    'settlement_lag_max_ms',
+    'latest_append_status',
+    'latest_append_engine_seq',
+    'latest_append_topic',
+    'latest_append_partition',
+    'latest_append_offset',
+    'append_success_count',
+    'append_failure_count',
+    'append_unknown_count',
+    'append_stats_last_status',
+    'checkpoint_topic',
+    'checkpoint_partition',
+    'checkpoint_next_offset',
     'delivery_state',
     'delivery_message_id',
     'event_key',
@@ -1881,7 +1977,7 @@ function MonitorTable({ payload, empty, icon, sourceKey, onOpenFlightRecorder }:
   const keys = Array.from(new Set([
     ...priorityKeys.filter((key) => key in rows[0]),
     ...Object.keys(rows[0])
-  ])).slice(0, 10);
+  ])).slice(0, 14);
   return (
     <Table
       rowKey={(record) => String(record.id ?? record.auction_id ?? record.outbox_id ?? record.job_id ?? record.room_id)}

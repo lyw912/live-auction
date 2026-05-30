@@ -559,6 +559,13 @@ func TestRedisLedgerLeavesPendingWhenKafkaAppendFails(t *testing.T) {
 	if appendStatus != kafkaAppendStatusFailed {
 		t.Fatalf("append status = %q, want %q", appendStatus, kafkaAppendStatusFailed)
 	}
+	appendStats, err := rdb.HGetAll(ctx, redisx.BidEngineAppendStatsKey(auctionID)).Result()
+	if err != nil {
+		t.Fatalf("load auction append stats: %v", err)
+	}
+	if appendStats["failure_count"] != "1" || appendStats["success_count"] != "" || appendStats["last_status"] != kafkaAppendStatusFailed {
+		t.Fatalf("auction append stats = %#v", appendStats)
+	}
 }
 
 func TestKafkaSettlementDuplicateMessageIsIdempotent(t *testing.T) {
@@ -634,6 +641,28 @@ func TestKafkaAckedDecisionKeepsPendingAndWorkerDuplicateIsIdempotent(t *testing
 	}
 	if appendStatus != kafkaAppendStatusAcked {
 		t.Fatalf("append status = %q, want %q", appendStatus, kafkaAppendStatusAcked)
+	}
+	appendMarker, err := rdb.HGetAll(ctx, redisx.BidEngineAppendMarkerKey(auctionID)).Result()
+	if err != nil {
+		t.Fatalf("load auction append marker: %v", err)
+	}
+	if appendMarker["kafka_append_status"] != kafkaAppendStatusAcked ||
+		appendMarker["engine_seq"] != strconv.FormatInt(resp.EngineSeq, 10) ||
+		appendMarker["client_bid_id"] != "redis-ledger-sync-ack-pending" {
+		t.Fatalf("auction append marker = %#v", appendMarker)
+	}
+	if appendMarker["expires_at_ms"] == "" {
+		t.Fatalf("auction append marker missing expires_at_ms: %#v", appendMarker)
+	}
+	if ttl, err := rdb.TTL(ctx, redisx.BidEngineAppendMarkerKey(auctionID)).Result(); err != nil || ttl <= 0 {
+		t.Fatalf("auction append marker ttl=%s err=%v, want positive", ttl, err)
+	}
+	appendStats, err := rdb.HGetAll(ctx, redisx.BidEngineAppendStatsKey(auctionID)).Result()
+	if err != nil {
+		t.Fatalf("load auction append stats: %v", err)
+	}
+	if appendStats["success_count"] != "1" || appendStats["failure_count"] != "" || appendStats["last_status"] != kafkaAppendStatusAcked {
+		t.Fatalf("auction append stats = %#v", appendStats)
 	}
 	processPendingAppends(t, worker, ctx, auctionID, 1)
 	if ledger.Len() != 2 {

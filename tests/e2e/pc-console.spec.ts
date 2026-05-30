@@ -74,6 +74,31 @@ test.beforeEach(async ({ page }) => {
   await page.route('/api/monitor/auctions', async (route) => route.fulfill({
     json: { items: [{ auction_id: 'auc_live', room_id: 'room_main', status: 'ACTIVE', current_price_cents: 45000, seq: 42 }] }
   }));
+  await page.route('/api/monitor/redis-engine', async (route) => route.fulfill({
+    json: {
+      items: [{
+        auction_id: 'auc_live',
+        engine_mode: 'redis_ledger',
+        status: 'ACTIVE',
+        engine_epoch: 1,
+        engine_seq: 42,
+        redis_pending_decisions: 1,
+        pending_settlements: 2,
+        failed_settlements: 0,
+        append_success_count: 7,
+        append_failure_count: 1,
+        append_unknown_count: 0,
+        settlement_lag_p99_ms: 120,
+        settlement_lag_max_ms: 180,
+        checkpoint_topic: 'auction.bid-events',
+        checkpoint_partition: 0,
+        checkpoint_next_offset: 43,
+        latest_append_status: 'ACKED',
+        latest_append_engine_seq: 42,
+        latest_append_topic: 'auction.bid-events'
+      }]
+    }
+  }));
   await page.route(/\/api\/monitor\/anomalies(\?.*)?$/, async (route) => route.fulfill({
     json: { items: [{ id: 1, severity: 'HIGH', type: 'CLOCK_STEP_BACKWARD', message: 'scheduler detected clock step backward' }] }
   }));
@@ -297,6 +322,9 @@ test('PC console renders live API auctions, orders, and expanded diagnostic pane
   await expect(page.getByTestId('pc-diagnostics-page')).toBeVisible();
   await expect(page.getByTestId('auction-queue')).not.toBeVisible();
   await expect(page.getByTestId('diagnostics')).toBeVisible();
+  await expect(page.getByTestId('redis-engine-summary')).toContainText('pending Redis 1');
+  await expect(page.getByTestId('redis-engine-summary')).toContainText('append 7/1/0');
+  await expect(page.getByTestId('redis-engine-summary')).toContainText('ACKED · seq 42');
   await expect(page.getByLabel('monitor-anomaly-type')).toBeVisible();
   await page.getByRole('button', { name: '竞拍', exact: true }).click();
   await expect(page.getByTestId('auction-control-summary')).toBeVisible();

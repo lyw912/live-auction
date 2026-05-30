@@ -437,6 +437,7 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 		observability.Inc("auction_bid_kafka_append_fail_total", map[string]string{"reason": failure.Reason})
 		markerCtx, markerCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
 		_ = e.redis.HSet(markerCtx, idemKey, "kafka_append_status", failure.Status, "kafka_append_error", err.Error()).Err()
+		_ = e.recordAuctionAppendStats(markerCtx, auctionID, failure.Status, result.EngineSeq)
 		markerCancel()
 		pauseCtx, pauseCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
 		defer pauseCancel()
@@ -452,6 +453,7 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 	if message.Partition >= 0 && message.Offset >= 0 {
 		fields = append(fields, "kafka_partition", message.Partition, "kafka_offset", message.Offset)
 	}
+	expiresAtMS := time.Now().UTC().Add(idempotencyTTL).UnixMilli()
 	markerCtx, markerCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
 	if err := e.redis.HSet(markerCtx, idemKey, fields...).Err(); err != nil {
 		markerCancel()
@@ -462,8 +464,69 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 		_ = e.pause(pauseCtx, auctionID, "KAFKA_APPEND_ACK_MARKER_FAILED", err.Error(), traceID)
 		return apierrors.New(apierrors.CodeProcessingRetryLater, "bid confirmation is pending; retry with the same idempotency key", http.StatusConflict)
 	}
+	auctionMarkerFields := []any{
+		"kafka_append_status", kafkaAppendStatusAcked,
+		"kafka_topic", message.Topic,
+		"engine_epoch", result.EngineEpoch,
+		"engine_seq", result.EngineSeq,
+		"client_bid_id", clientBidID,
+		"result", result.Result,
+		"server_time_ms", result.ServerTimeMS,
+		"trace_id", traceID,
+		"expires_at_ms", expiresAtMS,
+	}
+	if message.Partition >= 0 && message.Offset >= 0 {
+		auctionMarkerFields = append(auctionMarkerFields, "kafka_partition", message.Partition, "kafka_offset", message.Offset)
+	}
+	if err := e.redis.HSet(markerCtx, redisx.BidEngineAppendMarkerKey(auctionID), auctionMarkerFields...).Err(); err != nil {
+		markerCancel()
+		recordHTTPStage("kafka_append_marker", result.Result, "error", time.Since(start))
+		observability.Inc("auction_bid_kafka_append_marker_fail_total", map[string]string{"reason": "redis"})
+		pauseCtx, pauseCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
+		defer pauseCancel()
+		_ = e.pause(pauseCtx, auctionID, "KAFKA_APPEND_AUCTION_MARKER_FAILED", err.Error(), traceID)
+		return apierrors.New(apierrors.CodeProcessingRetryLater, "bid confirmation is pending; retry with the same idempotency key", http.StatusConflict)
+	}
+	if err := e.redis.PExpire(markerCtx, redisx.BidEngineAppendMarkerKey(auctionID), idempotencyTTL).Err(); err != nil {
+		markerCancel()
+		recordHTTPStage("kafka_append_marker", result.Result, "error", time.Since(start))
+		observability.Inc("auction_bid_kafka_append_marker_fail_total", map[string]string{"reason": "redis_ttl"})
+		pauseCtx, pauseCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
+		defer pauseCancel()
+		_ = e.pause(pauseCtx, auctionID, "KAFKA_APPEND_AUCTION_MARKER_TTL_FAILED", err.Error(), traceID)
+		return apierrors.New(apierrors.CodeProcessingRetryLater, "bid confirmation is pending; retry with the same idempotency key", http.StatusConflict)
+	}
+	if err := e.recordAuctionAppendStats(markerCtx, auctionID, kafkaAppendStatusAcked, result.EngineSeq); err != nil {
+		recordHTTPStage("kafka_append_marker", result.Result, "error", time.Since(start))
+		observability.Inc("auction_bid_kafka_append_marker_fail_total", map[string]string{"reason": "redis_stats"})
+	}
 	markerCancel()
 	return nil
+}
+
+func (e *Engine) recordAuctionAppendStats(ctx context.Context, auctionID string, status string, engineSeq int64) error {
+	if e == nil || e.redis == nil || auctionID == "" {
+		return nil
+	}
+	key := redisx.BidEngineAppendStatsKey(auctionID)
+	countField := "unknown_count"
+	switch status {
+	case kafkaAppendStatusAcked:
+		countField = "success_count"
+	case kafkaAppendStatusFailed:
+		countField = "failure_count"
+	}
+	pipe := e.redis.TxPipeline()
+	pipe.HIncrBy(ctx, key, countField, 1)
+	pipe.HSet(ctx, key,
+		"last_status", status,
+		"last_engine_seq", engineSeq,
+		"last_updated_ms", time.Now().UTC().UnixMilli(),
+		"expires_at_ms", time.Now().UTC().Add(idempotencyTTL).UnixMilli(),
+	)
+	pipe.PExpire(ctx, key, idempotencyTTL)
+	_, err := pipe.Exec(ctx)
+	return err
 }
 
 func (e *Engine) redisIdempotencyReplayResponse(ctx context.Context, auctionID string, clientBidID string, requestHash string, result engineResult, totalStart time.Time) (auction.BidResponse, error) {

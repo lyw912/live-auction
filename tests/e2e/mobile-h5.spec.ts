@@ -414,6 +414,36 @@ test('H5 bid stays pending until authoritative accepted response', async ({ page
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
 });
 
+test('H5 engine sold pending waits for settlement before payment copy', async ({ page }) => {
+  await page.route('/api/auctions/auc_live/bids', async (route) => {
+    await route.fulfill({
+      json: {
+        result: 'ENGINE_SOLD',
+        bid_id: 'bid_engine_sold',
+        auction_id: 'auc_live',
+        seq: 41,
+        engine_seq: 42,
+        settlement_status: 'PENDING',
+        current_price_cents: 60000,
+        current_winner_id: 'user_1',
+        end_at: '2099-05-22T14:00:00Z',
+        server_time_ms: Date.parse('2099-05-22T13:59:00Z'),
+        reject_reason: null
+      }
+    });
+  });
+
+  await page.goto('/?stateMatrix=1');
+  await page.getByRole('button', { name: '竞价中' }).click();
+  await page.getByTestId('bid-cta').click();
+
+  await expect(page.getByLabel('auction-state').getByText('落锤结算中')).toBeVisible();
+  await expect(page.getByLabel('auction-state').getByText('订单同步中')).toBeVisible();
+  await expect(page.getByTestId('bid-cta')).toHaveText(/等待订单/);
+  await expect(page.getByTestId('bid-cta')).toBeDisabled();
+  await expect(page.getByText('订单 ord_pending 已锁定')).not.toBeVisible();
+});
+
 test('H5 rejected bid shows business copy and re-enables CTA', async ({ page }) => {
   await page.route('/api/auctions/auc_live/bids', async (route) => {
     await route.fulfill({
