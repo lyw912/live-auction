@@ -21,13 +21,14 @@ import (
 const (
 	DefaultFakePaymentWebhookSecret = "local_fake_payment_secret"
 
-	BidResultAccepted         = "ACCEPTED"
-	BidResultAcceptedExtended = "ACCEPTED_EXTENDED"
-	BidResultAcceptedSold     = "ACCEPTED_SOLD"
-	BidResultRejected         = "REJECTED"
-	BidResultEngineAccepted   = "ENGINE_ACCEPTED"
-	BidResultEngineRejected   = "ENGINE_REJECTED"
-	BidResultEngineSold       = "ENGINE_SOLD"
+	BidResultAccepted            = "ACCEPTED"
+	BidResultAcceptedExtended    = "ACCEPTED_EXTENDED"
+	BidResultAcceptedSold        = "ACCEPTED_SOLD"
+	BidResultRejected            = "REJECTED"
+	BidResultConfirmationPending = "BID_CONFIRMATION_PENDING"
+	BidResultEngineAccepted      = "ENGINE_ACCEPTED"
+	BidResultEngineRejected      = "ENGINE_REJECTED"
+	BidResultEngineSold          = "ENGINE_SOLD"
 
 	SettlementStatusPending = "PENDING"
 	SettlementStatusSettled = "SETTLED"

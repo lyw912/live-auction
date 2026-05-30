@@ -3,6 +3,7 @@ package redisengine
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel/attribute"
+	"golang.org/x/sync/singleflight"
 
 	"live-auction/backend/internal/auction"
 	"live-auction/backend/internal/observability"
@@ -78,6 +80,9 @@ if existing[1] ~= false then
 end
 
 if redis.call('EXISTS', state_key) == 0 then
+  if state_json == '' then
+    return {'ERROR', 'RECONCILING', 'redis engine state missing and no postgres snapshot supplied'}
+  end
   local decoded = cjson.decode(state_json)
   local decoded_winner = decoded['current_winner_id']
   if decoded_winner == nil then decoded_winner = '' end
@@ -98,6 +103,7 @@ if redis.call('EXISTS', state_key) == 0 then
   redis.call('HSET', state_key, 'engine_epoch', tostring(decoded['engine_epoch'] or 1))
   redis.call('HSET', state_key, 'paused', tostring(decoded['paused'] or false))
   redis.call('HSET', state_key, 'pause_reason', tostring(decoded['pause_reason'] or ''))
+  redis.call('HSET', state_key, 'requires_postgres', tostring(decoded['requires_postgres'] or ''))
   redis.call('PEXPIRE', state_key, state_ttl_ms)
 end
 
@@ -105,7 +111,7 @@ local s = redis.call('HMGET', state_key,
   'status', 'current_price_cents', 'current_winner_id', 'start_price_cents',
   'increment_cents', 'cap_price_cents', 'end_at_ms', 'extend_window_ms',
   'extend_by_ms', 'max_extend_count', 'extend_count', 'accepted_bid_count',
-  'seq', 'engine_seq', 'engine_epoch', 'paused', 'pause_reason')
+  'seq', 'engine_seq', 'engine_epoch', 'paused', 'pause_reason', 'requires_postgres')
 
 local status = tostring(s[1])
 local current_price = tonumber(s[2]) or 0
@@ -126,6 +132,12 @@ local engine_seq = tonumber(s[14]) or 0
 local engine_epoch = tonumber(s[15]) or 1
 local paused = tostring(s[16])
 local pause_reason = tostring(s[17] or '')
+local requires_postgres = tostring(s[18] or '')
+
+if status == '' or s[2] == false or s[4] == false or s[5] == false or s[7] == false or
+   s[12] == false or s[13] == false or s[14] == false or s[15] == false or s[16] == false then
+  return {'ERROR', 'RECONCILING', 'redis engine state is incomplete'}
+end
 
 local function store_result(result)
   local encoded = cjson.encode(result)
@@ -174,11 +186,14 @@ local function reject(reason)
   return {'OK', store_decision(result)}
 end
 
-if paused == '1' then
+if paused == '1' or paused == 'true' then
   return {'ERROR', 'ENGINE_PAUSED', pause_reason}
 end
 if status == 'RECONCILING' then
   return {'ERROR', 'RECONCILING', pause_reason}
+end
+if requires_postgres ~= '' then
+  return {'ERROR', 'ENGINE_PAUSED', requires_postgres}
 end
 if status ~= 'ACTIVE' then
   return reject('AUCTION_NOT_ACTIVE')
@@ -264,6 +279,7 @@ type Engine struct {
 	redis              *redis.Client
 	ledger             BidLedger
 	kafkaAppendTimeout time.Duration
+	snapshotLoads      singleflight.Group
 }
 
 type snapshot struct {
@@ -372,17 +388,7 @@ func (e *Engine) PlaceBid(ctx context.Context, auctionID string, userID string, 
 	requestHash := requestHash(auctionID, userID, input.ClientBidID, input.AmountCents)
 	traceCtx := ctx
 	var stageErr error
-	_, stageSpan := apptracing.Start(traceCtx, "bid.idempotency.pg", attribute.String("auction.id", auctionID))
-	if replay, ok, err := e.completedReplay(ctx, auctionID, userID, idempotencyKey, requestHash); err != nil || ok {
-		stageErr = err
-		if ok {
-			stageSpan.SetAttributes(attribute.Bool("bid.idempotency.replay", true))
-		}
-		apptracing.End(stageSpan, stageErr)
-		return replay, err
-	}
-	apptracing.End(stageSpan, nil)
-	_, stageSpan = apptracing.Start(traceCtx, "bid.idempotency.redis", attribute.String("auction.id", auctionID))
+	_, stageSpan := apptracing.Start(traceCtx, "bid.idempotency.redis", attribute.String("auction.id", auctionID))
 	if replay, ok, err := e.redisPreDecisionReplay(ctx, auctionID, input.ClientBidID, requestHash); err != nil || ok {
 		stageErr = err
 		if ok {
@@ -401,19 +407,76 @@ func (e *Engine) PlaceBid(ctx context.Context, auctionID string, userID string, 
 	}
 	apptracing.End(stageSpan, nil)
 
-	_, stageSpan = apptracing.Start(traceCtx, "bid.snapshot_load", attribute.String("auction.id", auctionID))
-	snap, err := e.loadSnapshot(ctx, auctionID)
-	if err != nil {
-		apptracing.End(stageSpan, err)
-		return auction.BidResponse{}, err
-	}
-	apptracing.End(stageSpan, nil)
 	nowMS := time.Now().UTC().UnixMilli()
 	bidID := "bid_" + uuid.NewString()
-	stateJSON, err := json.Marshal(snap)
+	stateJSON := ""
+	stateExists, err := e.redis.Exists(ctx, redisx.BidEngineStateKey(auctionID)).Result()
 	if err != nil {
-		return auction.BidResponse{}, err
+		_ = e.pause(ctx, auctionID, "REDIS_ENGINE_STATE_CHECK_FAILED", err.Error(), traceID)
+		return auction.BidResponse{}, apierrors.New(apierrors.CodeEnginePaused, "redis ledger engine state check failed", http.StatusServiceUnavailable)
 	}
+	if stateExists == 0 {
+		if appendSeq, err := e.redisAppendHighWater(ctx, auctionID); err != nil {
+			_ = e.pause(ctx, auctionID, "REDIS_ENGINE_APPEND_MARKER_CHECK_FAILED", err.Error(), traceID)
+			return auction.BidResponse{}, apierrors.New(apierrors.CodeEnginePaused, "redis ledger engine append marker check failed", http.StatusServiceUnavailable)
+		} else if appendSeq > 0 {
+			if exists, existsErr := e.redis.Exists(ctx, redisx.BidEngineStateKey(auctionID)).Result(); existsErr != nil {
+				_ = e.pause(ctx, auctionID, "REDIS_ENGINE_STATE_RECHECK_FAILED", existsErr.Error(), traceID)
+				return auction.BidResponse{}, apierrors.New(apierrors.CodeEnginePaused, "redis ledger engine state recheck failed", http.StatusServiceUnavailable)
+			} else if exists > 0 {
+				goto redisLua
+			}
+			err := fmt.Errorf("redis engine state is missing after kafka append high-water engine_seq=%d", appendSeq)
+			_ = e.pause(ctx, auctionID, "REDIS_ENGINE_STATE_MISSING_REQUIRES_RECONCILE", err.Error(), traceID)
+			return auction.BidResponse{}, apierrors.New(apierrors.CodeEngineReconciling, "auction engine is reconciling after redis state loss", http.StatusConflict)
+		}
+		pendingCount, err := e.redis.HLen(ctx, redisx.BidEnginePendingKey(auctionID)).Result()
+		if err != nil {
+			_ = e.pause(ctx, auctionID, "REDIS_ENGINE_PENDING_CHECK_FAILED", err.Error(), traceID)
+			return auction.BidResponse{}, apierrors.New(apierrors.CodeEnginePaused, "redis ledger engine pending check failed", http.StatusServiceUnavailable)
+		}
+		if pendingCount > 0 {
+			if exists, existsErr := e.redis.Exists(ctx, redisx.BidEngineStateKey(auctionID)).Result(); existsErr != nil {
+				_ = e.pause(ctx, auctionID, "REDIS_ENGINE_STATE_RECHECK_FAILED", existsErr.Error(), traceID)
+				return auction.BidResponse{}, apierrors.New(apierrors.CodeEnginePaused, "redis ledger engine state recheck failed", http.StatusServiceUnavailable)
+			} else if exists > 0 {
+				goto redisLua
+			}
+			err := fmt.Errorf("redis engine state is missing while %d pending decisions remain", pendingCount)
+			_ = e.pause(ctx, auctionID, "REDIS_ENGINE_STATE_MISSING_REQUIRES_RECONCILE", err.Error(), traceID)
+			return auction.BidResponse{}, apierrors.New(apierrors.CodeEngineReconciling, "auction engine is reconciling after redis state loss", http.StatusConflict)
+		}
+		_, stageSpan = apptracing.Start(traceCtx, "bid.idempotency.pg_cold", attribute.String("auction.id", auctionID))
+		if replay, ok, err := e.completedReplay(ctx, auctionID, userID, idempotencyKey, requestHash); err != nil || ok {
+			stageErr = err
+			if ok {
+				stageSpan.SetAttributes(attribute.Bool("bid.idempotency.replay", true))
+			}
+			apptracing.End(stageSpan, stageErr)
+			return replay, err
+		}
+		apptracing.End(stageSpan, nil)
+
+		_, stageSpan = apptracing.Start(traceCtx, "bid.snapshot_load_cold", attribute.String("auction.id", auctionID))
+		snap, err := e.loadSnapshotSingleflight(ctx, auctionID)
+		if err != nil {
+			apptracing.End(stageSpan, err)
+			return auction.BidResponse{}, err
+		}
+		if err := e.ensureColdSnapshotCanSeedRedis(ctx, auctionID, snap); err != nil {
+			_ = e.pause(ctx, auctionID, "REDIS_ENGINE_STATE_MISSING_REQUIRES_RECONCILE", err.Error(), traceID)
+			apptracing.End(stageSpan, err)
+			return auction.BidResponse{}, apierrors.New(apierrors.CodeEngineReconciling, "auction engine is reconciling after redis state loss", http.StatusConflict)
+		}
+		raw, err := json.Marshal(snap)
+		if err != nil {
+			apptracing.End(stageSpan, err)
+			return auction.BidResponse{}, err
+		}
+		stateJSON = string(raw)
+		apptracing.End(stageSpan, nil)
+	}
+redisLua:
 	totalStart := time.Now()
 	start := time.Now()
 	_, stageSpan = apptracing.Start(traceCtx, "bid.redis_lua", attribute.String("auction.id", auctionID))
@@ -422,7 +485,7 @@ func (e *Engine) PlaceBid(ctx context.Context, auctionID string, userID string, 
 		redisx.BidEngineIdempotencyKey(auctionID, input.ClientBidID),
 		redisx.BidEnginePendingKey(auctionID),
 		redisx.BidEnginePendingAuctionsKey(),
-	}, nowMS, auctionID, userID, input.ClientBidID, input.AmountCents, requestHash, traceID, bidID, string(stateJSON), engineStateTTL.Milliseconds(), idempotencyTTL.Milliseconds())
+	}, nowMS, auctionID, userID, input.ClientBidID, input.AmountCents, requestHash, traceID, bidID, stateJSON, engineStateTTL.Milliseconds(), idempotencyTTL.Milliseconds())
 	values, err := cmd.Slice()
 	if err != nil {
 		apptracing.End(stageSpan, err)
@@ -471,15 +534,16 @@ func (e *Engine) PlaceBid(ctx context.Context, auctionID string, userID string, 
 		apptracing.End(stageSpan, err)
 		return resp, err
 	}
-	if err := e.appendDecisionBeforeReturn(ctx, auctionID, input.ClientBidID, result, traceID); err != nil {
+	resp, err := e.appendDecisionBeforeReturn(ctx, auctionID, input.ClientBidID, result, traceID)
+	if err != nil {
 		recordHTTPStage("total", result.Result, "kafka_append_failed", time.Since(totalStart))
 		return auction.BidResponse{}, err
 	}
 	recordHTTPStage("total", result.Result, "ok", time.Since(totalStart))
-	return result.response(), nil
+	return resp, nil
 }
 
-func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID string, clientBidID string, result engineResult, traceID string) error {
+func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID string, clientBidID string, result engineResult, traceID string) (auction.BidResponse, error) {
 	idemKey := redisx.BidEngineIdempotencyKey(auctionID, clientBidID)
 	traceCtx := ctx
 	_, stageSpan := apptracing.Start(traceCtx, "bid.append_order_wait",
@@ -494,7 +558,7 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 		apptracing.End(stageSpan, nil)
 		recordKafkaAppend(result.Result, "already_acked", 0)
 		recordHTTPStage("kafka_append", result.Result, "already_acked", 0)
-		return nil
+		return result.response(), nil
 	}
 	if waitResult.Status == appendDecisionStatusMissing {
 		stageSpan.SetAttributes(attribute.String("bid.append_order_wait.outcome", string(waitResult.Status)))
@@ -513,7 +577,7 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 		pauseCtx, pauseCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
 		defer pauseCancel()
 		_ = e.pause(pauseCtx, auctionID, "KAFKA_APPEND_PENDING_DECISION_MISSING", waitResult.Err.Error(), traceID)
-		return apierrors.New(apierrors.CodeEngineReconciling, "bid engine decision is recovering; retry with the same idempotency key", http.StatusConflict)
+		return auction.BidResponse{}, apierrors.New(apierrors.CodeEngineReconciling, "bid engine decision is recovering; retry with the same idempotency key", http.StatusConflict)
 	}
 	if waitResult.Status == appendDecisionStatusPendingWorker {
 		stageSpan.SetAttributes(attribute.String("bid.append_order_wait.outcome", string(waitResult.Status)))
@@ -529,13 +593,13 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 		).Err()
 		_ = e.recordAuctionAppendStats(markerCtx, auctionID, kafkaAppendStatusUnknown, result.EngineSeq)
 		markerCancel()
-		return apierrors.New(apierrors.CodeProcessingRetryLater, "bid confirmation is pending; retry with the same idempotency key", http.StatusConflict)
+		return result.response(), nil
 	}
 	if waitResult.Err != nil {
 		apptracing.End(stageSpan, waitResult.Err)
 		recordKafkaAppend(result.Result, "error", 0)
 		observability.Inc("auction_bid_kafka_append_fail_total", map[string]string{"reason": "pending_order_read"})
-		return apierrors.New(apierrors.CodeProcessingRetryLater, "bid confirmation is pending; retry with the same idempotency key", http.StatusConflict)
+		return auction.BidResponse{}, apierrors.New(apierrors.CodeProcessingRetryLater, "bid confirmation is pending; retry with the same idempotency key", http.StatusConflict)
 	}
 	apptracing.End(stageSpan, nil)
 	start := time.Now()
@@ -546,7 +610,7 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 		recordKafkaAppend(result.Result, "error", 0)
 		recordHTTPStage("append_order_wait", result.Result, "lock_error", time.Since(start))
 		observability.Inc("auction_bid_kafka_append_fail_total", map[string]string{"reason": "pending_lock"})
-		return apierrors.New(apierrors.CodeProcessingRetryLater, "bid confirmation is pending; retry with the same idempotency key", http.StatusConflict)
+		return auction.BidResponse{}, apierrors.New(apierrors.CodeProcessingRetryLater, "bid confirmation is pending; retry with the same idempotency key", http.StatusConflict)
 	}
 	if !locked {
 		recordKafkaAppend(result.Result, "pending_worker", 0)
@@ -560,7 +624,7 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 		).Err()
 		_ = e.recordAuctionAppendStats(markerCtx, auctionID, kafkaAppendStatusUnknown, result.EngineSeq)
 		markerCancel()
-		return apierrors.New(apierrors.CodeProcessingRetryLater, "bid confirmation is pending; retry with the same idempotency key", http.StatusConflict)
+		return result.response(), nil
 	}
 	defer releasePendingAppendLock(context.Background(), e.redis, lockKey, lockToken)
 
@@ -581,7 +645,7 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 		pauseCtx, pauseCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
 		defer pauseCancel()
 		_ = e.pause(pauseCtx, auctionID, "KAFKA_APPEND_ATTEMPT_MARKER_FAILED", err.Error(), traceID)
-		return apierrors.New(apierrors.CodeProcessingRetryLater, "bid confirmation is pending; retry with the same idempotency key", http.StatusConflict)
+		return auction.BidResponse{}, apierrors.New(apierrors.CodeProcessingRetryLater, "bid confirmation is pending; retry with the same idempotency key", http.StatusConflict)
 	}
 	attemptCancel()
 	message, err := e.ledger.Append(appendCtx, result)
@@ -603,7 +667,7 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 		pauseCtx, pauseCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
 		defer pauseCancel()
 		_ = e.pause(pauseCtx, auctionID, failure.PauseType, err.Error(), traceID)
-		return apierrors.New(failure.APIError, failure.Message, http.StatusConflict)
+		return auction.BidResponse{}, apierrors.New(failure.APIError, failure.Message, http.StatusConflict)
 	}
 	stageSpan.SetAttributes(
 		attribute.String("messaging.system", "kafka"),
@@ -626,11 +690,11 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 		pauseCtx, pauseCancel := context.WithTimeout(context.WithoutCancel(ctx), e.kafkaAppendTimeout)
 		defer pauseCancel()
 		_ = e.pause(pauseCtx, auctionID, "KAFKA_APPEND_ACK_MARKER_FAILED", err.Error(), traceID)
-		return apierrors.New(apierrors.CodeProcessingRetryLater, "bid confirmation is pending; retry with the same idempotency key", http.StatusConflict)
+		return auction.BidResponse{}, apierrors.New(apierrors.CodeProcessingRetryLater, "bid confirmation is pending; retry with the same idempotency key", http.StatusConflict)
 	}
 	markerCancel()
 	apptracing.End(stageSpan, nil)
-	return nil
+	return result.response(), nil
 }
 
 func (e *Engine) waitForPendingAppendTurn(ctx context.Context, auctionID string, clientBidID string, engineSeq int64) appendDecisionWaitResult {
@@ -782,10 +846,10 @@ func (e *Engine) redisIdempotencyReplayResponseFromRecord(replay redisIdempotenc
 		return auction.BidResponse{}, apierrors.New(apierrors.CodeEngineReconciling, "bid engine decision is recovering; retry with the same idempotency key", http.StatusConflict)
 	case kafkaAppendStatusUnknown:
 		recordHTTPStage("total", result.Result, "kafka_append_unknown", time.Since(totalStart))
-		return auction.BidResponse{}, apierrors.New(apierrors.CodeProcessingRetryLater, "bid confirmation is pending; retry with the same idempotency key", http.StatusConflict)
+		return result.response(), nil
 	default:
 		recordHTTPStage("total", result.Result, "kafka_append_unknown", time.Since(totalStart))
-		return auction.BidResponse{}, apierrors.New(apierrors.CodeProcessingRetryLater, "bid confirmation state is unknown; retry with the same idempotency key", http.StatusConflict)
+		return result.response(), nil
 	}
 }
 
@@ -925,6 +989,112 @@ func (e *Engine) completedReplay(ctx context.Context, auctionID string, userID s
 		return auction.BidResponse{}, false, err
 	}
 	return resp, true, nil
+}
+
+func (e *Engine) loadSnapshotSingleflight(ctx context.Context, auctionID string) (snapshot, error) {
+	value, err, _ := e.snapshotLoads.Do(auctionID, func() (any, error) {
+		return e.loadSnapshot(ctx, auctionID)
+	})
+	if err != nil {
+		return snapshot{}, err
+	}
+	snap, ok := value.(snapshot)
+	if !ok {
+		return snapshot{}, fmt.Errorf("redis ledger engine snapshot singleflight returned %T", value)
+	}
+	return snap, nil
+}
+
+func (e *Engine) redisAppendHighWater(ctx context.Context, auctionID string) (int64, error) {
+	markerSeq, err := e.redis.HGet(ctx, redisx.BidEngineAppendMarkerKey(auctionID), "engine_seq").Int64()
+	if err != nil && !errors.Is(err, redis.Nil) {
+		return 0, err
+	}
+	statsSeq, err := e.redis.HGet(ctx, redisx.BidEngineAppendStatsKey(auctionID), "last_engine_seq").Int64()
+	if err != nil && !errors.Is(err, redis.Nil) {
+		return 0, err
+	}
+	if statsSeq > markerSeq {
+		return statsSeq, nil
+	}
+	return markerSeq, nil
+}
+
+func (e *Engine) ensureColdSnapshotCanSeedRedis(ctx context.Context, auctionID string, snap snapshot) error {
+	if snap.EngineSeq <= 0 {
+		return nil
+	}
+	tx, err := e.db.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var pendingSettlements int64
+	if err := tx.QueryRow(ctx, `
+		SELECT count(*)
+		FROM redis_engine_settlements
+		WHERE auction_id = $1
+		  AND status NOT IN ('SETTLED','SKIPPED')
+	`, auctionID).Scan(&pendingSettlements); err != nil {
+		return err
+	}
+	if pendingSettlements > 0 {
+		return fmt.Errorf("redis state missing while %d settlement decisions are not terminal", pendingSettlements)
+	}
+
+	var settlementCount int64
+	var settledSeq sql.NullInt64
+	if err := tx.QueryRow(ctx, `
+		SELECT count(*), max(engine_seq)
+		FROM redis_engine_settlements
+		WHERE auction_id = $1
+		  AND engine_epoch = $2
+		  AND status IN ('SETTLED','SKIPPED')
+	`, auctionID, snap.EngineEpoch).Scan(&settlementCount, &settledSeq); err != nil {
+		return err
+	}
+	if settlementCount == 0 {
+		return tx.Commit(ctx)
+	}
+	if !settledSeq.Valid || settledSeq.Int64 != snap.EngineSeq {
+		return fmt.Errorf("redis state missing but settled ledger seq %d does not cover postgres engine seq %d", settledSeq.Int64, snap.EngineSeq)
+	}
+
+	var checkpointEpoch int64
+	var checkpointSeq int64
+	var storedHash string
+	var snapshotText string
+	err = tx.QueryRow(ctx, `
+		SELECT engine_epoch, engine_seq, state_hash, snapshot_json::text
+		FROM auction_engine_checkpoints
+		WHERE auction_id = $1
+	`, auctionID).Scan(&checkpointEpoch, &checkpointSeq, &storedHash, &snapshotText)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("redis state missing after settled ledger decisions without checkpoint")
+	}
+	if err != nil {
+		return err
+	}
+	if checkpointEpoch != snap.EngineEpoch || checkpointSeq != snap.EngineSeq {
+		return fmt.Errorf("redis state missing but checkpoint epoch/seq %d/%d does not cover postgres epoch/seq %d/%d", checkpointEpoch, checkpointSeq, snap.EngineEpoch, snap.EngineSeq)
+	}
+	var storedSnapshot engineCheckpointSnapshot
+	if err := json.Unmarshal([]byte(snapshotText), &storedSnapshot); err != nil {
+		return fmt.Errorf("redis state missing and checkpoint snapshot is invalid: %w", err)
+	}
+	storedPayload, err := json.Marshal(storedSnapshot)
+	if err != nil {
+		return err
+	}
+	_, payload, stateHash, err := checkpointSnapshot(ctx, tx, auctionID)
+	if err != nil {
+		return err
+	}
+	if storedHash != sha256Hex(storedPayload) || storedHash != stateHash || sha256Hex(payload) != stateHash {
+		return fmt.Errorf("redis state missing but checkpoint hash does not match current postgres state")
+	}
+	return tx.Commit(ctx)
 }
 
 func (e *Engine) loadSnapshot(ctx context.Context, auctionID string) (snapshot, error) {
@@ -1254,6 +1424,9 @@ func (w *Worker) ProcessPendingAppends(ctx context.Context, limit int) (int, err
 	if w == nil || w.db == nil || w.redis == nil || w.ledger == nil {
 		return 0, nil
 	}
+	if limit <= 0 {
+		limit = 1
+	}
 	auctionIDs, err := w.pendingAuctionIDs(ctx, limit)
 	if err != nil {
 		return 0, err
@@ -1262,6 +1435,26 @@ func (w *Worker) ProcessPendingAppends(ctx context.Context, limit int) (int, err
 		auctionIDs, err = w.activeAuctionIDs(ctx, limit)
 		if err != nil {
 			return 0, err
+		}
+	}
+	if len(auctionIDs) < limit {
+		activeIDs, err := w.activeAuctionIDs(ctx, limit)
+		if err != nil {
+			return 0, err
+		}
+		seen := make(map[string]struct{}, len(auctionIDs)+len(activeIDs))
+		for _, auctionID := range auctionIDs {
+			seen[auctionID] = struct{}{}
+		}
+		for _, auctionID := range activeIDs {
+			if _, ok := seen[auctionID]; ok {
+				continue
+			}
+			auctionIDs = append(auctionIDs, auctionID)
+			seen[auctionID] = struct{}{}
+			if len(auctionIDs) >= limit {
+				break
+			}
 		}
 	}
 	processed := 0
@@ -1820,7 +2013,7 @@ func (w *Worker) settlePayload(ctx context.Context, auctionID string, ledgerID s
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
-	w.refreshRedisPublicSeq(ctx, auctionID, publicSeq)
+	w.refreshRedisSettledState(ctx, auctionID, publicSeq)
 	observability.Inc("auction_bid_redis_settlement_total", map[string]string{"result": result.Result, "status": "settled"})
 	return nil
 }
@@ -2002,17 +2195,89 @@ func (w *Worker) markSettlementIdentityConflict(ctx context.Context, auctionID s
 	return settlementIdentityConflictError{err: fmt.Errorf("%s auction=%s epoch=%d seq=%d existing_stream=%s new_stream=%s", reason, auctionID, result.EngineEpoch, result.EngineSeq, existingStreamID, streamID)}
 }
 
-func (w *Worker) refreshRedisPublicSeq(ctx context.Context, auctionID string, publicSeq int64) {
+func (w *Worker) refreshRedisSettledState(ctx context.Context, auctionID string, publicSeq int64) {
 	if w == nil || w.redis == nil || publicSeq <= 0 {
 		return
 	}
-	if err := w.redis.HSet(ctx, redisx.BidEngineStateKey(auctionID), "seq", publicSeq).Err(); err != nil {
+	snap, err := loadSnapshotForRedisState(ctx, w.db, auctionID)
+	if err != nil {
+		w.logger().Warn("refresh redis settled state snapshot failed", slog.String("auction_id", auctionID), slog.Int64("seq", publicSeq), slog.String("error", err.Error()))
+		return
+	}
+	fields := []any{
+		"status", snap.Status,
+		"current_price_cents", snap.CurrentPriceCents,
+		"current_winner_id", snap.CurrentWinnerID,
+		"start_price_cents", snap.StartPriceCents,
+		"increment_cents", snap.IncrementCents,
+		"cap_price_cents", snap.CapPriceCents,
+		"end_at_ms", snap.EndAtMS,
+		"extend_window_ms", snap.ExtendWindowMS,
+		"extend_by_ms", snap.ExtendByMS,
+		"max_extend_count", snap.MaxExtendCount,
+		"extend_count", snap.ExtendCount,
+		"accepted_bid_count", snap.AcceptedBidCount,
+		"seq", publicSeq,
+		"engine_seq", snap.EngineSeq,
+		"engine_epoch", snap.EngineEpoch,
+		"paused", boolInt(snap.Paused),
+		"pause_reason", snap.PauseReason,
+		"requires_postgres", snap.RequiresPostgres,
+	}
+	if err := w.redis.HSet(ctx, redisx.BidEngineStateKey(auctionID), fields...).Err(); err != nil {
 		w.logger().Warn("refresh redis public seq failed", slog.String("auction_id", auctionID), slog.Int64("seq", publicSeq), slog.String("error", err.Error()))
 		return
 	}
 	if err := w.redis.PExpire(ctx, redisx.BidEngineStateKey(auctionID), engineStateTTL).Err(); err != nil {
 		w.logger().Warn("refresh redis public seq ttl failed", slog.String("auction_id", auctionID), slog.Int64("seq", publicSeq), slog.String("error", err.Error()))
 	}
+}
+
+func loadSnapshotForRedisState(ctx context.Context, db *pgxpool.Pool, auctionID string) (snapshot, error) {
+	var s snapshot
+	var winner *string
+	var capPrice *int64
+	var endAt time.Time
+	err := db.QueryRow(ctx, `
+		SELECT a.status, a.current_price_cents, a.current_winner_id,
+		       a.start_price_cents, a.increment_cents, a.cap_price_cents,
+		       a.end_at, ar.extend_window_seconds, ar.extend_by_seconds,
+		       ar.max_extend_count, a.extend_count, a.accepted_bid_count,
+		       a.seq, a.engine_seq, a.engine_epoch, a.engine_paused,
+		       COALESCE(a.engine_pause_reason, ''),
+		       CASE
+		         WHEN ar.fat_finger_threshold_cents IS NOT NULL THEN 'fat_finger_confirm'
+		         WHEN EXISTS (
+		           SELECT 1
+		           FROM max_bid_intents mbi
+		           WHERE mbi.auction_id = a.id AND mbi.status = 'ACTIVE'
+		         ) THEN 'active_max_bid_intent'
+		         ELSE ''
+		       END
+		FROM auctions a
+		JOIN auction_rules ar ON ar.auction_id = a.id AND ar.rule_version = a.rule_version
+		WHERE a.id = $1
+	`, auctionID).Scan(&s.Status, &s.CurrentPriceCents, &winner, &s.StartPriceCents, &s.IncrementCents, &capPrice, &endAt, &s.ExtendWindowMS, &s.ExtendByMS, &s.MaxExtendCount, &s.ExtendCount, &s.AcceptedBidCount, &s.Seq, &s.EngineSeq, &s.EngineEpoch, &s.Paused, &s.PauseReason, &s.RequiresPostgres)
+	if err != nil {
+		return snapshot{}, err
+	}
+	if winner != nil {
+		s.CurrentWinnerID = *winner
+	}
+	if capPrice != nil {
+		s.CapPriceCents = *capPrice
+	}
+	s.EndAtMS = endAt.UTC().UnixMilli()
+	s.ExtendWindowMS *= int64(time.Second / time.Millisecond)
+	s.ExtendByMS *= int64(time.Second / time.Millisecond)
+	return s, nil
+}
+
+func boolInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
 }
 
 func settleAccepted(ctx context.Context, tx pgx.Tx, result engineResult) (int64, error) {

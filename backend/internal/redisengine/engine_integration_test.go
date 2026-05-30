@@ -98,6 +98,64 @@ func TestRedisLedgerAcceptSettleRejectSoftCloseAndCap(t *testing.T) {
 	}
 }
 
+func TestRedisLedgerHotStateDoesNotLoadPostgresSnapshot(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	auctionID := createEngineAuction(t, db, 0)
+
+	if _, err := engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-hot-state-seed", auction.BidInput{
+		ClientBidID:   "redis-ledger-hot-state-seed",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_hot_state_seed"); err != nil {
+		t.Fatalf("seed redis state: %v", err)
+	}
+	db.Close()
+
+	resp, err := engine.PlaceBid(ctx, auctionID, "user_2", "redis-ledger-hot-state-no-pg", auction.BidInput{
+		ClientBidID:   "redis-ledger-hot-state-no-pg",
+		AmountCents:   20_000,
+		ClientSeenSeq: 0,
+	}, "tr_hot_state_no_pg")
+	if err != nil {
+		t.Fatalf("hot redis state bid should not need postgres snapshot: %v", err)
+	}
+	if resp.EngineSeq != 2 || resp.CurrentPriceCents != 20_000 {
+		t.Fatalf("hot redis response = %#v, want engine seq 2 price 20000", resp)
+	}
+}
+
+func TestRedisLedgerMissingHotStateWithUnsettledLedgerFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	auctionID := createEngineAuction(t, db, 0)
+
+	if _, err := engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-state-loss-seed", auction.BidInput{
+		ClientBidID:   "redis-ledger-state-loss-seed",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_state_loss_seed"); err != nil {
+		t.Fatalf("seed redis state: %v", err)
+	}
+	if err := rdb.Del(ctx, redisx.BidEngineStateKey(auctionID)).Err(); err != nil {
+		t.Fatalf("delete redis state: %v", err)
+	}
+
+	_, err := engine.PlaceBid(ctx, auctionID, "user_2", "redis-ledger-state-loss-next", auction.BidInput{
+		ClientBidID:   "redis-ledger-state-loss-next",
+		AmountCents:   20_000,
+		ClientSeenSeq: 0,
+	}, "tr_state_loss_next")
+	assertAPIErrorCode(t, err, apierrors.CodeEngineReconciling)
+	assertEnginePaused(t, db, auctionID, "REDIS_ENGINE_STATE_MISSING_REQUIRES_RECONCILE")
+}
+
 func TestRedisLedgerConcurrentAppendRecordsEveryEngineSeq(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
@@ -108,6 +166,7 @@ func TestRedisLedgerConcurrentAppendRecordsEveryEngineSeq(t *testing.T) {
 	auctionID := createEngineAuction(t, db, 0)
 
 	const bidders = 32
+	respCh := make(chan auction.BidResponse, bidders)
 	errCh := make(chan error, bidders)
 	start := make(chan struct{})
 	for i := 0; i < bidders; i++ {
@@ -115,11 +174,12 @@ func TestRedisLedgerConcurrentAppendRecordsEveryEngineSeq(t *testing.T) {
 		go func() {
 			<-start
 			clientBidID := "redis-ledger-concurrent-" + uuid.NewString()
-			_, err := engine.PlaceBid(ctx, auctionID, "user_concurrent_"+strconv.Itoa(i), clientBidID, auction.BidInput{
+			resp, err := engine.PlaceBid(ctx, auctionID, "user_concurrent_"+strconv.Itoa(i), clientBidID, auction.BidInput{
 				ClientBidID:   clientBidID,
 				AmountCents:   15_000 + int64(i)*5_000,
 				ClientSeenSeq: 0,
 			}, "tr_concurrent")
+			respCh <- resp
 			errCh <- err
 		}()
 	}
@@ -127,14 +187,16 @@ func TestRedisLedgerConcurrentAppendRecordsEveryEngineSeq(t *testing.T) {
 	pendingResponses := 0
 	for i := 0; i < bidders; i++ {
 		err := <-errCh
-		if err == nil {
-			continue
+		resp := <-respCh
+		if err != nil {
+			t.Fatalf("concurrent bid %d err = %v, want nil with final or pending-settlement response", i, err)
 		}
-		var apiErr apierrors.APIError
-		if !errors.As(err, &apiErr) || apiErr.Code != apierrors.CodeProcessingRetryLater {
-			t.Fatalf("concurrent bid %d err = %v, want nil or processing retry later", i, err)
+		if resp.SettlementStatus == auction.SettlementStatusPending {
+			pendingResponses++
+			if resp.EngineSeq == 0 {
+				t.Fatalf("pending settlement response missing engine seq: %#v", resp)
+			}
 		}
-		pendingResponses++
 	}
 	if pendingResponses == 0 {
 		t.Fatalf("pendingResponses = 0, test did not exercise fast-defer append path")
@@ -206,6 +268,7 @@ func TestRedisLedgerConcurrentSoftCloseExtendsOnlyOnce(t *testing.T) {
 
 	const bidders = 8
 	insertEngineUsers(t, db, "user_soft_", bidders)
+	respCh := make(chan auction.BidResponse, bidders)
 	errCh := make(chan error, bidders)
 	start := make(chan struct{})
 	for i := 0; i < bidders; i++ {
@@ -213,11 +276,12 @@ func TestRedisLedgerConcurrentSoftCloseExtendsOnlyOnce(t *testing.T) {
 		go func() {
 			<-start
 			clientBidID := "redis-ledger-soft-close-" + uuid.NewString()
-			_, err := engine.PlaceBid(ctx, auctionID, "user_soft_"+strconv.Itoa(i), clientBidID, auction.BidInput{
+			resp, err := engine.PlaceBid(ctx, auctionID, "user_soft_"+strconv.Itoa(i), clientBidID, auction.BidInput{
 				ClientBidID:   clientBidID,
 				AmountCents:   15_000 + int64(i)*5_000,
 				ClientSeenSeq: 0,
 			}, "tr_soft_close")
+			respCh <- resp
 			errCh <- err
 		}()
 	}
@@ -225,14 +289,16 @@ func TestRedisLedgerConcurrentSoftCloseExtendsOnlyOnce(t *testing.T) {
 	pendingResponses := 0
 	for i := 0; i < bidders; i++ {
 		err := <-errCh
-		if err == nil {
-			continue
+		resp := <-respCh
+		if err != nil {
+			t.Fatalf("concurrent soft-close bid %d err = %v, want nil with final or pending-settlement response", i, err)
 		}
-		var apiErr apierrors.APIError
-		if !errors.As(err, &apiErr) || apiErr.Code != apierrors.CodeProcessingRetryLater {
-			t.Fatalf("concurrent soft-close bid %d err = %v, want nil or processing retry later", i, err)
+		if resp.SettlementStatus == auction.SettlementStatusPending {
+			pendingResponses++
+			if resp.EngineSeq == 0 {
+				t.Fatalf("pending soft-close response missing engine seq: %#v", resp)
+			}
 		}
-		pendingResponses++
 	}
 	if pendingResponses == 0 {
 		t.Fatalf("pendingResponses = 0, test did not exercise fast-defer append path")
@@ -316,12 +382,11 @@ func TestRedisLedgerConcurrentCapOnlyOneSoldAndLoserSeesTerminal(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		out := <-outcomes
 		if out.err != nil {
-			var apiErr apierrors.APIError
-			if errors.As(out.err, &apiErr) && apiErr.Code == apierrors.CodeProcessingRetryLater {
-				pendingResponses++
-				continue
-			}
 			t.Fatalf("cap race bid returned unexpected error: %v", out.err)
+		}
+		if out.resp.SettlementStatus == auction.SettlementStatusPending {
+			pendingResponses++
+			continue
 		}
 		switch out.resp.Result {
 		case auction.BidResultEngineSold:
@@ -578,12 +643,17 @@ func TestRedisLedgerReplayUnknownAndFailedAppendStatusDoesNotAppendAgain(t *test
 	if err := rdb.HSet(ctx, idemKey, "kafka_append_status", kafkaAppendStatusUnknown).Err(); err != nil {
 		t.Fatalf("set unknown status: %v", err)
 	}
-	_, err = engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-phase2-status", auction.BidInput{
+	pending, err := engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-phase2-status", auction.BidInput{
 		ClientBidID:   "redis-ledger-phase2-status",
 		AmountCents:   15_000,
 		ClientSeenSeq: 0,
 	}, "tr_phase2_status_unknown")
-	assertAPIErrorCode(t, err, apierrors.CodeProcessingRetryLater)
+	if err != nil {
+		t.Fatalf("UNKNOWN replay err = %v, want pending-settlement response", err)
+	}
+	if pending.SettlementStatus != auction.SettlementStatusPending {
+		t.Fatalf("UNKNOWN replay result = %#v, want pending settlement", pending)
+	}
 	if ledger.Len() != 1 {
 		t.Fatalf("ledger len after UNKNOWN replay = %d, want no duplicate append", ledger.Len())
 	}
@@ -632,12 +702,17 @@ func TestRedisLedgerAppendTimeoutAfterWriteIsUnknownAndReplayDoesNotAppendAgain(
 	if appendStatus != kafkaAppendStatusUnknown {
 		t.Fatalf("append status = %q, want %q", appendStatus, kafkaAppendStatusUnknown)
 	}
-	_, err = engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-phase2-timeout", auction.BidInput{
+	pending, err := engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-phase2-timeout", auction.BidInput{
 		ClientBidID:   "redis-ledger-phase2-timeout",
 		AmountCents:   15_000,
 		ClientSeenSeq: 0,
 	}, "tr_phase2_timeout_retry")
-	assertAPIErrorCode(t, err, apierrors.CodeProcessingRetryLater)
+	if err != nil {
+		t.Fatalf("UNKNOWN retry err = %v, want pending-settlement response", err)
+	}
+	if pending.SettlementStatus != auction.SettlementStatusPending {
+		t.Fatalf("UNKNOWN retry result = %#v, want pending settlement", pending)
+	}
 	if ledger.Len() != 1 {
 		t.Fatalf("ledger len after UNKNOWN replay = %d, want no duplicate append", ledger.Len())
 	}
@@ -986,6 +1061,7 @@ func TestPendingAppendOrderFastDefersWithoutPausingAndWorkerAcks(t *testing.T) {
 
 	const bidders = 6
 	insertEngineUsers(t, db, "user_defer_", bidders)
+	respCh := make(chan auction.BidResponse, bidders)
 	errCh := make(chan error, bidders)
 	start := make(chan struct{})
 	for i := 0; i < bidders; i++ {
@@ -993,11 +1069,12 @@ func TestPendingAppendOrderFastDefersWithoutPausingAndWorkerAcks(t *testing.T) {
 		go func() {
 			<-start
 			clientBidID := "redis-ledger-defer-" + strconv.Itoa(i)
-			_, err := engine.PlaceBid(ctx, auctionID, "user_defer_"+strconv.Itoa(i), clientBidID, auction.BidInput{
+			resp, err := engine.PlaceBid(ctx, auctionID, "user_defer_"+strconv.Itoa(i), clientBidID, auction.BidInput{
 				ClientBidID:   clientBidID,
 				AmountCents:   15_000 + int64(i)*5_000,
 				ClientSeenSeq: 0,
 			}, "tr_defer")
+			respCh <- resp
 			errCh <- err
 		}()
 	}
@@ -1007,14 +1084,16 @@ func TestPendingAppendOrderFastDefersWithoutPausingAndWorkerAcks(t *testing.T) {
 	pendingResponses := 0
 	for i := 0; i < bidders; i++ {
 		err := <-errCh
-		if err == nil {
-			continue
+		resp := <-respCh
+		if err != nil {
+			t.Fatalf("bid err = %v, want nil with final or pending-settlement response", err)
 		}
-		var apiErr apierrors.APIError
-		if !errors.As(err, &apiErr) || apiErr.Code != apierrors.CodeProcessingRetryLater {
-			t.Fatalf("bid err = %v, want nil or processing retry later", err)
+		if resp.SettlementStatus == auction.SettlementStatusPending {
+			pendingResponses++
+			if resp.EngineSeq == 0 {
+				t.Fatalf("pending settlement response missing engine seq: %#v", resp)
+			}
 		}
-		pendingResponses++
 	}
 	elapsed := time.Since(started)
 	if elapsed >= engine.kafkaAppendTimeout/2 {
@@ -1192,7 +1271,7 @@ func TestPendingDecisionMissingWithoutAckPausesEngine(t *testing.T) {
 		t.Fatalf("seed idempotency: %v", err)
 	}
 
-	err = engine.appendDecisionBeforeReturn(ctx, auctionID, clientBidID, result, "tr_missing_pending_retry")
+	_, err = engine.appendDecisionBeforeReturn(ctx, auctionID, clientBidID, result, "tr_missing_pending_retry")
 	assertAPIErrorCode(t, err, apierrors.CodeEngineReconciling)
 	assertEnginePaused(t, db, auctionID, "KAFKA_APPEND_PENDING_DECISION_MISSING")
 	if ledger.Len() != 0 {

@@ -19,6 +19,7 @@ import (
 	apierrors "live-auction/backend/internal/platform/errors"
 	"live-auction/backend/internal/realtime"
 	"live-auction/backend/internal/redisengine"
+	"live-auction/backend/internal/redisx"
 	"live-auction/backend/internal/storage"
 	apptracing "live-auction/backend/internal/tracing"
 )
@@ -651,6 +652,9 @@ func (h AuctionHandler) PutMaxBidIntent(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	result, err := h.Repo.PutMaxBidIntent(r.Context(), auctionID, user.ID, r.Header.Get("Idempotency-Key"), req)
+	if err == nil {
+		h.markRedisLedgerRequiresPostgres(r.Context(), auctionID, "active_max_bid_intent")
+	}
 	writeResult(w, r, http.StatusOK, result, err)
 }
 
@@ -667,6 +671,17 @@ func (h AuctionHandler) DeleteMaxBidIntent(w http.ResponseWriter, r *http.Reques
 	}
 	result, err := h.Repo.DeleteMaxBidIntent(r.Context(), auctionID, user.ID, r.Header.Get("Idempotency-Key"))
 	writeResult(w, r, http.StatusOK, result, err)
+}
+
+func (h AuctionHandler) markRedisLedgerRequiresPostgres(ctx context.Context, auctionID string, reason string) {
+	if h.Config.BidEngineMode == bidEngineModePostgresLane || h.Config.BidEngineMode == bidEngineModeRedisGuard || h.Deps == nil || h.Deps.Redis == nil {
+		return
+	}
+	_ = h.Deps.Redis.HSet(ctx, redisx.BidEngineStateKey(auctionID),
+		"requires_postgres", reason,
+		"paused", 1,
+		"pause_reason", "REDIS_ENGINE_REQUIRES_POSTGRES_"+reason,
+	).Err()
 }
 
 func (h AuctionHandler) PayMock(w http.ResponseWriter, r *http.Request) {

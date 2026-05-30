@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"live-auction/backend/internal/auction"
 	apierrors "live-auction/backend/internal/platform/errors"
 )
 
@@ -22,7 +23,14 @@ func writeError(w http.ResponseWriter, r *http.Request, err apierrors.APIError) 
 
 func writeBidAdmissionResult(w http.ResponseWriter, r *http.Request, result any, err error) {
 	if err == nil {
-		writeResult(w, r, http.StatusOK, result, nil)
+		status := http.StatusOK
+		if bid, ok := result.(auction.BidResponse); ok && bid.SettlementStatus == auction.SettlementStatusPending && bid.Result != auction.BidResultConfirmationPending {
+			status = http.StatusAccepted
+		}
+		if bid, ok := result.(auction.BidResponse); ok && bid.Result == auction.BidResultConfirmationPending {
+			status = http.StatusAccepted
+		}
+		writeResult(w, r, status, result, nil)
 		return
 	}
 	var apiErr apierrors.APIError

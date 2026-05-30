@@ -97,6 +97,15 @@ type PendingBidRequest = {
   clientSeenSeq: number;
 };
 
+function isBidConfirmationPending(payload?: BidResponse | null) {
+  return payload?.result === 'BID_CONFIRMATION_PENDING'
+    || (Boolean(payload?.result?.startsWith('ENGINE_')) && payload?.settlement_status === 'PENDING');
+}
+
+function isEngineRejected(payload?: BidResponse | null) {
+  return payload?.result === 'ENGINE_REJECTED';
+}
+
 type AuctionRealtimeEvent = {
   auction_id: string;
   event_type: string;
@@ -445,6 +454,8 @@ async function ensureDemoSession(account: 'host' | 'user') {
 
 function rejectCopy(code?: string | null) {
   switch (code) {
+    case 'BID_CONFIRMATION_PENDING':
+      return '已进入确认队列';
     case 'BID_TOO_LOW':
       return '出价低于最低可出价';
     case 'BID_INCREMENT_MISMATCH':
@@ -491,6 +502,8 @@ function retryAfterMSFromHeaders(response: Response) {
 
 function riskActionCopy(code?: string | null) {
   switch (code) {
+    case 'BID_CONFIRMATION_PENDING':
+      return '等待服务端确认，断线后用同一请求自动恢复';
     case 'BID_AUCTION_TOO_HOT':
     case 'BID_RETRY_LATER':
     case 'RATE_LIMITED':
@@ -1126,6 +1139,30 @@ function App() {
   )), [activeAuctionID, roomAuctions]);
 
   const applyAcceptedBid = (payload: BidResponse) => {
+    if (payload.result === 'BID_CONFIRMATION_PENDING') {
+      setRiskCode('BID_CONFIRMATION_PENDING');
+      setBidFeedback(`出价已进入确认队列，等待账本确认 seq ${payload.engine_seq ?? payload.seq ?? lastSeq}`);
+      setBidPhase('engine_pending');
+      showAtmosphere({
+        kind: 'leading',
+        title: '出价确认中',
+        detail: '等待 Kafka 账本确认',
+        auction_id: payload.auction_id ?? activeAuctionIDRef.current,
+        cause_seq: payload.engine_seq ?? payload.seq ?? lastSeqRef.current,
+        event_type: payload.result ?? 'BID_CONFIRMATION_PENDING',
+        user_scope: 'self'
+      });
+      return;
+    }
+    if (isEngineRejected(payload)) {
+      const code = payload.reject_reason ?? 'ENGINE_REJECTED';
+      setRiskCode(code);
+      setBidFeedback(`${rejectCopy(code)}，热引擎已裁决 seq ${payload.engine_seq ?? payload.seq ?? lastSeq}`);
+      setBidPhase('rejected');
+      pendingBidRef.current = null;
+      void loadLeaderboard(payload.auction_id ?? activeAuctionIDRef.current);
+      return;
+    }
     const acceptedPrice = payload.current_price_cents ?? currentPriceCents;
     const acceptedWinnerID = payload.current_winner_id ?? '';
     const isEnginePending = payload.result === 'ENGINE_ACCEPTED' && payload.settlement_status !== 'SETTLED';
@@ -1620,7 +1657,7 @@ function App() {
 
   const submitBid = async () => {
     const auctionID = activeAuctionIDRef.current;
-    const canRetryPendingBid = Boolean(pendingBidRef.current && pendingBidRef.current.auctionID === auctionID && (bidPhase === 'uncertain' || riskCode === 'PROCESSING_RETRY_LATER'));
+    const canRetryPendingBid = Boolean(pendingBidRef.current && pendingBidRef.current.auctionID === auctionID && (bidPhase === 'uncertain' || bidPhase === 'engine_pending' || riskCode === 'PROCESSING_RETRY_LATER' || riskCode === 'BID_CONFIRMATION_PENDING'));
     if (selected !== 'active_bids' || (!canRetryPendingBid && scenario.ctaDisabled) || !auctionID) return;
     if (bidInFlightRef.current || bidCooldownUntilMS > Date.now()) return;
     bidInFlightRef.current = true;
@@ -1658,7 +1695,7 @@ function App() {
         setBidPhase('confirm_required');
         return;
       }
-      if (!response.ok || payload.reject_reason || payload.code) {
+      if (!response.ok || (payload.reject_reason && !isEngineRejected(payload)) || payload.code) {
         const code = payload.reject_reason ?? payload.code ?? '';
         const retryMS = retryAfterMS(response, payload);
         if (retryMS > 0) {
@@ -1674,7 +1711,9 @@ function App() {
       }
       setRiskCode('');
       setBidCooldownUntilMS(0);
-      pendingBidRef.current = null;
+      if (!isBidConfirmationPending(payload)) {
+        pendingBidRef.current = null;
+      }
       applyAcceptedBid(payload);
     } catch {
       setRiskCode('NETWORK_ERROR');
@@ -1704,7 +1743,7 @@ function App() {
         })
       });
       const payload = await response.json() as BidResponse;
-      if (!response.ok || payload.reject_reason || payload.code) {
+      if (!response.ok || (payload.reject_reason && !isEngineRejected(payload)) || payload.code) {
         const code = payload.reject_reason ?? payload.code ?? '';
         const retryMS = retryAfterMS(response, payload);
         if (retryMS > 0) {
