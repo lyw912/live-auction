@@ -274,6 +274,9 @@ type monitorRedisEngineRow struct {
 	AppendUnknownCount    int64      `json:"append_unknown_count"`
 	AppendStatsStatus     *string    `json:"append_stats_last_status,omitempty"`
 	AppendStatsEngineSeq  *int64     `json:"append_stats_last_engine_seq,omitempty"`
+	LastRecoveryRTOms     *int64     `json:"last_recovery_rto_ms,omitempty"`
+	LastRecoveryStatus    *string    `json:"last_recovery_status,omitempty"`
+	LastRecoveryAt        *time.Time `json:"last_recovery_at,omitempty"`
 }
 
 type createSignalRequest struct {
@@ -740,6 +743,18 @@ func (h MonitorHandler) RedisEngine(w http.ResponseWriter, r *http.Request) {
 		  JOIN candidate_auctions ca ON ca.id = s.auction_id
 		  WHERE s.ledger_source = 'kafka'
 		  ORDER BY s.auction_id, s.settled_at DESC NULLS LAST, s.updated_at DESC
+		),
+		last_recovery AS (
+		  SELECT DISTINCT ON (s.target_id)
+		         s.target_id AS auction_id,
+		         (s.result_json->>'rto_ms')::bigint AS rto_ms,
+		         s.status,
+		         s.processed_at
+		  FROM system_control_signals s
+		  JOIN candidate_auctions ca ON ca.id = s.target_id
+		  WHERE s.signal_type = 'resume_redis_engine'
+		    AND s.result_json ? 'rto_ms'
+		  ORDER BY s.target_id, s.processed_at DESC NULLS LAST, s.created_at DESC
 		)
 		SELECT a.id,
 		       CASE
@@ -758,11 +773,13 @@ func (h MonitorHandler) RedisEngine(w http.ResponseWriter, r *http.Request) {
 		       COALESCE(sl.lag_max_ms, 0)::bigint AS settlement_lag_max_ms,
 		       sl.last_settled_at,
 		       c.decision_topic, c.decision_partition, c.next_decision_offset,
-		       lk.ledger_topic, lk.ledger_partition, lk.ledger_offset, lk.stream_id, lk.settled_at
+		       lk.ledger_topic, lk.ledger_partition, lk.ledger_offset, lk.stream_id, lk.settled_at,
+		       lr.rto_ms, lr.status, lr.processed_at
 		FROM candidate_auctions a
 		LEFT JOIN settlement_lag sl ON sl.auction_id = a.id
 		LEFT JOIN auction_engine_checkpoints c ON c.auction_id = a.id
 		LEFT JOIN last_kafka lk ON lk.auction_id = a.id
+		LEFT JOIN last_recovery lr ON lr.auction_id = a.id
 		ORDER BY a.updated_at DESC
 	`, monitorLimit(r))
 	if err != nil {
@@ -773,7 +790,7 @@ func (h MonitorHandler) RedisEngine(w http.ResponseWriter, r *http.Request) {
 	result := []monitorRedisEngineRow{}
 	for rows.Next() {
 		var row monitorRedisEngineRow
-		if err := rows.Scan(&row.AuctionID, &row.EngineMode, &row.Status, &row.CurrentPrice, &row.CurrentWinnerID, &row.Seq, &row.EngineEpoch, &row.EngineSeq, &row.EnginePaused, &row.EnginePauseReason, &row.EnginePausedAt, &row.PendingSettlements, &row.FailedSettlements, &row.RedisPendingDecisions, &row.SettlementLagP50MS, &row.SettlementLagP95MS, &row.SettlementLagP99MS, &row.SettlementLagMaxMS, &row.LastSettledAt, &row.CheckpointTopic, &row.CheckpointPartition, &row.CheckpointNextOffset, &row.LastKafkaTopic, &row.LastKafkaPartition, &row.LastKafkaOffset, &row.LastKafkaSettlementID, &row.LastKafkaSettledAt); err != nil {
+		if err := rows.Scan(&row.AuctionID, &row.EngineMode, &row.Status, &row.CurrentPrice, &row.CurrentWinnerID, &row.Seq, &row.EngineEpoch, &row.EngineSeq, &row.EnginePaused, &row.EnginePauseReason, &row.EnginePausedAt, &row.PendingSettlements, &row.FailedSettlements, &row.RedisPendingDecisions, &row.SettlementLagP50MS, &row.SettlementLagP95MS, &row.SettlementLagP99MS, &row.SettlementLagMaxMS, &row.LastSettledAt, &row.CheckpointTopic, &row.CheckpointPartition, &row.CheckpointNextOffset, &row.LastKafkaTopic, &row.LastKafkaPartition, &row.LastKafkaOffset, &row.LastKafkaSettlementID, &row.LastKafkaSettledAt, &row.LastRecoveryRTOms, &row.LastRecoveryStatus, &row.LastRecoveryAt); err != nil {
 			writeError(w, r, internalMonitorError(err))
 			return
 		}

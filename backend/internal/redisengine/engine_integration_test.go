@@ -189,12 +189,15 @@ func TestRedisLedgerConcurrentAppendRecordsEveryEngineSeq(t *testing.T) {
 		err := <-errCh
 		resp := <-respCh
 		if err != nil {
-			t.Fatalf("concurrent bid %d err = %v, want nil with final or pending-settlement response", i, err)
+			var apiErr apierrors.APIError
+			if !errors.As(err, &apiErr) || apiErr.Code != apierrors.CodeProcessingRetryLater {
+				t.Fatalf("concurrent bid %d err = %v, want nil ACKed response or explicit pending durability", i, err)
+			}
 		}
-		if resp.SettlementStatus == auction.SettlementStatusPending {
+		if resp.DecisionStatus == auction.DecisionStatusPendingDurability {
 			pendingResponses++
-			if resp.EngineSeq == 0 {
-				t.Fatalf("pending settlement response missing engine seq: %#v", resp)
+			if resp.EngineSeq == 0 || resp.Result != string(apierrors.CodeProcessingRetryLater) || resp.DurabilityStatus != auction.DurabilityStatusKafkaUnknown {
+				t.Fatalf("pending durability response invalid: %#v", resp)
 			}
 		}
 	}
@@ -291,12 +294,15 @@ func TestRedisLedgerConcurrentSoftCloseExtendsOnlyOnce(t *testing.T) {
 		err := <-errCh
 		resp := <-respCh
 		if err != nil {
-			t.Fatalf("concurrent soft-close bid %d err = %v, want nil with final or pending-settlement response", i, err)
+			var apiErr apierrors.APIError
+			if !errors.As(err, &apiErr) || apiErr.Code != apierrors.CodeProcessingRetryLater {
+				t.Fatalf("concurrent soft-close bid %d err = %v, want nil ACKed response or explicit pending durability", i, err)
+			}
 		}
-		if resp.SettlementStatus == auction.SettlementStatusPending {
+		if resp.DecisionStatus == auction.DecisionStatusPendingDurability {
 			pendingResponses++
-			if resp.EngineSeq == 0 {
-				t.Fatalf("pending soft-close response missing engine seq: %#v", resp)
+			if resp.EngineSeq == 0 || resp.Result != string(apierrors.CodeProcessingRetryLater) || resp.DurabilityStatus != auction.DurabilityStatusKafkaUnknown {
+				t.Fatalf("pending soft-close response invalid: %#v", resp)
 			}
 		}
 	}
@@ -382,9 +388,12 @@ func TestRedisLedgerConcurrentCapOnlyOneSoldAndLoserSeesTerminal(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		out := <-outcomes
 		if out.err != nil {
-			t.Fatalf("cap race bid returned unexpected error: %v", out.err)
+			var apiErr apierrors.APIError
+			if !errors.As(out.err, &apiErr) || apiErr.Code != apierrors.CodeProcessingRetryLater {
+				t.Fatalf("cap race bid returned unexpected error: %v", out.err)
+			}
 		}
-		if out.resp.SettlementStatus == auction.SettlementStatusPending {
+		if out.resp.DecisionStatus == auction.DecisionStatusPendingDurability {
 			pendingResponses++
 			continue
 		}
@@ -648,11 +657,12 @@ func TestRedisLedgerReplayUnknownAndFailedAppendStatusDoesNotAppendAgain(t *test
 		AmountCents:   15_000,
 		ClientSeenSeq: 0,
 	}, "tr_phase2_status_unknown")
-	if err != nil {
-		t.Fatalf("UNKNOWN replay err = %v, want pending-settlement response", err)
-	}
-	if pending.SettlementStatus != auction.SettlementStatusPending {
-		t.Fatalf("UNKNOWN replay result = %#v, want pending settlement", pending)
+	assertAPIErrorCode(t, err, apierrors.CodeProcessingRetryLater)
+	if pending.Result != string(apierrors.CodeProcessingRetryLater) ||
+		pending.DecisionStatus != auction.DecisionStatusPendingDurability ||
+		pending.DurabilityStatus != auction.DurabilityStatusKafkaUnknown ||
+		pending.CurrentWinnerID != nil {
+		t.Fatalf("UNKNOWN replay result = %#v, want explicit pending durability without winner truth", pending)
 	}
 	if ledger.Len() != 1 {
 		t.Fatalf("ledger len after UNKNOWN replay = %d, want no duplicate append", ledger.Len())
@@ -707,11 +717,12 @@ func TestRedisLedgerAppendTimeoutAfterWriteIsUnknownAndReplayDoesNotAppendAgain(
 		AmountCents:   15_000,
 		ClientSeenSeq: 0,
 	}, "tr_phase2_timeout_retry")
-	if err != nil {
-		t.Fatalf("UNKNOWN retry err = %v, want pending-settlement response", err)
-	}
-	if pending.SettlementStatus != auction.SettlementStatusPending {
-		t.Fatalf("UNKNOWN retry result = %#v, want pending settlement", pending)
+	assertAPIErrorCode(t, err, apierrors.CodeProcessingRetryLater)
+	if pending.Result != string(apierrors.CodeProcessingRetryLater) ||
+		pending.DecisionStatus != auction.DecisionStatusPendingDurability ||
+		pending.DurabilityStatus != auction.DurabilityStatusKafkaUnknown ||
+		pending.CurrentWinnerID != nil {
+		t.Fatalf("UNKNOWN retry result = %#v, want explicit pending durability without winner truth", pending)
 	}
 	if ledger.Len() != 1 {
 		t.Fatalf("ledger len after UNKNOWN replay = %d, want no duplicate append", ledger.Len())
@@ -1086,12 +1097,15 @@ func TestPendingAppendOrderFastDefersWithoutPausingAndWorkerAcks(t *testing.T) {
 		err := <-errCh
 		resp := <-respCh
 		if err != nil {
-			t.Fatalf("bid err = %v, want nil with final or pending-settlement response", err)
+			var apiErr apierrors.APIError
+			if !errors.As(err, &apiErr) || apiErr.Code != apierrors.CodeProcessingRetryLater {
+				t.Fatalf("bid err = %v, want nil ACKed response or explicit pending durability", err)
+			}
 		}
-		if resp.SettlementStatus == auction.SettlementStatusPending {
+		if resp.DecisionStatus == auction.DecisionStatusPendingDurability {
 			pendingResponses++
-			if resp.EngineSeq == 0 {
-				t.Fatalf("pending settlement response missing engine seq: %#v", resp)
+			if resp.EngineSeq == 0 || resp.Result != string(apierrors.CodeProcessingRetryLater) || resp.DurabilityStatus != auction.DurabilityStatusKafkaUnknown {
+				t.Fatalf("pending durability response invalid: %#v", resp)
 			}
 		}
 	}

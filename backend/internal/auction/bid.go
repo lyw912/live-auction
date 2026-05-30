@@ -30,9 +30,16 @@ const (
 	BidResultEngineRejected      = "ENGINE_REJECTED"
 	BidResultEngineSold          = "ENGINE_SOLD"
 
-	SettlementStatusPending = "PENDING"
-	SettlementStatusSettled = "SETTLED"
-	SettlementStatusFailed  = "FAILED"
+	DecisionStatusDecided           = "DECIDED"
+	DecisionStatusPendingDurability = "PENDING_DURABILITY"
+	DecisionStatusReconciling       = "RECONCILING"
+	DurabilityStatusKafkaAcked      = "KAFKA_ACKED"
+	DurabilityStatusKafkaUnknown    = "KAFKA_UNKNOWN"
+	DurabilityStatusKafkaFailed     = "KAFKA_FAILED"
+	DurabilityStatusNotRequired     = "NOT_REQUIRED"
+	SettlementStatusPending         = "PENDING"
+	SettlementStatusSettled         = "SETTLED"
+	SettlementStatusFailed          = "FAILED"
 
 	BidSourceManual     = "MANUAL"
 	BidSourceAutoMaxBid = "AUTO_MAX_BID"
@@ -57,22 +64,33 @@ type BidInput struct {
 }
 
 type BidResponse struct {
-	Result            string     `json:"result"`
-	BidID             string     `json:"bid_id,omitempty"`
-	AuctionID         string     `json:"auction_id"`
-	Seq               int64      `json:"seq"`
-	EngineSeq         int64      `json:"engine_seq,omitempty"`
-	EngineEpoch       int64      `json:"engine_epoch,omitempty"`
-	SettlementStatus  string     `json:"settlement_status,omitempty"`
-	CurrentPriceCents int64      `json:"current_price_cents"`
-	CurrentWinnerID   *string    `json:"current_winner_id,omitempty"`
-	EndAt             *time.Time `json:"end_at,omitempty"`
-	ServerTimeMS      int64      `json:"server_time_ms"`
-	RejectReason      *string    `json:"reject_reason"`
-	ConfirmToken      string     `json:"confirm_token,omitempty"`
-	ExpiresInMS       int64      `json:"expires_in_ms,omitempty"`
-	AmountCents       int64      `json:"amount_cents,omitempty"`
-	ConfirmExpiresAt  *time.Time `json:"confirm_expires_at,omitempty"`
+	Result            string            `json:"result"`
+	BidID             string            `json:"bid_id,omitempty"`
+	AuctionID         string            `json:"auction_id"`
+	Seq               int64             `json:"seq"`
+	EngineSeq         int64             `json:"engine_seq,omitempty"`
+	EngineEpoch       int64             `json:"engine_epoch,omitempty"`
+	DecisionStatus    string            `json:"decision_status,omitempty"`
+	DurabilityStatus  string            `json:"durability_status,omitempty"`
+	SettlementStatus  string            `json:"settlement_status,omitempty"`
+	DecisionBasis     *BidDecisionBasis `json:"decision_basis,omitempty"`
+	CurrentPriceCents int64             `json:"current_price_cents"`
+	CurrentWinnerID   *string           `json:"current_winner_id,omitempty"`
+	EndAt             *time.Time        `json:"end_at,omitempty"`
+	ServerTimeMS      int64             `json:"server_time_ms"`
+	RejectReason      *string           `json:"reject_reason"`
+	ConfirmToken      string            `json:"confirm_token,omitempty"`
+	ExpiresInMS       int64             `json:"expires_in_ms,omitempty"`
+	AmountCents       int64             `json:"amount_cents,omitempty"`
+	ConfirmExpiresAt  *time.Time        `json:"confirm_expires_at,omitempty"`
+}
+
+type BidDecisionBasis struct {
+	PreviousPriceCents    int64   `json:"previous_price_cents"`
+	RequiredMinPriceCents int64   `json:"required_min_price_cents"`
+	CurrentPriceCents     int64   `json:"current_price_cents"`
+	Reason                *string `json:"reason,omitempty"`
+	EngineSeq             int64   `json:"engine_seq,omitempty"`
 }
 
 type ConfirmBidInput struct {
@@ -764,10 +782,19 @@ func (r *Repository) evaluateAndApplyBid(ctx context.Context, tx pgx.Tx, a locke
 			}
 		}
 		resp := BidResponse{
-			Result:            BidResultRejected,
-			BidID:             bidID,
-			AuctionID:         a.ID,
-			Seq:               seq,
+			Result:           BidResultRejected,
+			BidID:            bidID,
+			AuctionID:        a.ID,
+			Seq:              seq,
+			DecisionStatus:   DecisionStatusDecided,
+			DurabilityStatus: DurabilityStatusNotRequired,
+			DecisionBasis: &BidDecisionBasis{
+				PreviousPriceCents:    previousPriceCents(a),
+				RequiredMinPriceCents: nextExecutableBidAmount(a),
+				CurrentPriceCents:     a.CurrentPriceCents,
+				Reason:                &reason,
+				EngineSeq:             0,
+			},
 			CurrentPriceCents: a.CurrentPriceCents,
 			CurrentWinnerID:   a.CurrentWinnerID,
 			EndAt:             &a.EndAt,
@@ -1044,7 +1071,14 @@ func (r *Repository) nextAutoMaxBidStep(ctx context.Context, tx pgx.Tx, a locked
 }
 
 func nextExecutableBidAmount(a lockedAuction) int64 {
-	return a.CurrentPriceCents + a.IncrementCents
+	return previousPriceCents(a) + a.IncrementCents
+}
+
+func previousPriceCents(a lockedAuction) int64 {
+	if a.AcceptedBidCount <= 0 {
+		return a.StartPriceCents
+	}
+	return a.CurrentPriceCents
 }
 
 func defenderBeatsOrTies(defender MaxBidIntent, challenger MaxBidIntent) bool {

@@ -28,6 +28,7 @@ A run cannot be called current PTS-1B success unless it has all of these:
 - PTS report details or full sampler export;
 - server evidence under `docs/perf/pts/evidence/incoming/<label>/` before review, then under `current/` or `archive/*/` after classification;
 - `ENGINE_*` distribution, HTTP status distribution, durability status, and settlement status;
+- Redis Engine recovery evidence when claiming fault readiness, including `resume_redis_engine` signal result `rto_ms`, preflight/postflight status, checkpoint hash, and Redis Engine diagnostics `last_recovery_rto_ms`;
 - correctness verifier output from `tests/pts/verify-l4b-pts-correctness.sh`;
 - Redis/Kafka/PostgreSQL health evidence;
 - explicit fault-injection evidence if claiming resilience;

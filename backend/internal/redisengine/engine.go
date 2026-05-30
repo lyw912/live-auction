@@ -164,6 +164,11 @@ local function reject(reason)
   engine_seq = engine_seq + 1
   redis.call('HSET', state_key, 'engine_seq', engine_seq)
   redis.call('PEXPIRE', state_key, state_ttl_ms)
+  local basis_base = current_price
+  if accepted_bid_count <= 0 then
+    basis_base = start_price
+  end
+  local basis_required_min = basis_base + increment
   local result = {
     result = 'ENGINE_REJECTED',
     bid_id = bid_id,
@@ -181,7 +186,14 @@ local function reject(reason)
     end_at_ms = end_at_ms,
     server_time_ms = now_ms,
     trace_id = trace_id,
-    request_hash = request_hash
+    request_hash = request_hash,
+    decision_basis = {
+      previous_price_cents = basis_base,
+      required_min_price_cents = basis_required_min,
+      current_price_cents = current_price,
+      reason = reason,
+      engine_seq = engine_seq
+    }
   }
   return {'OK', store_decision(result)}
 end
@@ -215,6 +227,19 @@ local base = current_price
 if accepted_bid_count <= 0 then
   base = start_price
 end
+local required_min_price = base + increment
+
+local function with_basis(result, reason)
+  result['decision_basis'] = {
+    previous_price_cents = base,
+    required_min_price_cents = required_min_price,
+    current_price_cents = current_price,
+    reason = reason,
+    engine_seq = result['engine_seq'] or 0
+  }
+  return result
+end
+
 if amount < (base + increment) then
   return reject('BID_TOO_LOW')
 end
@@ -271,7 +296,7 @@ local result = {
   trace_id = trace_id,
   request_hash = request_hash
 }
-return {'OK', store_decision(result)}
+return {'OK', store_decision(with_basis(result, nil))}
 `)
 
 type Engine struct {
@@ -304,24 +329,33 @@ type snapshot struct {
 }
 
 type engineResult struct {
-	Result            string  `json:"result"`
-	BidID             string  `json:"bid_id"`
-	AuctionID         string  `json:"auction_id"`
-	UserID            string  `json:"user_id"`
-	ClientBidID       string  `json:"client_bid_id"`
-	AmountCents       int64   `json:"amount_cents"`
-	Seq               int64   `json:"seq"`
-	EngineSeq         int64   `json:"engine_seq"`
-	EngineEpoch       int64   `json:"engine_epoch"`
-	SettlementStatus  string  `json:"settlement_status"`
-	RejectReason      *string `json:"reject_reason,omitempty"`
-	CurrentPriceCents int64   `json:"current_price_cents"`
-	CurrentWinnerID   string  `json:"current_winner_id,omitempty"`
-	EndAtMS           int64   `json:"end_at_ms"`
-	ExtendCount       int     `json:"extend_count"`
-	ServerTimeMS      int64   `json:"server_time_ms"`
-	TraceID           string  `json:"trace_id"`
-	RequestHash       string  `json:"request_hash"`
+	Result            string        `json:"result"`
+	BidID             string        `json:"bid_id"`
+	AuctionID         string        `json:"auction_id"`
+	UserID            string        `json:"user_id"`
+	ClientBidID       string        `json:"client_bid_id"`
+	AmountCents       int64         `json:"amount_cents"`
+	Seq               int64         `json:"seq"`
+	EngineSeq         int64         `json:"engine_seq"`
+	EngineEpoch       int64         `json:"engine_epoch"`
+	SettlementStatus  string        `json:"settlement_status"`
+	RejectReason      *string       `json:"reject_reason,omitempty"`
+	CurrentPriceCents int64         `json:"current_price_cents"`
+	CurrentWinnerID   string        `json:"current_winner_id,omitempty"`
+	EndAtMS           int64         `json:"end_at_ms"`
+	ExtendCount       int           `json:"extend_count"`
+	ServerTimeMS      int64         `json:"server_time_ms"`
+	TraceID           string        `json:"trace_id"`
+	RequestHash       string        `json:"request_hash"`
+	DecisionBasis     decisionBasis `json:"decision_basis"`
+}
+
+type decisionBasis struct {
+	PreviousPriceCents    int64   `json:"previous_price_cents"`
+	RequiredMinPriceCents int64   `json:"required_min_price_cents"`
+	CurrentPriceCents     int64   `json:"current_price_cents"`
+	Reason                *string `json:"reason,omitempty"`
+	EngineSeq             int64   `json:"engine_seq,omitempty"`
 }
 
 type redisIdempotencyReplay struct {
@@ -558,7 +592,7 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 		apptracing.End(stageSpan, nil)
 		recordKafkaAppend(result.Result, "already_acked", 0)
 		recordHTTPStage("kafka_append", result.Result, "already_acked", 0)
-		return result.response(), nil
+		return result.response(auction.DurabilityStatusKafkaAcked, auction.DecisionStatusDecided), nil
 	}
 	if waitResult.Status == appendDecisionStatusMissing {
 		stageSpan.SetAttributes(attribute.String("bid.append_order_wait.outcome", string(waitResult.Status)))
@@ -593,7 +627,7 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 		).Err()
 		_ = e.recordAuctionAppendStats(markerCtx, auctionID, kafkaAppendStatusUnknown, result.EngineSeq)
 		markerCancel()
-		return result.response(), nil
+		return result.pendingDurabilityResponse(kafkaAppendStatusUnknown), apierrors.New(apierrors.CodeProcessingRetryLater, "bid decision is waiting for Kafka durability; retry with the same idempotency key", http.StatusAccepted)
 	}
 	if waitResult.Err != nil {
 		apptracing.End(stageSpan, waitResult.Err)
@@ -624,7 +658,7 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 		).Err()
 		_ = e.recordAuctionAppendStats(markerCtx, auctionID, kafkaAppendStatusUnknown, result.EngineSeq)
 		markerCancel()
-		return result.response(), nil
+		return result.pendingDurabilityResponse(kafkaAppendStatusUnknown), apierrors.New(apierrors.CodeProcessingRetryLater, "bid decision is waiting for Kafka durability; retry with the same idempotency key", http.StatusAccepted)
 	}
 	defer releasePendingAppendLock(context.Background(), e.redis, lockKey, lockToken)
 
@@ -694,7 +728,7 @@ func (e *Engine) appendDecisionBeforeReturn(ctx context.Context, auctionID strin
 	}
 	markerCancel()
 	apptracing.End(stageSpan, nil)
-	return result.response(), nil
+	return result.response(auction.DurabilityStatusKafkaAcked, auction.DecisionStatusDecided), nil
 }
 
 func (e *Engine) waitForPendingAppendTurn(ctx context.Context, auctionID string, clientBidID string, engineSeq int64) appendDecisionWaitResult {
@@ -840,16 +874,16 @@ func (e *Engine) redisIdempotencyReplayResponseFromRecord(replay redisIdempotenc
 	switch status {
 	case kafkaAppendStatusAcked:
 		recordHTTPStage("total", result.Result, "ok", time.Since(totalStart))
-		return result.response(), nil
+		return result.response(auction.DurabilityStatusKafkaAcked, auction.DecisionStatusDecided), nil
 	case kafkaAppendStatusFailed:
 		recordHTTPStage("total", result.Result, "kafka_append_failed", time.Since(totalStart))
-		return auction.BidResponse{}, apierrors.New(apierrors.CodeEngineReconciling, "bid engine decision is recovering; retry with the same idempotency key", http.StatusConflict)
+		return result.pendingDurabilityResponse(kafkaAppendStatusFailed), apierrors.New(apierrors.CodeEngineReconciling, "bid engine decision is recovering; retry with the same idempotency key", http.StatusConflict)
 	case kafkaAppendStatusUnknown:
 		recordHTTPStage("total", result.Result, "kafka_append_unknown", time.Since(totalStart))
-		return result.response(), nil
+		return result.pendingDurabilityResponse(kafkaAppendStatusUnknown), apierrors.New(apierrors.CodeProcessingRetryLater, "bid decision is waiting for Kafka durability; retry with the same idempotency key", http.StatusAccepted)
 	default:
 		recordHTTPStage("total", result.Result, "kafka_append_unknown", time.Since(totalStart))
-		return result.response(), nil
+		return result.pendingDurabilityResponse(kafkaAppendStatusUnknown), apierrors.New(apierrors.CodeProcessingRetryLater, "bid decision is waiting for Kafka durability; retry with the same idempotency key", http.StatusAccepted)
 	}
 }
 
@@ -1181,7 +1215,7 @@ func (e *Engine) pause(ctx context.Context, auctionID string, reason string, mes
 	return nil
 }
 
-func (r engineResult) response() auction.BidResponse {
+func (r engineResult) response(durabilityStatus string, decisionStatus string) auction.BidResponse {
 	result := r.Result
 	if result == resultAccepted {
 		result = auction.BidResultEngineAccepted
@@ -1201,6 +1235,25 @@ func (r engineResult) response() auction.BidResponse {
 		t := time.UnixMilli(r.EndAtMS).UTC()
 		endAt = &t
 	}
+	if decisionStatus == "" {
+		decisionStatus = auction.DecisionStatusDecided
+	}
+	if durabilityStatus == "" {
+		durabilityStatus = auction.DurabilityStatusKafkaAcked
+	}
+	var basis *auction.BidDecisionBasis
+	if r.DecisionBasis.RequiredMinPriceCents > 0 || r.DecisionBasis.CurrentPriceCents > 0 || r.DecisionBasis.PreviousPriceCents > 0 {
+		basis = &auction.BidDecisionBasis{
+			PreviousPriceCents:    r.DecisionBasis.PreviousPriceCents,
+			RequiredMinPriceCents: r.DecisionBasis.RequiredMinPriceCents,
+			CurrentPriceCents:     r.DecisionBasis.CurrentPriceCents,
+			Reason:                r.DecisionBasis.Reason,
+			EngineSeq:             r.DecisionBasis.EngineSeq,
+		}
+		if basis.EngineSeq == 0 {
+			basis.EngineSeq = r.EngineSeq
+		}
+	}
 	return auction.BidResponse{
 		Result:            result,
 		BidID:             r.BidID,
@@ -1208,7 +1261,10 @@ func (r engineResult) response() auction.BidResponse {
 		Seq:               r.Seq,
 		EngineSeq:         r.EngineSeq,
 		EngineEpoch:       r.EngineEpoch,
+		DecisionStatus:    decisionStatus,
+		DurabilityStatus:  durabilityStatus,
 		SettlementStatus:  auction.SettlementStatusPending,
+		DecisionBasis:     basis,
 		CurrentPriceCents: r.CurrentPriceCents,
 		CurrentWinnerID:   winner,
 		EndAt:             endAt,
@@ -1216,6 +1272,25 @@ func (r engineResult) response() auction.BidResponse {
 		RejectReason:      r.RejectReason,
 		AmountCents:       r.AmountCents,
 	}
+}
+
+func (r engineResult) pendingDurabilityResponse(kafkaAppendStatus string) auction.BidResponse {
+	durabilityStatus := auction.DurabilityStatusKafkaUnknown
+	decisionStatus := auction.DecisionStatusPendingDurability
+	if kafkaAppendStatus == kafkaAppendStatusFailed {
+		durabilityStatus = auction.DurabilityStatusKafkaFailed
+		decisionStatus = auction.DecisionStatusReconciling
+	}
+	resp := r.response(durabilityStatus, decisionStatus)
+	resp.Result = string(apierrors.CodeProcessingRetryLater)
+	if kafkaAppendStatus == kafkaAppendStatusFailed {
+		resp.Result = string(apierrors.CodeEngineReconciling)
+	}
+	resp.CurrentWinnerID = nil
+	if resp.DecisionBasis != nil {
+		resp.CurrentPriceCents = resp.DecisionBasis.CurrentPriceCents
+	}
+	return resp
 }
 
 func requestHash(auctionID string, userID string, clientBidID string, amountCents int64) string {
@@ -1343,6 +1418,19 @@ type engineCheckpointSnapshot struct {
 	LastAcceptedUserID    string `json:"last_accepted_user_id,omitempty"`
 	LastAcceptedAmount    int64  `json:"last_accepted_amount_cents,omitempty"`
 	LastAcceptedEngineSeq int64  `json:"last_accepted_engine_seq,omitempty"`
+}
+
+type redisEngineResumeReport struct {
+	AuctionID        string `json:"auction_id"`
+	Resumed          bool   `json:"resumed"`
+	Rebuilt          bool   `json:"rebuilt"`
+	EngineEpoch      int64  `json:"engine_epoch"`
+	EngineSeq        int64  `json:"engine_seq"`
+	PublicSeq        int64  `json:"public_seq"`
+	CheckpointHash   string `json:"checkpoint_hash,omitempty"`
+	RTOms            int64  `json:"rto_ms"`
+	PreflightStatus  string `json:"preflight_status"`
+	PostflightStatus string `json:"postflight_status"`
 }
 
 func NewWorker(db *pgxpool.Pool, redisClient *redis.Client, ledger BidLedger, consumerID string) *Worker {
@@ -1846,19 +1934,11 @@ func (w *Worker) processSignal(ctx context.Context, signalType string, auctionID
 		err := w.pause(ctx, auctionID, "REDIS_ENGINE_MANUAL_PAUSE", "redis engine manually paused", "", nil)
 		return map[string]any{"auction_id": auctionID, "paused": true}, err
 	case "resume_redis_engine":
-		_, err := w.db.Exec(ctx, `
-			UPDATE auctions
-			SET engine_paused = false,
-			    engine_pause_reason = NULL,
-			    engine_paused_at = NULL,
-			    engine_epoch = engine_epoch + 1,
-			    updated_at = now()
-			WHERE id = $1
-		`, auctionID)
-		if err == nil && w.redis != nil {
-			_ = w.redis.Del(ctx, redisx.BidEngineStateKey(auctionID)).Err()
-		}
-		return map[string]any{"auction_id": auctionID, "resumed": err == nil}, err
+		report, err := w.resumeRedisEngine(ctx, auctionID)
+		payload, _ := json.Marshal(report)
+		var out map[string]any
+		_ = json.Unmarshal(payload, &out)
+		return out, err
 	case "reconcile_redis_engine":
 		report, err := w.Reconcile(ctx, auctionID)
 		if err != nil {
@@ -1871,6 +1951,137 @@ func (w *Worker) processSignal(ctx context.Context, signalType string, auctionID
 	default:
 		return nil, fmt.Errorf("unsupported redis engine signal %s", signalType)
 	}
+}
+
+func (w *Worker) resumeRedisEngine(ctx context.Context, auctionID string) (redisEngineResumeReport, error) {
+	started := time.Now()
+	report := redisEngineResumeReport{AuctionID: auctionID}
+	preflight, err := w.Reconcile(ctx, auctionID)
+	if err != nil {
+		return report, err
+	}
+	report.PreflightStatus = preflight.Status
+	if preflight.Status != "OK" && preflight.Status != "REDIS_STATE_MISSING" && preflight.Status != "REDIS_BEHIND_DB" {
+		return report, fmt.Errorf("redis engine resume preflight failed: %s", preflight.Status)
+	}
+	if err := w.rebuildRedisFromCheckpoint(ctx, auctionID, &report); err != nil {
+		return report, err
+	}
+	postflight, err := w.Reconcile(ctx, auctionID)
+	if err != nil {
+		return report, err
+	}
+	report.PostflightStatus = postflight.Status
+	if postflight.Status != "OK" {
+		return report, fmt.Errorf("redis engine resume postflight failed: %s", postflight.Status)
+	}
+	if _, err := w.db.Exec(ctx, `
+		UPDATE auctions
+		SET engine_paused = false,
+		    engine_pause_reason = NULL,
+		    engine_paused_at = NULL,
+		    updated_at = now()
+		WHERE id = $1
+	`, auctionID); err != nil {
+		return report, err
+	}
+	if w.redis != nil {
+		_ = w.redis.HSet(ctx, redisx.BidEngineStateKey(auctionID), "paused", 0, "pause_reason", "").Err()
+	}
+	report.RTOms = time.Since(started).Milliseconds()
+	report.Resumed = true
+	observability.Observe("auction_bid_engine_resume_rto_seconds", time.Since(started).Seconds(), map[string]string{"status": "ok"}, observability.DefaultLatencyBuckets)
+	return report, nil
+}
+
+func (w *Worker) rebuildRedisFromCheckpoint(ctx context.Context, auctionID string, report *redisEngineResumeReport) error {
+	if w == nil || w.redis == nil {
+		return nil
+	}
+	var checkpointEpoch int64
+	var checkpointSeq int64
+	var storedHash string
+	var snapshotText string
+	err := w.db.QueryRow(ctx, `
+		SELECT engine_epoch, engine_seq, state_hash, snapshot_json::text
+		FROM auction_engine_checkpoints
+		WHERE auction_id = $1
+	`, auctionID).Scan(&checkpointEpoch, &checkpointSeq, &storedHash, &snapshotText)
+	if errors.Is(err, pgx.ErrNoRows) {
+		var dbSeq int64
+		if scanErr := w.db.QueryRow(ctx, `SELECT engine_seq FROM auctions WHERE id = $1`, auctionID).Scan(&dbSeq); scanErr != nil {
+			return scanErr
+		}
+		if dbSeq > 0 {
+			return fmt.Errorf("redis engine checkpoint missing for auction=%s engine_seq=%d", auctionID, dbSeq)
+		}
+		snap, err := loadSnapshotForRedisState(ctx, w.db, auctionID)
+		if err != nil {
+			return err
+		}
+		return w.writeRedisStateSnapshot(ctx, auctionID, snap, report, "")
+	}
+	if err != nil {
+		return err
+	}
+	var checkpoint engineCheckpointSnapshot
+	if err := json.Unmarshal([]byte(snapshotText), &checkpoint); err != nil {
+		return err
+	}
+	payload, err := json.Marshal(checkpoint)
+	if err != nil {
+		return err
+	}
+	if sha256Hex(payload) != storedHash {
+		return fmt.Errorf("redis engine checkpoint hash mismatch auction=%s", auctionID)
+	}
+	snap, err := loadSnapshotForRedisState(ctx, w.db, auctionID)
+	if err != nil {
+		return err
+	}
+	if snap.EngineEpoch != checkpointEpoch || snap.EngineSeq != checkpointSeq || snap.EngineSeq != checkpoint.EngineSeq || snap.Seq != checkpoint.PublicSeq || snap.CurrentPriceCents != checkpoint.CurrentPriceCents || snap.CurrentWinnerID != checkpoint.CurrentWinnerID || snap.Status != checkpoint.Status {
+		return fmt.Errorf("redis engine checkpoint does not match PostgreSQL settlement auction=%s", auctionID)
+	}
+	return w.writeRedisStateSnapshot(ctx, auctionID, snap, report, storedHash)
+}
+
+func (w *Worker) writeRedisStateSnapshot(ctx context.Context, auctionID string, snap snapshot, report *redisEngineResumeReport, stateHash string) error {
+	fields := []any{
+		"status", snap.Status,
+		"current_price_cents", snap.CurrentPriceCents,
+		"current_winner_id", snap.CurrentWinnerID,
+		"start_price_cents", snap.StartPriceCents,
+		"increment_cents", snap.IncrementCents,
+		"cap_price_cents", snap.CapPriceCents,
+		"end_at_ms", snap.EndAtMS,
+		"extend_window_ms", snap.ExtendWindowMS,
+		"extend_by_ms", snap.ExtendByMS,
+		"max_extend_count", snap.MaxExtendCount,
+		"extend_count", snap.ExtendCount,
+		"accepted_bid_count", snap.AcceptedBidCount,
+		"seq", snap.Seq,
+		"engine_seq", snap.EngineSeq,
+		"engine_epoch", snap.EngineEpoch,
+		"paused", boolInt(snap.Paused),
+		"pause_reason", snap.PauseReason,
+		"requires_postgres", snap.RequiresPostgres,
+	}
+	pipe := w.redis.TxPipeline()
+	pipe.HSet(ctx, redisx.BidEngineStateKey(auctionID), fields...)
+	pipe.PExpire(ctx, redisx.BidEngineStateKey(auctionID), engineStateTTL)
+	pipe.Del(ctx, pendingAppendLockKey(auctionID))
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return err
+	}
+	if report != nil {
+		report.Rebuilt = true
+		report.EngineEpoch = snap.EngineEpoch
+		report.EngineSeq = snap.EngineSeq
+		report.PublicSeq = snap.Seq
+		report.CheckpointHash = stateHash
+	}
+	return nil
 }
 
 func (w *Worker) activeAuctionIDs(ctx context.Context, limit int) ([]string, error) {
@@ -2321,7 +2532,7 @@ func settleAccepted(ctx context.Context, tx pgx.Tx, result engineResult) (int64,
 		return 0, fmt.Errorf("accepted settlement returned invalid public seq auction=%s epoch=%d seq=%d public_seq=%d", result.AuctionID, result.EngineEpoch, result.EngineSeq, publicSeq)
 	}
 	reason := (*string)(nil)
-	resp := result.response()
+	resp := result.response(auction.DurabilityStatusKafkaAcked, auction.DecisionStatusDecided)
 	resp.Result = responseResult
 	resp.SettlementStatus = auction.SettlementStatusSettled
 	resp.Seq = publicSeq
@@ -2341,6 +2552,9 @@ func settleAccepted(ctx context.Context, tx pgx.Tx, result engineResult) (int64,
 		"engine_epoch":        result.EngineEpoch,
 		"engine_seq":          result.EngineSeq,
 		"settlement_status":   auction.SettlementStatusSettled,
+		"decision_status":     auction.DecisionStatusDecided,
+		"durability_status":   auction.DurabilityStatusKafkaAcked,
+		"decision_basis":      result.DecisionBasis,
 	}
 	if result.Result == resultSold {
 		orderID, err := createOrder(ctx, tx, result.AuctionID, result.UserID, result.AmountCents)
@@ -2374,7 +2588,7 @@ func settleRejected(ctx context.Context, tx pgx.Tx, result engineResult) (int64,
 	if err != nil {
 		return 0, err
 	}
-	resp := result.response()
+	resp := result.response(auction.DurabilityStatusKafkaAcked, auction.DecisionStatusDecided)
 	resp.Result = auction.BidResultRejected
 	resp.SettlementStatus = auction.SettlementStatusSettled
 	resp.Seq = publicSeq
@@ -2398,6 +2612,9 @@ func settleRejected(ctx context.Context, tx pgx.Tx, result engineResult) (int64,
 			"engine_epoch":      result.EngineEpoch,
 			"engine_seq":        result.EngineSeq,
 			"settlement_status": auction.SettlementStatusSettled,
+			"decision_status":   auction.DecisionStatusDecided,
+			"durability_status": auction.DurabilityStatusKafkaAcked,
+			"decision_basis":    result.DecisionBasis,
 		}
 		if err := appendEvent(ctx, tx, result.AuctionID, publicSeq, result.EngineEpoch, result.EngineSeq, "bid_rejected", result.TraceID, payload); err != nil {
 			return 0, err
@@ -3171,6 +3388,9 @@ func (w *Worker) Reconcile(ctx context.Context, auctionID string) (Report, error
 			first = &copy
 		}
 	}
+	if errors.Is(err, redis.Nil) && dbSeq > 0 {
+		recordViolation(&reconcileViolation{status: "REDIS_STATE_MISSING", reason: "REDIS_ENGINE_STATE_MISSING_REQUIRES_REBUILD", message: "Redis hot-engine state is missing and must be rebuilt from checkpoint before resume", details: map[string]any{"db_seq": dbSeq}})
+	}
 	if redisSeq < dbSeq {
 		recordViolation(&reconcileViolation{status: "REDIS_BEHIND_DB", reason: "REDIS_ENGINE_REDIS_BEHIND_DB", message: "Redis engine seq is behind PostgreSQL settlement", details: map[string]any{"redis_seq": redisSeq, "db_seq": dbSeq}})
 	}
@@ -3200,7 +3420,9 @@ func (w *Worker) Reconcile(ctx context.Context, auctionID string) (Report, error
 	if first != nil {
 		report.Status = first.status
 		report.Message = first.message
-		_ = w.pause(ctx, auctionID, first.reason, first.message, "", first.details)
+		if first.status != "REDIS_STATE_MISSING" {
+			_ = w.pause(ctx, auctionID, first.reason, first.message, "", first.details)
+		}
 	}
 	return report, nil
 }

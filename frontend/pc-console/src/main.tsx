@@ -89,6 +89,8 @@ type RedisEngineMonitorPayload = MonitorPayload & {
     append_failure_count: number;
     append_unknown_count: number;
     settlement_lag_max_ms: number;
+    last_recovery_rto_ms?: number;
+    last_recovery_status?: string;
     latest_append?: Record<string, unknown>;
   };
 };
@@ -103,6 +105,8 @@ type RedisEngineSummary = {
   append_failure_count: number;
   append_unknown_count: number;
   settlement_lag_max_ms: number;
+  last_recovery_rto_ms?: number;
+  last_recovery_status?: string;
   latest_append?: Record<string, unknown>;
 };
 
@@ -376,6 +380,11 @@ function redisEngineSummary(payload?: MonitorPayload): RedisEngineSummary {
     acc.append_failure_count += Number(row.append_failure_count ?? 0);
     acc.append_unknown_count += Number(row.append_unknown_count ?? 0);
     acc.settlement_lag_max_ms = Math.max(acc.settlement_lag_max_ms, Number(row.settlement_lag_max_ms ?? 0));
+    const rto = Number(row.last_recovery_rto_ms ?? 0);
+    if (rto > 0 && rto >= Number(acc.last_recovery_rto_ms ?? 0)) {
+      acc.last_recovery_rto_ms = rto;
+      acc.last_recovery_status = String(row.last_recovery_status ?? '');
+    }
     const appendSeq = Number(row.latest_append_engine_seq ?? 0);
     const previousSeq = Number(acc.latest_append?.latest_append_engine_seq ?? 0);
     if (appendSeq >= previousSeq && row.latest_append_status) {
@@ -1869,6 +1878,7 @@ function DiagnosticsPanel({
         <span>append {engineSummary.append_success_count}/{engineSummary.append_failure_count}/{engineSummary.append_unknown_count}</span>
         <span>settlement {engineSummary.pending_settlements}/{engineSummary.failed_settlements}</span>
         <span>lag max {engineSummary.settlement_lag_max_ms}ms</span>
+        <span>recovery RTO {engineSummary.last_recovery_rto_ms ?? '-'}ms {engineSummary.last_recovery_status ?? ''}</span>
         <span>paused {engineSummary.paused_auctions}</span>
         <span>{latestAppendLabel}</span>
       </div>
@@ -1955,9 +1965,12 @@ function MonitorTable({ payload, empty, icon, sourceKey, onOpenFlightRecorder }:
     'latest_append_offset',
     'append_success_count',
     'append_failure_count',
-    'append_unknown_count',
-    'append_stats_last_status',
-    'checkpoint_topic',
+      'append_unknown_count',
+      'append_stats_last_status',
+      'last_recovery_rto_ms',
+      'last_recovery_status',
+      'last_recovery_at',
+      'checkpoint_topic',
     'checkpoint_partition',
     'checkpoint_next_offset',
     'delivery_state',

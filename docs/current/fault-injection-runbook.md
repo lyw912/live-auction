@@ -59,6 +59,22 @@ Redis loss followed by Kafka rebuild is only acceptable if the system:
 If any bid is accepted while Redis state is unverified, the run fails even if a
 later rebuild converges.
 
+The operator resume procedure is not a manual "clear pause" shortcut. A
+`resume_redis_engine` signal must:
+
+1. run reconcile preflight;
+2. drain Redis pending decisions into Kafka or fail closed;
+3. load the latest `auction_engine_checkpoints` snapshot;
+4. compare checkpoint hash, engine epoch, engine seq, public seq, current price,
+   winner, and terminal status against PostgreSQL settlement state;
+5. rebuild the Redis hot-state hash from the verified snapshot;
+6. run reconcile postflight;
+7. unpause only if postflight is `OK`;
+8. record `rto_ms` in the signal result and expose it through Redis Engine diagnostics.
+
+If the checkpoint is missing after any Kafka-backed settlement, resume must fail
+and keep the auction paused.
+
 ## Suggested Local Injection Commands
 
 Use only on dedicated pressure data.

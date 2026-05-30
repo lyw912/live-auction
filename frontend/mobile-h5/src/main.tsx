@@ -74,7 +74,16 @@ type BidResponse = {
   seq?: number;
   engine_seq?: number;
   engine_epoch?: number;
+  decision_status?: string;
+  durability_status?: string;
   settlement_status?: string;
+  decision_basis?: {
+    previous_price_cents?: number;
+    required_min_price_cents?: number;
+    current_price_cents?: number;
+    reason?: string;
+    engine_seq?: number;
+  };
   current_price_cents?: number;
   current_winner_id?: string;
   end_at?: string;
@@ -99,6 +108,8 @@ type PendingBidRequest = {
 
 function isBidConfirmationPending(payload?: BidResponse | null) {
   return payload?.result === 'BID_CONFIRMATION_PENDING'
+    || payload?.decision_status === 'PENDING_DURABILITY'
+    || payload?.durability_status === 'KAFKA_UNKNOWN'
     || (Boolean(payload?.result?.startsWith('ENGINE_')) && payload?.settlement_status === 'PENDING');
 }
 
@@ -1139,7 +1150,11 @@ function App() {
   )), [activeAuctionID, roomAuctions]);
 
   const applyAcceptedBid = (payload: BidResponse) => {
-    if (payload.result === 'BID_CONFIRMATION_PENDING') {
+    const isPendingDurability = payload.result === 'BID_CONFIRMATION_PENDING'
+      || payload.result === 'PROCESSING_RETRY_LATER'
+      || payload.decision_status === 'PENDING_DURABILITY'
+      || payload.durability_status === 'KAFKA_UNKNOWN';
+    if (isPendingDurability) {
       setRiskCode('BID_CONFIRMATION_PENDING');
       setBidFeedback(`出价已进入确认队列，等待账本确认 seq ${payload.engine_seq ?? payload.seq ?? lastSeq}`);
       setBidPhase('engine_pending');
@@ -1152,6 +1167,13 @@ function App() {
         event_type: payload.result ?? 'BID_CONFIRMATION_PENDING',
         user_scope: 'self'
       });
+      return;
+    }
+    if (payload.result === 'RECONCILING' || payload.decision_status === 'RECONCILING' || payload.durability_status === 'KAFKA_FAILED') {
+      setRiskCode('RECONCILING');
+      setBidFeedback('竞拍账本正在恢复，暂不能确认本次出价结果');
+      setBidPhase('uncertain');
+      pendingBidRef.current = pendingBidRef.current ?? null;
       return;
     }
     if (isEngineRejected(payload)) {

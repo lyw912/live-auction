@@ -65,8 +65,10 @@ services:
       - /bin/sh
       - -c
       - |
-        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic auction.bid-events --partitions 16 --replication-factor 1
-        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic auction.dlq --partitions 16 --replication-factor 1
+        echo "local Kafka profile: single broker, replication-factor=1, min.insync.replicas=1. This is functional evidence only, not production durability proof."
+        /opt/kafka/bin/kafka-configs.sh --bootstrap-server kafka:29092 --entity-type brokers --entity-name 1 --alter --add-config min.insync.replicas=1,unclean.leader.election.enable=false
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic auction.bid-events --partitions 16 --replication-factor 1 --config min.insync.replicas=1 --config unclean.leader.election.enable=false
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic auction.dlq --partitions 16 --replication-factor 1 --config min.insync.replicas=1 --config unclean.leader.election.enable=false
     restart: "no"
 
   minio:

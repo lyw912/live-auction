@@ -54,7 +54,10 @@ Rules:
 
 - `ENGINE_*` is the user-visible business decision.
 - `settlement_status` is not the decision.
-- `202` is acceptable only for a real decided result with explicit pending durability/settlement semantics.
+- `ENGINE_ACCEPTED`, `ENGINE_REJECTED`, and `ENGINE_SOLD` may be returned only after `durability_status = KAFKA_ACKED`.
+- `durability_status = KAFKA_UNKNOWN` must not be paired with an `ENGINE_*` result. It must return an explicit pending/reconciling response such as `PROCESSING_RETRY_LATER` with `decision_status = PENDING_DURABILITY`, and the UI must not show winner/leading truth from it.
+- `durability_status = KAFKA_FAILED` must fail closed as `RECONCILING` / `ENGINE_PAUSED`; dangerous bid actions remain disabled until reconciliation proves safety.
+- `202` is acceptable only for explicit pending durability or pending settlement semantics. It must not hide a normal success before the Kafka fence.
 - Normal PTS-1B must not degrade into bulk `PROCESSING_RETRY_LATER`, vague `409`, or second-level waiting.
 
 ## Performance Evidence Rules

@@ -855,6 +855,13 @@ func writeResult(w http.ResponseWriter, r *http.Request, status int, payload any
 	}
 	var apiErr apierrors.APIError
 	if errors.As(err, &apiErr) {
+		if payload != nil && apiErr.Status == http.StatusAccepted {
+			if apiErr.TraceID == "" {
+				apiErr.TraceID = traceID(r.Context())
+			}
+			writeJSON(w, apiErr.Status, payload)
+			return
+		}
 		writeError(w, r, apiErr)
 		return
 	}
