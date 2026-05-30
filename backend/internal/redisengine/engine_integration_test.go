@@ -242,7 +242,7 @@ func TestRedisLedgerDuplicateReplayAndReconcilePause(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if report.Status != "DB_BEHIND_REDIS" || report.DriftCount != 1 {
+	if report.Status != "DB_BEHIND_REDIS" || report.DriftCount < 1 {
 		t.Fatalf("report before settlement = %#v", report)
 	}
 	var paused bool
@@ -1124,6 +1124,246 @@ func TestReconcileBackfillsKafkaLedgerFromRedisPendingCrashWindow(t *testing.T) 
 		t.Fatalf("settle recovered kafka backfill: %v", err)
 	}
 	assertAuctionEngineSeq(t, db, auctionID, 1, 15_000, "ACTIVE")
+}
+
+func TestReconcileHealthyActiveAuctionWithoutAcceptedBids(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+
+	report, err := worker.Reconcile(ctx, auctionID)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if report.Status != "OK" || report.DriftCount != 0 {
+		t.Fatalf("report = %#v", report)
+	}
+}
+
+func TestReconcileDetectsAcceptedPublicSeqGap(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+
+	if _, err := engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-reconcile-gap-1", auction.BidInput{
+		ClientBidID:   "redis-ledger-reconcile-gap-1",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_reconcile_gap_1"); err != nil {
+		t.Fatalf("place first: %v", err)
+	}
+	if _, err := worker.ProcessKafka(ctx, 1); err != nil {
+		t.Fatalf("settle first: %v", err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE auction_events SET seq = 2 WHERE auction_id = $1 AND seq = 1`, auctionID); err != nil {
+		t.Fatalf("corrupt event seq: %v", err)
+	}
+	report, err := worker.Reconcile(ctx, auctionID)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if report.Status != "ACCEPTED_PUBLIC_SEQ_GAP" || report.DriftCount < 1 {
+		t.Fatalf("report = %#v", report)
+	}
+	assertEnginePaused(t, db, auctionID, "REDIS_ENGINE_ACCEPTED_PUBLIC_SEQ_GAP")
+}
+
+func TestReconcileDetectsWinnerPriceDrift(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+
+	if _, err := engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-reconcile-price", auction.BidInput{
+		ClientBidID:   "redis-ledger-reconcile-price",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_reconcile_price"); err != nil {
+		t.Fatalf("place bid: %v", err)
+	}
+	if _, err := worker.ProcessKafka(ctx, 1); err != nil {
+		t.Fatalf("settle bid: %v", err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE auctions SET current_price_cents = 12_000 WHERE id = $1`, auctionID); err != nil {
+		t.Fatalf("corrupt auction price: %v", err)
+	}
+	report, err := worker.Reconcile(ctx, auctionID)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if report.Status != "AUCTION_WINNER_PRICE_DRIFT" || report.DriftCount < 1 {
+		t.Fatalf("report = %#v", report)
+	}
+	assertEnginePaused(t, db, auctionID, "REDIS_ENGINE_WINNER_PRICE_DRIFT")
+}
+
+func TestReconcileDetectsOutboxCoverageMissing(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+
+	if _, err := engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-reconcile-outbox", auction.BidInput{
+		ClientBidID:   "redis-ledger-reconcile-outbox",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_reconcile_outbox"); err != nil {
+		t.Fatalf("place bid: %v", err)
+	}
+	if _, err := worker.ProcessKafka(ctx, 1); err != nil {
+		t.Fatalf("settle bid: %v", err)
+	}
+	if _, err := db.Exec(ctx, `
+		DELETE FROM outbox_delivery
+		WHERE outbox_id IN (SELECT id FROM outbox_events WHERE auction_id = $1)
+	`, auctionID); err != nil {
+		t.Fatalf("delete outbox delivery: %v", err)
+	}
+	report, err := worker.Reconcile(ctx, auctionID)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if report.Status != "OUTBOX_COVERAGE_MISSING" || report.DriftCount < 1 {
+		t.Fatalf("report = %#v", report)
+	}
+	assertEnginePaused(t, db, auctionID, "REDIS_ENGINE_OUTBOX_COVERAGE_MISSING")
+}
+
+func TestKafkaSettlementWritesEngineCheckpoint(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+
+	resp, err := engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-checkpoint", auction.BidInput{
+		ClientBidID:   "redis-ledger-checkpoint",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_checkpoint")
+	if err != nil {
+		t.Fatalf("place bid: %v", err)
+	}
+	if _, err := worker.ProcessKafka(ctx, 1); err != nil {
+		t.Fatalf("settle bid: %v", err)
+	}
+
+	var checkpointSeq int64
+	var nextOffset int64
+	var stateHash string
+	var snapshot struct {
+		AuctionID         string `json:"auction_id"`
+		EngineSeq         int64  `json:"engine_seq"`
+		CurrentPriceCents int64  `json:"current_price_cents"`
+		CurrentWinnerID   string `json:"current_winner_id"`
+	}
+	var snapshotRaw []byte
+	if err := db.QueryRow(ctx, `
+		SELECT engine_seq, next_decision_offset, state_hash, snapshot_json
+		FROM auction_engine_checkpoints
+		WHERE auction_id = $1
+	`, auctionID).Scan(&checkpointSeq, &nextOffset, &stateHash, &snapshotRaw); err != nil {
+		t.Fatalf("load checkpoint: %v", err)
+	}
+	if checkpointSeq != resp.EngineSeq || nextOffset != 1 || stateHash == "" {
+		t.Fatalf("checkpoint seq=%d next_offset=%d hash=%q, want seq=%d offset=1 non-empty hash", checkpointSeq, nextOffset, stateHash, resp.EngineSeq)
+	}
+	if err := json.Unmarshal(snapshotRaw, &snapshot); err != nil {
+		t.Fatalf("decode checkpoint snapshot: %v", err)
+	}
+	if snapshot.AuctionID != auctionID || snapshot.EngineSeq != resp.EngineSeq || snapshot.CurrentPriceCents != 15_000 || snapshot.CurrentWinnerID != "user_1" {
+		t.Fatalf("checkpoint snapshot = %#v", snapshot)
+	}
+	report, err := worker.Reconcile(ctx, auctionID)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if report.Status != "OK" || report.DriftCount != 0 {
+		t.Fatalf("report = %#v", report)
+	}
+}
+
+func TestReconcileDetectsMissingEngineCheckpoint(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+
+	if _, err := engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-checkpoint-missing", auction.BidInput{
+		ClientBidID:   "redis-ledger-checkpoint-missing",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_checkpoint_missing"); err != nil {
+		t.Fatalf("place bid: %v", err)
+	}
+	if _, err := worker.ProcessKafka(ctx, 1); err != nil {
+		t.Fatalf("settle bid: %v", err)
+	}
+	if _, err := db.Exec(ctx, `DELETE FROM auction_engine_checkpoints WHERE auction_id = $1`, auctionID); err != nil {
+		t.Fatalf("delete checkpoint: %v", err)
+	}
+	report, err := worker.Reconcile(ctx, auctionID)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if report.Status != "ENGINE_CHECKPOINT_MISSING" || report.DriftCount < 1 {
+		t.Fatalf("report = %#v", report)
+	}
+	assertEnginePaused(t, db, auctionID, "REDIS_ENGINE_CHECKPOINT_MISSING")
+}
+
+func TestReconcileDetectsEngineCheckpointHashDrift(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+
+	if _, err := engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-checkpoint-drift", auction.BidInput{
+		ClientBidID:   "redis-ledger-checkpoint-drift",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_checkpoint_drift"); err != nil {
+		t.Fatalf("place bid: %v", err)
+	}
+	if _, err := worker.ProcessKafka(ctx, 1); err != nil {
+		t.Fatalf("settle bid: %v", err)
+	}
+	if _, err := db.Exec(ctx, `
+		UPDATE auction_engine_checkpoints
+		SET state_hash = 'corrupted-checkpoint-hash'
+		WHERE auction_id = $1
+	`, auctionID); err != nil {
+		t.Fatalf("corrupt checkpoint hash: %v", err)
+	}
+	report, err := worker.Reconcile(ctx, auctionID)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if report.Status != "ENGINE_CHECKPOINT_STATE_HASH_DRIFT" || report.DriftCount < 1 {
+		t.Fatalf("report = %#v", report)
+	}
+	assertEnginePaused(t, db, auctionID, "REDIS_ENGINE_CHECKPOINT_STATE_HASH_DRIFT")
 }
 
 func TestReconcileDoesNotPauseWhilePendingAppendInProgress(t *testing.T) {

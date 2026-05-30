@@ -2,6 +2,15 @@
 
 Date: 2026-05-29
 
+Supersession note, 2026-05-30: the final architecture direction for high-value
+live auction is now
+`docs/perf/pts/l4b-kafka/single-hotspot-redesign-from-first-principles-2026-05-30.md`.
+The implementation plan is
+`docs/perf/pts/l4b-kafka/route-b-implementation-plan-2026-05-30.md`.
+This README records the current/pre-redesign L4B implementation and PTS evidence.
+Do not use the Redis-only HTTP success behavior described below as the final
+safety contract.
+
 This folder records the Kafka/L4B pressure-test background, decisions, workflow,
 and correctness gates after the project moved the hot bid path from PG-lane to
 Redis Lua + Apache Kafka ledger.
@@ -13,6 +22,7 @@ cloud pressure, that the new hot path improves latency while preserving auction
 truth:
 
 ```text
+current implementation / pre-redesign:
 HTTP bid
   -> Redis Lua per-auction decision
   -> Redis pending hash protected by AOF
@@ -29,6 +39,10 @@ Kafka in `engine_seq` order, and deletes the pending field only after Kafka
 append succeeds. This is the current compromise between the business goal
 (low-latency accepted bids on one hot auction) and durability (no Redis-accepted
 decision may disappear silently before Kafka/PG settlement).
+
+This compromise is no longer the proposed final high-value auction contract.
+For final course defense, HTTP success must move behind a Kafka durable decision
+ack as defined in the single-hotspot redesign document.
 
 A run is useful only if it answers both questions:
 
@@ -48,6 +62,8 @@ short Kafka hiccups into false engine pauses.
 
 | Purpose | Path |
 |---|---|
+| Authoritative safety redesign | `docs/perf/pts/l4b-kafka/single-hotspot-redesign-from-first-principles-2026-05-30.md` |
+| Route B+ implementation plan | `docs/perf/pts/l4b-kafka/route-b-implementation-plan-2026-05-30.md` |
 | Workload matrix | `docs/perf/pts/l4b-kafka/workload-matrix-20260529.md` |
 | PTS-1 runbook | `docs/perf/pts/l4b-kafka/final-burst-1000vu-runbook.md` |
 | PTS-1A accepted ladder JMX | `tests/pts/pts-1a-accepted-ladder-1000vu-1m.jmx` |
@@ -181,6 +197,37 @@ The PTS report must show roughly 1000 `POST PTS-1 hotspot bid` samples. A much
 larger count means the cloud harness looped the sampler despite the JMX
 `LoopController.loops=1`; classify that report as `HARNESS_GAP`, not as PTS-1
 capacity evidence.
+
+## Sampling Logs And Percentiles
+
+Alibaba Cloud PTS sampling logs are diagnostic request details. At the default
+1% pressure-log sampling rate, a 1000-request run normally yields only about 10
+detail rows. That is enough to inspect example request/response bodies, but it
+is not enough to compute credible full-run p95/p99.
+
+For paid evidence runs where we need independently calculated HTTP percentiles,
+set the PTS advanced pressure-log sampling rate to `100%` and allocate enough
+pressure-machine capacity for the extra overhead. The run can then use
+`GetJMeterSamplingLogs` as the raw latency ledger only if the pulled row count
+matches the expected request count for the sampler.
+
+Pull and summarize after the run:
+
+```bash
+PAGE_SIZE=100 bash tests/pts/fetch-pts-sampling-logs.sh REPORT_ID docs/perf/pts/evidence/REPORT_ID/pts-sampling-logs
+bash tests/pts/summarize-pts-sampling-logs.sh docs/perf/pts/evidence/REPORT_ID/pts-sampling-logs/sampling-logs.jsonl 1000
+```
+
+For a specific sampler, filter by sampler id or label:
+
+```bash
+SAMPLER_ID=2 bash tests/pts/summarize-pts-sampling-logs.sh docs/perf/pts/evidence/REPORT_ID/pts-sampling-logs/sampling-logs.jsonl 1000
+```
+
+Only cite the script's p50/p90/p95/p99 as full-run percentiles when
+`coverage: FULL`. If it prints `coverage: SAMPLE_ONLY`, keep the rows as
+diagnostic examples and cite PTS sampler aggregates plus server-side evidence
+instead.
 
 ## Risk Coverage
 

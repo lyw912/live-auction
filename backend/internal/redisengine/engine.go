@@ -853,6 +853,29 @@ type Report struct {
 	Message            string    `json:"message,omitempty"`
 }
 
+type reconcileViolation struct {
+	status  string
+	reason  string
+	message string
+	details map[string]any
+}
+
+type engineCheckpointSnapshot struct {
+	AuctionID             string `json:"auction_id"`
+	Status                string `json:"status"`
+	CurrentPriceCents     int64  `json:"current_price_cents"`
+	CurrentWinnerID       string `json:"current_winner_id,omitempty"`
+	PublicSeq             int64  `json:"public_seq"`
+	EngineEpoch           int64  `json:"engine_epoch"`
+	EngineSeq             int64  `json:"engine_seq"`
+	AcceptedBidCount      int64  `json:"accepted_bid_count"`
+	ExtendCount           int    `json:"extend_count"`
+	LastAcceptedBidID     string `json:"last_accepted_bid_id,omitempty"`
+	LastAcceptedUserID    string `json:"last_accepted_user_id,omitempty"`
+	LastAcceptedAmount    int64  `json:"last_accepted_amount_cents,omitempty"`
+	LastAcceptedEngineSeq int64  `json:"last_accepted_engine_seq,omitempty"`
+}
+
 func NewWorker(db *pgxpool.Pool, redisClient *redis.Client, ledger BidLedger, consumerID string) *Worker {
 	if consumerID == "" {
 		consumerID = "settlement-" + uuid.NewString()
@@ -1470,6 +1493,9 @@ func (w *Worker) settlePayload(ctx context.Context, auctionID string, ledgerID s
 	if err := markSettlementSettled(ctx, tx, auctionID, ledgerID); err != nil {
 		return err
 	}
+	if err := upsertEngineCheckpoint(ctx, tx, auctionID, message); err != nil {
+		return err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
@@ -1490,7 +1516,7 @@ func (w *Worker) recordSettlementAttempt(ctx context.Context, auctionID string, 
 	}
 	payloadHash := sha256Hex(payload)
 	ledgerSource := "redis_stream"
-	if message.Topic != "" && strings.HasPrefix(message.ID, "kafka:") {
+	if message.Topic != "" && message.Partition >= 0 && message.Offset >= 0 {
 		ledgerSource = "kafka"
 	}
 	var attempt settlementAttempt
@@ -1921,6 +1947,94 @@ func markSettlementSettled(ctx context.Context, tx pgx.Tx, auctionID string, str
 	return err
 }
 
+func checkpointSnapshot(ctx context.Context, tx pgx.Tx, auctionID string) (engineCheckpointSnapshot, []byte, string, error) {
+	var s engineCheckpointSnapshot
+	var winner *string
+	var lastBidID *string
+	var lastUserID *string
+	var lastAmount *int64
+	var lastEngineSeq *int64
+	err := tx.QueryRow(ctx, `
+		SELECT a.id,
+		       a.status,
+		       a.current_price_cents,
+		       a.current_winner_id,
+		       a.seq,
+		       a.engine_epoch,
+		       a.engine_seq,
+		       a.accepted_bid_count,
+		       a.extend_count,
+		       b.id,
+		       b.user_id,
+		       b.amount_cents,
+		       b.engine_seq
+		FROM auctions a
+		LEFT JOIN LATERAL (
+		  SELECT id, user_id, amount_cents, engine_seq
+		  FROM bids
+		  WHERE auction_id = a.id AND status = 'ACCEPTED'
+		  ORDER BY engine_epoch DESC NULLS LAST, engine_seq DESC NULLS LAST, seq DESC NULLS LAST
+		  LIMIT 1
+		) b ON true
+		WHERE a.id = $1
+	`, auctionID).Scan(&s.AuctionID, &s.Status, &s.CurrentPriceCents, &winner, &s.PublicSeq, &s.EngineEpoch, &s.EngineSeq, &s.AcceptedBidCount, &s.ExtendCount, &lastBidID, &lastUserID, &lastAmount, &lastEngineSeq)
+	if err != nil {
+		return engineCheckpointSnapshot{}, nil, "", err
+	}
+	if winner != nil {
+		s.CurrentWinnerID = *winner
+	}
+	if lastBidID != nil {
+		s.LastAcceptedBidID = *lastBidID
+	}
+	if lastUserID != nil {
+		s.LastAcceptedUserID = *lastUserID
+	}
+	if lastAmount != nil {
+		s.LastAcceptedAmount = *lastAmount
+	}
+	if lastEngineSeq != nil {
+		s.LastAcceptedEngineSeq = *lastEngineSeq
+	}
+	payload, err := json.Marshal(s)
+	if err != nil {
+		return engineCheckpointSnapshot{}, nil, "", err
+	}
+	return s, payload, sha256Hex(payload), nil
+}
+
+func upsertEngineCheckpoint(ctx context.Context, tx pgx.Tx, auctionID string, message LedgerMessage) error {
+	if message.Topic == "" || message.Partition < 0 || message.Offset < 0 {
+		return nil
+	}
+	snapshot, payload, stateHash, err := checkpointSnapshot(ctx, tx, auctionID)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `
+		INSERT INTO auction_engine_checkpoints (
+		  auction_id, engine_epoch, engine_seq, decision_topic, decision_partition,
+		  next_decision_offset, state_hash, snapshot_json, updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, now())
+		ON CONFLICT (auction_id) DO UPDATE
+		SET engine_epoch = EXCLUDED.engine_epoch,
+		    engine_seq = EXCLUDED.engine_seq,
+		    decision_topic = EXCLUDED.decision_topic,
+		    decision_partition = EXCLUDED.decision_partition,
+		    next_decision_offset = EXCLUDED.next_decision_offset,
+		    state_hash = EXCLUDED.state_hash,
+		    snapshot_json = EXCLUDED.snapshot_json,
+		    updated_at = now()
+		WHERE auction_engine_checkpoints.engine_epoch < EXCLUDED.engine_epoch
+		   OR (
+		     auction_engine_checkpoints.engine_epoch = EXCLUDED.engine_epoch
+		     AND auction_engine_checkpoints.engine_seq <= EXCLUDED.engine_seq
+		   )
+	`, auctionID, snapshot.EngineEpoch, snapshot.EngineSeq, message.Topic, message.Partition, message.Offset+1, stateHash, string(payload))
+	return err
+}
+
 func markSettlementFailed(ctx context.Context, tx pgx.Tx, auctionID string, streamID string, message string) error {
 	_, err := tx.Exec(ctx, `
 		UPDATE redis_engine_settlements
@@ -2065,6 +2179,335 @@ func pauseTx(ctx context.Context, tx pgx.Tx, auctionID string, reason string, me
 	return err
 }
 
+func (w *Worker) checkSettlementTerminal(ctx context.Context, auctionID string) (*reconcileViolation, error) {
+	var seq int64
+	var status string
+	var lastErr string
+	err := w.db.QueryRow(ctx, `
+		SELECT engine_seq, status, COALESCE(last_error, '')
+		FROM redis_engine_settlements
+		WHERE auction_id = $1
+		  AND status NOT IN ('SETTLED','SKIPPED')
+		ORDER BY engine_epoch, engine_seq
+		LIMIT 1
+	`, auctionID).Scan(&seq, &status, &lastErr)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &reconcileViolation{
+		status:  "KAFKA_LEDGER_SETTLEMENT_NOT_TERMINAL",
+		reason:  "KAFKA_LEDGER_SETTLEMENT_NOT_TERMINAL",
+		message: "Kafka decision has not reached terminal settlement",
+		details: map[string]any{"engine_seq": seq, "settlement_status": status, "last_error": lastErr},
+	}, nil
+}
+
+func (w *Worker) checkSettlementGapless(ctx context.Context, auctionID string) (*reconcileViolation, error) {
+	var prev int64
+	var current int64
+	err := w.db.QueryRow(ctx, `
+		WITH ordered AS (
+		  SELECT engine_seq, lag(engine_seq) OVER (ORDER BY engine_seq) AS prev_seq
+		  FROM redis_engine_settlements
+		  WHERE auction_id = $1 AND engine_epoch = (SELECT engine_epoch FROM auctions WHERE id = $1)
+		)
+		SELECT COALESCE(prev_seq, 0), engine_seq
+		FROM ordered
+		WHERE engine_seq <> COALESCE(prev_seq, 0) + 1
+		ORDER BY engine_seq
+		LIMIT 1
+	`, auctionID).Scan(&prev, &current)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &reconcileViolation{
+		status:  "KAFKA_LEDGER_ENGINE_SEQ_GAP",
+		reason:  "KAFKA_LEDGER_ENGINE_SEQ_GAP",
+		message: "Kafka decisions that reached settlement table are not engine-seq gapless",
+		details: map[string]any{"previous_engine_seq": prev, "current_engine_seq": current},
+	}, nil
+}
+
+func (w *Worker) checkAcceptedPublicSeqContiguous(ctx context.Context, auctionID string) (*reconcileViolation, error) {
+	var prev int64
+	var current int64
+	err := w.db.QueryRow(ctx, `
+		WITH ordered AS (
+		  SELECT seq, lag(seq) OVER (ORDER BY seq) AS prev_seq
+		  FROM auction_events
+		  WHERE auction_id = $1
+		)
+		SELECT COALESCE(prev_seq, 0), seq
+		FROM ordered
+		WHERE seq <> COALESCE(prev_seq, 0) + 1
+		ORDER BY seq
+		LIMIT 1
+	`, auctionID).Scan(&prev, &current)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &reconcileViolation{
+		status:  "ACCEPTED_PUBLIC_SEQ_GAP",
+		reason:  "REDIS_ENGINE_ACCEPTED_PUBLIC_SEQ_GAP",
+		message: "Auction public event sequence is not contiguous",
+		details: map[string]any{"previous_public_seq": prev, "current_public_seq": current},
+	}, nil
+}
+
+func (w *Worker) checkAuctionWinnerPrice(ctx context.Context, auctionID string) (*reconcileViolation, error) {
+	var dbPrice int64
+	var dbWinner string
+	var wantPrice int64
+	var wantWinner string
+	var acceptedCount int64
+	err := w.db.QueryRow(ctx, `
+		SELECT a.current_price_cents,
+		       COALESCE(a.current_winner_id, ''),
+		       COALESCE(b.amount_cents, 0),
+		       COALESCE(b.user_id, ''),
+		       COALESCE(b.accepted_count, 0)
+		FROM auctions a
+		LEFT JOIN LATERAL (
+		  SELECT amount_cents, user_id, count(*) OVER () AS accepted_count
+		  FROM bids
+		  WHERE auction_id = a.id AND status = 'ACCEPTED'
+		  ORDER BY engine_epoch DESC NULLS LAST, engine_seq DESC NULLS LAST, seq DESC NULLS LAST
+		  LIMIT 1
+		) b ON true
+		WHERE a.id = $1
+	`, auctionID).Scan(&dbPrice, &dbWinner, &wantPrice, &wantWinner, &acceptedCount)
+	if err != nil {
+		return nil, err
+	}
+	if acceptedCount == 0 {
+		return nil, nil
+	}
+	if dbPrice == wantPrice && dbWinner == wantWinner {
+		return nil, nil
+	}
+	return &reconcileViolation{
+		status:  "AUCTION_WINNER_PRICE_DRIFT",
+		reason:  "REDIS_ENGINE_WINNER_PRICE_DRIFT",
+		message: "Auction current winner/price does not match latest accepted settled bid",
+		details: map[string]any{"db_price_cents": dbPrice, "expected_price_cents": wantPrice, "db_winner_id": dbWinner, "expected_winner_id": wantWinner},
+	}, nil
+}
+
+func (w *Worker) checkSoldOrderUniqueness(ctx context.Context, auctionID string) (*reconcileViolation, error) {
+	var status string
+	var orders int64
+	var soldSettlements int64
+	err := w.db.QueryRow(ctx, `
+		SELECT a.status,
+		       COALESCE(count(DISTINCT o.id), 0),
+		       COALESCE(count(DISTINCT s.id) FILTER (WHERE s.result = 'ENGINE_SOLD' AND s.status = 'SETTLED'), 0)
+		FROM auctions a
+		LEFT JOIN orders o ON o.auction_id = a.id
+		LEFT JOIN redis_engine_settlements s ON s.auction_id = a.id
+		WHERE a.id = $1
+		GROUP BY a.id
+	`, auctionID).Scan(&status, &orders, &soldSettlements)
+	if err != nil {
+		return nil, err
+	}
+	if orders <= 1 && (status != "SOLD" || orders == 1) && soldSettlements <= 1 {
+		return nil, nil
+	}
+	return &reconcileViolation{
+		status:  "SOLD_ORDER_INVARIANT_FAILED",
+		reason:  "REDIS_ENGINE_SOLD_ORDER_INVARIANT_FAILED",
+		message: "Sold auction/order invariant failed",
+		details: map[string]any{"auction_status": status, "order_count": orders, "sold_settlements": soldSettlements},
+	}, nil
+}
+
+func (w *Worker) checkIdempotencyResponses(ctx context.Context, auctionID string) (*reconcileViolation, error) {
+	var clientBidID string
+	var bidHash string
+	var idemHash string
+	var bidResponse string
+	var idemResponse string
+	err := w.db.QueryRow(ctx, `
+		SELECT b.client_bid_id,
+		       b.request_hash,
+		       COALESCE(i.request_hash, ''),
+		       b.response_json::text,
+		       COALESCE(i.response_json::text, '')
+		FROM bids b
+		LEFT JOIN idempotency_records i
+		  ON i.scope_type = 'bid'
+		 AND i.scope_id = b.auction_id
+		 AND i.user_id = b.user_id
+		 AND i.idempotency_key = b.client_bid_id
+		WHERE b.auction_id = $1
+		  AND (i.idempotency_key IS NULL OR i.status <> 'COMPLETED' OR i.request_hash <> b.request_hash OR i.response_json::text <> b.response_json::text)
+		ORDER BY b.engine_epoch NULLS LAST, b.engine_seq NULLS LAST, b.created_at
+		LIMIT 1
+	`, auctionID).Scan(&clientBidID, &bidHash, &idemHash, &bidResponse, &idemResponse)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &reconcileViolation{
+		status:  "IDEMPOTENCY_RESPONSE_DRIFT",
+		reason:  "REDIS_ENGINE_IDEMPOTENCY_RESPONSE_DRIFT",
+		message: "Bid idempotency response does not match settled bid response",
+		details: map[string]any{"client_bid_id": clientBidID, "bid_request_hash": bidHash, "idempotency_request_hash": idemHash, "bid_response_json": bidResponse, "idempotency_response_json": idemResponse},
+	}, nil
+}
+
+func (w *Worker) checkOutboxCoverage(ctx context.Context, auctionID string) (*reconcileViolation, error) {
+	var seq int64
+	var eventType string
+	var deliveryStatus string
+	err := w.db.QueryRow(ctx, `
+		SELECT e.seq, e.event_type, COALESCE(d.status, 'MISSING')
+		FROM auction_events e
+		LEFT JOIN outbox_events o
+		  ON o.aggregate_type = 'auction'
+		 AND o.aggregate_id = e.auction_id
+		 AND o.event_type = e.event_type
+		 AND o.seq = e.seq
+		LEFT JOIN outbox_delivery d ON d.outbox_id = o.id
+		WHERE e.auction_id = $1
+		  AND (o.id IS NULL OR d.outbox_id IS NULL)
+		ORDER BY e.seq
+		LIMIT 1
+	`, auctionID).Scan(&seq, &eventType, &deliveryStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &reconcileViolation{
+		status:  "OUTBOX_COVERAGE_MISSING",
+		reason:  "REDIS_ENGINE_OUTBOX_COVERAGE_MISSING",
+		message: "Auction event is missing matching outbox delivery record",
+		details: map[string]any{"seq": seq, "event_type": eventType, "delivery_status": deliveryStatus},
+	}, nil
+}
+
+func (w *Worker) checkEngineCheckpoint(ctx context.Context, auctionID string) (*reconcileViolation, error) {
+	tx, err := w.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var dbEpoch int64
+	var dbSeq int64
+	err = tx.QueryRow(ctx, `
+		SELECT engine_epoch, engine_seq
+		FROM auctions
+		WHERE id = $1
+	`, auctionID).Scan(&dbEpoch, &dbSeq)
+	if err != nil {
+		return nil, err
+	}
+
+	var settledSeq int64
+	var hasKafkaSettlement bool
+	err = tx.QueryRow(ctx, `
+		SELECT COALESCE(max(engine_seq), 0),
+		       COALESCE(bool_or(ledger_source = 'kafka' AND ledger_topic IS NOT NULL AND ledger_partition IS NOT NULL AND ledger_offset IS NOT NULL), false)
+		FROM redis_engine_settlements
+		WHERE auction_id = $1
+		  AND engine_epoch = $2
+		  AND status IN ('SETTLED','SKIPPED')
+	`, auctionID, dbEpoch).Scan(&settledSeq, &hasKafkaSettlement)
+	if err != nil {
+		return nil, err
+	}
+	if !hasKafkaSettlement {
+		return nil, tx.Commit(ctx)
+	}
+
+	var checkpointEpoch int64
+	var checkpointSeq int64
+	var checkpointTopic string
+	var checkpointPartition int
+	var nextOffset int64
+	var storedHash string
+	var snapshotText string
+	err = tx.QueryRow(ctx, `
+		SELECT engine_epoch, engine_seq, decision_topic, decision_partition,
+		       next_decision_offset, state_hash, snapshot_json::text
+		FROM auction_engine_checkpoints
+		WHERE auction_id = $1
+	`, auctionID).Scan(&checkpointEpoch, &checkpointSeq, &checkpointTopic, &checkpointPartition, &nextOffset, &storedHash, &snapshotText)
+	if errors.Is(err, pgx.ErrNoRows) {
+		_ = tx.Commit(ctx)
+		return &reconcileViolation{
+			status:  "ENGINE_CHECKPOINT_MISSING",
+			reason:  "REDIS_ENGINE_CHECKPOINT_MISSING",
+			message: "Settled Kafka decisions exist without a rebuild checkpoint",
+			details: map[string]any{"db_engine_epoch": dbEpoch, "db_engine_seq": dbSeq, "settled_engine_seq": settledSeq},
+		}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if checkpointEpoch != dbEpoch || checkpointSeq != dbSeq || checkpointSeq < settledSeq {
+		_ = tx.Commit(ctx)
+		return &reconcileViolation{
+			status:  "ENGINE_CHECKPOINT_LAG",
+			reason:  "REDIS_ENGINE_CHECKPOINT_LAG",
+			message: "Engine checkpoint does not cover the latest PostgreSQL settlement state",
+			details: map[string]any{"db_engine_epoch": dbEpoch, "db_engine_seq": dbSeq, "checkpoint_epoch": checkpointEpoch, "checkpoint_seq": checkpointSeq, "settled_engine_seq": settledSeq},
+		}, nil
+	}
+	if checkpointTopic == "" || checkpointPartition < 0 || nextOffset <= 0 {
+		_ = tx.Commit(ctx)
+		return &reconcileViolation{
+			status:  "ENGINE_CHECKPOINT_OFFSET_INVALID",
+			reason:  "REDIS_ENGINE_CHECKPOINT_OFFSET_INVALID",
+			message: "Engine checkpoint cannot identify the next Kafka decision offset",
+			details: map[string]any{"decision_topic": checkpointTopic, "decision_partition": checkpointPartition, "next_decision_offset": nextOffset},
+		}, nil
+	}
+
+	_, payload, stateHash, err := checkpointSnapshot(ctx, tx, auctionID)
+	if err != nil {
+		return nil, err
+	}
+	var storedSnapshot engineCheckpointSnapshot
+	if err := json.Unmarshal([]byte(snapshotText), &storedSnapshot); err != nil {
+		_ = tx.Commit(ctx)
+		return &reconcileViolation{
+			status:  "ENGINE_CHECKPOINT_SNAPSHOT_INVALID",
+			reason:  "REDIS_ENGINE_CHECKPOINT_SNAPSHOT_INVALID",
+			message: "Engine checkpoint snapshot JSON is not decodable",
+			details: map[string]any{"checkpoint_seq": checkpointSeq, "db_engine_seq": dbSeq, "error": err.Error()},
+		}, nil
+	}
+	storedPayload, err := json.Marshal(storedSnapshot)
+	if err != nil {
+		return nil, err
+	}
+	if storedHash != sha256Hex(storedPayload) || storedHash != stateHash || sha256Hex(payload) != stateHash {
+		_ = tx.Commit(ctx)
+		return &reconcileViolation{
+			status:  "ENGINE_CHECKPOINT_STATE_HASH_DRIFT",
+			reason:  "REDIS_ENGINE_CHECKPOINT_STATE_HASH_DRIFT",
+			message: "Engine checkpoint state hash does not match current settled PostgreSQL state",
+			details: map[string]any{"checkpoint_hash": storedHash, "current_hash": stateHash, "checkpoint_seq": checkpointSeq, "db_engine_seq": dbSeq},
+		}, nil
+	}
+	return nil, tx.Commit(ctx)
+}
+
 func (w *Worker) Reconcile(ctx context.Context, auctionID string) (Report, error) {
 	report := Report{CheckedAt: time.Now().UTC(), AuctionID: auctionID, Status: "OK"}
 	var dbSeq int64
@@ -2130,23 +2573,47 @@ func (w *Worker) Reconcile(ctx context.Context, auctionID string) (Report, error
 		_ = w.pause(ctx, auctionID, "REDIS_ENGINE_PENDING_KAFKA_APPEND_UNKNOWN", report.Message, "", map[string]any{"pending_decisions": pending, "recovered_pending": recovered})
 		return report, nil
 	}
+	var first *reconcileViolation
+	recordViolation := func(v *reconcileViolation) {
+		if v == nil {
+			return
+		}
+		report.DriftCount++
+		if first == nil {
+			copy := *v
+			first = &copy
+		}
+	}
 	if redisSeq < dbSeq {
-		report.Status = "REDIS_BEHIND_DB"
-		report.DriftCount = 1
-		report.Message = "Redis engine seq is behind PostgreSQL settlement"
-		_ = w.pause(ctx, auctionID, "REDIS_ENGINE_REDIS_BEHIND_DB", report.Message, "", map[string]any{"redis_seq": redisSeq, "db_seq": dbSeq})
+		recordViolation(&reconcileViolation{status: "REDIS_BEHIND_DB", reason: "REDIS_ENGINE_REDIS_BEHIND_DB", message: "Redis engine seq is behind PostgreSQL settlement", details: map[string]any{"redis_seq": redisSeq, "db_seq": dbSeq}})
 	}
 	if redisSeq > dbSeq {
-		report.Status = "DB_BEHIND_REDIS"
-		report.DriftCount = 1
-		report.Message = "PostgreSQL settlement is behind Redis engine ledger"
-		_ = w.pause(ctx, auctionID, "REDIS_ENGINE_DB_BEHIND_REDIS", report.Message, "", map[string]any{"redis_seq": redisSeq, "db_seq": dbSeq})
+		recordViolation(&reconcileViolation{status: "DB_BEHIND_REDIS", reason: "REDIS_ENGINE_DB_BEHIND_REDIS", message: "PostgreSQL settlement is behind Redis engine ledger", details: map[string]any{"redis_seq": redisSeq, "db_seq": dbSeq}})
 	}
 	if report.DLQSettlements > 0 {
-		report.Status = "KAFKA_LEDGER_DLQ"
-		report.DriftCount++
-		report.Message = "Kafka bid ledger settlement has dead-lettered events"
-		_ = w.pause(ctx, auctionID, "KAFKA_LEDGER_DLQ_PRESENT", report.Message, "", map[string]any{"dlq_settlements": report.DLQSettlements})
+		recordViolation(&reconcileViolation{status: "KAFKA_LEDGER_DLQ", reason: "KAFKA_LEDGER_DLQ_PRESENT", message: "Kafka bid ledger settlement has dead-lettered events", details: map[string]any{"dlq_settlements": report.DLQSettlements}})
+	}
+	checks := []func(context.Context, string) (*reconcileViolation, error){
+		w.checkSettlementTerminal,
+		w.checkSettlementGapless,
+		w.checkAcceptedPublicSeqContiguous,
+		w.checkAuctionWinnerPrice,
+		w.checkSoldOrderUniqueness,
+		w.checkIdempotencyResponses,
+		w.checkOutboxCoverage,
+		w.checkEngineCheckpoint,
+	}
+	for _, check := range checks {
+		violation, err := check(ctx, auctionID)
+		if err != nil {
+			return report, err
+		}
+		recordViolation(violation)
+	}
+	if first != nil {
+		report.Status = first.status
+		report.Message = first.message
+		_ = w.pause(ctx, auctionID, first.reason, first.message, "", first.details)
 	}
 	return report, nil
 }

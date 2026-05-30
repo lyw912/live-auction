@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/segmentio/kafka-go"
@@ -220,14 +221,17 @@ func ledgerDLQTopic(ledger BidLedger) string {
 }
 
 type MemoryLedger struct {
-	mu       sync.Mutex
-	messages []LedgerMessage
-	next     int
-	dlq      []LedgerMessage
+	mu        sync.Mutex
+	messages  []LedgerMessage
+	next      int
+	dlq       []LedgerMessage
+	partition int
 }
 
+var nextMemoryLedgerPartition = time.Now().UnixNano() % 1_000_000_000
+
 func NewMemoryLedger() *MemoryLedger {
-	return &MemoryLedger{}
+	return &MemoryLedger{partition: int(atomic.AddInt64(&nextMemoryLedgerPartition, 1))}
 }
 
 func (l *MemoryLedger) Append(_ context.Context, result engineResult) (LedgerMessage, error) {
@@ -240,7 +244,7 @@ func (l *MemoryLedger) Append(_ context.Context, result engineResult) (LedgerMes
 	msg := LedgerMessage{
 		ID:        result.ledgerID(),
 		Topic:     defaultBidEventsTopic,
-		Partition: 0,
+		Partition: l.partition,
 		Offset:    int64(len(l.messages)),
 		Key:       result.AuctionID,
 		Value:     value,
