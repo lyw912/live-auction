@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+RUNTIME_DIR="${PTS_RUNTIME_DIR:-/tmp/live-auction-pts}"
 
 export SESSION_COUNT="${SESSION_COUNT:-1000}"
 export SESSION_CSV="${SESSION_CSV:-pts-1ab-1000vu-sessions.csv}"
@@ -32,8 +33,8 @@ cd "$ROOT_DIR"
 
 docker compose -f infra/docker-compose.yml up -d postgres redis kafka kafka-init
 
-if [ -f "$ROOT_DIR/docs/perf/pts/server.pid" ]; then
-  old_pid="$(cat "$ROOT_DIR/docs/perf/pts/server.pid")"
+if [ -f "$RUNTIME_DIR/server.pid" ]; then
+  old_pid="$(cat "$RUNTIME_DIR/server.pid")"
   if kill -0 "$old_pid" 2>/dev/null; then
     kill "$old_pid" 2>/dev/null || true
     sleep 1

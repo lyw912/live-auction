@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPORT_ID="${1:?usage: bash tests/pts/fetch-pts-sampling-logs.sh REPORT_ID [OUT_DIR]}"
-OUT_DIR="${2:-docs/perf/pts/evidence/$REPORT_ID/pts-sampling-logs}"
+OUT_DIR="${2:-docs/perf/pts/evidence/incoming/$REPORT_ID/pts-sampling-logs}"
 PAGE_SIZE="${PAGE_SIZE:-100}"
 PAGE_START="${PAGE_START:-1}"
 MAX_PAGES="${MAX_PAGES:-100000}"

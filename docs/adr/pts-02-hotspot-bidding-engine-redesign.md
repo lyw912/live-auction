@@ -2,7 +2,9 @@
 
 Date: 2026-05-28
 
-Status: proposed
+Status: historical/proposed; superseded as the current entry by `docs/current/architecture.md`.
+
+> 2026-05-31 note: this ADR records the staged route from PostgreSQL lane to Redis guard and Redis ledger. Use it as historical design context, not as the final current contract. The current hot-bid contract is Redis hot-state decision + Kafka durable decision WAL/fence + PostgreSQL settlement/audit + fail-closed reconciliation, with PTS-1B correctness and latency gates defined in `docs/current/performance-correctness-contract.md`.
 
 ## Context
 

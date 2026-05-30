@@ -72,6 +72,6 @@ failed run.
 
 Evidence:
 
-- PTS export: `docs/perf/pts/evidence/C33WX7MG/`
-- after snapshot: `docs/perf/pts/evidence/after-C33WX7MG-l4b-accepted-ladder-10ms-1000vu/`
-- fixed-gate proof: `docs/perf/pts/evidence/after-C33WX7MG-l4b-accepted-ladder-10ms-1000vu-gate-fixed/`
+- PTS export: `docs/perf/pts/evidence/archive/current-adjacent/C33WX7MG/`
+- after snapshot: `docs/perf/pts/evidence/archive/current-adjacent/after-C33WX7MG-l4b-accepted-ladder-10ms-1000vu/`
+- fixed-gate proof: `docs/perf/pts/evidence/archive/current-adjacent/after-C33WX7MG-l4b-accepted-ladder-10ms-1000vu-gate-fixed/`

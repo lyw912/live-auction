@@ -71,5 +71,5 @@ Fix:
 
 Evidence:
 
-- PTS export: `docs/perf/pts/evidence/WT3VX7WG/`
-- after snapshot: `docs/perf/pts/evidence/after-WT3VX7WG-l4b-accepted-ladder-5ms-1000vu/`
+- PTS export: `docs/perf/pts/evidence/archive/current-adjacent/WT3VX7WG/`
+- after snapshot: `docs/perf/pts/evidence/archive/current-adjacent/after-WT3VX7WG-l4b-accepted-ladder-5ms-1000vu/`

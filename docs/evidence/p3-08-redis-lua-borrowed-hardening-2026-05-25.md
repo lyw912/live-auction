@@ -66,4 +66,4 @@ Focused tests covering the borrowing:
 - Redis still does not decide winner, price, cap, cancel, end, order, auction seq, or idempotency response.
 - The three admission checks remain separate single-key Lua calls. This is intentional because admission is protective, not money truth. A strict combined limiter would require a same-slot multi-key script ADR.
 - No Redis Lua reservation path is implemented.
-- No Redis Lua performance improvement is claimed. Reservation remains gated by `docs/p3-decision-log.md` P3-D14.
+- No Redis Lua performance improvement is claimed. Reservation remains gated by `docs/archive/progress/p3-decision-log.md` P3-D14.

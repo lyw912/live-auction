@@ -3,7 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LABEL="${1:-before-l4b-pts-preflight}"
-OUT_DIR="$ROOT_DIR/docs/perf/pts/evidence/$LABEL"
+EVIDENCE_ROOT="${EVIDENCE_ROOT:-$ROOT_DIR/docs/perf/pts/evidence/incoming}"
+OUT_DIR="$EVIDENCE_ROOT/$LABEL"
 DB_CONTAINER="${DB_CONTAINER:-live-auction-postgres}"
 REDIS_CONTAINER="${REDIS_CONTAINER:-live-auction-redis}"
 KAFKA_CONTAINER="${KAFKA_CONTAINER:-live-auction-kafka}"
@@ -83,7 +84,7 @@ SQL
 {
   require_rg "lua_writes_pending_before_kafka" "redis\\.call\\('HSET', pending_key" "$ROOT_DIR/backend/internal/redisengine/engine.go"
   require_rg "lua_indexes_pending_auction" "redis\\.call\\('SADD', pending_auctions_key, auction_id\\)" "$ROOT_DIR/backend/internal/redisengine/engine.go"
-  require_rg "handler_returns_pending_without_kafka_append" "return result\\.response\\(\\), nil" "$ROOT_DIR/backend/internal/redisengine/engine.go"
+  require_rg "handler_returns_engine_result_without_kafka_append" "return result\\.response\\(\\), nil" "$ROOT_DIR/backend/internal/redisengine/engine.go"
   require_rg "worker_processes_pending_before_kafka" "ProcessPendingAppends\\(loopCtx, 100\\)" "$ROOT_DIR/backend/internal/redisengine/engine.go"
   require_rg "worker_logs_loop_errors" "redis engine worker loop failed" "$ROOT_DIR/backend/internal/redisengine/engine.go"
   require_rg "worker_logs_loop_progress" "redis engine worker loop processed" "$ROOT_DIR/backend/internal/redisengine/engine.go"
@@ -113,7 +114,8 @@ SQL
   require_rg "accepted_settlement_fenced_update" 'WHERE id = \$1 AND engine_epoch = \$7 AND engine_seq = \$6 - 1' "$ROOT_DIR/backend/internal/redisengine/engine.go"
   require_rg "soft_close_extends_from_previous_end_at" "local candidate = end_at_ms \\+ extend_by_ms" "$ROOT_DIR/backend/internal/redisengine/engine.go"
   require_rg "cap_is_terminal_before_soft_close" "amount == cap" "$ROOT_DIR/backend/internal/redisengine/engine.go"
-  require_rg "redis_replay_unknown_not_success" "CodeProcessingRetryLater" "$ROOT_DIR/backend/internal/redisengine/engine.go"
+  require_rg "redis_replay_unknown_returns_engine_result" "kafka_append_unknown" "$ROOT_DIR/backend/internal/redisengine/engine.go"
+  require_rg "gateway_pending_settlement_is_202" "SettlementStatus == auction\\.SettlementStatusPending" "$ROOT_DIR/backend/internal/gateway/json.go"
   require_rg "redis_replay_acked_returns_engine_result" "case kafkaAppendStatusAcked" "$ROOT_DIR/backend/internal/redisengine/engine.go"
   require_rg "kafka_writer_requires_all_acks" "RequiredAcks:\\s+kafka\\.RequireAll" "$ROOT_DIR/backend/internal/redisengine/kafka_ledger.go"
   require_rg "kafka_writer_is_synchronous" "Async:\\s+false" "$ROOT_DIR/backend/internal/redisengine/kafka_ledger.go"

@@ -245,13 +245,13 @@ not do that.
 
 ## Evidence
 
-- PTS report details: `docs/perf/pts/evidence/6A3YX7NG/report-details.json`
-- PTS sampled logs: `docs/perf/pts/evidence/6A3YX7NG/pts-sampling-logs/`
+- PTS report details: `docs/perf/pts/evidence/archive/current-adjacent/6A3YX7NG/report-details.json`
+- PTS sampled logs: `docs/perf/pts/evidence/archive/current-adjacent/6A3YX7NG/pts-sampling-logs/`
 - server after snapshot:
-  `docs/perf/pts/evidence/after-6A3YX7NG-pts-1b-contention-burst-1000vu/`
+  `docs/perf/pts/evidence/archive/current-adjacent/after-6A3YX7NG-pts-1b-contention-burst-1000vu/`
 - main gates:
-  `docs/perf/pts/evidence/after-6A3YX7NG-pts-1b-contention-burst-1000vu/l4b-invariant-gates.tsv`
+  `docs/perf/pts/evidence/archive/current-adjacent/after-6A3YX7NG-pts-1b-contention-burst-1000vu/l4b-invariant-gates.tsv`
 - detailed correctness output:
-  `docs/perf/pts/evidence/after-6A3YX7NG-pts-1b-contention-burst-1000vu/l4b-correctness.txt`
+  `docs/perf/pts/evidence/archive/current-adjacent/after-6A3YX7NG-pts-1b-contention-burst-1000vu/l4b-correctness.txt`
 - extra adversarial audit:
-  `docs/perf/pts/evidence/after-6A3YX7NG-pts-1b-contention-burst-1000vu/pts-1b-adversarial-correctness.txt`
+  `docs/perf/pts/evidence/archive/current-adjacent/after-6A3YX7NG-pts-1b-contention-burst-1000vu/pts-1b-adversarial-correctness.txt`

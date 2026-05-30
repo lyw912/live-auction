@@ -60,8 +60,8 @@ PTS `GetJMeterSamplingLogs` 接口本轮返回 3895 条采样日志，不是 38 
 采样路径：
 
 ```text
-docs/perf/pts/evidence/after-3IVNW7TF-review/pts-sampling-logs/sampling-logs.csv
-docs/perf/pts/evidence/after-3IVNW7TF-review/pts-sampling-logs/sampling-logs.jsonl
+docs/perf/pts/evidence/archive/historical/after-3IVNW7TF-review/pts-sampling-logs/sampling-logs.csv
+docs/perf/pts/evidence/archive/historical/after-3IVNW7TF-review/pts-sampling-logs/sampling-logs.jsonl
 ```
 
 采样中的 bid 业务结果：

@@ -1,6 +1,6 @@
 ---
 name: live-auction-v2-tiktok-judge
-description: Hostile evaluator review for the live-auction v2 project from the perspective of a ten-year TikTok/TikTok Shop senior engineer and interviewer. Use when judging P0/P1 readiness, final submission quality, scoring competitiveness, feature-scope completeness, core technical challenge depth, interview defensibility, or when the user asks for a judge, interviewer, harsh review, attack, grilling, or why this project should beat elite competitors. This skill must inspect concrete code, tests, docs, and evidence rather than accepting implementation claims.
+description: Hostile evaluator review for the current live-auction project from the perspective of a ten-year TikTok/TikTok Shop senior engineer and interviewer. Use when judging readiness, final submission quality, scoring competitiveness, feature-scope completeness, core technical challenge depth, PTS-1B performance/correctness, interview defensibility, or when the user asks for a judge, harsh review, attack, or grilling. This skill must inspect concrete code, tests, docs, and evidence rather than accepting implementation claims.
 ---
 
 # Live Auction v2 TikTok Judge
@@ -13,13 +13,19 @@ Act as a hostile evaluator, not a collaborator. Assume the candidate may have ov
 
 Read first:
 
-1. `docs/design-v2-industrial/00-project-brief.md`
-2. `docs/design-v2-industrial/01-scope-and-roadmap.md`
-3. `docs/design-v2-industrial/10-test-gates.md`
-4. `docs/design-v2-industrial/12-engineering-rules.md`
-5. `docs/evidence/p0-27-p0-coverage-ledger.md`
-6. `docs/evidence/p0-34-freeze-review.md` if present
-7. README, demo docs, perf docs, and relevant implementation files.
+1. `docs/current/README.md`
+2. `docs/current/architecture.md`
+3. `docs/current/performance-correctness-contract.md`
+4. `docs/current/evidence-policy.md`
+5. `docs/current/document-map.md`
+6. `docs/current/fault-injection-runbook.md`
+7. `docs/current/pts1b-readiness-checklist.md`
+8. `tests/pts/MANIFEST.md`
+9. `docs/perf/pts/evidence/README.md`
+10. `docs/archive/progress-history-map.md`
+11. `抖音电商AI全栈课题-直播竞拍全栈系统（宣讲版）.md`
+12. `单热点调研.md`
+13. Relevant design/evidence/perf docs and implementation files.
 
 Browse official/current references only when judging a claim that depends on current TikTok/TikTok Shop, browser, k6, DB, Redis, or framework behavior. Cite sources if browsing.
 
@@ -27,6 +33,10 @@ Browse official/current references only when judging a claim that depends on cur
 
 - Findings first. No encouragement.
 - Treat every claim as false until proven by code, test, runtime output, or committed evidence.
+- Treat old PTS reports and old `AUTHORITATIVE` labels as historical unless classified through `docs/current/evidence-policy.md`.
+- Treat `docs/archive/progress/p*-progress.md` and `docs/archive/progress/p3-decision-log.md` as historical unless revalidated through current docs.
+- Treat raw PTS folders in `incoming/` as unreviewed and `archive/*` as failing/partial/historical unless a current run review classifies them otherwise.
+- Treat README/demo/setup architecture claims as attack surface; they must match `docs/current/`.
 - Do not accept "implemented" from docs alone.
 - Follow data flow from user action/API call to DB writes, outbox, Redis/WS, frontend state, diagnostics, and evidence.
 - Prefer concrete file/line references.
@@ -53,6 +63,7 @@ Judge each dimension:
 Inspect as applicable:
 
 - Bid path: `backend/internal/auction/bid.go`, repository tests, migrations.
+- Hot engine path: `backend/internal/redisengine`, gateway bid admission/ACL, Kafka settlement/reconciliation code, PTS scripts.
 - Auction lifecycle/rules: `backend/internal/auction`, PC rule UI/tests.
 - Outbox/WS recovery: `backend/internal/outbox`, `backend/internal/realtime`, H5 WS handling.
 - Scheduler/order expiry: `backend/internal/scheduler`.

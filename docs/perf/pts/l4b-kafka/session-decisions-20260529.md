@@ -2,12 +2,12 @@
 
 Date: 2026-05-29
 
-This note preserves the key decisions from the L4B/Kafka PTS preparation
+This note archives the key decisions from the L4B/Kafka PTS preparation
 discussion.
 
 ## Architecture Direction
 
-- The PG-lane/Redis-guard progress is preserved on a backup branch.
+- The PG-lane/Redis-guard progress was archived on a backup branch.
 - Current pressure work runs on `review/l4b-ledger`.
 - Redpanda was removed from the active path; Apache Kafka is the local broker.
 - The hot bid mode is `BID_ENGINE_MODE=redis_ledger`.

@@ -3,7 +3,8 @@ set -euo pipefail
 
 LABEL="${1:-manual}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-OUT_DIR="$ROOT_DIR/docs/perf/pts/evidence/$LABEL"
+EVIDENCE_ROOT="${EVIDENCE_ROOT:-$ROOT_DIR/docs/perf/pts/evidence/incoming}"
+OUT_DIR="$EVIDENCE_ROOT/$LABEL"
 DB_CONTAINER="${DB_CONTAINER:-live-auction-postgres}"
 REDIS_CONTAINER="${REDIS_CONTAINER:-live-auction-redis}"
 DB_USER="${DB_USER:-live_auction}"

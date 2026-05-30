@@ -31,5 +31,5 @@ headroom before the 60-second scene ends.
 
 Evidence:
 
-- PTS export: `docs/perf/pts/evidence/TR3VX7RG/`
-- after snapshot: `docs/perf/pts/evidence/after-TR3VX7RG-l4b-accepted-ladder-5ms-1000vu/`
+- PTS export: `docs/perf/pts/evidence/archive/current-adjacent/TR3VX7RG/`
+- after snapshot: `docs/perf/pts/evidence/archive/current-adjacent/after-TR3VX7RG-l4b-accepted-ladder-5ms-1000vu/`

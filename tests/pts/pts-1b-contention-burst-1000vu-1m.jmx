@@ -211,11 +211,12 @@ vars.put('client_seen_seq', Long.toString(Math.max(0L, globalRank - 1L)))
             </collectionProp>
           </HeaderManager>
           <hashTree/>
-          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="bid HTTP 200 expected for business outcome" enabled="true">
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="bid HTTP 200 or 202 expected for business outcome" enabled="false">
             <collectionProp name="Asserion.test_strings">
               <stringProp name="49586">200</stringProp>
+              <stringProp name="49588">202</stringProp>
             </collectionProp>
-            <stringProp name="Assertion.custom_message">Bid returned non-200. In PTS-1 this is a backend/gateway/idempotency conflict signal to classify after the run.</stringProp>
+            <stringProp name="Assertion.custom_message">Bid returned neither final 200 nor confirmation-pending 202. In PTS-1B this is a backend/gateway/idempotency conflict signal to classify after the run.</stringProp>
             <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
             <boolProp name="Assertion.assume_success">false</boolProp>
             <intProp name="Assertion.test_type">8</intProp>
@@ -230,6 +231,11 @@ vars.put('client_seen_seq', Long.toString(Math.max(0L, globalRank - 1L)))
 if (prev.getResponseCode() == '429') {
   prev.setSuccessful(false)
   prev.setResponseMessage('ADMISSION_CONTAMINATION_HTTP_429')
+  return
+}
+if (!(prev.getResponseCode() == '200' || prev.getResponseCode() == '202')) {
+  prev.setSuccessful(false)
+  prev.setResponseMessage('UNEXPECTED_BID_HTTP_' + prev.getResponseCode())
   return
 }
 def body = prev.getResponseDataAsString()

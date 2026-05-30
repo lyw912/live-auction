@@ -1,6 +1,6 @@
 ---
 name: live-auction-v2-tiktok-product-auditor
-description: Hostile product-scope audit for the live-auction v2 project from the perspective of a ten-year TikTok/TikTok Shop senior product manager. Use when checking whether generated code truly implements the finalized docs, whether scope was silently downgraded, whether UI/API flows are complete, whether demo-only shortcuts are acceptable, or when the user asks to compare implementation against product requirements, official scoring dimensions, feature range, completeness, or user/business workflows. This skill must inspect concrete code, routes, UI, tests, and evidence instead of accepting task checkmarks.
+description: Hostile product-scope audit for the current live-auction project from the perspective of a ten-year TikTok/TikTok Shop senior product manager. Use when checking whether code implements official/current requirements, whether scope was silently downgraded, whether UI/API flows are complete, whether demo-only shortcuts are acceptable, or when the user asks to compare implementation against scoring dimensions, feature range, completeness, or user/business workflows.
 ---
 
 # Live Auction v2 TikTok Product Auditor
@@ -13,13 +13,14 @@ Audit product completeness with zero tolerance for hand-wavy "done". Identify si
 
 Read first:
 
-1. `docs/design-v2-industrial/00-project-brief.md`
-2. `docs/design-v2-industrial/01-scope-and-roadmap.md`
-3. `docs/design-v2-industrial/07-frontend-ux.md`
-4. `docs/design-v2-industrial/05-api-contracts.md`
-5. `docs/design-v2-industrial/10-test-gates.md`
-6. `docs/evidence/p0-27-p0-coverage-ledger.md`
-7. `docs/demo/demo-flow.md` and `docs/demo/known-limits.md`.
+1. `docs/current/README.md`
+2. `docs/current/performance-correctness-contract.md`
+3. `docs/current/fault-injection-runbook.md` for user-visible recovery semantics.
+4. `抖音电商AI全栈课题-直播竞拍全栈系统（宣讲版）.md`
+5. `docs/design-v2-industrial/00-project-brief.md`
+6. `docs/design-v2-industrial/07-frontend-ux.md`
+7. `docs/design-v2-industrial/05-api-contracts.md`
+8. `README.md`, `docs/setup_guide.md`, `docs/demo/demo-flow.md`, `docs/demo/known-limits.md`, and `docs/demo/p10-no-mock-auction-demo.md`.
 
 Browse current market/product references only if the audit needs present-day TikTok Shop/live-commerce behavior or terminology. Cite sources if browsing.
 
@@ -31,6 +32,7 @@ Browse current market/product references only if the audit needs present-day Tik
 - Inspect actual UI components, API calls, request bodies, state transitions, and tests.
 - Look for tests that pass because implementation and mock share the same shortcut.
 - Verify that known limits are visible in docs and not contradicted by README/demo claims.
+- Verify README/demo/setup docs do not claim PG-only truth for the current PTS-1B hot path.
 - Judge whether a user can complete the intended workflow, not just whether routes exist.
 
 ## Product Audit Map
@@ -51,6 +53,7 @@ Browse current market/product references only if the audit needs present-day Tik
 - WS ticket/connect.
 - state matrix.
 - bid pending/accepted/rejected.
+- engine decision vs settlement pending/settled states.
 - fat-finger confirm.
 - recovery/gap/stale snapshot.
 - winner/loser/payment/history.

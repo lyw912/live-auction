@@ -61,7 +61,7 @@ Local source anchors:
 | Atomic event/outbox append | `backend/internal/auction/repository.go:484`, `:486`, `:500`, `:506`, `:519` | Strong. Auction seq increment, event row, outbox row, and delivery row are written in the PostgreSQL transaction. |
 | Ordered relay and poison behavior | `backend/internal/outbox/relay.go:195`, `:231`, `:244`, `:248`, `:257`, `:391`, `:425`, `:462`, `:486`, `:558`, `:576`, `:609` | Good. Existing relay already has claim state, shard lease ownership, same-auction head-of-line guard, classified errors, DEAD, gap notice, and watermarks. |
 | Browser recovery | `backend/internal/realtime/server.go:192`, `:203`, `:211`, `:219`, `:253`, `:323`, `:335`, `:346`, `:349`, `:356`, `:373`, `:387`, `:421` | Good. Browser path uses scoped tickets, room ACL, history replay, seq-gap snapshot fallback, singleflight/semaphore bounded snapshot rebuild, and Redis snapshot projection. |
-| P3 governing decision | `docs/p3-decision-log.md` P3-D13 | NATS/JetStream is already evidence-gated unless internal service messaging or relay delivery becomes a measured bottleneck. |
+| P3 governing decision | `docs/archive/progress/p3-decision-log.md` P3-D13 | NATS/JetStream is already evidence-gated unless internal service messaging or relay delivery becomes a measured bottleneck. |
 
 ## Borrowing Decision Matrix
 
@@ -107,7 +107,7 @@ Rebuild only becomes reasonable if all are true:
 ### P3: Documentation And Defensibility
 
 1. Keep this review as the NATS/JetStream comparison evidence.
-2. Update `docs/p3-decision-log.md` so the current accepted claim is selective borrowing only.
+2. Update `docs/archive/progress/p3-decision-log.md` so the current accepted claim is selective borrowing only.
 3. In interview/demo docs, claim only:
 
 ```text
@@ -210,12 +210,12 @@ If another project directly uses NATS + JetStream, do not argue that NATS is bad
 
 | Question | Defensible Answer | Code/Evidence To Show |
 |---|---|---|
-| Why not use NATS + JetStream directly? | It delivers messages but does not decide legal bids, winners, cap sold, or idempotency. Current bottleneck evidence does not point to internal messaging. | `backend/internal/auction/bid.go`, `docs/p3-decision-log.md` P3-D13 |
+| Why not use NATS + JetStream directly? | It delivers messages but does not decide legal bids, winners, cap sold, or idempotency. Current bottleneck evidence does not point to internal messaging. | `backend/internal/auction/bid.go`, `docs/archive/progress/p3-decision-log.md` P3-D13 |
 | What exactly was borrowed? | Consumer delivery-state thinking, ack/redelivery/backoff/TERM semantics, dedupe message id, slow-consumer pending-byte discipline, monitoring vocabulary, snapshot/catchup mindset. | This review; current outbox/realtime code |
 | What is your JetStream equivalent of ack pending? | `outbox_delivery` states plus relay watermarks: ready, publishing, dead, last published outbox/auction/seq, oldest ready age. | `backend/internal/outbox/relay.go:609` |
 | What is your message id? | Domain message identity is `outbox_id`, plus `event_key`, `auction_id`, `seq`, and `payload_sha256`; JetStream seq would not be auction seq. | `backend/internal/auction/repository.go:506` |
 | What happens on duplicate delivery? | Relay is at-least-once; clients dedupe by `auction_id + seq`, gaps force snapshot, idempotency prevents duplicate money effects. | `backend/internal/realtime/server.go:323` |
-| When would you adopt JetStream? | Only after internal service split or measured relay/internal delivery bottleneck, with ADR and broker-down/consumer-crash/poison/order tests. | `docs/p3-decision-log.md` NATS gate |
+| When would you adopt JetStream? | Only after internal service split or measured relay/internal delivery bottleneck, with ADR and broker-down/consumer-crash/poison/order tests. | `docs/archive/progress/p3-decision-log.md` NATS gate |
 | Why are you stronger than a team that just says "we used NATS"? | I can show the transaction that creates truth, the outbox delivery state, recovery behavior, and tests. NATS alone is infrastructure, not domain proof. | `backend/internal/auction/repository.go:484`, `backend/internal/outbox/relay.go`, P0/P3 evidence |
 
 ## Implementation Follow-Up

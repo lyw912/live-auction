@@ -13,12 +13,16 @@ Break the system like a senior test engineer who has seen live commerce incident
 
 Read first:
 
-1. `docs/design-v2-industrial/10-test-gates.md`
-2. `docs/design-v2-industrial/03-domain-model-and-rules.md`
-3. `docs/design-v2-industrial/05-api-contracts.md`
-4. `docs/design-v2-industrial/06-realtime-and-recovery.md`
-5. `docs/design-v2-industrial/08-observability-and-ops.md`
-6. Existing tests under `backend/internal`, `tests/e2e`, `tests/load`, and evidence docs.
+1. `docs/current/README.md`
+2. `docs/current/architecture.md`
+3. `docs/current/performance-correctness-contract.md`
+4. `docs/current/evidence-policy.md`
+5. `docs/current/fault-injection-runbook.md`
+6. `docs/current/pts1b-readiness-checklist.md`
+7. `tests/pts/MANIFEST.md`
+8. `docs/design-v2-industrial/10-test-gates.md`
+9. `docs/design-v2-industrial/03-domain-model-and-rules.md`
+10. Existing tests under `backend/internal`, `tests/e2e`, `tests/load`, `tests/pts`, and evidence docs.
 
 Browse current external docs only when validating current tool/browser/library behavior. Prefer official sources.
 
@@ -68,6 +72,9 @@ Cover at least these classes when relevant:
 ### Ops and Data
 
 - Redis down during ticket, snapshot, outbox publish.
+- Redis state loss during hot auction decision/rebuild.
+- Kafka append timeout/unavailable during hot decision.
+- settlement worker crash after Kafka append.
 - PostgreSQL lock or migration constraint violation.
 - scheduler crash/lease expiry.
 - clock rollback.

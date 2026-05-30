@@ -76,7 +76,7 @@ Performance interpretation:
 
 Evidence:
 
-- PTS report details: `docs/perf/pts/evidence/U23XX73G/report-details.json`
-- PTS sampled logs: `docs/perf/pts/evidence/U23XX73G/pts-sampling-logs/`
+- PTS report details: `docs/perf/pts/evidence/archive/current-adjacent/U23XX73G/report-details.json`
+- PTS sampled logs: `docs/perf/pts/evidence/archive/current-adjacent/U23XX73G/pts-sampling-logs/`
 - after snapshot:
-  `docs/perf/pts/evidence/after-U23XX73G-l4b-accepted-ladder-10ms-1000vu/`
+  `docs/perf/pts/evidence/archive/current-adjacent/after-U23XX73G-l4b-accepted-ladder-10ms-1000vu/`

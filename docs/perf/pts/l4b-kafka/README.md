@@ -2,6 +2,12 @@
 
 Date: 2026-05-29
 
+Current supersession note, 2026-05-31: this folder is historical/current-adjacent. It is not the current execution authority for PTS-1B. Read `docs/current/README.md`, `docs/current/performance-correctness-contract.md`, `docs/current/evidence-policy.md`, and `tests/pts/MANIFEST.md` first. Individual report reviews here may be useful bottleneck evidence, but a report in this folder is not current success evidence unless reclassified under `docs/current/evidence-policy.md`.
+
+Report review classification is indexed in
+`docs/perf/pts/l4b-kafka/report-review-index.md`. Read that index before opening
+individual `report-*-review.md` files.
+
 Supersession note, 2026-05-30: the final architecture direction for high-value
 live auction is now
 `docs/perf/pts/l4b-kafka/single-hotspot-redesign-from-first-principles-2026-05-30.md`.
@@ -64,13 +70,14 @@ short Kafka hiccups into false engine pauses.
 |---|---|
 | Authoritative safety redesign | `docs/perf/pts/l4b-kafka/single-hotspot-redesign-from-first-principles-2026-05-30.md` |
 | Route B+ implementation plan | `docs/perf/pts/l4b-kafka/route-b-implementation-plan-2026-05-30.md` |
+| Historical/current-adjacent report review index | `docs/perf/pts/l4b-kafka/report-review-index.md` |
 | Workload matrix | `docs/perf/pts/l4b-kafka/workload-matrix-20260529.md` |
 | PTS-1 runbook | `docs/perf/pts/l4b-kafka/final-burst-1000vu-runbook.md` |
 | PTS-1A accepted ladder JMX | `tests/pts/pts-1a-accepted-ladder-1000vu-1m.jmx` |
 | PTS-1B contention burst JMX | `tests/pts/pts-1b-contention-burst-1000vu-1m.jmx` |
-| Full-check PTS-1 JMX | `tests/pts/live-auction-l4b-final-burst-1000vu-1m.jmx` |
-| Longer PTS-1 JMX | `tests/pts/live-auction-l4b-final-burst-1000vu-2m.jmx` |
-| Legacy PTS-1 JMX | `tests/pts/live-auction-l4b-final-second-1000vu.jmx` |
+| Full-check PTS-1 JMX | `tests/pts/archive/current-adjacent/live-auction-l4b-final-burst-1000vu-1m.jmx` |
+| Longer PTS-1 JMX | `tests/pts/archive/current-adjacent/live-auction-l4b-final-burst-1000vu-2m.jmx` |
+| Legacy PTS-1 JMX | `tests/pts/archive/historical/live-auction-l4b-final-second-1000vu.jmx` |
 | Current upload JMX | `tests/pts/pts-1a-accepted-ladder-1000vu-1m.jmx` |
 | PTS-1 CSV | `docs/perf/pts/pts-1ab-1000vu-sessions.csv` |
 | Reset/seed | `tests/pts/reset-l4b-final-second-pressure.sh` |
@@ -214,14 +221,14 @@ matches the expected request count for the sampler.
 Pull and summarize after the run:
 
 ```bash
-PAGE_SIZE=100 bash tests/pts/fetch-pts-sampling-logs.sh REPORT_ID docs/perf/pts/evidence/REPORT_ID/pts-sampling-logs
-bash tests/pts/summarize-pts-sampling-logs.sh docs/perf/pts/evidence/REPORT_ID/pts-sampling-logs/sampling-logs.jsonl 1000
+PAGE_SIZE=100 bash tests/pts/fetch-pts-sampling-logs.sh REPORT_ID docs/perf/pts/evidence/incoming/REPORT_ID/pts-sampling-logs
+bash tests/pts/summarize-pts-sampling-logs.sh docs/perf/pts/evidence/incoming/REPORT_ID/pts-sampling-logs/sampling-logs.jsonl 1000
 ```
 
 For a specific sampler, filter by sampler id or label:
 
 ```bash
-SAMPLER_ID=2 bash tests/pts/summarize-pts-sampling-logs.sh docs/perf/pts/evidence/REPORT_ID/pts-sampling-logs/sampling-logs.jsonl 1000
+SAMPLER_ID=2 bash tests/pts/summarize-pts-sampling-logs.sh docs/perf/pts/evidence/incoming/REPORT_ID/pts-sampling-logs/sampling-logs.jsonl 1000
 ```
 
 Only cite the script's p50/p90/p95/p99 as full-run percentiles when

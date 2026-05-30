@@ -1,5 +1,7 @@
 # Setup Guide
 
+> 2026-05-31 current-architecture note: this guide is local setup help. For architecture authority read `docs/current/README.md`. For PTS-1B pressure setup read `tests/pts/MANIFEST.md`.
+
 本文档记录本地启动、工具安装和环境检查内容。当前仓库已经包含 P0 后端、前端、迁移、测试命令、证据记录、`.env.example` 和本地 `infra/docker-compose.yml`。
 
 ## 1. 已在仓库内准备好的内容
@@ -7,7 +9,7 @@
 - `README.md`：项目目标、技术路线和目录说明。
 - `CLAUDE.md`：给编码助手/协作者的工程规则。
 - `.env.example`：本地开发环境变量样例。
-- `infra/docker-compose.yml`：本地 PostgreSQL、Redis、MinIO。
+- `infra/docker-compose.yml`：本地 PostgreSQL、Redis、Kafka、MinIO、Prometheus、Grafana。
 - `backend/`、`frontend/`、`tests/`、`docs/evidence/`、`docs/perf/`、`docs/demo/`、`docs/adr/`：开工目录骨架。
 - `.github/workflows/ci.yml`：最小 CI，运行迁移和后端 Go 测试。
 
@@ -113,22 +115,31 @@ goose -version
 
 ## 4. 本地环境变量
 
-从仓库根目录创建本地 `.env`：
+从仓库根目录创建普通本地 demo `.env`：
 
 ```powershell
 Copy-Item .env.example .env
 ```
+
+PTS-1B Redis/Kafka hot-engine 调试 profile 使用：
+
+```powershell
+Copy-Item .env.pts1b.example .env
+```
+
+正式 PTS-1B 压测仍应优先使用 `tests/pts/MANIFEST.md` 中的 reset/preflight/verify 流程，而不是只复制 env 文件。
 
 默认配置：
 
 | 服务 | 地址 | 账号 |
 |---|---|---|
 | PostgreSQL | `localhost:5432` | `live_auction` / `live_auction` |
-| Redis | `localhost:6379` | 无密码 |
+| Redis | `localhost:6380` | 无密码 |
+| Kafka | `localhost:9092` | local single-node test broker |
 | MinIO API | `localhost:9000` | `liveauction` / `liveauction123` |
 | MinIO Console | `http://localhost:9001` | `liveauction` / `liveauction123` |
 
-P0 使用 mock auth 和 mock payment，不需要真实登录、短信、支付或直播推流配置。
+P0/demo 使用本地 auth 和 fake-provider payment，不需要短信、真实支付或直播推流配置。`.env.example` 是保守 demo profile；当前 PTS-1B hot-bid profile 需要 Redis + Kafka + PostgreSQL，并由 `tests/pts/reset-l4b-final-second-pressure.sh` 设置 `BID_ENGINE_MODE=redis_ledger`、关闭 admission、重置 Kafka topic 和热拍卖数据。
 
 ## 5. 启动本地基础设施
 
@@ -142,6 +153,7 @@ docker compose -f infra\docker-compose.yml ps
 ```powershell
 docker exec live-auction-postgres pg_isready -U live_auction -d live_auction
 docker exec live-auction-redis redis-cli ping
+docker exec live-auction-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
 ```
 
 打开 MinIO Console：
@@ -156,7 +168,7 @@ http://localhost:9001
 live-auction-items
 ```
 
-当前 P0 本地演示只要求 bucket 存在；如需自动化，可后续把 bucket 初始化放进 seed/migration 辅助命令。
+当前本地演示只要求 bucket 存在；如需自动化，可后续把 bucket 初始化放进 seed/migration 辅助命令。
 
 停止本地服务：
 
@@ -248,13 +260,15 @@ backend/internal/outbox/
 backend/internal/scheduler/
 backend/internal/observability/
 backend/internal/storage/
+backend/internal/redisengine/
 ```
 
 技术选择：
 
 - HTTP router：`chi`
 - PostgreSQL driver/pool：优先 `pgx`
-- Redis client：后续实现时选成熟 Go client
+- Redis client：hot-state decision、ticket、history/snapshot
+- Kafka client：current hot-bid decision WAL/fence and settlement replay
 - MinIO/S3：S3-compatible SDK
 - logger：结构化日志，所有请求带 `trace_id`
 
@@ -271,6 +285,8 @@ go run ./cmd/server
 ```text
 http://localhost:8080/readyz
 ```
+
+普通本地 demo 可使用 `.env.example` 的保守默认配置。当前 PTS-1B 压测不要手工猜环境变量，按 `docs/current/runtime-profiles.md` 和 `tests/pts/MANIFEST.md` 的 reset/preflight/verify sequence 执行。
 
 ## 9. 外部资源与 API 申请
 
@@ -309,10 +325,12 @@ docker compose -f infra\docker-compose.yml ps
 确认：
 
 - `.env` 已由 `.env.example` 创建。
-- PostgreSQL、Redis、MinIO 都是 healthy 或可连接。
+- PTS-1B 调试时 `.env` 已由 `.env.pts1b.example` 创建，或通过 reset 脚本显式覆盖 env。
+- PostgreSQL、Redis、Kafka、MinIO 都是 healthy 或可连接。
 - MinIO bucket `live-auction-items` 已创建。
-- `docs/design-v2-industrial/12-engineering-rules.md` 已读。
-- P0 bid/cancel/end/realtime 已有实现和证据；新增修改仍需先看 `docs/design-v2-industrial/12-engineering-rules.md` 和对应 gate。
+- `docs/current/README.md`、`docs/current/architecture.md`、`docs/current/performance-correctness-contract.md` 已读。
+- PTS-1B 压测前已读 `tests/pts/MANIFEST.md` 和 `docs/current/evidence-policy.md`。
+- 历史 `docs/design-v2-industrial/*` 只作为产品/UX/工程约束和历史基线；遇到热路径冲突时以 `docs/current/` 为准。
 
 ## 11. 参考来源
 

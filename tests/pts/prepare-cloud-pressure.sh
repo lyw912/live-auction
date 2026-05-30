@@ -5,8 +5,10 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BACKEND_DIR="$ROOT_DIR/backend"
 MIGRATIONS_DIR="$BACKEND_DIR/migrations"
 OUT_DIR="$ROOT_DIR/docs/perf/pts"
-SESSION_CSV="${SESSION_CSV:-pts_sessions.csv}"
-JMX_PATH="${JMX_PATH:-$ROOT_DIR/tests/pts/live-auction-core-pressure.jmx}"
+RUNTIME_DIR="${PTS_RUNTIME_DIR:-/tmp/live-auction-pts}"
+SESSION_CSV="${SESSION_CSV:-archive/data/pts_sessions.csv}"
+JMX_PATH_WAS_SET="${JMX_PATH+x}"
+JMX_PATH="${JMX_PATH:-$ROOT_DIR/tests/pts/archive/historical/live-auction-core-pressure.jmx}"
 BOOTSTRAP_SQL="/tmp/live-auction-bootstrap-before-migrations.sql"
 DB_CONTAINER="${DB_CONTAINER:-live-auction-postgres}"
 REDIS_CONTAINER="${REDIS_CONTAINER:-live-auction-redis}"
@@ -38,7 +40,14 @@ OTEL_EXPORTER_OTLP_TIMEOUT="${OTEL_EXPORTER_OTLP_TIMEOUT:-3s}"
 OTEL_TRACES_SAMPLER_RATIO="${OTEL_TRACES_SAMPLER_RATIO:-1}"
 OTEL_SERVICE_NAME="${OTEL_SERVICE_NAME:-live-auction-backend}"
 
-mkdir -p "$OUT_DIR"
+if [ -z "$JMX_PATH_WAS_SET" ] && [ "${ALLOW_HISTORICAL_PTS:-}" != "1" ]; then
+  echo "prepare-cloud-pressure.sh default JMX is archived historical: tests/pts/archive/historical/live-auction-core-pressure.jmx" >&2
+  echo "Use tests/pts/reset-l4b-final-second-pressure.sh for current PTS-1A/PTS-1B." >&2
+  echo "To run the historical default intentionally, set ALLOW_HISTORICAL_PTS=1." >&2
+  exit 2
+fi
+
+mkdir -p "$OUT_DIR" "$RUNTIME_DIR"
 
 cat > "$BOOTSTRAP_SQL" <<'SQL'
 INSERT INTO users (id, role, display_name, city)
@@ -97,12 +106,12 @@ echo "[4/7] Generating real session CSV for PTS"
 echo "[5/7] Building backend"
 (
   cd "$BACKEND_DIR"
-  go build -o "$OUT_DIR/live-auction-server" ./cmd/server
+  go build -o "$RUNTIME_DIR/live-auction-server" ./cmd/server
 )
 
 echo "[6/7] Starting backend on $HTTP_ADDR"
-if [ -f "$OUT_DIR/server.pid" ]; then
-  old_pid="$(cat "$OUT_DIR/server.pid")"
+if [ -f "$RUNTIME_DIR/server.pid" ]; then
+  old_pid="$(cat "$RUNTIME_DIR/server.pid")"
   if kill -0 "$old_pid" 2>/dev/null; then
     kill "$old_pid" 2>/dev/null || true
     sleep 1
@@ -148,8 +157,8 @@ done < <(
   SESSION_TTL=12h \
   OUTBOX_WORKER_ID=pts-cloud-1 \
   SCHEDULER_WORKER_ID=pts-cloud-1 \
-  setsid "$OUT_DIR/live-auction-server" > "$OUT_DIR/server.log" 2> "$OUT_DIR/server.err.log" < /dev/null &
-  echo $! > "$OUT_DIR/server.pid"
+  setsid "$RUNTIME_DIR/live-auction-server" > "$RUNTIME_DIR/server.log" 2> "$RUNTIME_DIR/server.err.log" < /dev/null &
+  echo $! > "$RUNTIME_DIR/server.pid"
 )
 
 echo "[7/7] Verifying backend"
@@ -162,6 +171,7 @@ echo "Prepared:"
 echo "- Backend: http://47.113.223.90:${HTTP_PORT}"
 echo "- JMX: $JMX_PATH"
 echo "- CSV: $OUT_DIR/$SESSION_CSV"
-echo "- Logs: $OUT_DIR/server.log and $OUT_DIR/server.err.log"
+echo "- Runtime: $RUNTIME_DIR"
+echo "- Logs: $RUNTIME_DIR/server.log and $RUNTIME_DIR/server.err.log"
 echo "- Exploration profile: ADMISSION_ENABLED=false BID_ENGINE_MODE=$BID_ENGINE_MODE REDIS_ADDR=$REDIS_ADDR KAFKA_BROKERS=$KAFKA_BROKERS"
 echo "- Tracing: OTEL_TRACES_ENABLED=$OTEL_TRACES_ENABLED OTEL_EXPORTER_OTLP_ENDPOINT=$OTEL_EXPORTER_OTLP_ENDPOINT OTEL_TRACES_SAMPLER_RATIO=$OTEL_TRACES_SAMPLER_RATIO"

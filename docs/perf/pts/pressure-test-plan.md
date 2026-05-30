@@ -1,5 +1,10 @@
 # PTS Pressure Test Plan
 
+> 2026-05-31 supersession notice: this plan contains historical PG-lane /
+> Redis-guard pressure strategy. Use it for background only. Current PTS-1B
+> execution and pass/fail rules are in `tests/pts/MANIFEST.md` and
+> `docs/current/performance-correctness-contract.md`.
+
 This document defines what each pressure workload is allowed to prove. It is the
 planning layer above the concrete runbooks and JMX files.
 
@@ -276,7 +281,7 @@ Current repair scope after `1L29X7UG`:
 5. Do not change `synchronous_commit` in the app by default. Test
    `synchronous_commit=local/off` only as an explicitly labeled DB experiment
    with crash-loss tolerance documented.
-6. Re-run `tests/pts/live-auction-hotspot-pressure.jmx` and compare against
+6. Re-run `tests/pts/archive/historical/live-auction-hotspot-pressure.jmx` and compare against
    `1L29X7UG` for guard stale ratio, guard reject count, projection update
    outcomes, queue wait/rejects, DB pool wait, row-lock wait, tx duration,
    outbox lag, and correctness invariants.

@@ -29,9 +29,9 @@ remain unrecoverable after that bounded recovery attempt.
 
 - PTS-1A accepted ladder JMX: `tests/pts/pts-1a-accepted-ladder-1000vu-1m.jmx`
 - PTS-1B contention burst JMX: `tests/pts/pts-1b-contention-burst-1000vu-1m.jmx`
-- Full-check 1-minute JMX: `tests/pts/live-auction-l4b-final-burst-1000vu-1m.jmx`
-- Longer 2-minute JMX: `tests/pts/live-auction-l4b-final-burst-1000vu-2m.jmx`
-- Legacy 6-minute JMX: `tests/pts/live-auction-l4b-final-second-1000vu.jmx`
+- Full-check 1-minute JMX: `tests/pts/archive/current-adjacent/live-auction-l4b-final-burst-1000vu-1m.jmx`
+- Longer 2-minute JMX: `tests/pts/archive/current-adjacent/live-auction-l4b-final-burst-1000vu-2m.jmx`
+- Legacy 6-minute JMX: `tests/pts/archive/historical/live-auction-l4b-final-second-1000vu.jmx`
 - CSV: `docs/perf/pts/pts-1ab-1000vu-sessions.csv`
 - Reset: `tests/pts/reset-l4b-final-second-pressure.sh`
 

@@ -4,7 +4,8 @@ set -euo pipefail
 AUCTION_ID="${AUCTION_ID:-auc_live}"
 LABEL="${1:-after-l4b-pts}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-OUT_DIR="$ROOT_DIR/docs/perf/pts/evidence/$LABEL"
+EVIDENCE_ROOT="${EVIDENCE_ROOT:-$ROOT_DIR/docs/perf/pts/evidence/incoming}"
+OUT_DIR="$EVIDENCE_ROOT/$LABEL"
 DB_CONTAINER="${DB_CONTAINER:-live-auction-postgres}"
 KAFKA_CONTAINER="${KAFKA_CONTAINER:-live-auction-kafka}"
 REDIS_CONTAINER="${REDIS_CONTAINER:-live-auction-redis}"
@@ -800,13 +801,13 @@ from (
     ('P0', 'no_public_auction_event_seq_gap', (select missing_count = 0 from event_gap), 'public auction event seq must be continuous'),
     ('P0', 'no_duplicate_client_bid_id', (select violations = 0 from duplicate_client_bid), 'client_bid_id must not create duplicate bid rows'),
     ('P0', 'pts_expected_unique_users',
-      (case when nullif(:'expected_unique_bids', '') is null then true else (select unique_users = (:'expected_unique_bids')::bigint from bid_identity) end),
+      (case when nullif(trim(:'expected_unique_bids'), '') is null then true else (select unique_users = nullif(trim(:'expected_unique_bids'), '')::bigint from bid_identity) end),
       'PTS post-run gate: distinct user_id count must match expected_unique_bids; detects disabled Alibaba PTS CSV split'),
     ('P0', 'pts_expected_unique_client_bid_ids',
-      (case when nullif(:'expected_unique_bids', '') is null then true else (select unique_client_bid_ids = (:'expected_unique_bids')::bigint from bid_identity) end),
+      (case when nullif(trim(:'expected_unique_bids'), '') is null then true else (select unique_client_bid_ids = nullif(trim(:'expected_unique_bids'), '')::bigint from bid_identity) end),
       'PTS post-run gate: distinct client_bid_id count must match expected_unique_bids; detects duplicated CSV rows/idempotency replay workload'),
     ('P0', 'pts_expected_total_bid_rows',
-      (case when nullif(:'expected_unique_bids', '') is null then true else (select total = (:'expected_unique_bids')::bigint from bid_identity) end),
+      (case when nullif(trim(:'expected_unique_bids'), '') is null then true else (select total = nullif(trim(:'expected_unique_bids'), '')::bigint from bid_identity) end),
       'PTS post-run gate: total persisted bid decisions must match expected_unique_bids'),
     ('P0', 'no_duplicate_engine_seq', (select violations = 0 from duplicate_engine_seq), 'engine_epoch/engine_seq must identify at most one accepted bid'),
     ('P0', 'engine_epoch_seq_monotonic', (select violations = 0 from epoch_seq_violations), 'engine_epoch/engine_seq must be monotonic'),
@@ -1270,13 +1271,13 @@ from (
     ('P0', 'no_public_auction_event_seq_gap', (select missing_count = 0 from event_gap), 'public auction event seq must be continuous'),
     ('P0', 'no_duplicate_client_bid_id', (select violations = 0 from duplicate_client_bid), 'client_bid_id must not create duplicate bid rows'),
     ('P0', 'pts_expected_unique_users',
-      (case when nullif(:'expected_unique_bids', '') is null then true else (select unique_users = (:'expected_unique_bids')::bigint from bid_identity) end),
+      (case when nullif(trim(:'expected_unique_bids'), '') is null then true else (select unique_users = nullif(trim(:'expected_unique_bids'), '')::bigint from bid_identity) end),
       'PTS post-run gate: distinct user_id count must match expected_unique_bids; detects disabled Alibaba PTS CSV split'),
     ('P0', 'pts_expected_unique_client_bid_ids',
-      (case when nullif(:'expected_unique_bids', '') is null then true else (select unique_client_bid_ids = (:'expected_unique_bids')::bigint from bid_identity) end),
+      (case when nullif(trim(:'expected_unique_bids'), '') is null then true else (select unique_client_bid_ids = nullif(trim(:'expected_unique_bids'), '')::bigint from bid_identity) end),
       'PTS post-run gate: distinct client_bid_id count must match expected_unique_bids; detects duplicated CSV rows/idempotency replay workload'),
     ('P0', 'pts_expected_total_bid_rows',
-      (case when nullif(:'expected_unique_bids', '') is null then true else (select total = (:'expected_unique_bids')::bigint from bid_identity) end),
+      (case when nullif(trim(:'expected_unique_bids'), '') is null then true else (select total = nullif(trim(:'expected_unique_bids'), '')::bigint from bid_identity) end),
       'PTS post-run gate: total persisted bid decisions must match expected_unique_bids'),
     ('P0', 'no_duplicate_engine_seq', (select violations = 0 from duplicate_engine_seq), 'engine_epoch/engine_seq must identify at most one accepted bid'),
     ('P0', 'engine_epoch_seq_monotonic', (select violations = 0 from epoch_seq_violations), 'engine_epoch/engine_seq must be monotonic'),

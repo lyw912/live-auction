@@ -487,8 +487,8 @@ That is the level at which senior experts have to argue with concrete tradeoffs 
 
 ## New Progress Trackers To Create
 
-- `docs/p2-progress.md`
-- `docs/p3-progress.md`
+- `docs/archive/progress/p2-progress.md`
+- `docs/archive/progress/p3-progress.md`
 - `docs/evidence/p2-*`
 - `docs/evidence/p3-*`
 - ADRs under `docs/adr/` for:

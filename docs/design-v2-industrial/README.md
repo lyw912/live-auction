@@ -1,9 +1,18 @@
-# Design v2 Industrial · 开工基线
+# Design v2 Industrial · Historical Baseline
 
-> 日期：2026-05-22  
-> 用途：这是直播竞拍系统第二版、可复制到新仓库直接开工的完整设计文档集。正式开发只参考本文件夹和本文件夹内整理后的项目简报，不再回看 v1.x 修订包。
+> 2026-05-31 supersession notice: this directory is no longer the top-level authority for the hot-bid architecture. Read `docs/current/README.md` first. This directory remains useful for official scope, UI/UX, recovery, diagnostics, guardrails, and historical reasoning, but its PG-lane statements are superseded for PTS-1B by `docs/current/architecture.md` and `docs/current/performance-correctness-contract.md`.
 
-## 入口顺序
+> In particular, do not use this README's old "PostgreSQL row lock is auction truth / Redis Lua design-only" language as the current PTS-1B hot path. The current target is Redis hot-state decision + Kafka decision WAL/fence + PostgreSQL settlement/audit + fail-closed reconciliation.
+
+> 日期：2026-05-22
+> 原始用途：直播竞拍系统第二版设计文档集。
+> 当前用途：历史基线与产品/工程约束库；遇到热路径、性能、正确性、故障注入冲突时，以 `docs/current/` 为准。
+
+## 当前使用方式
+
+不要从本目录开始新任务。先读 `docs/current/README.md`。只有在需要产品范围、UI/UX、恢复原则、诊断思路或工程纪律时，再按下面索引读取具体文件。
+
+## 历史入口顺序
 
 1. `00-project-brief.md`：项目目标、官方范围、评分拆解。
 2. `01-scope-and-roadmap.md`：P0/P1/P2 分期、取舍、开工顺序。
@@ -28,24 +37,26 @@
 21. `21-p5-plus-atmosphere-ui-execution-roadmap.md`：把 19/20 转成 P5+ 工程路线和逐提交 slice 计划。
 22. `templates/`：正式开发时需要持续填写的模板。
 
-## 一句话方案
+## 历史一句话方案
 
 用 PostgreSQL 作为竞拍事实真源，用行锁序列化同一 auction 的所有金钱相关写入；用 durable idempotency 防重复；用 immutable events + outbox relay 把提交后的状态可靠投递到 Redis history/snapshot 和 WebSocket；客户端只展示服务端权威状态，断线或 gap 后通过 history/snapshot 恢复。
 
-## 不再争论的决策
+当前 PTS-1B hot manual bid 方案已经变更为：Redis live decision state + Kafka durable decision WAL/fence + PostgreSQL settlement/audit/order truth + fail-closed reconciliation。不要把上面的历史 PG-lane 方案当成当前性能路线。
+
+## 历史决策，需按 current 重新解释
 
 - P0 不做微服务，不做真实直播推流，不做真实支付，不做 AI 热路径。
-- Redis Lua 不进入 v1 实现范围，只作为 P2 design-only。
+- Redis Lua 不进入 v1 实现范围，只作为 P2 design-only。当前 PTS-1B 已经 supersede 这条：Redis Lua 是 hot-state decision engine 的一部分，但必须受 Kafka fence、settlement、reconciliation 约束。
 - 所有性能数字必须先有 baseline 报告，不能写猜测值。
 - Chat、保证金、讲解中、用户加入广播是完整度功能，不是技术亮点。
 - 竞拍正确性、可恢复实时、异常可诊断、实测纪律才是最终亮点。
 - P1 完成后，后续工业化工作以 `16-industrial-p2-p3-roadmap.md` 为准：先补 auth/ACL/room/rate-limit/payment hardening，再做 multi-instance realtime 和最终 baseline。
-- P3/P4 中期重置后，以 `18-p3-p4-roadmap-reset.md`、`docs/p3-decision-log.md` 和 `docs/evidence/index.md` 作为当前执行面：性能探索先关闭 admission 找真实极限，完成归因和优化后再回填 admission limit。
+- P3/P4 中期重置后，以 `18-p3-p4-roadmap-reset.md`、`docs/archive/progress/p3-decision-log.md` 和 `docs/evidence/index.md` 作为当时执行面。当前执行面已经迁移到 `docs/current/`、`tests/pts/MANIFEST.md` 和 `docs/perf/pts/evidence/README.md`。
 
-## 复制到新仓库后
+## 历史复制说明
 
 1. 保留本目录结构。
-2. 先按 `11-implementation-plan.md` 初始化仓库、服务、数据库迁移和测试框架。
+2. 不要再按 `11-implementation-plan.md` 单独初始化当前架构；先读 `docs/current/README.md` 和当前 runtime/evidence/PTS 文档。
 3. 每实现一个 P0 模块，补 `templates/evidence-record.md`。
-4. 每次写入性能数字前，必须先补 `templates/perf-baseline.md`。
-5. 任何新设计若违反 `12-engineering-rules.md`，必须先写 ADR 并通过 review。
+4. 每次写入性能数字前，必须满足 `docs/current/evidence-policy.md`，旧 `templates/perf-baseline.md` 只能作格式参考。
+5. 任何新设计若违反 `12-engineering-rules.md`，必须先写 ADR 并通过 review，同时说明是否 supersede 当前 contract。

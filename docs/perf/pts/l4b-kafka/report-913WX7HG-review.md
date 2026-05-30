@@ -56,5 +56,5 @@ Fix:
 
 Evidence:
 
-- PTS export: `docs/perf/pts/evidence/913WX7HG/`
-- after snapshot: `docs/perf/pts/evidence/after-913WX7HG-l4b-accepted-ladder-5ms-1000vu/`
+- PTS export: `docs/perf/pts/evidence/archive/current-adjacent/913WX7HG/`
+- after snapshot: `docs/perf/pts/evidence/archive/current-adjacent/after-913WX7HG-l4b-accepted-ladder-5ms-1000vu/`
