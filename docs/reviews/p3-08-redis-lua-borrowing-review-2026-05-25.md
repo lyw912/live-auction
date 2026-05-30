@@ -78,7 +78,7 @@ Local Redis source anchors:
 | Bid truth path | `backend/internal/auction/bid.go:125`, `:196`, `:648`, `:678` | Strong. Place/confirm bid lock the auction row and evaluate auction rules in the transaction. |
 | Atomic event/outbox append | `backend/internal/auction/repository.go:481` | Strong. Auction seq/version, `auction_events`, `outbox_events`, and `outbox_delivery` are appended in the same PostgreSQL transaction. |
 | Redis/DB projection reconciliation | `backend/internal/reconcile/checker.go:26`, `:428` | Good for current projection use. It is not yet a Redis reservation reconciler; that would be a new requirement. |
-| P3 governing decision | `docs/p3-decision-log.md` P3-D14 | Redis remains projection/cache/admission support; Lua reservation is evidence-gated. |
+| P3 governing decision | `docs/archive/progress/p3-decision-log.md` P3-D14 | Redis remains projection/cache/admission support; Lua reservation is evidence-gated. |
 
 ## Redis Lua Versus Current Architecture
 
@@ -283,7 +283,7 @@ If another project directly uses Redis Lua for bidding, do not argue that Redis 
 | What exactly did you borrow from Redis Lua? | Small atomic scripts for read-decide-update, per-key TTL state, bounded gateway admission, and atomic one-time token consume. | This review; Redis rate limiter docs |
 | What happens if Redis is down? | Admission fails open with anomaly so correctness still reaches PostgreSQL; WS ticket consume fails closed because unsafe connection should not proceed. | `backend/internal/gateway/bid_admission.go:193`, `backend/internal/realtime/ticket_test.go:56` |
 | Are your three limiter checks atomic together? | No, and they do not need to be for money correctness. They are layered protective gates. A strict combined limiter would need a same-slot multi-key Lua design. | `backend/internal/gateway/bid_admission.go:181` |
-| What would make Redis Lua reservation worth building? | Clean P3-R4 evidence that PG hot-row is release-blocking, plus ADR/reconciliation/invariant tests proving Redis cannot become split-brain auction truth. | `docs/p3-decision-log.md` P3-D14 |
+| What would make Redis Lua reservation worth building? | Clean P3-R4 evidence that PG hot-row is release-blocking, plus ADR/reconciliation/invariant tests proving Redis cannot become split-brain auction truth. | `docs/archive/progress/p3-decision-log.md` P3-D14 |
 | Why are you stronger than a team that says "we used Redis Lua for speed"? | I can show where Lua is safe, where it is unsafe, and the DB transaction that proves auction correctness. Speed claims without reconciliation do not answer the official scoring table. | `docs/design-v2-industrial/00-project-brief.md` |
 
 ## No-Go Claims

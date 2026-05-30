@@ -17,6 +17,7 @@ import (
 
 const (
 	bidEngineModePostgresLane = "postgres_lane"
+	bidEngineModeRedisLedger  = "redis_ledger"
 	bidLaneRetryAfterSeconds  = 1
 )
 

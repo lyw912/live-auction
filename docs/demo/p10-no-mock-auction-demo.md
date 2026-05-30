@@ -1,5 +1,7 @@
 # P10 No-Mock Auction Demo
 
+> 2026-05-31 current-architecture note: this demo proves product flow and no-route-mock honesty. It does not prove PTS-1B performance. For current hot-bid architecture and performance/correctness evidence, read `docs/current/README.md`, `docs/current/evidence-policy.md`, and `tests/pts/MANIFEST.md`.
+
 Date: 2026-05-27
 
 ## Purpose
@@ -86,7 +88,8 @@ H5 bidder room:
 ## Talking Points
 
 - The product copy and media are demo content; the auction state is not.
-- PostgreSQL decides price, winner, order, and terminal state.
-- Redis/WebSocket deliver projections and realtime updates, but never decide auction truth.
+- For the current high-concurrency hot path, Redis performs the live atomic engine decision under Kafka WAL/fence and reconciliation.
+- PostgreSQL remains settlement, audit, order, and durable query truth.
+- WebSocket delivers server-authoritative updates and recovery hints; the browser never decides auction truth.
 - H5 never shows bid success before server confirmation and never hammers locally when countdown reaches zero.
 - Diagnostics are backed by real persisted rows and outbox delivery state.

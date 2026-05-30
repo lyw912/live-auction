@@ -13,3 +13,11 @@ scrape_configs:
           - host.docker.internal:8080
         labels:
           service: live-auction-backend
+
+  - job_name: live-auction-otel-collector
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - otel-collector:8889
+        labels:
+          service: live-auction-otel-collector

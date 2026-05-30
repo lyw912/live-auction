@@ -1,17 +1,27 @@
 # Evidence Index
 
-> Date: 2026-05-24 Asia/Shanghai  
-> Status: authoritative evidence map for P3/P4 reset.
+> 2026-05-31 supersession notice: this index is historical and over-broad for current hot-bid work. Read `docs/current/README.md`, `docs/current/document-map.md`, and `docs/archive/evidence-era-map.md` first. Rows below that say `AUTHORITATIVE` were authoritative for their original phase unless revalidated under the current Redis hot-state + Kafka WAL/fence + PostgreSQL settlement contract.
+
+> Do not use PG-lane-era or early Redis evidence as proof that current PTS-1B meets p99 <= 50ms, highest-bid-wins, justified-reject, or fault-injection gates.
+
+> Date: 2026-05-24 Asia/Shanghai
+> Original status: authoritative evidence map for P3/P4 reset.
+> Current status: historical evidence index; see `docs/current/` for current authority.
 
 ## Classification
 
-- `AUTHORITATIVE`: current decision input.
-- `PARTIAL`: valid for a specific conclusion, but bounded by a known caveat.
+These labels are original-era labels retained for traceability. They are not the
+same as the current evidence classes in `docs/current/evidence-policy.md`.
+
+- `AUTHORITATIVE`: authoritative for its original phase only; not current PTS-1B proof unless revalidated.
+- `PARTIAL`: valid for a specific original conclusion, but bounded by a known caveat.
 - `HARNESS_ONLY`: proves scripts, seed, auth, or instrumentation can run; not bottleneck evidence.
 - `SUPERSEDED`: replaced by newer evidence or policy.
 - `RAW_LOCAL`: raw output exists but should be opened only through compact analysis or a named investigation.
 
-## Authoritative Evidence
+## Historical Evidence Originally Marked Authoritative
+
+Rows in this section keep their original labels for traceability. For current hot-bid work, reinterpret them through `docs/archive/evidence-era-map.md`; do not treat the label alone as current authority.
 
 | Evidence | Classification | Current use |
 |---|---|---|
@@ -91,9 +101,11 @@
 | `docs/evidence/pts-l2-postgres-lane-2026-05-28.md` | AUTHORITATIVE | PTS L2 `postgres_lane` implemented from `1d31bf9`: per-auction bounded lane, replay-before-queue, explicit retry-too-hot/retry-later responses, queue/tx metrics, anomaly payloads, and H5 `BID_RETRY_LATER` cooldown coverage. No PTS latency number is claimed yet. |
 | `docs/evidence/pts-l3-realtime-delivery-2026-05-28.md` | AUTHORITATIVE | PTS L3 realtime delivery implemented from `1d31bf9`: heartbeat config is wired and observable, heartbeat timeout cancels socket context, stale snapshot recovery is classified separately, H5 reconnect uses bounded Retry-After-aware backoff, snapshot recovery is in-flight guarded, connecting/recovering/disconnected CTA states are disabled, and healthy WS state no longer polls snapshots. No `1000+` online claim is made yet. |
 | `docs/evidence/pts-l4a-redis-guard-2026-05-28.md` | AUTHORITATIVE | PTS L4a `redis_guard` implemented from `1d31bf9`: Redis Lua can conservatively reject obvious invalid pressure before the PostgreSQL lane, stale/missing/unavailable guard state falls through to PostgreSQL truth, outbox/snapshot refresh the short guard projection, metrics are emitted, and no winner/order/settlement truth moves to Redis. No PTS latency number is claimed yet. |
+| `docs/evidence/pts-l4b-redis-ledger-engine-2026-05-29.md` | AUTHORITATIVE | PTS L4b implements the hot engine as Redis Lua state machine + Kafka durable ledger + PostgreSQL settlement truth, with engine epoch/seq fencing, bounded settlement retry, DLQ pause, reconciliation, and invariant verifier checks. No PTS latency number is claimed yet. |
+| `docs/evidence/pts-l4b-kafka-ledger-recovery-fix-2026-05-29.md` | AUTHORITATIVE | PTS L4b follow-up fix for the Redis decision/Kafka append crash window: reconcile backfills Redis pending decisions into Kafka, settlement proceeds even while new hot-engine bids are paused, H5 distinguishes pending settlement, and Kafka auto-topic creation is test-only. |
 | `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan.md` | AUTHORITATIVE | P3/P4 pressure protocol and admission-off policy. |
 | `docs/design-v2-industrial/18-p3-p4-roadmap-reset.md` | AUTHORITATIVE | Current P3/P4 execution order and decision gates. |
-| `docs/p3-decision-log.md` | AUTHORITATIVE | Current decisions, superseded evidence, and go/no-go gates, including P9-D01 reopening Max Bid/Pre-Bid through ADR only. |
+| `docs/archive/progress/p3-decision-log.md` | AUTHORITATIVE | Original-era P3/P4 decisions, superseded evidence, and go/no-go gates, including P9-D01 reopening Max Bid/Pre-Bid through ADR only. Historical only for current hot bidding. |
 
 ## Partial Evidence
 

@@ -41,7 +41,7 @@ still dominated by PostgreSQL row-lock and DB-pool waiting:
 
 ## Next Validation
 
-Run `tests/pts/live-auction-hotspot-pressure.jmx` with the bounded-lane
+Run `tests/pts/archive/historical/live-auction-hotspot-pressure.jmx` with the bounded-lane
 `redis_guard` profile and compare against `1L29X7UG`:
 
 - guard `STALE` vs `REJECT` vs `ALLOW`;

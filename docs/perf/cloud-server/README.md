@@ -10,8 +10,8 @@
 
 - ReportId: `3IVNW7TF`
 - 报告文件: `Jmeter压测报告-3IVNW7TF-20260528014811.pdf`
-- PTS 明细: `docs/perf/pts/evidence/after-3IVNW7TF-review/pts-sampling-logs/`
-- 服务侧证据: `docs/perf/pts/evidence/after-3IVNW7TF-review/`
+- PTS 明细: `docs/perf/pts/evidence/archive/historical/after-3IVNW7TF-review/pts-sampling-logs/`
+- 服务侧证据: `docs/perf/pts/evidence/archive/historical/after-3IVNW7TF-review/`
 
 ## 文档地图
 

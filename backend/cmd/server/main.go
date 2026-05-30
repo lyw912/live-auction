@@ -15,8 +15,10 @@ import (
 	"live-auction/backend/internal/outbox"
 	"live-auction/backend/internal/platform/logger"
 	"live-auction/backend/internal/realtime"
+	"live-auction/backend/internal/redisengine"
 	"live-auction/backend/internal/scheduler"
 	"live-auction/backend/internal/storage"
+	"live-auction/backend/internal/tracing"
 )
 
 func main() {
@@ -25,6 +27,14 @@ func main() {
 
 	cfg := config.Load()
 	log := logger.New(cfg.AppEnv)
+	shutdownTracing := tracing.Init(ctx, log)
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := shutdownTracing(shutdownCtx); err != nil {
+			log.Error("shutdown tracing", slog.String("error", err.Error()))
+		}
+	}()
 
 	deps, err := storage.Open(ctx, cfg, log)
 	if err != nil {
@@ -45,10 +55,23 @@ func main() {
 			Run(ctx, log, 500*time.Millisecond)
 	}
 	go scheduler.NewRunner(deps.Postgres, schedulerWorkerID).Run(ctx, log, 500*time.Millisecond)
+	settlementWorkerID := envOrDefault("REDIS_ENGINE_SETTLEMENT_WORKER_ID", workerID)
+	var bidLedger redisengine.BidLedger
+	if cfg.BidEngineMode != "postgres_lane" && cfg.BidEngineMode != "redis_guard" {
+		ledger, err := redisengine.NewKafkaLedgerFromEnv(cfg.KafkaBrokers, cfg.KafkaBidTopic, cfg.KafkaDLQTopic, "settlement-workers", settlementWorkerID)
+		if err != nil {
+			log.Error("open kafka bid ledger", slog.String("error", err.Error()))
+			os.Exit(1)
+		} else {
+			bidLedger = ledger
+			defer bidLedger.Close()
+			go redisengine.NewWorker(deps.Postgres, deps.Redis, bidLedger, settlementWorkerID).WithLogger(log).Run(ctx, 200*time.Millisecond)
+		}
+	}
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           gateway.NewRouterWithRealtime(cfg, deps, log, rt),
+		Handler:           gateway.NewRouterWithRealtimeAndLedger(cfg, deps, log, rt, bidLedger),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

@@ -3,7 +3,8 @@ set -euo pipefail
 
 LABEL="${1:-manual}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-OUT_DIR="$ROOT_DIR/docs/perf/pts/evidence/$LABEL"
+EVIDENCE_ROOT="${EVIDENCE_ROOT:-$ROOT_DIR/docs/perf/pts/evidence/incoming}"
+OUT_DIR="$EVIDENCE_ROOT/$LABEL"
 DB_CONTAINER="${DB_CONTAINER:-live-auction-postgres}"
 REDIS_CONTAINER="${REDIS_CONTAINER:-live-auction-redis}"
 DB_USER="${DB_USER:-live_auction}"
@@ -30,7 +31,8 @@ select id, status, current_price_cents, accepted_bid_count, seq, end_at from auc
 select count(*) as bids,
        count(*) filter (where status='ACCEPTED') as accepted,
        count(*) filter (where status='REJECTED') as rejected
-from bids;
+from bids
+where auction_id in ('auc_live','auc_side');
 select status, count(*) from outbox_delivery group by status order by status;
 select count(*) as pending,
        max(now() - event_created_at) as max_pending_age,

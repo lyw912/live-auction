@@ -1,5 +1,11 @@
 # Full PTS Pressure Runbook
 
+> 2026-05-31 supersession notice: this runbook is historical for PG-lane /
+> Redis-guard hotspot exploration. It is not the current PTS-1B execution
+> authority. Current PTS-1B starts from `tests/pts/MANIFEST.md`.
+>
+> Historical reset commands in this file require `ALLOW_HISTORICAL_PTS=1`.
+
 Use this flow for each pressure round.
 
 For the current PTS-1 hotspot optimization work, use the dedicated hotspot
@@ -7,7 +13,7 @@ exploration bundle:
 
 ```bash
 cd /root/workspace/live-auction
-bash tests/pts/reset-hotspot-pressure-data.sh
+bash tests/pts/archive/historical/reset-hotspot-pressure-data.sh
 bash tests/pts/collect-server-evidence.sh before-pts1-hotspot-YYYYMMDD-HHMM
 ```
 
@@ -47,8 +53,8 @@ BID_LANE_WORKERS=256 BID_LANE_QUEUE_SIZE=100000 BID_LANE_QUEUE_TIMEOUT=10m \
 
 Upload:
 
-- `tests/pts/live-auction-hotspot-pressure.jmx`
-- `docs/perf/pts/pts_hotspot_sessions.csv`
+- `tests/pts/archive/historical/live-auction-hotspot-pressure.jmx`
+- `docs/perf/pts/archive/data/pts_hotspot_sessions.csv`
 
 PTS settings for optimization validation rounds:
 
@@ -83,7 +89,7 @@ number from a single validation run.
 
 ```bash
 cd /root/workspace/live-auction
-bash tests/pts/reset-pressure-data.sh
+bash tests/pts/archive/historical/reset-pressure-data.sh
 ```
 
 Verify:
@@ -91,7 +97,7 @@ Verify:
 ```bash
 curl -fsS http://127.0.0.1:18080/readyz
 curl -fsS http://127.0.0.1:18080/metrics | grep 'auction_admission_enabled 0'
-wc -l docs/perf/pts/pts_sessions.csv
+wc -l docs/perf/pts/archive/data/pts_sessions.csv
 ```
 
 Expected: ready, admission 0, CSV around 4097 lines.
@@ -109,8 +115,8 @@ under `docs/perf/pts/evidence/before-r2/`.
 
 Upload:
 
-- `tests/pts/live-auction-core-pressure.jmx`
-- `docs/perf/pts/pts_sessions.csv`
+- `tests/pts/archive/historical/live-auction-core-pressure.jmx`
+- `docs/perf/pts/archive/data/pts_sessions.csv`
 
 PTS settings:
 
@@ -150,13 +156,20 @@ Immediately after PTS ends:
 bash tests/pts/collect-server-evidence.sh after-r2
 ```
 
-Then preserve the PDF report in `docs/perf/pts/evidence/after-r2/`.
+Then archive the PDF report under `docs/perf/pts/evidence/incoming/after-r2/` before review/classification.
 
 ## 5. Pull PTS Sampling Logs
 
 Alibaba Cloud `GetJMeterSamplingLogs` gets JMeter sample logs by page.
 Required parameters are `ReportId`, `PageNumber`, and `PageSize`; useful filters
 include `SamplerId`, `Success`, `ResponseCode`, `BeginTime`, and `EndTime`.
+Alibaba Cloud PTS sampling logs are diagnostic samples, not the full request
+ledger. Official documentation states that sampling logs are collected at a
+default `1%` sampling rate and retained for 30 days; pay-as-you-go billing
+documentation also describes the pressure-log sampling rate as defaulting to
+`1%`. Use `GetJMeterSampleMetrics` or report details for PTS-side aggregate
+counts/RT/percentiles, use sampling logs for examples and failure diagnosis, and
+use server-side DB/Redis/Kafka evidence for full business correctness.
 
 If using OpenAPI Explorer:
 

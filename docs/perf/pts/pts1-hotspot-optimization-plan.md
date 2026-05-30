@@ -1,14 +1,18 @@
 # PTS-1 Hotspot Optimization Plan
 
+> 2026-05-31 supersession notice: this is a historical PG-lane/Redis-guard
+> optimization plan. It explains why PostgreSQL row-lock contention failed the
+> millisecond goal, but it is not the current Redis/Kafka PTS-1B plan.
+
 Status: proposed next task
 
 Baseline report: `9VY7W7BF`
 
 Baseline evidence:
 
-- `docs/perf/pts/evidence/after-9VY7W7BF-pts1-hotspot-review/analysis-summary.md`
-- `docs/perf/pts/evidence/before-pts1-hotspot-20260528-1647/`
-- `docs/perf/pts/evidence/after-9VY7W7BF-pts1-hotspot-review/`
+- `docs/perf/pts/evidence/archive/historical/after-9VY7W7BF-pts1-hotspot-review/analysis-summary.md`
+- `docs/perf/pts/evidence/archive/historical/before-pts1-hotspot-20260528-1647/`
+- `docs/perf/pts/evidence/archive/historical/after-9VY7W7BF-pts1-hotspot-review/`
 
 ## Problem
 
@@ -42,7 +46,7 @@ truth guarantees:
 The next PTS-1 run must compare directly against `9VY7W7BF` using the same JMX:
 
 ```text
-tests/pts/live-auction-hotspot-pressure.jmx
+tests/pts/archive/historical/live-auction-hotspot-pressure.jmx
 ```
 
 ## Non-Goals

@@ -79,12 +79,47 @@ func (a roomACL) requireActiveMembership(ctx context.Context, user AuthUser, roo
 }
 
 func (a roomACL) requireActiveMembershipForAuction(ctx context.Context, user AuthUser, auctionID string, traceID string) (string, error) {
-	roomID, err := a.roomForAuction(ctx, auctionID)
+	var roomID string
+	var allowed bool
+	var err error
+	if user.Role == "host" {
+		err = a.db.QueryRow(ctx, `
+			SELECT a.room_id,
+			       EXISTS(
+			         SELECT 1
+			         FROM rooms r
+			         WHERE r.id = a.room_id
+			           AND r.host_id = $2
+			           AND r.status = 'OPEN'
+			       )
+			FROM auctions a
+			WHERE a.id = $1
+		`, auctionID, user.ID).Scan(&roomID, &allowed)
+	} else {
+		err = a.db.QueryRow(ctx, `
+			SELECT a.room_id,
+			       EXISTS(
+			         SELECT 1
+			         FROM room_memberships rm
+			         JOIN rooms r ON r.id = rm.room_id
+			         WHERE rm.room_id = a.room_id
+			           AND rm.user_id = $2
+			           AND rm.role IN ('viewer','host')
+			           AND rm.status = 'ACTIVE'
+			           AND r.status = 'OPEN'
+			       )
+			FROM auctions a
+			WHERE a.id = $1
+		`, auctionID, user.ID).Scan(&roomID, &allowed)
+	}
 	if err != nil {
+		if err == pgx.ErrNoRows {
+			return "", apierrors.New(apierrors.CodeAuctionNotFound, "auction not found", http.StatusNotFound)
+		}
 		return "", err
 	}
-	if err := a.requireActiveMembership(ctx, user, roomID, auctionID, traceID); err != nil {
-		return roomID, err
+	if !allowed {
+		return roomID, a.forbidden(ctx, user, roomID, auctionID, traceID, "active room membership required")
 	}
 	return roomID, nil
 }

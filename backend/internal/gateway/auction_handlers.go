@@ -11,12 +11,17 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/minio/minio-go/v7"
+	"go.opentelemetry.io/otel/attribute"
 
 	"live-auction/backend/internal/auction"
 	"live-auction/backend/internal/config"
+	"live-auction/backend/internal/observability"
 	apierrors "live-auction/backend/internal/platform/errors"
 	"live-auction/backend/internal/realtime"
+	"live-auction/backend/internal/redisengine"
+	"live-auction/backend/internal/redisx"
 	"live-auction/backend/internal/storage"
+	apptracing "live-auction/backend/internal/tracing"
 )
 
 type AuctionHandler struct {
@@ -28,6 +33,7 @@ type AuctionHandler struct {
 	Bids   *bidAdmission
 	Lanes  *bidLaneManager
 	Guard  *redisGuard
+	Engine *redisengine.Engine
 }
 
 type uploadURLRequest struct {
@@ -345,47 +351,166 @@ func (h AuctionHandler) GetAuction(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h AuctionHandler) PlaceBid(w http.ResponseWriter, r *http.Request) {
+	mode := h.Config.BidEngineMode
+	if mode == "" {
+		mode = bidEngineModePostgresLane
+	}
+	ctx, span := apptracing.Start(r.Context(), "bid.place",
+		attribute.String("bid.engine_mode", mode),
+		attribute.String("http.route", "/api/auctions/{id}/bids"),
+	)
+	var handlerErr error
+	defer func() {
+		apptracing.End(span, handlerErr)
+	}()
+	r = r.WithContext(ctx)
+	traceCtx := r.Context()
+	totalStart := time.Now()
+	totalOutcome := "error"
+	defer func() {
+		recordBidGatewayStage("total", mode, totalOutcome, time.Since(totalStart))
+	}()
+
+	stageStart := time.Now()
+	_, stageSpan := apptracing.Start(traceCtx, "bid.auth")
 	user, ok := currentUser(r)
 	if !ok {
-		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		apiErr := apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized)
+		handlerErr = apiErr
+		apptracing.End(stageSpan, handlerErr)
+		recordBidGatewayStage("auth", mode, "error", time.Since(stageStart))
+		writeError(w, r, apiErr)
 		return
 	}
+	stageSpan.SetAttributes(attribute.String("enduser.id", user.ID), attribute.String("enduser.role", user.Role))
+	apptracing.End(stageSpan, nil)
+	recordBidGatewayStage("auth", mode, "ok", time.Since(stageStart))
+
+	stageStart = time.Now()
+	_, stageSpan = apptracing.Start(traceCtx, "bid.decode")
 	var req auction.BidInput
 	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "invalid json body", 400))
+		apiErr := apierrors.New(apierrors.CodeInvalidArgument, "invalid json body", 400)
+		handlerErr = apiErr
+		apptracing.End(stageSpan, handlerErr)
+		recordBidGatewayStage("decode", mode, "error", time.Since(stageStart))
+		writeError(w, r, apiErr)
 		return
 	}
+	stageSpan.SetAttributes(attribute.Int64("bid.amount_cents", req.AmountCents))
+	apptracing.End(stageSpan, nil)
+	recordBidGatewayStage("decode", mode, "ok", time.Since(stageStart))
 	auctionID := chi.URLParam(r, "id")
+	span.SetAttributes(attribute.String("auction.id", auctionID))
+
+	stageStart = time.Now()
+	_, stageSpan = apptracing.Start(traceCtx, "bid.acl", attribute.String("auction.id", auctionID))
 	if _, err := h.ACL.requireActiveMembershipForAuction(r.Context(), user, auctionID, traceID(r.Context())); err != nil {
+		handlerErr = err
+		apptracing.End(stageSpan, err)
+		recordBidGatewayStage("acl", mode, "error", time.Since(stageStart))
 		writeResult(w, r, http.StatusOK, nil, err)
 		return
 	}
+	apptracing.End(stageSpan, nil)
+	recordBidGatewayStage("acl", mode, "ok", time.Since(stageStart))
 	if h.Bids != nil {
+		stageStart = time.Now()
+		_, stageSpan = apptracing.Start(traceCtx, "bid.admission", attribute.String("auction.id", auctionID))
 		if replay, permit, ok, err := h.Bids.admit(r.Context(), r, user, auctionID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context())); err != nil || ok {
+			if err != nil {
+				handlerErr = err
+				apptracing.End(stageSpan, err)
+				recordBidGatewayStage("admission", mode, "error", time.Since(stageStart))
+			} else if ok {
+				apptracing.End(stageSpan, nil)
+				recordBidGatewayStage("admission", mode, "replay", time.Since(stageStart))
+				totalOutcome = "ok"
+			}
 			writeBidAdmissionResult(w, r, replay, err)
 			return
 		} else if permit != nil {
+			apptracing.End(stageSpan, nil)
+			recordBidGatewayStage("admission", mode, "ok", time.Since(stageStart))
 			defer permit.Release()
 		}
 	}
 	if h.Guard != nil {
+		stageStart = time.Now()
+		_, stageSpan = apptracing.Start(traceCtx, "bid.redis_guard", attribute.String("auction.id", auctionID))
 		decision := h.Guard.Check(r.Context(), auctionID, user.ID, req)
 		if decision.Outcome == redisGuardOutcomeReject {
 			result, err := h.Guard.Response(r.Context(), auctionID, user.ID, traceID(r.Context()), decision)
+			if err != nil {
+				handlerErr = err
+				apptracing.End(stageSpan, err)
+				recordBidGatewayStage("redis_guard", mode, "error", time.Since(stageStart))
+			} else {
+				stageSpan.SetAttributes(attribute.String("bid.redis_guard.outcome", "reject"))
+				apptracing.End(stageSpan, nil)
+				recordBidGatewayStage("redis_guard", mode, "reject", time.Since(stageStart))
+				totalOutcome = "ok"
+			}
 			writeBidAdmissionResult(w, r, result, err)
 			return
 		}
+		stageSpan.SetAttributes(attribute.String("bid.redis_guard.outcome", "pass"))
+		apptracing.End(stageSpan, nil)
+		recordBidGatewayStage("redis_guard", mode, "pass", time.Since(stageStart))
+	}
+	if h.Engine != nil {
+		stageStart = time.Now()
+		_, stageSpan = apptracing.Start(traceCtx, "bid.redis_engine", attribute.String("auction.id", auctionID))
+		result, err := h.Engine.PlaceBid(r.Context(), auctionID, user.ID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context()))
+		if err != nil {
+			handlerErr = err
+			apptracing.End(stageSpan, err)
+			recordBidGatewayStage("redis_engine", mode, "error", time.Since(stageStart))
+		} else {
+			stageSpan.SetAttributes(
+				attribute.String("bid.result", result.Result),
+				attribute.Int64("bid.seq", result.Seq),
+			)
+			apptracing.End(stageSpan, nil)
+			recordBidGatewayStage("redis_engine", mode, "ok", time.Since(stageStart))
+			totalOutcome = "ok"
+		}
+		writeBidAdmissionResult(w, r, result, err)
+		return
 	}
 	place := func(ctx context.Context) (auction.BidResponse, error) {
 		return h.Repo.PlaceBid(ctx, auctionID, user.ID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context()))
 	}
+	stageStart = time.Now()
+	_, stageSpan = apptracing.Start(traceCtx, "bid.postgres_lane", attribute.String("auction.id", auctionID))
 	result, err := h.executeBidLane(r.Context(), auctionID, user.ID, traceID(r.Context()), place)
+	if err != nil {
+		handlerErr = err
+		apptracing.End(stageSpan, err)
+		recordBidGatewayStage("postgres_lane", mode, "error", time.Since(stageStart))
+	} else {
+		stageSpan.SetAttributes(
+			attribute.String("bid.result", result.Result),
+			attribute.Int64("bid.seq", result.Seq),
+		)
+		apptracing.End(stageSpan, nil)
+		recordBidGatewayStage("postgres_lane", mode, "ok", time.Since(stageStart))
+		totalOutcome = "ok"
+	}
 	if err == nil && h.Guard != nil {
 		// This refresh is a best-effort cache update after PostgreSQL commit.
 		// Outbox relay remains the durable projection repair path.
 		h.Guard.RefreshAfterAcceptedBid(r.Context(), result)
 	}
 	writeBidAdmissionResult(w, r, result, err)
+}
+
+func recordBidGatewayStage(stage string, mode string, outcome string, elapsed time.Duration) {
+	observability.Observe("auction_bid_gateway_stage_seconds", elapsed.Seconds(), map[string]string{
+		"stage":   stage,
+		"mode":    mode,
+		"outcome": outcome,
+	}, observability.DefaultLatencyBuckets)
 }
 
 func (h AuctionHandler) DemoCompetingBid(w http.ResponseWriter, r *http.Request) {
@@ -527,6 +652,9 @@ func (h AuctionHandler) PutMaxBidIntent(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	result, err := h.Repo.PutMaxBidIntent(r.Context(), auctionID, user.ID, r.Header.Get("Idempotency-Key"), req)
+	if err == nil {
+		h.markRedisLedgerRequiresPostgres(r.Context(), auctionID, "active_max_bid_intent")
+	}
 	writeResult(w, r, http.StatusOK, result, err)
 }
 
@@ -543,6 +671,17 @@ func (h AuctionHandler) DeleteMaxBidIntent(w http.ResponseWriter, r *http.Reques
 	}
 	result, err := h.Repo.DeleteMaxBidIntent(r.Context(), auctionID, user.ID, r.Header.Get("Idempotency-Key"))
 	writeResult(w, r, http.StatusOK, result, err)
+}
+
+func (h AuctionHandler) markRedisLedgerRequiresPostgres(ctx context.Context, auctionID string, reason string) {
+	if h.Config.BidEngineMode == bidEngineModePostgresLane || h.Config.BidEngineMode == bidEngineModeRedisGuard || h.Deps == nil || h.Deps.Redis == nil {
+		return
+	}
+	_ = h.Deps.Redis.HSet(ctx, redisx.BidEngineStateKey(auctionID),
+		"requires_postgres", reason,
+		"paused", 1,
+		"pause_reason", "REDIS_ENGINE_REQUIRES_POSTGRES_"+reason,
+	).Err()
 }
 
 func (h AuctionHandler) PayMock(w http.ResponseWriter, r *http.Request) {
@@ -724,5 +863,5 @@ func writeResult(w http.ResponseWriter, r *http.Request, status int, payload any
 		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, minioErr.Message, 500))
 		return
 	}
-	writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "internal server error", 500))
+	writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "internal server error: "+err.Error(), 500))
 }

@@ -778,6 +778,30 @@ body {
   margin-bottom: 24px;
 }
 
+.engine-diagnostics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.engine-diagnostics span {
+  min-width: 0;
+  min-height: 34px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-0);
+  color: var(--color-text);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .control-summary {
   display: grid;
   gap: 14px;

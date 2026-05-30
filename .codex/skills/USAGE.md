@@ -3,16 +3,16 @@
 把本目录下的 skill 文件夹复制到新仓库的 `.codex/skills/`：
 
 ```text
-docs/design-v2-industrial/skills/live-auction-v2-navigator
-docs/design-v2-industrial/skills/live-auction-v2-plan-review
-docs/design-v2-industrial/skills/live-auction-v2-code-review
-docs/design-v2-industrial/skills/live-auction-v2-ui-review
-docs/design-v2-industrial/skills/live-auction-v2-perf-review
-docs/design-v2-industrial/skills/live-auction-v2-stress-attacker
-docs/design-v2-industrial/skills/live-auction-v2-ship-gate
-docs/design-v2-industrial/skills/live-auction-v2-tiktok-judge
-docs/design-v2-industrial/skills/live-auction-v2-tiktok-test-attacker
-docs/design-v2-industrial/skills/live-auction-v2-tiktok-product-auditor
+.codex/skills/live-auction-v2-navigator
+.codex/skills/live-auction-v2-plan-review
+.codex/skills/live-auction-v2-code-review
+.codex/skills/live-auction-v2-ui-review
+.codex/skills/live-auction-v2-perf-review
+.codex/skills/live-auction-v2-stress-attacker
+.codex/skills/live-auction-v2-ship-gate
+.codex/skills/live-auction-v2-tiktok-judge
+.codex/skills/live-auction-v2-tiktok-test-attacker
+.codex/skills/live-auction-v2-tiktok-product-auditor
 ```
 
 复制后目录应类似：
@@ -22,9 +22,10 @@ docs/design-v2-industrial/skills/live-auction-v2-tiktok-product-auditor
 .codex/skills/live-auction-v2-plan-review/SKILL.md
 ...
 docs/design-v2-industrial/README.md
+docs/current/README.md
 ```
 
-这些 skills 默认从新仓库根目录读取 `docs/design-v2-industrial/`。如果文档放在其他路径，使用前先告诉 Codex 定版设计目录。
+这些 skills 当前默认先读取 `docs/current/`，再按任务读取 `docs/design-v2-industrial/` 的历史/产品/UX/工程约束材料。如果文档放在其他路径，使用前先告诉 Codex 当前权威设计目录。
 
 触发建议：
 
@@ -38,3 +39,9 @@ docs/design-v2-industrial/README.md
 - 评委拷打：`使用 live-auction-v2-tiktok-judge 像 TikTok 十年资深工程师/面试官一样审 P0`
 - 测试攻击：`使用 live-auction-v2-tiktok-test-attacker 设计并运行恶意/边界/事故场景`
 - 产品验收：`使用 live-auction-v2-tiktok-product-auditor 对照范围和代码逐项查验是否降级实现`
+
+压测、性能审查、发布闸门、评委拷打类任务必须先确认 `docs/current/runtime-profiles.md`：
+
+- `.env.example` 只代表本地 demo profile。
+- PTS-1B 必须使用 `.env.pts1b.example` 或 `tests/pts/MANIFEST.md` 的 reset/preflight/verify 流程。
+- PTS-1B 证据必须记录 `BID_ENGINE_MODE=redis_ledger`、`ADMISSION_ENABLED=false`、Redis 和 Kafka 配置来源。

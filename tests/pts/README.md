@@ -1,5 +1,15 @@
 # Alibaba Cloud PTS JMeter Smoke
 
+> 2026-05-31 current entry notice: for PTS-1B performance/correctness claims, read `docs/current/performance-correctness-contract.md` first. This README still documents PTS/JMeter connectivity and diagnostics, but older JMX files in this directory include smoke, accepted-ladder, PG-lane, Redis-guard, and historical L4B workloads. Do not treat every script here as current success evidence.
+
+> Current active PTS-1B workload is `pts-1b-contention-burst-1000vu-1m.jmx` unless a newer current doc explicitly supersedes it. Pair it with reset/preflight/correctness scripts and current evidence rules.
+
+> The active-vs-historical script list is now maintained in `tests/pts/MANIFEST.md`. Use that manifest rather than guessing from file names.
+
+> Historical reset scripts are opt-in only. See `tests/pts/HISTORICAL.md`; old
+> PG-lane/Redis-guard reset flows require `ALLOW_HISTORICAL_PTS=1` and must not
+> be cited as current PTS-1B evidence.
+
 This folder is for temporary Alibaba Cloud PTS/JMeter validation. It proves PTS can reach the current endpoint and that the core REST business chain works. It is not capacity evidence and must not be used for QPS, P99, or online-user claims.
 
 ## Why `192.168.1.104` Is Not Enough
@@ -176,6 +186,6 @@ If `RATE_LIMITED`, `BID_AUCTION_TOO_HOT`, HTTP `429`, or WS admission rejection 
 
 ## Formal Cloud Run Discipline
 
-When the system is deployed on ECS, use the ECS public domain/IP for smoke. For formal performance evidence, run the system on Linux/ECS, collect server metrics, and record three repeat runs per workload using `docs/design-v2-industrial/templates/perf-baseline.md`.
+When the system is deployed on ECS, use the ECS public domain/IP for smoke. For formal performance evidence, run the system on Linux/ECS, collect server metrics, record three repeat runs per workload, and follow `docs/current/performance-correctness-contract.md`. The old `docs/design-v2-industrial/templates/perf-baseline.md` template can still be used as a formatting aid, but it is not sufficient for current PTS-1B claims unless it includes `ENGINE_*`, durability, settlement, verifier, and fault-injection evidence.
 
 Do not use the Cloudflare quick tunnel for capacity conclusions. It is only a temporary reachability and script-debugging bridge.

@@ -22,6 +22,8 @@ const (
 	CodeRateLimited                              Code = "RATE_LIMITED"
 	CodeBidAuctionTooHot                         Code = "BID_AUCTION_TOO_HOT"
 	CodeBidRetryLater                            Code = "BID_RETRY_LATER"
+	CodeEnginePaused                             Code = "ENGINE_PAUSED"
+	CodeEngineReconciling                        Code = "RECONCILING"
 	CodeIdempotencyKeyReusedWithDifferentRequest Code = "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST"
 	CodeProcessingRetryLater                     Code = "PROCESSING_RETRY_LATER"
 	CodeIdempotencyTimeout                       Code = "IDEMPOTENCY_TIMEOUT"

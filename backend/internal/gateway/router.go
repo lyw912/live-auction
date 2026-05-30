@@ -13,12 +13,23 @@ import (
 	"live-auction/backend/internal/config"
 	"live-auction/backend/internal/observability"
 	"live-auction/backend/internal/realtime"
+	"live-auction/backend/internal/redisengine"
 	"live-auction/backend/internal/storage"
 )
 
 func NewRouter(cfg config.Config, deps *storage.Dependencies, log *slog.Logger) http.Handler {
+	cfg = normalizeBidLaneConfig(cfg)
 	rt := realtime.NewServerWithOptions(deps.Postgres, deps.Redis, realtimeOptions(cfg)).WithAdmission(newRealtimeAdmission(cfg))
-	return NewRouterWithRealtime(cfg, deps, log, rt)
+	var ledger redisengine.BidLedger
+	if cfg.BidEngineMode != bidEngineModePostgresLane && cfg.BidEngineMode != bidEngineModeRedisGuard {
+		kafkaLedger, err := redisengine.NewKafkaLedgerFromEnv(cfg.KafkaBrokers, cfg.KafkaBidTopic, cfg.KafkaDLQTopic, "settlement-workers", "gateway")
+		if err == nil {
+			ledger = kafkaLedger
+		} else if log != nil {
+			log.Error("open kafka bid ledger", slog.String("error", err.Error()))
+		}
+	}
+	return NewRouterWithRealtimeAndLedger(cfg, deps, log, rt, ledger)
 }
 
 func realtimeOptions(cfg config.Config) realtime.Options {
@@ -47,7 +58,12 @@ func newRealtimeAdmission(cfg config.Config) *realtime.Admission {
 }
 
 func NewRouterWithRealtime(cfg config.Config, deps *storage.Dependencies, log *slog.Logger, rt *realtime.Server) http.Handler {
+	return NewRouterWithRealtimeAndLedger(cfg, deps, log, rt, nil)
+}
+
+func NewRouterWithRealtimeAndLedger(cfg config.Config, deps *storage.Dependencies, log *slog.Logger, rt *realtime.Server, ledger redisengine.BidLedger) http.Handler {
 	bidLaneCfg := normalizeBidLaneConfig(cfg)
+	cfg = bidLaneCfg
 	observability.SetAdmissionConfig(observability.AdmissionConfig{
 		Enabled:               cfg.AdmissionEnabled,
 		BidUserLimit:          cfg.BidUserLimitPerSecond,
@@ -78,6 +94,11 @@ func NewRouterWithRealtime(cfg config.Config, deps *storage.Dependencies, log *s
 	r.Get("/api/health", health.Readiness)
 	r.Get("/metrics", observability.Handler(deps.Postgres).ServeHTTP)
 
+	var engine *redisengine.Engine
+	if cfg.BidEngineMode != bidEngineModePostgresLane && cfg.BidEngineMode != bidEngineModeRedisGuard {
+		engine = redisengine.New(deps.Postgres, deps.Redis, ledger).
+			WithKafkaAppendTimeout(cfg.BidEngineKafkaAppendTimeout)
+	}
 	auctionHandler := AuctionHandler{
 		Config: cfg,
 		Deps:   deps,
@@ -86,7 +107,7 @@ func NewRouterWithRealtime(cfg config.Config, deps *storage.Dependencies, log *s
 		ACL:    newRoomACL(deps.Postgres),
 		Bids:   newBidAdmission(cfg, deps.Postgres, deps.Redis),
 		Lanes:  newBidLaneManager(cfg, deps.Postgres),
-		Guard:  newRedisGuard(cfg, deps.Postgres, deps.Redis),
+		Engine: engine,
 	}
 	authHandler := AuthHandler{Config: cfg, DB: deps.Postgres}
 	monitorHandler := MonitorHandler{Deps: deps}
@@ -141,6 +162,7 @@ func NewRouterWithRealtime(cfg config.Config, deps *storage.Dependencies, log *s
 			r.With(requireHost).Get("/monitor/recovery", monitorHandler.Recovery)
 			r.With(requireHost).Get("/monitor/snapshots", monitorHandler.Snapshots)
 			r.With(requireHost).Get("/monitor/signals", monitorHandler.Signals)
+			r.With(requireHost).Get("/monitor/redis-engine", monitorHandler.RedisEngine)
 			r.With(requireHost).Post("/monitor/signals", monitorHandler.CreateSignal)
 			r.With(requireHost).Post("/test/rooms", auctionHandler.TestSetupRoom)
 		})

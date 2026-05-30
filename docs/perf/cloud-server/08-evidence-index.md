@@ -1,32 +1,37 @@
 # 08 · 证据索引
 
+> 2026-05-31 supersession notice: this is a historical evidence index for the
+> old cloud core-pressure run. It is not current PTS-1B success evidence. Current
+> evidence classification is governed by `docs/current/evidence-policy.md`,
+> `tests/pts/MANIFEST.md`, and `tests/pts/HISTORICAL.md`.
+
 ## 当前 PTS 证据
 
 | 内容 | 路径 |
 |---|---|
 | PTS PDF | `Jmeter压测报告-3IVNW7TF-20260528014811.pdf` |
 | PDF page images | `docs/perf/pts/pdf-pages/` |
-| PTS sampling CSV | `docs/perf/pts/evidence/after-3IVNW7TF-review/pts-sampling-logs/sampling-logs.csv` |
-| PTS sampling JSONL | `docs/perf/pts/evidence/after-3IVNW7TF-review/pts-sampling-logs/sampling-logs.jsonl` |
-| PTS sampling raw pages | `docs/perf/pts/evidence/after-3IVNW7TF-review/pts-sampling-logs/pages/` |
-| Service metrics | `docs/perf/pts/evidence/after-3IVNW7TF-review/metrics.prom` |
-| Redis info | `docs/perf/pts/evidence/after-3IVNW7TF-review/redis-info.txt` |
-| CPU | `docs/perf/pts/evidence/after-3IVNW7TF-review/mpstat.txt` |
-| Disk | `docs/perf/pts/evidence/after-3IVNW7TF-review/iostat-xz.txt` |
-| Memory | `docs/perf/pts/evidence/after-3IVNW7TF-review/free-m.txt` |
-| Processes | `docs/perf/pts/evidence/after-3IVNW7TF-review/top-processes.txt` |
-| Sockets | `docs/perf/pts/evidence/after-3IVNW7TF-review/ss-s.txt` |
+| PTS sampling CSV | `docs/perf/pts/evidence/archive/historical/after-3IVNW7TF-review/pts-sampling-logs/sampling-logs.csv` |
+| PTS sampling JSONL | `docs/perf/pts/evidence/archive/historical/after-3IVNW7TF-review/pts-sampling-logs/sampling-logs.jsonl` |
+| PTS sampling raw pages | `docs/perf/pts/evidence/archive/historical/after-3IVNW7TF-review/pts-sampling-logs/pages/` |
+| Service metrics | `docs/perf/pts/evidence/archive/historical/after-3IVNW7TF-review/metrics.prom` |
+| Redis info | `docs/perf/pts/evidence/archive/historical/after-3IVNW7TF-review/redis-info.txt` |
+| CPU | `docs/perf/pts/evidence/archive/historical/after-3IVNW7TF-review/mpstat.txt` |
+| Disk | `docs/perf/pts/evidence/archive/historical/after-3IVNW7TF-review/iostat-xz.txt` |
+| Memory | `docs/perf/pts/evidence/archive/historical/after-3IVNW7TF-review/free-m.txt` |
+| Processes | `docs/perf/pts/evidence/archive/historical/after-3IVNW7TF-review/top-processes.txt` |
+| Sockets | `docs/perf/pts/evidence/archive/historical/after-3IVNW7TF-review/ss-s.txt` |
 
 ## 当前 PTS 工具
 
 | 内容 | 路径 |
 |---|---|
-| JMX | `tests/pts/live-auction-core-pressure.jmx` |
+| JMX | `tests/pts/archive/historical/live-auction-core-pressure.jmx` |
 | Prepare script | `tests/pts/prepare-cloud-pressure.sh` |
-| Reset script | `tests/pts/reset-pressure-data.sh` |
+| Reset script | `tests/pts/archive/historical/reset-pressure-data.sh` |
 | Evidence script | `tests/pts/collect-server-evidence.sh` |
 | PTS sampling fetch | `tests/pts/fetch-pts-sampling-logs.sh` |
-| Session CSV | `docs/perf/pts/pts_sessions.csv` |
+| Session CSV | `docs/perf/pts/archive/data/pts_sessions.csv` |
 
 ## 当前关键数字
 

@@ -1,5 +1,7 @@
 # P0 Demo Flow
 
+> 2026-05-31 current-architecture note: this is a product demo flow, not PTS-1B performance evidence. For current hot-bid architecture and pressure evidence, read `docs/current/README.md`, `docs/current/performance-correctness-contract.md`, and `tests/pts/MANIFEST.md`.
+
 > P10 judge-facing demo policy lives in `docs/demo/p10-no-mock-auction-demo.md`. P10 should use a backend-created item and auction in the demo session and must not rely on Playwright route mocks or a pre-seeded ACTIVE auction as the main trunk.
 
 Date: 2026-05-22
@@ -64,6 +66,8 @@ pnpm test:e2e:h5-live
 
 - H5 still enters deterministic local room `room_main`; this is a demo room, not a full room selector.
 - P0 uses mock auth and mock payment.
+- Demo flow success is not PTS-1B capacity evidence.
+- Current PTS-1B hot path uses Redis live decision state, Kafka decision WAL/fence, and PostgreSQL settlement/audit. Old PG-only wording in historical docs does not govern PTS-1B.
 - P10 narrows the judge-facing trunk: local demo identity/room setup is allowed, but route-mocked API responses and pre-seeded ACTIVE auctions are not allowed as the main demo evidence.
 - Payment and real live streaming are outside the P10 no-mock auction trunk; a looping product video can stand in for the live visual layer, and local fake-provider payment must be labeled optional if shown.
 - No production performance number is claimed from the demo.
@@ -72,5 +76,5 @@ pnpm test:e2e:h5-live
 ## Fallback Plan
 
 - If browser dev proxies are unstable, run `pnpm test:e2e:h5-live` and show its raw output as the live backend proof.
-- If Redis is down, state the known degradation clearly: bidding remains PostgreSQL-authoritative where reachable, but WebSocket ticket/reconnect quality is not claimed during the outage.
-- If performance is questioned, show `docs/perf/p0-load-smoke-2026-05-22.md` only as local smoke evidence and defer any QPS/P99/fanout claim until a formal 3-run baseline exists.
+- If Redis is down during normal demo, state the known degradation clearly: WebSocket ticket/reconnect quality is not claimed, and the Redis hot-engine profile must fail closed or enter recovery rather than fake success.
+- If performance is questioned, show `docs/current/evidence-policy.md` and `tests/pts/MANIFEST.md`; local demo smoke is not QPS/P99/fanout evidence.

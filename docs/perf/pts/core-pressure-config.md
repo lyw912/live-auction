@@ -1,11 +1,15 @@
 # PTS Core Pressure Configuration
 
+> 2026-05-31 supersession notice: this core-pressure profile is historical. It
+> can still explain old bottleneck evidence, but it is not current PTS-1B
+> execution guidance. Current PTS workloads are listed in `tests/pts/MANIFEST.md`.
+
 Use this bundle to find the first cloud bottleneck with admission disabled.
 Do not run it against real customer traffic or shared production data.
 
 ## Files
 
-- `tests/pts/live-auction-core-pressure.jmx`
+- `tests/pts/archive/historical/live-auction-core-pressure.jmx`
 - `pts_sessions.csv`, generated from `docs/perf/pts/generate-pts-sessions.sql`
 
 Upload both files to the same PTS JMeter scene. In the JMX, the CSV path is only

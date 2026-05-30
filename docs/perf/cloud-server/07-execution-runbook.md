@@ -1,5 +1,14 @@
 # 07 · 云服务器下一轮执行手册
 
+> 2026-05-31 supersession notice: this is a historical cloud pressure runbook
+> for the earlier core-pressure/PG-lane era. It is not the current PTS-1B
+> execution authority. For current PTS-1B use `tests/pts/MANIFEST.md`,
+> `docs/current/runtime-profiles.md`, and
+> `docs/current/performance-correctness-contract.md`.
+>
+> Commands in this file that call `tests/pts/archive/historical/reset-pressure-data.sh` now require
+> `ALLOW_HISTORICAL_PTS=1` and must be labeled historical/harness evidence.
+
 ## 0. 基本原则
 
 每一轮压测必须有唯一 run id：
@@ -39,7 +48,7 @@ ADMISSION_ENABLED=false \
 SESSION_TTL=12h \
 OUTBOX_WORKER_ID=pts-cloud-1 \
 SCHEDULER_WORKER_ID=pts-cloud-1 \
-./docs/perf/pts/live-auction-server
+/tmp/live-auction-pts/live-auction-server
 ```
 
 开发调试才用：
@@ -55,7 +64,7 @@ air
 
 ```bash
 cd /root/workspace/live-auction
-bash tests/pts/reset-pressure-data.sh
+bash tests/pts/archive/historical/reset-pressure-data.sh
 ```
 
 验证：
@@ -63,7 +72,7 @@ bash tests/pts/reset-pressure-data.sh
 ```bash
 curl -fsS http://127.0.0.1:18080/readyz
 curl -fsS http://127.0.0.1:18080/metrics | grep 'auction_admission_enabled 0'
-wc -l docs/perf/pts/pts_sessions.csv
+wc -l docs/perf/pts/archive/data/pts_sessions.csv
 ```
 
 DB 验证：
@@ -98,8 +107,8 @@ bash tests/pts/collect-server-evidence.sh during-<run-id>-03
 上传：
 
 ```text
-tests/pts/live-auction-core-pressure.jmx
-docs/perf/pts/pts_sessions.csv
+tests/pts/archive/historical/live-auction-core-pressure.jmx
+docs/perf/pts/archive/data/pts_sessions.csv
 ```
 
 配置：

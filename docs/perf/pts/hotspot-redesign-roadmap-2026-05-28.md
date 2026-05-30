@@ -4,6 +4,8 @@ Date: 2026-05-28
 
 Status: proposed execution plan
 
+Supersession note, 2026-05-29: current L4b intentionally uses Kafka as the required durable ledger. Earlier roadmap text preferring Redis Streams first is superseded by the Redis hot state + Kafka ledger + PostgreSQL settlement implementation.
+
 ## Goal
 
 Turn PTS-1 from a weak point into the project's strongest differentiator:
@@ -27,7 +29,7 @@ These tracks are not mutually exclusive. They should converge into one industria
 
 | Layer | Purpose | Integration policy |
 |---|---|---|
-| PostgreSQL baseline | Keep existing correctness and settlement truth. | Always retained as fallback. |
+| PostgreSQL baseline | Keep existing correctness and settlement truth. | Historical fallback only; not current PTS-1B hot path. |
 | PG lane | Reduce DB lock/pool convoying and expose overload. | Merge into mainline because it improves the baseline path. |
 | Redis guard | Optional Redis prefilter/projection that protects PG without deciding winner/order. | Integrate behind `BID_ENGINE_MODE=postgres_lane|redis_guard|redis_ledger`; can merge earlier than ledger. |
 | Redis ledger engine | Optional hot decision engine for extreme hotspot mode. | Integrate behind `BID_ENGINE_MODE=postgres_lane|redis_guard|redis_ledger`; default stays conservative until gates pass. |
@@ -50,7 +52,7 @@ The final implementation should be planned as layers that compose, not as isolat
 
 | Layer | Name | Responsibility | Main modules | UI surface | Runtime switch |
 |---|---|---|---|---|---|
-| L0 | Evidence and baseline | Preserve PTS-1 facts and invariant gates. | `docs/perf/pts`, `tests/pts`, invariant checker | none, docs only | n/a |
+| L0 | Evidence and baseline | Archive PTS-1 facts and invariant gates. | `docs/perf/pts`, `tests/pts`, invariant checker | none, docs only | n/a |
 | L1 | Admission and debounce | Stop useless pressure before serialization. | H5 bid dock, gateway GCRA, local pending state | pending disable, retry copy, cooldown | `ADMISSION_ENABLED`, limit envs |
 | L2 | PostgreSQL lane | Bound hot-auction DB concurrency while preserving final DB truth response. | gateway/auction lane, repository metrics | same existing bid result UI plus retry-too-hot state | `BID_ENGINE_MODE=postgres_lane` |
 | L3 | Realtime delivery | Room-scoped WebSocket, heartbeat, recovery, slow-client isolation. | realtime hub/server, Redis history/snapshot | reconnecting, recovered, stale/gap, live rank updates | always on |
@@ -166,8 +168,8 @@ Deliberate exclusions:
 - max/proxy bid in Redis;
 - multi-region;
 - real payment;
-- mandatory Kafka; use Redis Streams behind a command-log interface first.
-- Flink/Kafka unless Redis Stream is proven insufficient.
+- Flink stream processing; settlement remains app-owned.
+- multi-node production Kafka proof; local Apache Kafka is a functional test topology.
 
 Expected result:
 
@@ -182,8 +184,8 @@ Concrete components:
 | `PostgresEngine` | Existing repository path plus lane. | Default mode. |
 | `RedisGuard` | Reject clearly invalid/stale pressure before PG truth transaction. | No winner/order mutation. |
 | `RedisLedgerEngine` | Lua state transition and ledger append. | Manual bid only. |
-| Redis Lua script | Atomic rule validation, idempotency, current price/winner/end_at, cap sold, stream append. | No proxy/max-bid loop. |
-| `AuctionCommandLog` | Abstract Redis Streams now, Kafka later if needed. | Redis Streams first; no mandatory Kafka container. |
+| Redis Lua script | Atomic rule validation, idempotency, current price/winner/end_at, cap sold, pending-decision marker. | No proxy/max-bid loop. |
+| `AuctionCommandLog` | Kafka durable ledger behind a small interface. | Local Apache Kafka for functional gates; production requires replicated brokers. |
 | Settlement worker | Consume ledger and write PostgreSQL bid/event/outbox/idempotency/order. | At-least-once, idempotent. |
 | Reconciler | Compare Redis state, ledger, DB, outbox. | pause on gap/poison/divergence. |
 | Gateway response adapter | Preserve old response where possible, add settlement fields. | `ENGINE_ACCEPTED`, `ENGINE_REJECTED`, `ENGINE_SOLD`. |

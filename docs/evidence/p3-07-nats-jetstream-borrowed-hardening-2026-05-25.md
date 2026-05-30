@@ -61,4 +61,4 @@ Focused tests covering the borrowing:
 
 - No NATS server, JetStream stream, backend NATS SDK, or browser NATS client is integrated.
 - No NATS/JetStream performance number is claimed.
-- Broker adoption remains evidence-gated by `docs/p3-decision-log.md` P3-D13 and would require a new ADR plus broker-down, duplicate, poison, restart, ordering, and backpressure tests.
+- Broker adoption remains evidence-gated by `docs/archive/progress/p3-decision-log.md` P3-D13 and would require a new ADR plus broker-down, duplicate, poison, restart, ordering, and backpressure tests.

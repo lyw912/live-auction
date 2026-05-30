@@ -887,6 +887,7 @@ func admissionTestConfig() config.Config {
 	cfg.BidAuctionMaxInFlight = 64
 	cfg.BidLimitWindow = time.Second
 	cfg.BidLimitRedisTimeout = 50 * time.Millisecond
+	cfg.BidEngineMode = bidEngineModePostgresLane
 	return cfg
 }
 

@@ -25,13 +25,13 @@ IPv6: off
 当前 JMX：
 
 ```text
-tests/pts/live-auction-core-pressure.jmx
+tests/pts/archive/historical/live-auction-core-pressure.jmx
 ```
 
 session CSV：
 
 ```text
-docs/perf/pts/pts_sessions.csv
+docs/perf/pts/archive/data/pts_sessions.csv
 ```
 
 要求：

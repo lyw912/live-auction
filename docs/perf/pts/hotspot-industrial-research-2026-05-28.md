@@ -4,6 +4,8 @@ Date: 2026-05-28
 
 Status: research baseline for PTS-1 architecture reset
 
+Supersession note, 2026-05-29: the implementation direction was upgraded after this research note. Current L4b uses Redis Lua as hot state, Kafka as durable ledger, and PostgreSQL as settlement truth. Earlier statements that Kafka is not required for the first implementation are historical context, not current implementation guidance.
+
 ## Executive Finding
 
 PTS-1 exposed the real core problem: the current path is correct but not competitive for a hot live auction. A P99 above 2s means the system is behaving like a database-serialized back office workflow, not a millisecond bidding engine.
@@ -116,7 +118,7 @@ Use a three-tier plan:
 2. Redis guard path: use Redis Lua as a high-performance prefilter/projection layer. It rejects clearly invalid or stale pressure and protects PG, but it does not maintain winner/order truth.
 3. Strategic differentiator: implement a Redis Lua + durable ledger hot engine as an opt-in `BID_ENGINE_MODE=redis_ledger` profile, with PostgreSQL settlement and reconciliation. This is the route that can credibly beat DB-lock-only competitors, but only after the full correctness mechanism exists.
 
-Kafka is not a required dependency for the first Redis-ledger implementation. In the current single-machine deployment, Redis Streams or a PostgreSQL ledger/outbox table is a more pragmatic command log. Kafka should remain a compatible future implementation of the command-log interface, not a mandatory Docker dependency for PTS-1.
+Current implementation update: Kafka is required for L4b so Redis does not carry both hot state and historical ledger. Local single-node Apache Kafka is only a functional test topology; production still needs replicated Kafka and reconciliation evidence.
 
 Realtime delivery is a parallel P0 track, not a later UI polish task:
 

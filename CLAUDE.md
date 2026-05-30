@@ -1,49 +1,52 @@
 # CLAUDE.md
 
-This repository implements a live auction system. Use the design documents in `docs/design-v2-industrial/` as the source of truth.
+This repository implements the live auction system. Start from the current
+architecture docs, not the historical PG-lane baseline.
 
-## Priorities
+## Required First Reads
 
-1. Preserve server-authoritative auction correctness.
-2. Keep realtime delivery recoverable through outbox, Redis history/snapshot and authoritative snapshots.
-3. Make failures visible through diagnostics and evidence records.
-4. Avoid unmeasured performance claims.
+1. `docs/current/README.md`
+2. `docs/current/architecture.md`
+3. `docs/current/performance-correctness-contract.md`
+4. `docs/current/document-map.md`
+5. `tests/pts/MANIFEST.md` for PTS work
 
-## Non-Negotiables
+The official brief `抖音电商AI全栈课题-直播竞拍全栈系统（宣讲版）.md` and images under
+`docs/references/official-brief-images/` are immutable. `单热点调研.md` is
+important research, but it is not by itself the governing design.
 
-- PostgreSQL is truth for auction state, price, winner, bids, orders, scheduler jobs and idempotency.
-- Redis is cache/projection/recovery helper only.
-- WebSocket is delivery only.
-- Never use client timestamps to decide ordering, close time or winner.
-- No direct DB commit followed by direct WebSocket publish without outbox.
-- No fake dashboard cards or static diagnostic data.
-- No AI in bid, cancel or settlement paths.
+## Current Non-Negotiables
 
-## Expected Workflow
+- PostgreSQL remains settlement, audit, order, and durable query truth.
+- Redis is the live hot-state decision engine only inside the current
+  Kafka/fence/reconciliation contract.
+- Kafka is the durable ordered decision WAL/fence for hot-engine decisions.
+- The hot bid path must fail closed or reconcile when Redis/Kafka/PostgreSQL
+  state cannot be proven safe.
+- Never trust client timestamps, current price, winner, terminal state, or bid
+  success.
+- Do not use HTTP status alone as auction outcome; inspect `ENGINE_*`,
+  durability, and settlement fields.
+- No performance claim without current workload, profile, verifier, and
+  evidence classification.
 
-1. Read the relevant design section before changing code.
-2. Keep changes scoped to the module being implemented.
-3. Add or update tests for invariants, races and recovery behavior.
-4. For any P0 gate touched, add an evidence record under `docs/evidence/`.
-5. For performance claims, add raw output under `docs/perf/` before writing the claim.
+## Historical Material
 
-## Current Decisions
+`docs/design-v2-industrial/`, `docs/evidence/`, `docs/archive/`,
+`docs/perf/pts/`, and old report reviews may be useful background. If they
+conflict with `docs/current/`, prefer `docs/current/` and label the older source
+as historical or current-adjacent.
 
-- Backend: Go modular monolith.
-- HTTP: `net/http` with `chi`.
-- Migrations: `goose` SQL migrations in `backend/migrations/`.
-- Frontend: React + TypeScript + Vite.
-- PC UI: Arco Design.
-- H5 UI: custom domain UI.
-- Local infra: Docker Compose with PostgreSQL, Redis and MinIO.
+## Current PTS Target
 
-## Review Checklist
+PTS-1B means 1000 final-second bids against one hot auction, user-visible bid
+decision p99 <= 50ms, highest valid amount wins, all rejects have decision-time
+basis, and fault-injection gates either recover safely or fail closed.
 
-- Does this affect auction truth?
-- Does it need idempotency?
-- Does it need event/outbox records?
-- Can it race with bid, cancel or end jobs?
-- Can retry duplicate money state?
-- Can reconnect recover this state?
-- Can slow clients cause memory growth?
-- Is there a test or evidence record for the failure mode?
+## Development Checklist
+
+- Keep money and bid decisions server-authoritative.
+- Preserve idempotency and request-hash conflict behavior.
+- Keep outbox/WebSocket/snapshot recovery ordered and replayable.
+- Add or update tests for correctness, race, and recovery paths touched.
+- Use `docs/current/evidence-policy.md` before writing or citing evidence.

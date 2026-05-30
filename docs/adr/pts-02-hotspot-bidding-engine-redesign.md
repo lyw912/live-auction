@@ -2,7 +2,9 @@
 
 Date: 2026-05-28
 
-Status: proposed
+Status: historical/proposed; superseded as the current entry by `docs/current/architecture.md`.
+
+> 2026-05-31 note: this ADR records the staged route from PostgreSQL lane to Redis guard and Redis ledger. Use it as historical design context, not as the final current contract. The current hot-bid contract is Redis hot-state decision + Kafka durable decision WAL/fence + PostgreSQL settlement/audit + fail-closed reconciliation, with PTS-1B correctness and latency gates defined in `docs/current/performance-correctness-contract.md`.
 
 ## Context
 
@@ -96,7 +98,7 @@ HTTP bid request
        - enforce idempotency
        - increment engine_seq
        - update current price/winner/end_at/terminal state
-       - append accepted/rejected command result to Redis Stream or Kafka topic
+  -> synchronously append accepted/rejected command result to Kafka
   -> return ENGINE_ACCEPTED / ENGINE_REJECTED / ENGINE_SOLD
   -> settlement worker replays ledger into PostgreSQL
        - insert bids
@@ -173,8 +175,6 @@ auction:{id}:idem:{client_bid_id}
   engine_seq
   expires_at
 
-auction:{id}:stream
-  XADD entries with command/result/event payload
 ```
 
 The Lua script must be short and deterministic. It must not call network, sleep, or do unbounded loops. Proxy/max-bid settlement is not included in the first Redis hot engine; it remains PostgreSQL path until a separate atomic algorithm is designed.
@@ -188,13 +188,11 @@ Optimistic locking in this stage means:
 
 ## Settlement Contract
 
-The settlement worker consumes the ledger in order per auction.
-
-Kafka is not mandatory for the current single-machine project. Define a small command-log abstraction instead:
+The settlement worker consumes the ledger in order per auction. Current L4b uses Kafka as the required durable ledger, not Redis Streams. Redis holds hot state and short idempotency replay only.
 
 ```text
 AuctionCommandLog.Append(ctx, auctionID, entry)
-AuctionCommandLog.ReadGroup(ctx, auctionID, consumer)
+AuctionCommandLog.Fetch(ctx, consumer_group)
 AuctionCommandLog.Ack(ctx, auctionID, entryID)
 ```
 
@@ -202,11 +200,11 @@ Implementation policy:
 
 | Implementation | When to use | Why |
 |---|---|---|
-| Redis Streams | Current local/ECS single-machine project. | Reuses existing Redis, supports ordered replay and consumer groups, avoids Docker/Kafka overhead. |
-| PostgreSQL ledger/outbox table | When Redis persistence is not acceptable. | Strong single-DB durability, fewer moving parts, but higher DB write cost. |
-| Kafka | Future multi-node or multi-service scale-out. | Dedicated event-log semantics and partition ordering, but heavier operations. |
+| Kafka | Current L4b runtime. | Dedicated append-only ledger, consumer group replay, and physical separation from Redis hot state. |
+| PostgreSQL ledger/outbox table | Emergency fallback design only. | Strong single-DB durability, fewer moving parts, but higher DB write cost and reintroduces hot DB pressure. |
+| Redis Streams | Rejected for this upgraded L4b runtime. | It couples hot state and historical ledger in the same Redis failure domain. |
 
-On a one-machine deployment, Kafka does not remove the single-machine failure domain. It can decouple processes, but it also consumes memory, CPU, and disk and makes PTS attribution noisier. The first implementation should not require pulling Kafka in Docker.
+On the local one-machine deployment, Kafka does not remove host-level failure domain. It is still used to prove runtime boundaries and failure gates; production must use replicated brokers, ISR, DLQ monitoring, and replay/reconciliation operations.
 
 Required DB guarantees:
 
@@ -255,9 +253,9 @@ Rejected. It moves row-lock waiting into conflict retry and makes tail latency a
 
 Rejected for the main live auction path. It changes fairness and final-second semantics. It may be used later for analytics or feed price refresh, not bid acceptance.
 
-### Full Kafka/Flink First
+### Kafka/Flink First
 
-Deferred. It is architecturally strong but too large for the immediate project window. Redis Stream can stand in as the local durable ordered log; Kafka/Flink is a scale-out evolution if the project needs multi-node settlement.
+Kafka is now accepted for the L4b durable ledger because Redis Stream would keep hot state and historical ledger in one Redis failure domain. Flink remains deferred; settlement is still an app-owned consumer group that writes PostgreSQL truth idempotently.
 
 ## Rollback
 

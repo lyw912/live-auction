@@ -20,7 +20,24 @@ WITH candidates AS (
       OR id LIKE 'k6_ws_%'
       OR id LIKE 'k6_user_%'
     )
-  ORDER BY id
+  ORDER BY
+    CASE
+      WHEN id LIKE 'k6_bidder_%' THEN 0
+      WHEN id LIKE 'k6_user_%' THEN 1
+      WHEN id LIKE 'k6_ws_%' THEN 2
+      ELSE 3
+    END,
+    CASE
+      WHEN id ~ '^k6_bidder_[0-9]+_[0-9]+$' THEN substring(id from '^k6_bidder_([0-9]+)_')::integer
+      WHEN id ~ '^k6_user_[0-9]+$' THEN substring(id from '^k6_user_([0-9]+)$')::integer
+      WHEN id ~ '^k6_ws_[0-9]+$' THEN substring(id from '^k6_ws_([0-9]+)$')::integer
+      ELSE 2147483647
+    END,
+    CASE
+      WHEN id ~ '^k6_bidder_[0-9]+_[0-9]+$' THEN substring(id from '^k6_bidder_[0-9]+_([0-9]+)$')::integer
+      ELSE 0
+    END,
+    id
   LIMIT :session_count
 ),
 tokens AS (

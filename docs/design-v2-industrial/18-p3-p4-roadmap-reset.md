@@ -30,14 +30,14 @@ This reset supersedes any P3 plan that starts by adopting a transport, CDC, Redi
 - `docs/design-v2-industrial/10-test-gates.md`: required workload families.
 - `docs/design-v2-industrial/12-engineering-rules.md`: truth, idempotency, outbox, WebSocket, and performance non-negotiables.
 - `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan.md`: local stress protocol.
-- `docs/p3-decision-log.md`: current P3 decisions and go/no-go gates.
+- `docs/archive/progress/p3-decision-log.md`: current P3 decisions and go/no-go gates.
 - `docs/evidence/index.md`: authoritative vs superseded evidence index.
 
 ## Current Implementation State
 
 | Area | Current state | Reset interpretation |
 |---|---|---|
-| P0/P1/P2 | Complete per `docs/p2-progress.md` and P0/P1 evidence. | Product/security shortcuts are no longer the main blocker. |
+| P0/P1/P2 | Complete per `docs/archive/progress/p2-progress.md` and P0/P1 evidence. | Product/security shortcuts are no longer the main blocker. |
 | Admission | Implemented and useful as product protection. | Must be off during performance exploration. Re-enable only after finding the practical downstream ceiling. |
 | Outbox claim | First real P3 bottleneck found and fixed. Claim query improved from `1584.153ms` to `14.165ms` under matching local pressure. | Keep evidence. Do not revisit CDC/partitioning unless backlog/claim/update becomes bottleneck again. |
 | PG hot row | Still visible under 300 rps open-model hot-auction pressure after outbox fix. | Primary next bottleneck candidate, but Windows absolute p99 is not final capacity. |
@@ -186,7 +186,7 @@ Admission target:
 
 | Order | New milestone | Goal | Exit gate |
 |---:|---|---|---|
-| 1 | P3-R0 decision/evidence reset | Freeze decisions, evidence index, and clean pressure policy. | This document, `docs/p3-decision-log.md`, and `docs/evidence/index.md` exist. |
+| 1 | P3-R0 decision/evidence reset | Freeze decisions, evidence index, and clean pressure policy. | This document, `docs/archive/progress/p3-decision-log.md`, and `docs/evidence/index.md` exist. |
 | 2 | P3-R1 admission-off harness proof | Ensure all downstream workloads can run with `ADMISSION_ENABLED=false` and fail if admission moves. | Compact report proves admission off before/after and zero admission reject delta. |
 | 3 | P3-R2 hot/cold multi-room adversarial stress | Prove one hot room does not corrupt or silently starve cold rooms. | Hot/cold latency/fanout metrics, cross-room invariant, bottleneck verdict. |
 | 4 | P3-R3 clean realtime fanout and slow-consumer drilldown | Validate the self-hub under fanout/slow/reconnect pressure without Windows connect-storm noise. | Clean downstream-pressure fanout, slow-consumer, reconnect, runtime profile verdict. |

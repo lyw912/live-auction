@@ -1,5 +1,7 @@
 # P0 Known Limits
 
+> 2026-05-31 current-architecture note: this file describes demo/product limits. It is not the current hot-bid architecture contract. For PTS-1B and Redis/Kafka/PostgreSQL correctness, read `docs/current/architecture.md`, `docs/current/performance-correctness-contract.md`, and `docs/current/evidence-policy.md`.
+
 Date: 2026-05-23
 
 Commit: included in current P2 hardening changes; see git history for exact milestone commits
@@ -23,8 +25,10 @@ Commit: included in current P2 hardening changes; see git history for exact mile
 
 ## Correctness Scope
 
-- PostgreSQL is the source of truth for auction state, bids, idempotency, orders, and terminal results.
-- Redis and WebSocket are projection and delivery layers only.
+- For normal product/demo flows, PostgreSQL remains the durable settlement, audit, order, and query store.
+- For the current PTS-1B hot manual-bid path, Redis is the live atomic decision state under Kafka WAL/fence and reconciliation; PostgreSQL applies settlement/audit afterward.
+- Kafka is required for the current durable decision ledger/fence. A Redis decision that cannot be durably fenced must not be presented as final settled success.
+- WebSocket is a delivery/recovery layer only.
 - WebSocket browser auth uses Redis-backed one-time tickets. If Redis is unavailable, ticket issue/connect fails closed.
 - There is no bid rate limiter in P0. The Redis-down bid-limit gate is explicitly treated as a scope adjustment, not an implemented degradation feature.
 - Existing room ACL rejects are recorded as `ACL_FORBIDDEN` anomalies. Rich ACL drilldown/filtering is still P2-06.
@@ -33,11 +37,12 @@ Commit: included in current P2 hardening changes; see git history for exact mile
 ## Evidence Scope
 
 - P0 correctness/demo gates are covered by Go tests, Playwright tests, live H5/PC backend smoke, and committed evidence records under `docs/evidence/`.
+- Current PTS-1B claims require `docs/current/evidence-policy.md`, `tests/pts/MANIFEST.md`, `ENGINE_*` distribution, correctness verifier output, and fault-injection evidence when resilience is claimed.
 - Frontend unit/E2E route mocks prove UI state contracts; live backend coverage is limited to the explicit H5/PC live smoke tests.
 - Route-mocked UI tests are never evidence for the P10 no-mock auction trunk. P10 evidence must separately capture the created auction ID and backend/flight-recorder proof for that created auction.
 - H5 route-mocked visual and behavior tests now follow the current feed -> floating product card -> bid panel interaction where bid controls are asserted. The default feed card still shows price, countdown, status, connection, and next-bid entry.
 - `docs/perf/p0-load-smoke-2026-05-22.md` is a local smoke baseline only.
-- No QPS, online-user capacity, production P99/P999, or fanout capacity claim is allowed until a formal native 3-run k6 baseline is recorded.
+- No QPS, online-user capacity, production P99/P999, PTS-1B p99, or fanout capacity claim is allowed without current evidence classified by `docs/current/evidence-policy.md`.
 
 ## Operations Scope
 

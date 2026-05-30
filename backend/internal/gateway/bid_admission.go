@@ -67,8 +67,10 @@ func (a *bidAdmission) admit(ctx context.Context, r *http.Request, user AuthUser
 		return auction.BidResponse{}, nil, false, apierrors.New(apierrors.CodeInvalidArgument, "Idempotency-Key must equal client_bid_id", http.StatusBadRequest)
 	}
 	requestHash := bidAdmissionRequestHash(auctionID, user.ID, input.ClientBidID, input.AmountCents)
-	if replay, ok, err := a.completedBidReplay(ctx, auctionID, user.ID, idempotencyKey, requestHash); err != nil || ok {
-		return replay, nil, ok, err
+	if a.cfg.BidEngineMode == bidEngineModePostgresLane || a.cfg.BidEngineMode == bidEngineModeRedisGuard {
+		if replay, ok, err := a.completedBidReplay(ctx, auctionID, user.ID, idempotencyKey, requestHash); err != nil || ok {
+			return replay, nil, ok, err
+		}
 	}
 	if err := a.checkRedisLimits(ctx, r, user, auctionID, traceID); err != nil {
 		return auction.BidResponse{}, nil, false, err

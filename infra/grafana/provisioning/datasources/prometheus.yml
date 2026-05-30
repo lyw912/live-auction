@@ -7,3 +7,21 @@ datasources:
     url: http://prometheus:9090
     isDefault: true
     editable: false
+    uid: live-auction-prometheus
+  - name: Live Auction Tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200
+    editable: false
+    uid: live-auction-tempo
+    jsonData:
+      tracesToLogsV2:
+        datasourceUid: live-auction-prometheus
+      serviceMap:
+        datasourceUid: live-auction-prometheus
+  - name: Live Auction Pyroscope
+    type: grafana-pyroscope-datasource
+    access: proxy
+    url: http://pyroscope:4040
+    editable: false
+    uid: live-auction-pyroscope

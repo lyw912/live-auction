@@ -11,7 +11,12 @@ docker compose -f infra\docker-compose.yml down
 Services:
 
 - PostgreSQL: `localhost:5432`
-- Redis: `localhost:6379`
+- Redis 7: `localhost:6380`
+- Apache Kafka: `localhost:9092`
+
+Redis 7 is required for the Redis hot bidding state machine. Local Redis is configured with AOF and `appendfsync always` plus `noeviction` for failure testing. Production needs Sentinel or Redis Cluster with replicas; the local single-node service is only a test topology.
+
+Kafka is required for the L4b durable bid ledger. Redis is the hot state machine; Kafka is the immutable event log; PostgreSQL remains settlement/audit truth. The application does not auto-create Kafka topics by default. Local integration tests create their own test topics explicitly; deployment must create `auction.bid-events` and `auction.dlq` explicitly so partition count, replication factor, retention, and ISR policy are visible configuration. The local Kafka service is single-node and exists for functional/failure gates only. Production must use replicated brokers, `acks=all`, idempotent producers where supported, sufficient ISR, disabled unclean leader election, DLQ monitoring, and replay/reconciliation runbooks.
 - MinIO API: `localhost:9000`
 - MinIO Console: `http://localhost:9001`
 - Prometheus: `http://localhost:9090`
