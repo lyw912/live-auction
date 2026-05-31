@@ -45,7 +45,7 @@ func TestRequireHostAllowsHostRole(t *testing.T) {
 }
 
 func TestAuthMiddlewareRejectsMockHeadersWhenDisabled(t *testing.T) {
-	handler := authMiddleware(config.Config{AppEnv: "local", MockHostUserID: "host_1", MockUserID: "user_1"}, nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := authMiddleware(config.Config{AppEnv: "local", MockHostUserID: "host_1", MockUserID: "user_1"}, nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	req := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
@@ -112,7 +112,7 @@ func TestExpiredSessionRejects(t *testing.T) {
 	db := openMonitorDB(t)
 	cfg := testConfig()
 	cfg.SessionTTL = time.Second
-	handler := authMiddleware(cfg, db)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := authMiddleware(cfg, db, nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	token, tokenHash, err := newSessionToken()

@@ -14,14 +14,27 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 
 	"live-auction/backend/internal/config"
 	apierrors "live-auction/backend/internal/platform/errors"
+	"live-auction/backend/internal/redisx"
 )
 
 const sessionCookieName = "la_session"
 
 type authUserKey struct{}
+
+// requestStartKey stores the time.Time at which the request entered authMiddleware.
+// PlaceBid reads it to measure the full auth→engine latency in the "total" stage.
+type requestStartKey struct{}
+
+func bidRequestStart(ctx context.Context) time.Time {
+	if t, ok := ctx.Value(requestStartKey{}).(time.Time); ok {
+		return t
+	}
+	return time.Now()
+}
 
 type AuthUser struct {
 	ID   string
@@ -31,6 +44,7 @@ type AuthUser struct {
 type AuthHandler struct {
 	Config config.Config
 	DB     *pgxpool.Pool
+	Redis  *redis.Client
 }
 
 type loginRequest struct {
@@ -38,9 +52,11 @@ type loginRequest struct {
 	Role    string `json:"role"`
 }
 
-func authMiddleware(cfg config.Config, db *pgxpool.Pool) func(http.Handler) http.Handler {
+func authMiddleware(cfg config.Config, db *pgxpool.Pool, rdb *redis.Client) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := context.WithValue(r.Context(), requestStartKey{}, time.Now())
+			r = r.WithContext(ctx)
 			if hasMockAuthHeader(r) {
 				user, ok := mockUserFromRequest(cfg, r)
 				if !ok {
@@ -55,7 +71,7 @@ func authMiddleware(cfg config.Config, db *pgxpool.Pool) func(http.Handler) http
 				writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing session", http.StatusUnauthorized))
 				return
 			}
-			user, err := lookupSession(r.Context(), db, token)
+			user, err := lookupSession(r.Context(), db, rdb, token)
 			if err != nil {
 				_ = recordAuthSessionExpired(r.Context(), db, r, err)
 				writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "invalid or expired session", http.StatusUnauthorized))
@@ -151,11 +167,15 @@ func (h AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 func (h AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	token := sessionTokenFromRequest(r)
 	if token != "" {
+		hash := hashSessionToken(token)
 		_, _ = h.DB.Exec(r.Context(), `
 			UPDATE auth_sessions
 			SET revoked_at = now()
 			WHERE token_hash = $1 AND revoked_at IS NULL
-		`, hashSessionToken(token))
+		`, hash)
+		if h.Redis != nil {
+			h.Redis.Del(r.Context(), redisx.AuthSessionKey(hash))
+		}
 	}
 	clearSessionCookie(w)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -247,16 +267,42 @@ func sessionTokenFromRequest(r *http.Request) string {
 	return ""
 }
 
-func lookupSession(ctx context.Context, db *pgxpool.Pool, token string) (AuthUser, error) {
+func lookupSession(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client, token string) (AuthUser, error) {
+	hash := hashSessionToken(token)
+
+	if rdb != nil {
+		if cached, err := rdb.Get(ctx, redisx.AuthSessionKey(hash)).Bytes(); err == nil {
+			var u AuthUser
+			if json.Unmarshal(cached, &u) == nil {
+				return u, nil
+			}
+		}
+	}
+
 	var user AuthUser
+	var expiresAt time.Time
 	err := db.QueryRow(ctx, `
-		SELECT user_id, role
+		SELECT user_id, role, expires_at
 		FROM auth_sessions
 		WHERE token_hash = $1
 		  AND revoked_at IS NULL
 		  AND expires_at > now()
-	`, hashSessionToken(token)).Scan(&user.ID, &user.Role)
-	return user, err
+	`, hash).Scan(&user.ID, &user.Role, &expiresAt)
+	if err != nil {
+		return user, err
+	}
+
+	if rdb != nil {
+		ttl := time.Until(expiresAt)
+		if ttl > 5*time.Minute {
+			ttl = 5 * time.Minute
+		}
+		if data, err := json.Marshal(user); err == nil {
+			rdb.Set(ctx, redisx.AuthSessionKey(hash), data, ttl)
+		}
+	}
+
+	return user, nil
 }
 
 func newSessionToken() (token string, tokenHash string, err error) {

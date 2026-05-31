@@ -137,54 +137,6 @@
           <stringProp name="ConstantTimer.delay">0</stringProp>
         </ConstantTimer>
         <hashTree/>
-        <JSR223PreProcessor guiclass="TestBeanGUI" testclass="JSR223PreProcessor" testname="compute PTS-1B contention bid" enabled="true">
-          <stringProp name="cacheKey">live-auction-compute-pts-1b-contention-bid-v2</stringProp>
-          <stringProp name="filename"></stringProp>
-          <stringProp name="parameters"></stringProp>
-          <stringProp name="scriptLanguage">groovy</stringProp>
-          <stringProp name="script"><![CDATA[
-long burstWaitMS = Long.parseLong(props.getProperty('burst_wait_ms', '40000'))
-long barrierQuantumMS = Long.parseLong(props.getProperty('contention_barrier_quantum_ms', '10000'))
-def target = props.get('l4b_final_second_target_ms') as java.util.concurrent.atomic.AtomicLong
-if (target == null) {
-  long now = System.currentTimeMillis()
-  long desired = now + burstWaitMS
-  long aligned = ((desired + barrierQuantumMS - 1L) / barrierQuantumMS) * barrierQuantumMS
-  target = new java.util.concurrent.atomic.AtomicLong(aligned)
-  def existingTarget = props.putIfAbsent('l4b_final_second_target_ms', target)
-  if (existingTarget != null) {
-    target = existingTarget as java.util.concurrent.atomic.AtomicLong
-  }
-}
-long sleepMS = target.get() - System.currentTimeMillis()
-if (sleepMS > 0L) {
-  Thread.sleep(sleepMS)
-}
-
-long base = Long.parseLong(props.getProperty('contention_amount_base_cents', '10000'))
-long inc = Long.parseLong(props.getProperty('contention_amount_increment_cents', '5000'))
-long stride = Long.parseLong(props.getProperty('contention_amount_stride', '1000'))
-long localCount = Long.parseLong(vars.get('bid_local_count') ?: '0') + 1L
-vars.put('bid_local_count', Long.toString(localCount))
-
-String userID = vars.get('user_id') ?: 'unknown_user'
-def matcher = userID =~ /k6_bidder_(\d+)_(\d+)/
-long bucket = 0L
-long lane = 0L
-if (matcher.matches()) {
-  bucket = Long.parseLong(matcher.group(1))
-  lane = Long.parseLong(matcher.group(2))
-}
-long globalRank = Math.max(1L, (bucket - 1L) * 7L + lane + 1L)
-long amount = base + inc * stride * globalRank
-String clientBidId = 'pts-1b-contention-' + userID + '-' + localCount + '-' + globalRank
-vars.put('amount_cents', Long.toString(amount))
-vars.put('client_bid_id', clientBidId)
-vars.put('idempotency_key', clientBidId)
-vars.put('client_seen_seq', Long.toString(Math.max(0L, globalRank - 1L)))
-          ]]></stringProp>
-        </JSR223PreProcessor>
-        <hashTree/>
         <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="POST PTS-1 hotspot bid" enabled="true">
           <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
           <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
@@ -202,6 +154,54 @@ vars.put('client_seen_seq', Long.toString(Math.max(0L, globalRank - 1L)))
           <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
         </HTTPSamplerProxy>
         <hashTree>
+          <JSR223PreProcessor guiclass="TestBeanGUI" testclass="JSR223PreProcessor" testname="compute PTS-1B contention bid" enabled="true">
+                    <stringProp name="cacheKey">live-auction-compute-pts-1b-contention-bid-v2</stringProp>
+                    <stringProp name="filename"></stringProp>
+                    <stringProp name="parameters"></stringProp>
+                    <stringProp name="scriptLanguage">groovy</stringProp>
+                    <stringProp name="script"><![CDATA[
+          long burstWaitMS = Long.parseLong(props.getProperty('burst_wait_ms', '40000'))
+          long barrierQuantumMS = Long.parseLong(props.getProperty('contention_barrier_quantum_ms', '10000'))
+          def target = props.get('l4b_final_second_target_ms') as java.util.concurrent.atomic.AtomicLong
+          if (target == null) {
+            long now = System.currentTimeMillis()
+            long desired = now + burstWaitMS
+            long aligned = ((desired + barrierQuantumMS - 1L) / barrierQuantumMS) * barrierQuantumMS
+            target = new java.util.concurrent.atomic.AtomicLong(aligned)
+            def existingTarget = props.putIfAbsent('l4b_final_second_target_ms', target)
+            if (existingTarget != null) {
+              target = existingTarget as java.util.concurrent.atomic.AtomicLong
+            }
+          }
+          long sleepMS = target.get() - System.currentTimeMillis()
+          if (sleepMS > 0L) {
+            Thread.sleep(sleepMS)
+          }
+          
+          long base = Long.parseLong(props.getProperty('contention_amount_base_cents', '10000'))
+          long inc = Long.parseLong(props.getProperty('contention_amount_increment_cents', '5000'))
+          long stride = Long.parseLong(props.getProperty('contention_amount_stride', '1000'))
+          long localCount = Long.parseLong(vars.get('bid_local_count') ?: '0') + 1L
+          vars.put('bid_local_count', Long.toString(localCount))
+          
+          String userID = vars.get('user_id') ?: 'unknown_user'
+          def matcher = userID =~ /k6_bidder_(\d+)_(\d+)/
+          long bucket = 0L
+          long lane = 0L
+          if (matcher.matches()) {
+            bucket = Long.parseLong(matcher.group(1))
+            lane = Long.parseLong(matcher.group(2))
+          }
+          long globalRank = Math.max(1L, (bucket - 1L) * 7L + lane + 1L)
+          long amount = base + inc * stride * globalRank
+          String clientBidId = 'pts-1b-contention-' + userID + '-' + localCount + '-' + globalRank
+          vars.put('amount_cents', Long.toString(amount))
+          vars.put('client_bid_id', clientBidId)
+          vars.put('idempotency_key', clientBidId)
+          vars.put('client_seen_seq', Long.toString(Math.max(0L, globalRank - 1L)))
+                    ]]></stringProp>
+                  </JSR223PreProcessor>
+                  <hashTree/>
           <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="bid idempotency header" enabled="true">
             <collectionProp name="HeaderManager.headers">
               <elementProp name="" elementType="Header">

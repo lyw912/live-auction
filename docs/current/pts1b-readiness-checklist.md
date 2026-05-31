@@ -57,6 +57,11 @@ BASE_URL=http://127.0.0.1:18080 bash tests/pts/preflight-l4b-pts-guards.sh befor
 - [ ] PTS mode: virtual users.
 - [ ] Intended users: 1000.
 - [ ] Loop count: one bid per user.
+- [ ] Latency objective is final user-visible `ENGINE_*` decision latency, not
+      HTTP `202` pending acknowledgement RTT.
+- [ ] If the sampler can receive `202`, it either retries/polls with the same
+      `client_bid_id` until final `ENGINE_*`, or the run is explicitly labeled
+      ingress-only and cannot be `CURRENT_PASS`.
 - [ ] PTS report/log sampling settings recorded.
 - [ ] PTS target host/port matches backend.
 
@@ -89,6 +94,9 @@ FINAL_WAIT_SECONDS=0 bash tests/pts/verify-l4b-pts-correctness.sh <report-id-or-
 
 - [ ] 1000 intended unique bids classified.
 - [ ] User-visible `ENGINE_*` p99 <= 50ms.
+- [ ] `202` / `PROCESSING_RETRY_LATER` RTT is not used as the PTS-1B p99.
+- [ ] `pending_ratio` and `timeout_ratio` are reported; dominant pending UX
+      fails even if HTTP status is 2xx.
 - [ ] Final winner is the highest valid amount.
 - [ ] Every low reject is strictly below decision-time current required price, or has another explicit business-rule basis.
 - [ ] No unresolved pending append, DLQ, engine pause, or settlement gap.

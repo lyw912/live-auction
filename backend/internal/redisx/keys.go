@@ -59,3 +59,16 @@ func BidEngineRelayCursorKey(auctionID string) string {
 func WSTicketKey(token string) string {
 	return "ws_ticket:" + token
 }
+
+// AuthSessionKey caches an authenticated AuthUser keyed by token hash.
+// TTL is capped at 5 minutes so revoked sessions expire quickly.
+func AuthSessionKey(tokenHash string) string {
+	return "auth:session:" + tokenHash
+}
+
+// ACLMembershipKey caches a positive room-membership result for one user/auction
+// pair. The {auctionID} hash tag keeps this slot-adjacent to the engine state so
+// a future Lua extension could read it atomically if needed.
+func ACLMembershipKey(auctionID, userID string) string {
+	return fmt.Sprintf("acl:membership:{%s}:%s", auctionID, userID)
+}

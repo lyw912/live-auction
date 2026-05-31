@@ -51,9 +51,11 @@ func Open(ctx context.Context, cfg config.Config, log *slog.Logger) (*Dependenci
 	}
 
 	rdb := redis.NewClient(&redis.Options{
-		Addr:     cfg.RedisAddr,
-		Password: cfg.RedisPassword,
-		DB:       cfg.RedisDB,
+		Addr:         cfg.RedisAddr,
+		Password:     cfg.RedisPassword,
+		DB:           cfg.RedisDB,
+		PoolSize:     cfg.RedisPoolSize,     // 0 = go-redis default (10×GOMAXPROCS)
+		MinIdleConns: cfg.RedisMinIdleConns, // pre-warm so burst requests never wait for new dials
 	})
 
 	minioClient, err := minio.New(cfg.MinIOEndpoint, &minio.Options{

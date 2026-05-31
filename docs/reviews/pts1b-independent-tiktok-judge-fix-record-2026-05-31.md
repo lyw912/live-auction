@@ -19,6 +19,42 @@ This document does not claim a current PTS-1B pass. A pass still requires the cu
 
 ## Fixes Completed
 
+### P0: Prevent PostgreSQL Settlement From Rewinding Redis Live State
+
+Changed files:
+
+- `backend/internal/redisengine/engine.go`
+- `backend/internal/redisengine/engine_integration_test.go`
+
+Failure found after PTS report `HA5YX7ZG`:
+
+- PTS sampled 1000 bid requests and all returned HTTP `202`.
+- Kafka contained duplicate messages for the same auction `engine_seq` with different request hashes, for example offsets `52` and `101` both carried `engine_seq=53`.
+- PostgreSQL settlement then correctly detected `engine_seq request hash conflict`, paused the engine, and left the run non-terminal.
+
+Root cause:
+
+- Redis Lua increments `engine_seq` atomically inside one script invocation.
+- `Worker.refreshRedisSettledState` was called after settlement and wrote the PostgreSQL settled snapshot back into the Redis hot-state hash.
+- During contention, PostgreSQL settlement lags Redis live decisions. The refresh path therefore overwrote newer Redis `engine_seq` / winner / price fields with an older settled snapshot.
+- Later Lua invocations read the rewound Redis state and reused already-issued `engine_seq` values.
+
+Fix:
+
+- Redis hot-state refresh from settlement is now a Redis-side conditional write.
+- If current Redis `engine_seq` is greater than the PostgreSQL snapshot `engine_seq`, the refresh is skipped.
+- If Redis state is missing while pending decisions still exist, the refresh is skipped instead of rebuilding from a partial settled snapshot.
+- Settlement still updates PostgreSQL/checkpoint state; it no longer corrupts Redis live decision state.
+
+Regression test:
+
+- `TestRedisLedgerSettlementRefreshDoesNotRewindLiveRedisState` proves that when Redis live state is ahead of the first settled message, processing that settlement does not reduce Redis `engine_seq`, and the next bid does not reuse an old sequence.
+- Verified with:
+
+```bash
+go test ./internal/redisengine -run TestRedisLedgerSettlementRefreshDoesNotRewindLiveRedisState -count=10
+```
+
 ### P0: Kafka ACK Before User-Visible Engine Success
 
 Changed files:
@@ -130,6 +166,8 @@ Preflight now separates:
 
 Passed:
 
+- `go test ./internal/redisengine -run TestRedisLedgerSettlementRefreshDoesNotRewindLiveRedisState -count=10`
+- `bash -n tests/pts/verify-l4b-pts-correctness.sh`
 - `go test ./... -run TestNonExistent -count=0`
 - `go test ./internal/gateway -run TestWriteBidAdmissionResult -count=1`
 - `pnpm --filter mobile-h5 build`
@@ -140,21 +178,30 @@ Passed:
 Blocked:
 
 - `go test ./internal/auction ./internal/gateway ./internal/redisengine`
+- `go test ./internal/redisengine -count=1`
 
 Blocker details:
 
 - Tests could not connect to PostgreSQL at `127.0.0.1:5432`; the error was `connectex: No connection could be made because the target machine actively refused it`.
 - `docker ps` showed `live-auction-postgres` running and mapped to `0.0.0.0:5432->5432/tcp`, so this needs a local Docker/port/proxy follow-up before treating integration tests as verified.
 - Kafka container startup was blocked because `live-auction-redpanda` already owned port `9092`; the existing process was not stopped during this repair.
+- On the current Linux/Docker environment, the focused Redis rewind regression passes, but the full redisengine package still has pre-existing scheduling-sensitive pending-append tests that can fail with `pendingResponses = 0`; this is a test harness stability issue and should be hardened before using full-package green as a release gate.
 
 ## Remaining Evidence Required
 
 Before claiming `CURRENT_PASS`:
 
 - restore local PostgreSQL connectivity and rerun backend integration tests;
+- run the current reset before any new PTS-1B attempt so PostgreSQL rows, Redis bid keys, and Kafka topics from `HA5YX7ZG` cannot pollute the next result;
 - run current reset/preflight from `tests/pts/MANIFEST.md`;
-- run PTS-1B three times with current JMX/CSV;
+- run PTS-1B three times with current JMX/CSV, but do not treat HTTP `202` RTT
+  as user-visible decision p99;
+- update or wrap the PTS sampler so a `202` response is followed with the same
+  `client_bid_id` / idempotency key until final `ENGINE_*` or timeout, or label
+  the result as ingress-only;
 - collect `ENGINE_*`, HTTP, durability, and settlement distributions;
+- report `accept_latency_ms`, `final_decision_latency_ms`,
+  `settlement_latency_ms`, `pending_ratio`, and `timeout_ratio`;
 - run `tests/pts/verify-l4b-pts-correctness.sh`;
 - execute Redis loss, Kafka timeout/restart, settlement worker crash, PostgreSQL disruption, and reconnect storm fault gates;
 - classify evidence according to `docs/current/evidence-policy.md`.

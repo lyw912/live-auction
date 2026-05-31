@@ -103,12 +103,12 @@ func NewRouterWithRealtimeAndLedger(cfg config.Config, deps *storage.Dependencie
 		Deps:   deps,
 		Repo:   auction.NewRepository(deps.Postgres),
 		RT:     rt,
-		ACL:    newRoomACL(deps.Postgres),
+		ACL:    newRoomACL(deps.Postgres, deps.Redis),
 		Bids:   newBidAdmission(cfg, deps.Postgres, deps.Redis),
 		Lanes:  newBidLaneManager(cfg, deps.Postgres),
 		Engine: engine,
 	}
-	authHandler := AuthHandler{Config: cfg, DB: deps.Postgres}
+	authHandler := AuthHandler{Config: cfg, DB: deps.Postgres, Redis: deps.Redis}
 	monitorHandler := MonitorHandler{Deps: deps}
 	hostPrompterHandler := HostPrompterHandler{Deps: deps}
 	heatSummaryHandler := HeatSummaryHandler{Deps: deps}
@@ -118,7 +118,7 @@ func NewRouterWithRealtimeAndLedger(cfg config.Config, deps *storage.Dependencie
 		r.Post("/auth/logout", authHandler.Logout)
 		r.Post("/payments/fake-provider/webhook", auctionHandler.FakePaymentWebhook)
 		r.Group(func(r chi.Router) {
-			r.Use(authMiddleware(cfg, deps.Postgres))
+			r.Use(authMiddleware(cfg, deps.Postgres, deps.Redis))
 			r.Get("/auth/me", authHandler.Me)
 			r.Get("/rooms", auctionHandler.ListRooms)
 			r.With(requireHost).Post("/items/upload-url", auctionHandler.CreateUploadURL)

@@ -64,12 +64,19 @@ which gate failed.
 |---|---:|---|
 | POST sampler count |  |  |
 | HTTP 2xx / 4xx / 5xx |  |  |
-| HTTP p50 / p95 / p99 |  |  |
+| HTTP accept p50 / p95 / p99 |  |  |
+| Final `ENGINE_*` p50 / p95 / p99 |  |  |
+| `202` / pending ratio |  |  |
+| final-decision timeout ratio |  |  |
 | Sample-log row count |  |  |
 | Dropped/failed PTS iterations |  |  |
 
 Explain any mismatch between PTS sampler count and server-side unique bids.
 Sampling logs are diagnostic samples unless configured to 100%.
+
+HTTP `202` RTT is acceptance/enqueue latency only. It must not be reported as
+user-visible final bid-decision p99. If the sampler stops at `202`, classify the
+latency evidence as ingress-only and do not mark the run `CURRENT_PASS`.
 
 ## Engine Decision Distribution
 

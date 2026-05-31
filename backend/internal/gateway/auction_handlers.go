@@ -365,7 +365,7 @@ func (h AuctionHandler) PlaceBid(w http.ResponseWriter, r *http.Request) {
 	}()
 	r = r.WithContext(ctx)
 	traceCtx := r.Context()
-	totalStart := time.Now()
+	totalStart := bidRequestStart(r.Context())
 	totalOutcome := "error"
 	defer func() {
 		recordBidGatewayStage("total", mode, totalOutcome, time.Since(totalStart))
@@ -403,17 +403,22 @@ func (h AuctionHandler) PlaceBid(w http.ResponseWriter, r *http.Request) {
 	auctionID := chi.URLParam(r, "id")
 	span.SetAttributes(attribute.String("auction.id", auctionID))
 
-	stageStart = time.Now()
-	_, stageSpan = apptracing.Start(traceCtx, "bid.acl", attribute.String("auction.id", auctionID))
-	if _, err := h.ACL.requireActiveMembershipForAuction(r.Context(), user, auctionID, traceID(r.Context())); err != nil {
-		handlerErr = err
-		apptracing.End(stageSpan, err)
-		recordBidGatewayStage("acl", mode, "error", time.Since(stageStart))
-		writeResult(w, r, http.StatusOK, nil, err)
-		return
+	// For the redis_engine path ACL is enforced atomically inside the Lua script
+	// (KEYS[6] = acl:membership:{auction}:{user}), eliminating a separate Redis RTT.
+	// Non-engine paths (postgres_lane, redis_guard) still use the Go-level check.
+	if h.Engine == nil {
+		stageStart = time.Now()
+		_, stageSpan = apptracing.Start(traceCtx, "bid.acl", attribute.String("auction.id", auctionID))
+		if _, err := h.ACL.requireActiveMembershipForAuction(r.Context(), user, auctionID, traceID(r.Context())); err != nil {
+			handlerErr = err
+			apptracing.End(stageSpan, err)
+			recordBidGatewayStage("acl", mode, "error", time.Since(stageStart))
+			writeResult(w, r, http.StatusOK, nil, err)
+			return
+		}
+		apptracing.End(stageSpan, nil)
+		recordBidGatewayStage("acl", mode, "ok", time.Since(stageStart))
 	}
-	apptracing.End(stageSpan, nil)
-	recordBidGatewayStage("acl", mode, "ok", time.Since(stageStart))
 	if h.Bids != nil {
 		stageStart = time.Now()
 		_, stageSpan = apptracing.Start(traceCtx, "bid.admission", attribute.String("auction.id", auctionID))
@@ -461,7 +466,8 @@ func (h AuctionHandler) PlaceBid(w http.ResponseWriter, r *http.Request) {
 	if h.Engine != nil {
 		stageStart = time.Now()
 		_, stageSpan = apptracing.Start(traceCtx, "bid.redis_engine", attribute.String("auction.id", auctionID))
-		result, err := h.Engine.PlaceBid(r.Context(), auctionID, user.ID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context()))
+		result, err := h.Engine.PlaceBid(r.Context(), auctionID, user.ID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context()),
+			redisx.ACLMembershipKey(auctionID, user.ID))
 		if err != nil {
 			handlerErr = err
 			apptracing.End(stageSpan, err)

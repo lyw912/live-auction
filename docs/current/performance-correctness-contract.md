@@ -78,6 +78,40 @@ Every current PTS-1B claim must include:
 
 Old PG-lane, Redis-guard, unsafe fast Redis, or failed Kafka-fence runs cannot prove the current system. They may only be used as historical bottleneck evidence.
 
+### Latency Semantics
+
+For PTS-1B, the primary p99 is the user-visible final business decision latency:
+
+```text
+bid click/request start -> final ENGINE_ACCEPTED / ENGINE_REJECTED / ENGINE_SOLD response visible to the user
+```
+
+HTTP `202` latency is not final bid-decision latency. It is only acceptance or
+enqueue latency:
+
+```text
+bid click/request start -> PROCESSING_RETRY_LATER / PENDING_DURABILITY acknowledgement
+```
+
+A run dominated by `202` may prove that the ingress path accepted load, but it
+does not prove the bid engine delivered final user-visible decisions at that
+p99. Do not cite `202` RTT as PTS-1B decision p99, capacity, or user experience
+success.
+
+Every PTS-1B report must separate:
+
+- `accept_latency_ms`: HTTP request to `202` pending acknowledgement;
+- `final_decision_latency_ms`: request start to final `ENGINE_*`;
+- `settlement_latency_ms`: Kafka durable decision to PostgreSQL settlement;
+- `pending_ratio`: share of requests returning pending durability;
+- `timeout_ratio`: share of requests that do not reach final `ENGINE_*` inside
+  the measurement window.
+
+If the first response is `202`, the load script or post-run evidence must keep
+using the same `client_bid_id` / idempotency key until it observes final
+`ENGINE_*` or timeout. A PTS sampler that stops at `202` can only be used for
+ingress/queueing evidence.
+
 ## Failure-Injection Gates
 
 | Fault | Required behavior |

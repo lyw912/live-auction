@@ -14,6 +14,8 @@ type Config struct {
 	RedisAddr     string
 	RedisPassword string
 	RedisDB       int
+	RedisPoolSize     int
+	RedisMinIdleConns int
 	KafkaBrokers  string
 	KafkaBidTopic string
 	KafkaDLQTopic string
@@ -74,6 +76,8 @@ func Load() Config {
 		RedisAddr:     getEnv("REDIS_ADDR", "localhost:6380"),
 		RedisPassword: getEnv("REDIS_PASSWORD", ""),
 		RedisDB:       getEnvInt("REDIS_DB", 0),
+		RedisPoolSize:     getEnvInt("REDIS_POOL_SIZE", 0),        // 0 = go-redis default (10×GOMAXPROCS)
+		RedisMinIdleConns: getEnvInt("REDIS_MIN_IDLE_CONNS", 50),  // pre-warmed connections
 		KafkaBrokers:  getEnv("KAFKA_BROKERS", "localhost:9092"),
 		KafkaBidTopic: getEnv("KAFKA_BID_TOPIC", "auction.bid-events"),
 		KafkaDLQTopic: getEnv("KAFKA_DLQ_TOPIC", "auction.dlq"),

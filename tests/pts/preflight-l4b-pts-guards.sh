@@ -84,24 +84,21 @@ SQL
 {
   require_rg "lua_writes_pending_before_kafka" "redis\\.call\\('HSET', pending_key" "$ROOT_DIR/backend/internal/redisengine/engine.go"
   require_rg "lua_indexes_pending_auction" "redis\\.call\\('SADD', pending_auctions_key, auction_id\\)" "$ROOT_DIR/backend/internal/redisengine/engine.go"
-  require_rg "handler_requires_kafka_ack_before_engine_result" "DurabilityStatusKafkaAcked" "$ROOT_DIR/backend/internal/redisengine/engine.go"
-  require_rg "unknown_kafka_append_returns_pending_durability" "pendingDurabilityResponse\\(kafkaAppendStatusUnknown\\)" "$ROOT_DIR/backend/internal/redisengine/engine.go"
-  require_rg "worker_processes_pending_before_kafka" "ProcessPendingAppends\\(loopCtx, 100\\)" "$ROOT_DIR/backend/internal/redisengine/engine.go"
+  require_rg "lua_appends_decision_log_stream" "redis\\.call\\('XADD', log_stream_key" "$ROOT_DIR/backend/internal/redisengine/engine.go"
+  require_rg "handler_returns_engine_durable_decided" "DurabilityStatusEngineDurable, auction\\.DecisionStatusDecided" "$ROOT_DIR/backend/internal/redisengine/engine.go"
+  require_rg "unknown_replay_returns_engine_durable" "replay_engine_durable" "$ROOT_DIR/backend/internal/redisengine/engine.go"
+  require_rg "worker_processes_decision_log_relay" "ProcessPendingAppends\\(loopCtx, 100\\)" "$ROOT_DIR/backend/internal/redisengine/engine.go"
   require_rg "worker_logs_loop_errors" "redis engine worker loop failed" "$ROOT_DIR/backend/internal/redisengine/engine.go"
   require_rg "worker_logs_loop_progress" "redis engine worker loop processed" "$ROOT_DIR/backend/internal/redisengine/engine.go"
   require_rg "worker_splits_kafka_settlement_loop" "\"kafka-settlement\"" "$ROOT_DIR/backend/internal/redisengine/engine.go"
   require_rg "server_passes_logger_to_worker" "WithLogger\\(log\\)\\.Run" "$ROOT_DIR/backend/cmd/server/main.go"
   require_rg "worker_uses_pending_auction_index" "pendingAuctionIDs\\(ctx, limit\\)" "$ROOT_DIR/backend/internal/redisengine/engine.go"
-  require_rg "pending_append_has_per_auction_lock" "pendingAppendLockKey\\(auctionID\\)" "$ROOT_DIR/backend/internal/redisengine/engine.go"
-  require_rg "pending_append_lock_uses_setnx" "SetNX\\(ctx, lockKey, lockToken" "$ROOT_DIR/backend/internal/redisengine/engine.go"
-  require_rg "pending_append_lock_uses_unique_token" "lockOwner \\+ \":\" \\+ uuid\\.NewString\\(\\)" "$ROOT_DIR/backend/internal/redisengine/engine.go"
-  require_rg "pending_append_lock_uses_long_lease" "pendingAppendLockTTL\\s+=\\s+2 \\* time\\.Minute" "$ROOT_DIR/backend/internal/redisengine/engine.go"
-  require_rg "pending_append_lock_is_refreshed" "refreshPendingAppendLock\\(lockCtx, lockKey, lockToken\\)" "$ROOT_DIR/backend/internal/redisengine/engine.go"
-  require_rg "pending_append_checks_lock_before_delete" "pending append lock lost after kafka append" "$ROOT_DIR/backend/internal/redisengine/engine.go"
-  require_rg "reconcile_does_not_pause_inflight_append" "REDIS_PENDING_APPEND_IN_PROGRESS" "$ROOT_DIR/backend/internal/redisengine/engine.go"
-  require_rg "pending_append_appends_then_deletes" "w\\.ledger\\.Append\\(ctx, decision\\.result\\)" "$ROOT_DIR/backend/internal/redisengine/engine.go"
-  require_rg "pending_append_deletes_after_kafka_append" "HDel\\(ctx, pendingKey, decision\\.field\\)" "$ROOT_DIR/backend/internal/redisengine/engine.go"
-  require_rg "pending_index_removed_when_empty" "SRem\\(ctx, redisx\\.BidEnginePendingAuctionsKey\\(\\), auctionID\\)" "$ROOT_DIR/backend/internal/redisengine/engine.go"
+  require_rg "relay_reads_from_stream_cursor" "XRead\\(ctx, &redis\\.XReadArgs" "$ROOT_DIR/backend/internal/redisengine/engine.go"
+  require_rg "relay_batch_appends_to_kafka" "w\\.ledger\\.AppendBatch\\(ctx, results\\)" "$ROOT_DIR/backend/internal/redisengine/engine.go"
+  require_rg "relay_marks_idempotency_acked" "kafka_append_status\", kafkaAppendStatusAcked" "$ROOT_DIR/backend/internal/redisengine/engine.go"
+  require_rg "relay_deletes_pending_after_kafka_append" "HDel\\(ctx, redisx\\.BidEnginePendingKey\\(auctionID\\)" "$ROOT_DIR/backend/internal/redisengine/engine.go"
+  require_rg "relay_advances_cursor_after_batch" "Set\\(ctx, cursorKey, lastID" "$ROOT_DIR/backend/internal/redisengine/engine.go"
+  require_rg "reconcile_does_not_pause_inflight_stream" "pendingAppendInProgress" "$ROOT_DIR/backend/internal/redisengine/engine.go"
   require_rg "empty_pending_index_entry_is_cleaned" "len\\(decisions\\) == 0" "$ROOT_DIR/backend/internal/redisengine/engine.go"
   require_rg "reconciler_recovers_pending" "recoverPendingDecisions" "$ROOT_DIR/backend/internal/redisengine/engine.go"
   require_rg "settlement_rejects_stale_epoch" "result\\.EngineEpoch != dbEpoch" "$ROOT_DIR/backend/internal/redisengine/engine.go"
@@ -115,7 +112,7 @@ SQL
   require_rg "accepted_settlement_fenced_update" 'WHERE id = \$1 AND engine_epoch = \$7 AND engine_seq = \$6 - 1' "$ROOT_DIR/backend/internal/redisengine/engine.go"
   require_rg "soft_close_extends_from_previous_end_at" "local candidate = end_at_ms \\+ extend_by_ms" "$ROOT_DIR/backend/internal/redisengine/engine.go"
   require_rg "cap_is_terminal_before_soft_close" "amount == cap" "$ROOT_DIR/backend/internal/redisengine/engine.go"
-  require_rg "redis_replay_unknown_is_not_engine_success" "DecisionStatusPendingDurability" "$ROOT_DIR/backend/internal/redisengine/engine.go"
+  require_rg "redis_replay_unknown_is_engine_durable" "DurabilityStatusEngineDurable" "$ROOT_DIR/backend/internal/redisengine/engine.go"
   require_rg "gateway_pending_settlement_is_202" "SettlementStatus == auction\\.SettlementStatusPending" "$ROOT_DIR/backend/internal/gateway/json.go"
   require_rg "redis_replay_acked_returns_engine_result" "case kafkaAppendStatusAcked" "$ROOT_DIR/backend/internal/redisengine/engine.go"
   require_rg "kafka_writer_requires_all_acks" "RequiredAcks:\\s+kafka\\.RequireAll" "$ROOT_DIR/backend/internal/redisengine/kafka_ledger.go"
@@ -213,7 +210,7 @@ SQL
   bid_topic_desc="$(docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-topics.sh --bootstrap-server "$KAFKA_BOOTSTRAP" --describe --topic "$KAFKA_BID_TOPIC" 2>/dev/null || true)"
   dlq_topic_desc="$(docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-topics.sh --bootstrap-server "$KAFKA_BOOTSTRAP" --describe --topic "$KAFKA_DLQ_TOPIC" 2>/dev/null || true)"
   bid_topic_partitions="$(printf '%s\n' "$bid_topic_desc" | awk -F'PartitionCount: ' '/PartitionCount:/ {split($2, a, "\t"); print a[1]; exit}')"
-  bid_topic_replication="$(printf '%s\n' "$bid_topic_desc" | awk -F'ReplicationFactor: ' '/ReplicationFactor:/ {split($2, a, "\t"); print a[1]; exit}')"
+  bid_topic_replication="$(printf '%s\n' "$bid_topic_desc" | awk -F'ReplicationFactor: ' '/ReplicationFactor:/ {split($2, a, "\t"); gsub(/[^0-9].*/, "", a[1]); print a[1]; exit}')"
   bid_topic_under_replicated="$(printf '%s\n' "$bid_topic_desc" | awk '/Leader:/ && /Replicas:/ && /Isr:/ {
     replicas=""; isr="";
     for (i=1; i<=NF; i++) {
@@ -226,7 +223,7 @@ SQL
   } END { print bad + 0 }')"
   bid_topic_min_isr="$(printf '%s\n' "$bid_topic_desc" | awk '{
     for (i=1; i<=NF; i++) {
-      if ($i ~ /^min.insync.replicas=/) { split($i, a, "="); print a[2]; found=1 }
+      if ($i ~ /^min.insync.replicas=/) { split($i, a, "="); gsub(/[^0-9].*/, "", a[2]); print a[2]; found=1 }
     }
   } END { if (!found) print "" }' | tail -n 1)"
   printf 'P0\tkafka_bid_topic_exists\t%s\tbid ledger topic must exist\n' "$([[ "$bid_topic_desc" == *"Topic: $KAFKA_BID_TOPIC"* ]] && echo PASS || echo FAIL)"

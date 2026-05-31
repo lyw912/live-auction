@@ -4,19 +4,23 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 
 	apierrors "live-auction/backend/internal/platform/errors"
+	"live-auction/backend/internal/redisx"
 )
 
 type roomACL struct {
-	db *pgxpool.Pool
+	db  *pgxpool.Pool
+	rdb *redis.Client
 }
 
-func newRoomACL(db *pgxpool.Pool) roomACL {
-	return roomACL{db: db}
+func newRoomACL(db *pgxpool.Pool, rdb *redis.Client) roomACL {
+	return roomACL{db: db, rdb: rdb}
 }
 
 func (a roomACL) requireHostOwnsRoom(ctx context.Context, user AuthUser, roomID string, traceID string) error {
@@ -79,6 +83,14 @@ func (a roomACL) requireActiveMembership(ctx context.Context, user AuthUser, roo
 }
 
 func (a roomACL) requireActiveMembershipForAuction(ctx context.Context, user AuthUser, auctionID string, traceID string) (string, error) {
+	cacheKey := redisx.ACLMembershipKey(auctionID, user.ID)
+
+	if a.rdb != nil {
+		if roomID, err := a.rdb.Get(ctx, cacheKey).Result(); err == nil {
+			return roomID, nil
+		}
+	}
+
 	var roomID string
 	var allowed bool
 	var err error
@@ -120,6 +132,13 @@ func (a roomACL) requireActiveMembershipForAuction(ctx context.Context, user Aut
 	}
 	if !allowed {
 		return roomID, a.forbidden(ctx, user, roomID, auctionID, traceID, "active room membership required")
+	}
+
+	// Cache positive results only; denials are rare and we still want fresh checks.
+	// TTL = 5min, matching auth session cache cap, so warmup cache survives the
+	// burst_wait_ms barrier (40s) without expiring before the burst fires.
+	if a.rdb != nil {
+		a.rdb.Set(ctx, cacheKey, roomID, 5*time.Minute)
 	}
 	return roomID, nil
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/singleflight"
 
 	"live-auction/backend/internal/auction"
@@ -59,6 +60,19 @@ local idem_key = KEYS[2]
 local pending_key = KEYS[3]
 local pending_auctions_key = KEYS[4]
 local log_stream_key = KEYS[5]
+local acl_key = KEYS[6]
+
+-- ACL membership check: runs atomically inside the script, so no separate
+-- Redis round-trip is needed. The gateway pre-seeds acl:membership:{auction}:{user}
+-- when the room opens; the bid hot path never touches the DB for ACL.
+-- acl_key is empty string when called without ACL context (tests, non-gateway paths).
+if acl_key and acl_key ~= '' then
+    local acl_val = redis.call('GET', acl_key)
+    if not acl_val or acl_val == false or acl_val == '' then
+        return {'ERROR', 'ACL_FORBIDDEN', 'user does not have active room membership'}
+    end
+end
+
 
 local now_ms = tonumber(ARGV[1])
 local auction_id = ARGV[2]
@@ -330,10 +344,11 @@ return {'OK', store_decision(with_basis(result, nil))}
 `)
 
 type Engine struct {
-	db            *pgxpool.Pool
-	redis         *redis.Client
-	ledger        BidLedger
-	snapshotLoads singleflight.Group
+	db             *pgxpool.Pool
+	redis          *redis.Client
+	ledger         BidLedger
+	snapshotLoads  singleflight.Group
+	coldStartGroup singleflight.Group // serialises cold-start recovery per auction
 }
 
 type snapshot struct {
@@ -409,7 +424,14 @@ func New(db *pgxpool.Pool, redisClient *redis.Client, ledger BidLedger) *Engine 
 	return &Engine{db: db, redis: redisClient, ledger: ledger}
 }
 
-func (e *Engine) PlaceBid(ctx context.Context, auctionID string, userID string, idempotencyKey string, input auction.BidInput, traceID string) (auction.BidResponse, error) {
+// PlaceBid executes the bid hot path. Pass aclKey to enforce room-membership
+// inside the Lua script atomically (no extra Redis RTT). Omit it (or pass "")
+// for test/non-gateway callers — Lua skips the ACL check in that case.
+func (e *Engine) PlaceBid(ctx context.Context, auctionID string, userID string, idempotencyKey string, input auction.BidInput, traceID string, aclKey ...string) (auction.BidResponse, error) {
+	acl := ""
+	if len(aclKey) > 0 {
+		acl = aclKey[0]
+	}
 	if e == nil || e.db == nil || e.redis == nil || e.ledger == nil {
 		return auction.BidResponse{}, apierrors.New(apierrors.CodeEnginePaused, "redis/kafka ledger engine is unavailable", http.StatusServiceUnavailable)
 	}
@@ -422,123 +444,92 @@ func (e *Engine) PlaceBid(ctx context.Context, auctionID string, userID string, 
 	requestHash := requestHash(auctionID, userID, input.ClientBidID, input.AmountCents)
 	traceCtx := ctx
 	var stageErr error
-	_, stageSpan := apptracing.Start(traceCtx, "bid.idempotency.redis", attribute.String("auction.id", auctionID))
-	if replay, ok, err := e.redisPreDecisionReplay(ctx, auctionID, input.ClientBidID, requestHash); err != nil || ok {
-		stageErr = err
-		if ok {
-			stageSpan.SetAttributes(attribute.Bool("bid.idempotency.replay", true))
-		}
-		apptracing.End(stageSpan, stageErr)
-		if err != nil {
-			var apiErr apierrors.APIError
-			if errors.As(err, &apiErr) {
-				return replay, err
-			}
-			_ = e.pause(ctx, auctionID, "REDIS_IDEMPOTENCY_REPLAY_FAILED", err.Error(), traceID)
-			return auction.BidResponse{}, apierrors.New(apierrors.CodeEnginePaused, "redis ledger engine idempotency state is invalid", http.StatusServiceUnavailable)
-		}
-		return replay, nil
-	}
-	apptracing.End(stageSpan, nil)
+	var stageSpan trace.Span
 
 	nowMS := time.Now().UTC().UnixMilli()
 	bidID := "bid_" + uuid.NewString()
-	stateJSON := ""
-	stateExists, err := e.redis.Exists(ctx, redisx.BidEngineStateKey(auctionID)).Result()
-	if err != nil {
-		_ = e.pause(ctx, auctionID, "REDIS_ENGINE_STATE_CHECK_FAILED", err.Error(), traceID)
-		return auction.BidResponse{}, apierrors.New(apierrors.CodeEnginePaused, "redis ledger engine state check failed", http.StatusServiceUnavailable)
-	}
-	if stateExists == 0 {
-		if appendSeq, err := e.redisAppendHighWater(ctx, auctionID); err != nil {
-			_ = e.pause(ctx, auctionID, "REDIS_ENGINE_APPEND_MARKER_CHECK_FAILED", err.Error(), traceID)
-			return auction.BidResponse{}, apierrors.New(apierrors.CodeEnginePaused, "redis ledger engine append marker check failed", http.StatusServiceUnavailable)
-		} else if appendSeq > 0 {
-			if exists, existsErr := e.redis.Exists(ctx, redisx.BidEngineStateKey(auctionID)).Result(); existsErr != nil {
-				_ = e.pause(ctx, auctionID, "REDIS_ENGINE_STATE_RECHECK_FAILED", existsErr.Error(), traceID)
-				return auction.BidResponse{}, apierrors.New(apierrors.CodeEnginePaused, "redis ledger engine state recheck failed", http.StatusServiceUnavailable)
-			} else if exists > 0 {
-				goto redisLua
-			}
-			err := fmt.Errorf("redis engine state is missing after kafka append high-water engine_seq=%d", appendSeq)
-			_ = e.pause(ctx, auctionID, "REDIS_ENGINE_STATE_MISSING_REQUIRES_RECONCILE", err.Error(), traceID)
-			return auction.BidResponse{}, apierrors.New(apierrors.CodeEngineReconciling, "auction engine is reconciling after redis state loss", http.StatusConflict)
-		}
-		pendingCount, err := e.redis.HLen(ctx, redisx.BidEnginePendingKey(auctionID)).Result()
-		if err != nil {
-			_ = e.pause(ctx, auctionID, "REDIS_ENGINE_PENDING_CHECK_FAILED", err.Error(), traceID)
-			return auction.BidResponse{}, apierrors.New(apierrors.CodeEnginePaused, "redis ledger engine pending check failed", http.StatusServiceUnavailable)
-		}
-		if pendingCount > 0 {
-			if exists, existsErr := e.redis.Exists(ctx, redisx.BidEngineStateKey(auctionID)).Result(); existsErr != nil {
-				_ = e.pause(ctx, auctionID, "REDIS_ENGINE_STATE_RECHECK_FAILED", existsErr.Error(), traceID)
-				return auction.BidResponse{}, apierrors.New(apierrors.CodeEnginePaused, "redis ledger engine state recheck failed", http.StatusServiceUnavailable)
-			} else if exists > 0 {
-				goto redisLua
-			}
-			err := fmt.Errorf("redis engine state is missing while %d pending decisions remain", pendingCount)
-			_ = e.pause(ctx, auctionID, "REDIS_ENGINE_STATE_MISSING_REQUIRES_RECONCILE", err.Error(), traceID)
-			return auction.BidResponse{}, apierrors.New(apierrors.CodeEngineReconciling, "auction engine is reconciling after redis state loss", http.StatusConflict)
-		}
-		_, stageSpan = apptracing.Start(traceCtx, "bid.idempotency.pg_cold", attribute.String("auction.id", auctionID))
-		if replay, ok, err := e.completedReplay(ctx, auctionID, userID, idempotencyKey, requestHash); err != nil || ok {
-			stageErr = err
-			if ok {
-				stageSpan.SetAttributes(attribute.Bool("bid.idempotency.replay", true))
-			}
-			apptracing.End(stageSpan, stageErr)
-			return replay, err
-		}
-		apptracing.End(stageSpan, nil)
 
-		_, stageSpan = apptracing.Start(traceCtx, "bid.snapshot_load_cold", attribute.String("auction.id", auctionID))
-		snap, err := e.loadSnapshotSingleflight(ctx, auctionID)
-		if err != nil {
-			apptracing.End(stageSpan, err)
-			return auction.BidResponse{}, err
-		}
-		if err := e.ensureColdSnapshotCanSeedRedis(ctx, auctionID, snap); err != nil {
-			_ = e.pause(ctx, auctionID, "REDIS_ENGINE_STATE_MISSING_REQUIRES_RECONCILE", err.Error(), traceID)
-			apptracing.End(stageSpan, err)
-			return auction.BidResponse{}, apierrors.New(apierrors.CodeEngineReconciling, "auction engine is reconciling after redis state loss", http.StatusConflict)
-		}
-		raw, err := json.Marshal(snap)
-		if err != nil {
-			apptracing.End(stageSpan, err)
-			return auction.BidResponse{}, err
-		}
-		stateJSON = string(raw)
-		apptracing.End(stageSpan, nil)
-	}
-redisLua:
+	// Optimistic execution: skip the pre-Lua EXISTS check and go straight to EVAL.
+	// For the warm hot path (100% of PTS-1B and normal production load), state is
+	// already in Redis and EXISTS would always return 1 — paying an extra Redis RTT
+	// and joining the single-threaded queue twice for nothing.
+	//
+	// If Redis state is missing (cold start after crash/restart), the Lua script
+	// returns {ERROR, RECONCILING, "state missing..."} with len(values)==3. We
+	// detect that signal below and run the cold-start path exactly once.
+	stateJSON := ""
+	return e.placeBidWithSnapshot(ctx, traceCtx, auctionID, userID, idempotencyKey, input,
+		requestHash, traceID, nowMS, bidID, stateJSON, acl, &stageErr, &stageSpan)
+}
+
+// placeBidWithSnapshot runs the Lua CAS and, on cold-start signal, loads a
+// PostgreSQL snapshot and retries once. Splitting this out keeps PlaceBid readable
+// while avoiding a goto or closure workaround.
+func (e *Engine) placeBidWithSnapshot(
+	ctx context.Context, traceCtx context.Context,
+	auctionID, userID, idempotencyKey string, input auction.BidInput,
+	requestHash, traceID string, nowMS int64, bidID, stateJSON, aclKey string,
+	stageErr *error, stageSpan *trace.Span,
+) (auction.BidResponse, error) {
 	totalStart := time.Now()
 	start := time.Now()
-	_, stageSpan = apptracing.Start(traceCtx, "bid.redis_lua", attribute.String("auction.id", auctionID))
+	_, *stageSpan = apptracing.Start(traceCtx, "bid.redis_lua", attribute.String("auction.id", auctionID))
 	cmd := ledgerRunner.Run(ctx, e.redis, []string{
 		redisx.BidEngineStateKey(auctionID),
 		redisx.BidEngineIdempotencyKey(auctionID, input.ClientBidID),
 		redisx.BidEnginePendingKey(auctionID),
 		redisx.BidEnginePendingAuctionsKey(),
 		redisx.BidEngineLogStreamKey(auctionID), // KEYS[5]: decision log stream (WAL)
+		aclKey,                                   // KEYS[6]: ACL check in-Lua (empty = skip)
 	}, nowMS, auctionID, userID, input.ClientBidID, input.AmountCents, requestHash, traceID, bidID, stateJSON, engineStateTTL.Milliseconds(), idempotencyTTL.Milliseconds())
 	values, err := cmd.Slice()
 	if err != nil {
-		apptracing.End(stageSpan, err)
+		apptracing.End(*stageSpan, err)
 		ledgerRunner.Record(redisx.ClassifyScriptError(err), time.Since(start))
 		_ = e.pause(ctx, auctionID, "REDIS_ENGINE_SCRIPT_ERROR", err.Error(), traceID)
 		return auction.BidResponse{}, apierrors.New(apierrors.CodeEnginePaused, "redis ledger engine paused after script failure: "+err.Error(), http.StatusServiceUnavailable)
 	}
 	if len(values) < 2 {
 		err := fmt.Errorf("redis ledger engine returned invalid result: %v", values)
-		apptracing.End(stageSpan, err)
+		apptracing.End(*stageSpan, err)
 		_ = e.pause(ctx, auctionID, "REDIS_ENGINE_BAD_SCRIPT_RESULT", fmt.Sprintf("%v", values), traceID)
 		return auction.BidResponse{}, apierrors.New(apierrors.CodeEnginePaused, "redis ledger engine returned invalid result", http.StatusServiceUnavailable)
 	}
 	status := stringValue(values[0])
 	if status == "ERROR" {
 		code := apierrors.Code(stringValue(values[1]))
-		err := apierrors.New(code, "redis ledger engine rejected request", http.StatusConflict)
-		apptracing.End(stageSpan, err)
+		apiErr := apierrors.New(code, "redis ledger engine rejected request", http.StatusConflict)
+		apptracing.End(*stageSpan, apiErr)
+
+		// Lua signals state missing + no snapshot: run cold-start path and retry once.
+		// This only happens after Redis data loss (restart/eviction); normal hot path
+		// never hits this branch.
+		if stringValue(values[1]) == "ACL_FORBIDDEN" {
+			return auction.BidResponse{}, apierrors.New(apierrors.CodeForbiddenRoom, "room access denied", http.StatusForbidden)
+		}
+		if code == apierrors.CodeEngineReconciling && stateJSON == "" &&
+			len(values) >= 3 && strings.HasPrefix(stringValue(values[2]), "redis engine state missing") {
+			// Serialise cold-start per auction: only one goroutine runs the safety
+			// checks and snapshot load; all others wait and share the result.
+			type coldResult struct {
+				resp    auction.BidResponse
+				snapJSON string
+			}
+			val, sfErr, _ := e.coldStartGroup.Do(auctionID, func() (any, error) {
+				resp, snapJSON, err := e.runColdStart(ctx, traceCtx, auctionID, userID, idempotencyKey, requestHash, traceID, stageErr, stageSpan)
+				return coldResult{resp, snapJSON}, err
+			})
+			if sfErr != nil {
+				return val.(coldResult).resp, sfErr
+			}
+			cr := val.(coldResult)
+			if cr.resp != (auction.BidResponse{}) {
+				return cr.resp, nil
+			}
+			return e.placeBidWithSnapshot(ctx, traceCtx, auctionID, userID, idempotencyKey, input,
+				requestHash, traceID, nowMS, bidID, cr.snapJSON, aclKey, stageErr, stageSpan)
+		}
+
 		if code == apierrors.CodeEngineReconciling {
 			return auction.BidResponse{}, apierrors.New(apierrors.CodeEngineReconciling, "auction is reconciling", http.StatusConflict)
 		}
@@ -549,32 +540,98 @@ redisLua:
 	}
 	var result engineResult
 	if err := json.Unmarshal([]byte(stringValue(values[1])), &result); err != nil {
-		apptracing.End(stageSpan, err)
+		apptracing.End(*stageSpan, err)
 		_ = e.pause(ctx, auctionID, "REDIS_ENGINE_RESULT_DECODE_FAILED", err.Error(), traceID)
 		return auction.BidResponse{}, err
 	}
-	stageSpan.SetAttributes(
+	(*stageSpan).SetAttributes(
 		attribute.String("bid.result", result.Result),
 		attribute.Int64("bid.engine_seq", result.EngineSeq),
 		attribute.Int64("bid.engine_epoch", result.EngineEpoch),
 	)
-	apptracing.End(stageSpan, nil)
+	apptracing.End(*stageSpan, nil)
 	redisElapsed := time.Since(start)
 	ledgerRunner.Record("ok", redisElapsed)
 	recordDecision(result.Result, redisElapsed)
 	recordHTTPStage("redis_lua", result.Result, "ok", redisElapsed)
 	if status == "REPLAY" {
-		_, stageSpan = apptracing.Start(traceCtx, "bid.redis_replay_response", attribute.String("auction.id", auctionID))
+		_, *stageSpan = apptracing.Start(traceCtx, "bid.redis_replay_response", attribute.String("auction.id", auctionID))
 		resp, err := e.redisIdempotencyReplayResponse(ctx, auctionID, input.ClientBidID, requestHash, result, totalStart)
-		apptracing.End(stageSpan, err)
+		apptracing.End(*stageSpan, err)
 		return resp, err
 	}
-	// Decision is final: the Lua atomically committed the result to the in-memory
-	// state AND appended it to the decision log stream (XADD). The group-commit relay
-	// will durably produce it to Kafka asynchronously — no hot-path Kafka round-trip.
-	// We return ENGINE_DURABLE immediately; the client sees DECIDED on first response.
 	recordHTTPStage("total", result.Result, "ok", time.Since(totalStart))
 	return result.response(auction.DurabilityStatusEngineDurable, auction.DecisionStatusDecided), nil
+}
+
+// runColdStart performs the safety checks and snapshot load that must precede
+// seeding Redis hot state. Called only when placeBidWithSnapshot detects a
+// cold-start signal from the Lua script.
+func (e *Engine) runColdStart(
+	ctx context.Context, traceCtx context.Context,
+	auctionID, userID, idempotencyKey, requestHash, traceID string,
+	stageErr *error, stageSpan *trace.Span,
+) (auction.BidResponse, string, error) {
+	if appendSeq, err := e.redisAppendHighWater(ctx, auctionID); err != nil {
+		_ = e.pause(ctx, auctionID, "REDIS_ENGINE_APPEND_MARKER_CHECK_FAILED", err.Error(), traceID)
+		return auction.BidResponse{}, "", apierrors.New(apierrors.CodeEnginePaused, "redis ledger engine append marker check failed", http.StatusServiceUnavailable)
+	} else if appendSeq > 0 {
+		if exists, existsErr := e.redis.Exists(ctx, redisx.BidEngineStateKey(auctionID)).Result(); existsErr != nil {
+			_ = e.pause(ctx, auctionID, "REDIS_ENGINE_STATE_RECHECK_FAILED", existsErr.Error(), traceID)
+			return auction.BidResponse{}, "", apierrors.New(apierrors.CodeEnginePaused, "redis ledger engine state recheck failed", http.StatusServiceUnavailable)
+		} else if exists > 0 {
+			// State appeared while we were checking: retry without snapshot.
+			return auction.BidResponse{}, "", nil
+		}
+		err := fmt.Errorf("redis engine state is missing after kafka append high-water engine_seq=%d", appendSeq)
+		_ = e.pause(ctx, auctionID, "REDIS_ENGINE_STATE_MISSING_REQUIRES_RECONCILE", err.Error(), traceID)
+		return auction.BidResponse{}, "", apierrors.New(apierrors.CodeEngineReconciling, "auction engine is reconciling after redis state loss", http.StatusConflict)
+	}
+	pendingCount, err := e.redis.HLen(ctx, redisx.BidEnginePendingKey(auctionID)).Result()
+	if err != nil {
+		_ = e.pause(ctx, auctionID, "REDIS_ENGINE_PENDING_CHECK_FAILED", err.Error(), traceID)
+		return auction.BidResponse{}, "", apierrors.New(apierrors.CodeEnginePaused, "redis ledger engine pending check failed", http.StatusServiceUnavailable)
+	}
+	if pendingCount > 0 {
+		if exists, existsErr := e.redis.Exists(ctx, redisx.BidEngineStateKey(auctionID)).Result(); existsErr != nil {
+			_ = e.pause(ctx, auctionID, "REDIS_ENGINE_STATE_RECHECK_FAILED", existsErr.Error(), traceID)
+			return auction.BidResponse{}, "", apierrors.New(apierrors.CodeEnginePaused, "redis ledger engine state recheck failed", http.StatusServiceUnavailable)
+		} else if exists > 0 {
+			return auction.BidResponse{}, "", nil
+		}
+		err := fmt.Errorf("redis engine state is missing while %d pending decisions remain", pendingCount)
+		_ = e.pause(ctx, auctionID, "REDIS_ENGINE_STATE_MISSING_REQUIRES_RECONCILE", err.Error(), traceID)
+		return auction.BidResponse{}, "", apierrors.New(apierrors.CodeEngineReconciling, "auction engine is reconciling after redis state loss", http.StatusConflict)
+	}
+	_, *stageSpan = apptracing.Start(traceCtx, "bid.idempotency.pg_cold", attribute.String("auction.id", auctionID))
+	if replay, ok, err := e.completedReplay(ctx, auctionID, userID, idempotencyKey, requestHash); err != nil || ok {
+		*stageErr = err
+		if ok {
+			(*stageSpan).SetAttributes(attribute.Bool("bid.idempotency.replay", true))
+		}
+		apptracing.End(*stageSpan, *stageErr)
+		return replay, "", err
+	}
+	apptracing.End(*stageSpan, nil)
+
+	_, *stageSpan = apptracing.Start(traceCtx, "bid.snapshot_load_cold", attribute.String("auction.id", auctionID))
+	snap, err := e.loadSnapshotSingleflight(ctx, auctionID)
+	if err != nil {
+		apptracing.End(*stageSpan, err)
+		return auction.BidResponse{}, "", err
+	}
+	if err := e.ensureColdSnapshotCanSeedRedis(ctx, auctionID, snap); err != nil {
+		_ = e.pause(ctx, auctionID, "REDIS_ENGINE_STATE_MISSING_REQUIRES_RECONCILE", err.Error(), traceID)
+		apptracing.End(*stageSpan, err)
+		return auction.BidResponse{}, "", apierrors.New(apierrors.CodeEngineReconciling, "auction engine is reconciling after redis state loss", http.StatusConflict)
+	}
+	raw, err := json.Marshal(snap)
+	if err != nil {
+		apptracing.End(*stageSpan, err)
+		return auction.BidResponse{}, "", err
+	}
+	apptracing.End(*stageSpan, nil)
+	return auction.BidResponse{}, string(raw), nil
 }
 
 
