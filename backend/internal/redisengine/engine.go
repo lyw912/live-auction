@@ -41,10 +41,10 @@ const (
 	// Tuned to balance throughput (large batch) with tail latency (small batch).
 	relayBatchSize = 512
 	// relayBatchBlock is the XREAD block timeout; keeps the relay responsive.
-	relayBatchBlock = 2 * time.Millisecond
-	resultAccepted  = "ENGINE_ACCEPTED"
-	resultRejected  = "ENGINE_REJECTED"
-	resultSold      = "ENGINE_SOLD"
+	relayBatchBlock   = 2 * time.Millisecond
+	resultAccepted    = "ENGINE_ACCEPTED"
+	resultRejected    = "ENGINE_REJECTED"
+	resultSold        = "ENGINE_SOLD"
 	resultReconciling = "RECONCILING"
 )
 
@@ -480,7 +480,7 @@ func (e *Engine) placeBidWithSnapshot(
 		redisx.BidEnginePendingKey(auctionID),
 		redisx.BidEnginePendingAuctionsKey(),
 		redisx.BidEngineLogStreamKey(auctionID), // KEYS[5]: decision log stream (WAL)
-		aclKey,                                   // KEYS[6]: ACL check in-Lua (empty = skip)
+		aclKey,                                  // KEYS[6]: ACL check in-Lua (empty = skip)
 	}, nowMS, auctionID, userID, input.ClientBidID, input.AmountCents, requestHash, traceID, bidID, stateJSON, engineStateTTL.Milliseconds(), idempotencyTTL.Milliseconds())
 	values, err := cmd.Slice()
 	if err != nil {
@@ -512,7 +512,7 @@ func (e *Engine) placeBidWithSnapshot(
 			// Serialise cold-start per auction: only one goroutine runs the safety
 			// checks and snapshot load; all others wait and share the result.
 			type coldResult struct {
-				resp    auction.BidResponse
+				resp     auction.BidResponse
 				snapJSON string
 			}
 			val, sfErr, _ := e.coldStartGroup.Do(auctionID, func() (any, error) {
@@ -633,7 +633,6 @@ func (e *Engine) runColdStart(
 	apptracing.End(*stageSpan, nil)
 	return auction.BidResponse{}, string(raw), nil
 }
-
 
 func (e *Engine) redisIdempotencyReplayResponse(ctx context.Context, auctionID string, clientBidID string, requestHash string, result engineResult, totalStart time.Time) (auction.BidResponse, error) {
 	load, err := e.loadRedisIdempotencyReplay(ctx, auctionID, clientBidID)
@@ -3108,8 +3107,87 @@ func (w *Worker) Reconcile(ctx context.Context, auctionID string) (Report, error
 		if first.status != "REDIS_STATE_MISSING" {
 			_ = w.pause(ctx, auctionID, first.reason, first.message, "", first.details)
 		}
+		return report, nil
+	}
+	if paused {
+		cleared, err := w.clearRecoverablePause(ctx, auctionID)
+		if err != nil {
+			return report, err
+		}
+		if cleared {
+			report.Paused = false
+			report.Message = "recoverable redis engine pause cleared after reconcile completed with no invariant violations"
+		}
 	}
 	return report, nil
+}
+
+func (w *Worker) clearRecoverablePause(ctx context.Context, auctionID string) (bool, error) {
+	var reason string
+	err := w.db.QueryRow(ctx, `
+		SELECT COALESCE(engine_pause_reason, '')
+		FROM auctions
+		WHERE id = $1
+		  AND engine_paused = true
+	`, auctionID).Scan(&reason)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !isRecoverableRedisEnginePause(reason) {
+		return false, nil
+	}
+
+	payload, _ := json.Marshal(map[string]any{"reason": reason, "cleared_by": "redis_engine_reconcile"})
+	tx, err := w.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tag, err := tx.Exec(ctx, `
+		UPDATE auctions
+		SET engine_paused = false,
+		    engine_pause_reason = NULL,
+		    engine_paused_at = NULL,
+		    updated_at = now()
+		WHERE id = $1
+		  AND engine_paused = true
+		  AND engine_pause_reason = $2
+	`, auctionID, reason)
+	if err != nil {
+		return false, err
+	}
+	if tag.RowsAffected() == 0 {
+		return false, tx.Commit(ctx)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO system_anomaly_events (severity, type, auction_id, message, payload_json)
+		VALUES ('MED', 'REDIS_ENGINE_AUTO_RESUMED', $1, $2, $3)
+	`, auctionID, "redis engine auto-resumed after reconcile proved the ledger and PostgreSQL are consistent", payload); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	if w.redis != nil {
+		_ = w.redis.HSet(ctx, redisx.BidEngineStateKey(auctionID), "paused", 0, "pause_reason", "").Err()
+	}
+	observability.Inc("auction_bid_engine_auto_resume_total", map[string]string{"reason": reason})
+	return true, nil
+}
+
+func isRecoverableRedisEnginePause(reason string) bool {
+	switch reason {
+	case "REDIS_ENGINE_DB_BEHIND_REDIS",
+		"REDIS_ENGINE_REDIS_BEHIND_DB",
+		"REDIS_ENGINE_PENDING_KAFKA_RECOVERY_FAILED",
+		"REDIS_ENGINE_PENDING_KAFKA_APPEND_UNKNOWN":
+		return true
+	default:
+		return false
+	}
 }
 
 func shouldBroadcastReject(reason *string) bool {

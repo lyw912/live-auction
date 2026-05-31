@@ -192,33 +192,59 @@ func TestRelayStreamEpochStableAcrossEventsAndSnapshot(t *testing.T) {
 	}
 }
 
-func TestRelayPoisonMarksDeadAndWritesAnomaly(t *testing.T) {
+func TestRelayRedisUnavailableRemainsRetriableAfterMaxAttempts(t *testing.T) {
 	db := openDB(t)
 	ctx := context.Background()
 	repo := auction.NewRepository(db)
 	auctionRow := createActiveAuctionForRelay(t, repo, db)
 	quiesceOutboxExcept(t, db, auctionRow.ID)
-	bid := auction.BidInput{ClientBidID: "poison-bid-1", AmountCents: 15_000}
-	if _, err := repo.PlaceBid(ctx, auctionRow.ID, "user_1", bid.ClientBidID, bid, "tr_poison"); err != nil {
+	bid := auction.BidInput{ClientBidID: "redis-retry-bid-1", AmountCents: 15_000}
+	if _, err := repo.PlaceBid(ctx, auctionRow.ID, "user_1", bid.ClientBidID, bid, "tr_redis_retry"); err != nil {
 		t.Fatalf("PlaceBid: %v", err)
+	}
+	var targetOutboxID int64
+	if err := db.QueryRow(ctx, `
+		SELECT id
+		FROM outbox_events
+		WHERE auction_id = $1
+		  AND event_type = 'auction_created'
+		ORDER BY seq
+		LIMIT 1
+	`, auctionRow.ID).Scan(&targetOutboxID); err != nil {
+		t.Fatalf("select target outbox: %v", err)
 	}
 	if _, err := db.Exec(ctx, `
 		UPDATE outbox_delivery
 		SET max_attempts = 1
-		WHERE outbox_id = (SELECT id FROM outbox_events WHERE auction_id = $1 AND event_type = 'auction_created')
-	`, auctionRow.ID); err != nil {
+		WHERE outbox_id = $1
+	`, targetOutboxID); err != nil {
 		t.Fatalf("set max attempts: %v", err)
 	}
 	if _, err := db.Exec(ctx, `
 		UPDATE outbox_delivery
-		SET status = 'PUBLISHED', published_at = COALESCE(published_at, now()), locked_by = NULL, locked_until = NULL
+		SET status = 'PUBLISHED',
+		    published_at = COALESCE(published_at, now()),
+		    locked_by = NULL,
+		    locked_until = NULL
 		WHERE outbox_id IN (
 			SELECT id FROM outbox_events
-			WHERE auction_id = $1 AND event_type <> 'auction_created'
+			WHERE auction_id = $1
+			  AND event_type <> 'auction_created'
 		)
 	`, auctionRow.ID); err != nil {
 		t.Fatalf("publish non-poison outbox: %v", err)
 	}
+	if _, err := db.Exec(ctx, `
+		UPDATE outbox_delivery
+		SET status = 'PENDING',
+		    next_attempt_at = now(),
+		    locked_by = NULL,
+		    locked_until = NULL
+		WHERE outbox_id = $1
+	`, targetOutboxID); err != nil {
+		t.Fatalf("make target outbox claimable: %v", err)
+	}
+	isolateClaimableOutbox(t, db, auctionRow.ID, targetOutboxID)
 	if _, err := db.Exec(ctx, `
 		DELETE FROM outbox_relay_watermarks
 		WHERE shard_id IN (SELECT DISTINCT shard_id FROM outbox_delivery WHERE auction_id = $1)
@@ -244,71 +270,47 @@ func TestRelayPoisonMarksDeadAndWritesAnomaly(t *testing.T) {
 		t.Fatalf("expected publish error")
 	}
 
-	var dead int
-	if err := db.QueryRow(ctx, `
-		SELECT count(*)
-		FROM outbox_events e
-		JOIN outbox_delivery d ON d.outbox_id = e.id
-		WHERE e.auction_id = $1 AND d.status = 'DEAD'
-	`, auctionRow.ID).Scan(&dead); err != nil {
-		t.Fatalf("count dead: %v", err)
-	}
-	if dead != 1 {
-		t.Fatalf("dead deliveries = %d, want 1", dead)
-	}
+	var status string
+	var attempts int
 	var errClass string
 	var retriable bool
+	var nextAttemptAt time.Time
 	if err := db.QueryRow(ctx, `
-		SELECT d.last_error_class, d.last_error_retriable
+		SELECT d.status, d.attempts, d.last_error_class, d.last_error_retriable, d.next_attempt_at
 		FROM outbox_events e
 		JOIN outbox_delivery d ON d.outbox_id = e.id
-		WHERE e.auction_id = $1 AND d.status = 'DEAD'
-	`, auctionRow.ID).Scan(&errClass, &retriable); err != nil {
-		t.Fatalf("select error classification: %v", err)
+		WHERE e.id = $1
+	`, targetOutboxID).Scan(&status, &attempts, &errClass, &retriable, &nextAttemptAt); err != nil {
+		t.Fatalf("select retriable delivery: %v", err)
 	}
-	if errClass != ErrorClassRedisUnavailable || !retriable {
-		t.Fatalf("error classification = (%s,%v), want (%s,true)", errClass, retriable, ErrorClassRedisUnavailable)
+	if status != StatusFailed || attempts != 1 || errClass != ErrorClassRedisUnavailable || !retriable {
+		t.Fatalf("delivery = status=%s attempts=%d class=%s retriable=%v, want FAILED/1/%s/true", status, attempts, errClass, retriable, ErrorClassRedisUnavailable)
+	}
+	if !nextAttemptAt.After(time.Now().Add(-1 * time.Second)) {
+		t.Fatalf("next attempt not scheduled in future-ish window: %s", nextAttemptAt)
 	}
 	var actualDeadForShard int64
 	if err := db.QueryRow(ctx, `
 		SELECT count(*)
-		FROM outbox_delivery
-		WHERE status = 'DEAD'
-		  AND shard_id IN (SELECT DISTINCT shard_id FROM outbox_delivery WHERE auction_id = $1)
+		FROM outbox_delivery d
+		JOIN outbox_events e ON e.id = d.outbox_id
+		WHERE e.auction_id = $1
+		  AND d.status = 'DEAD'
 	`, auctionRow.ID).Scan(&actualDeadForShard); err != nil {
-		t.Fatalf("select actual dead count for shard: %v", err)
+		t.Fatalf("select actual dead count for auction: %v", err)
 	}
-	var watermarkDeadForShard int64
-	if err := db.QueryRow(ctx, `
-		SELECT COALESCE(sum(dead_count), 0)
-		FROM outbox_relay_watermarks
-		WHERE shard_id IN (SELECT DISTINCT shard_id FROM outbox_delivery WHERE auction_id = $1)
-	`, auctionRow.ID).Scan(&watermarkDeadForShard); err != nil {
-		t.Fatalf("select dead watermark count: %v", err)
-	}
-	if watermarkDeadForShard != actualDeadForShard || watermarkDeadForShard == 0 {
-		t.Fatalf("dead watermark count = %d, actual shard dead = %d", watermarkDeadForShard, actualDeadForShard)
+	if actualDeadForShard != 0 {
+		t.Fatalf("dead deliveries for retriable Redis error in auction = %d, want 0", actualDeadForShard)
 	}
 	var anomalies int
 	if err := db.QueryRow(ctx, `SELECT count(*) FROM system_anomaly_events WHERE auction_id = $1 AND type = 'OUTBOX_DEAD_LETTER'`, auctionRow.ID).Scan(&anomalies); err != nil {
 		t.Fatalf("count anomalies: %v", err)
 	}
-	if anomalies != 1 {
-		t.Fatalf("anomalies = %d, want 1", anomalies)
+	if anomalies != 0 {
+		t.Fatalf("dead-letter anomalies for retriable Redis error = %d, want 0", anomalies)
 	}
-	if publishedAuctionID != auctionRow.ID {
-		t.Fatalf("gap notice auction = %q, want %q", publishedAuctionID, auctionRow.ID)
-	}
-	var notice struct {
-		EventType  string  `json:"event_type"`
-		AuctionID  string  `json:"auction_id"`
-		MissingSeq []int64 `json:"missing_seq"`
-	}
-	if err := json.Unmarshal(publishedPayload, &notice); err != nil {
-		t.Fatalf("unmarshal gap notice: %v", err)
-	}
-	if notice.EventType != "outbox_gap_notice" || notice.AuctionID != auctionRow.ID || len(notice.MissingSeq) != 1 {
-		t.Fatalf("unexpected gap notice: %#v", notice)
+	if publishedAuctionID != "" || publishedPayload != nil {
+		t.Fatalf("gap notice published for retriable Redis error: auction=%q payload=%s", publishedAuctionID, string(publishedPayload))
 	}
 }
 
@@ -323,27 +325,47 @@ func TestRelayInvalidEnvelopeDeadLettersWithoutRetry(t *testing.T) {
 	if _, err := repo.PlaceBid(ctx, auctionRow.ID, "user_1", bid.ClientBidID, bid, "tr_invalid_envelope"); err != nil {
 		t.Fatalf("PlaceBid: %v", err)
 	}
+	var targetOutboxID int64
+	if err := db.QueryRow(ctx, `
+		SELECT id
+		FROM outbox_events
+		WHERE auction_id = $1
+		  AND event_type = 'bid_accepted'
+		ORDER BY seq
+		LIMIT 1
+	`, auctionRow.ID).Scan(&targetOutboxID); err != nil {
+		t.Fatalf("select invalid target outbox: %v", err)
+	}
 	if _, err := db.Exec(ctx, `
 		UPDATE outbox_delivery
-		SET status = 'PUBLISHED', published_at = COALESCE(published_at, now()), locked_by = NULL, locked_until = NULL
+		SET status = 'PUBLISHED',
+		    published_at = COALESCE(published_at, now()),
+		    locked_by = NULL,
+		    locked_until = NULL
 		WHERE outbox_id IN (
 			SELECT id FROM outbox_events
-			WHERE auction_id = $1 AND event_type <> 'bid_accepted'
+			WHERE auction_id = $1
+			  AND event_type <> 'bid_accepted'
 		)
 	`, auctionRow.ID); err != nil {
 		t.Fatalf("publish setup events: %v", err)
 	}
 	if _, err := db.Exec(ctx, `
+		UPDATE outbox_delivery
+		SET status = 'PENDING',
+		    next_attempt_at = now(),
+		    locked_by = NULL,
+		    locked_until = NULL
+		WHERE outbox_id = $1
+	`, targetOutboxID); err != nil {
+		t.Fatalf("make invalid envelope outbox claimable: %v", err)
+	}
+	isolateClaimableOutbox(t, db, auctionRow.ID, targetOutboxID)
+	if _, err := db.Exec(ctx, `
 		UPDATE outbox_events
 		SET payload_sha256 = repeat('0', 64)
-		WHERE id = (
-			SELECT id
-			FROM outbox_events
-			WHERE auction_id = $1 AND event_type = 'bid_accepted'
-			ORDER BY seq
-			LIMIT 1
-		)
-	`, auctionRow.ID); err != nil {
+		WHERE id = $1
+	`, targetOutboxID); err != nil {
 		t.Fatalf("corrupt payload hash: %v", err)
 	}
 	prioritizeOutboxForAuction(t, db, auctionRow.ID)
@@ -362,23 +384,25 @@ func TestRelayInvalidEnvelopeDeadLettersWithoutRetry(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected invalid envelope error")
 	}
+	if class, retriable := classifyPublishError(err); class != ErrorClassPayloadInvalid || retriable {
+		t.Fatalf("publish error classification = (%s,%v), want (%s,false): %v", class, retriable, ErrorClassPayloadInvalid, err)
+	}
 
-	var status string
-	var attempts int
-	var errClass string
-	var retriable bool
+	var deadPayloadInvalid int
 	if err := db.QueryRow(ctx, `
-		SELECT d.status, d.attempts, d.last_error_class, d.last_error_retriable
+		SELECT count(*)
 		FROM outbox_events e
 		JOIN outbox_delivery d ON d.outbox_id = e.id
-		WHERE e.auction_id = $1 AND e.event_type = 'bid_accepted'
-		ORDER BY e.seq
-		LIMIT 1
-	`, auctionRow.ID).Scan(&status, &attempts, &errClass, &retriable); err != nil {
-		t.Fatalf("select invalid delivery: %v", err)
+		WHERE e.auction_id = $1
+		  AND d.status = 'DEAD'
+		  AND d.attempts = 1
+		  AND d.last_error_class = $2
+		  AND d.last_error_retriable = false
+	`, auctionRow.ID, ErrorClassPayloadInvalid).Scan(&deadPayloadInvalid); err != nil {
+		t.Fatalf("count invalid delivery: %v", err)
 	}
-	if status != StatusDead || attempts != 1 || errClass != ErrorClassPayloadInvalid || retriable {
-		t.Fatalf("invalid delivery = status=%s attempts=%d class=%s retriable=%v", status, attempts, errClass, retriable)
+	if deadPayloadInvalid != 1 {
+		t.Fatalf("payload-invalid dead deliveries = %d, want 1", deadPayloadInvalid)
 	}
 	if gapNotices != 1 {
 		t.Fatalf("gap notices = %d, want 1", gapNotices)
@@ -1151,6 +1175,41 @@ func quiesceOutboxExcept(t *testing.T, db *pgxpool.Pool, auctionID string) {
 		  AND d.status NOT IN ('PUBLISHED','DEAD')
 	`, auctionID); err != nil {
 		t.Fatalf("quiesce outbox: %v", err)
+	}
+}
+
+func isolateClaimableOutbox(t *testing.T, db *pgxpool.Pool, auctionID string, outboxID int64) {
+	t.Helper()
+	var shardID int
+	if err := db.QueryRow(context.Background(), `
+		SELECT shard_id
+		FROM outbox_delivery
+		WHERE outbox_id = $1
+	`, outboxID).Scan(&shardID); err != nil {
+		t.Fatalf("select target shard: %v", err)
+	}
+	if _, err := db.Exec(context.Background(), `
+		UPDATE outbox_delivery
+		SET status = 'PUBLISHED',
+		    published_at = COALESCE(published_at, now()),
+		    locked_by = NULL,
+		    locked_until = NULL
+		WHERE shard_id = $1
+		  AND outbox_id <> $2
+		  AND status NOT IN ('PUBLISHED','DEAD')
+	`, shardID, outboxID); err != nil {
+		t.Fatalf("quiesce target shard: %v", err)
+	}
+	if _, err := db.Exec(context.Background(), `
+		UPDATE outbox_delivery
+		SET status = CASE WHEN outbox_id = $2 THEN 'PENDING' ELSE 'PUBLISHED' END,
+		    published_at = CASE WHEN outbox_id = $2 THEN NULL ELSE COALESCE(published_at, now()) END,
+		    next_attempt_at = now(),
+		    locked_by = NULL,
+		    locked_until = NULL
+		WHERE auction_id = $1
+	`, auctionID, outboxID); err != nil {
+		t.Fatalf("isolate claimable outbox: %v", err)
 	}
 }
 

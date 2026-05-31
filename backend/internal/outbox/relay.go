@@ -33,6 +33,7 @@ const (
 	DefaultHistoryTTL      = 30 * time.Minute
 	DefaultDrainBatch      = 256
 	DefaultLeaseTTL        = 5 * time.Second
+	MaxRetriableBackoff    = 30 * time.Second
 	EventSchemaVersion     = 1
 	GuardProjectionTTL     = 30 * time.Minute
 	guardProjectionTimeout = 25 * time.Millisecond
@@ -549,27 +550,42 @@ func (r *Relay) markFailure(ctx context.Context, event Event, publishErr error, 
 	var attempts int
 	var maxAttempts int
 	errClass, retriable := classifyPublishError(publishErr)
-	nextStatus := "CASE WHEN attempts + 1 >= max_attempts THEN 'DEAD' ELSE 'FAILED' END"
-	if !retriable {
-		nextStatus = "'DEAD'"
+	if retriable {
+		if err := tx.QueryRow(ctx, `
+			UPDATE outbox_delivery
+			SET attempts = attempts + 1,
+			    status = 'FAILED',
+			    next_attempt_at = now() + LEAST(($5::double precision * interval '1 second'), interval '30 seconds'),
+			    locked_by = NULL,
+			    locked_until = NULL,
+			    last_error = $2,
+			    last_error_class = $3,
+			    last_error_retriable = $4,
+			    last_error_at = now()
+			WHERE outbox_id = $1
+			RETURNING attempts, max_attempts
+		`, event.OutboxID, publishErr.Error(), errClass, retriable, retriableBackoffSeconds(errClass, attempts+1)).Scan(&attempts, &maxAttempts); err != nil {
+			return err
+		}
+	} else {
+		if err := tx.QueryRow(ctx, `
+			UPDATE outbox_delivery
+			SET attempts = attempts + 1,
+			    status = 'DEAD',
+			    next_attempt_at = now() + interval '1 second',
+			    locked_by = NULL,
+			    locked_until = NULL,
+			    last_error = $2,
+			    last_error_class = $3,
+			    last_error_retriable = $4,
+			    last_error_at = now()
+			WHERE outbox_id = $1
+			RETURNING attempts, max_attempts
+		`, event.OutboxID, publishErr.Error(), errClass, retriable).Scan(&attempts, &maxAttempts); err != nil {
+			return err
+		}
 	}
-	if err := tx.QueryRow(ctx, `
-		UPDATE outbox_delivery
-		SET attempts = attempts + 1,
-		    status = `+nextStatus+`,
-		    next_attempt_at = now() + interval '1 second',
-		    locked_by = NULL,
-		    locked_until = NULL,
-		    last_error = $2,
-		    last_error_class = $3,
-		    last_error_retriable = $4,
-		    last_error_at = now()
-		WHERE outbox_id = $1
-		RETURNING attempts, max_attempts
-	`, event.OutboxID, publishErr.Error(), errClass, retriable).Scan(&attempts, &maxAttempts); err != nil {
-		return err
-	}
-	dead := !retriable || attempts >= maxAttempts
+	dead := !retriable
 	if dead {
 		payload, err := json.Marshal(map[string]any{
 			"outbox_id":    event.OutboxID,
@@ -603,6 +619,29 @@ func (r *Relay) markFailure(ctx context.Context, event Event, publishErr error, 
 		r.publishGapNotice(ctx, event)
 	}
 	return nil
+}
+
+func retriableBackoffSeconds(errClass string, attempts int) float64 {
+	if attempts < 1 {
+		attempts = 1
+	}
+	base := 1.0
+	switch errClass {
+	case ErrorClassRedisUnavailable:
+		base = 2.0
+	case ErrorClassPublishTimeout:
+		base = 1.0
+	default:
+		base = 1.0
+	}
+	backoff := base
+	for i := 1; i < attempts && backoff < MaxRetriableBackoff.Seconds(); i++ {
+		backoff *= 2
+	}
+	if max := MaxRetriableBackoff.Seconds(); backoff > max {
+		return max
+	}
+	return backoff
 }
 
 func (r *Relay) publishGapNotice(ctx context.Context, event Event) {

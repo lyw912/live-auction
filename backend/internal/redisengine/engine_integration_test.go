@@ -1089,12 +1089,6 @@ func TestRelayGroupCommitBatchesAllDecisions(t *testing.T) {
 	}
 }
 
-
-
-
-
-
-
 func TestKafkaSettlementUniqueSeqConflictWithSamePayloadIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
@@ -1517,11 +1511,11 @@ func TestReconcileRecoversStreamDecisionWithoutKafkaAck(t *testing.T) {
 	if err := rdb.XAdd(ctx, &redis.XAddArgs{
 		Stream: redisx.BidEngineLogStreamKey(auctionID),
 		Values: map[string]any{
-			"engine_seq":  "1",
+			"engine_seq":   "1",
 			"engine_epoch": "1",
-			"result":      resultAccepted,
-			"auction_id":  auctionID,
-			"payload":     string(raw),
+			"result":       resultAccepted,
+			"auction_id":   auctionID,
+			"payload":      string(raw),
 		},
 	}).Err(); err != nil {
 		t.Fatalf("seed log stream: %v", err)
@@ -1920,6 +1914,55 @@ func TestReconcileDoesNotPauseWhenStreamHasPendingEntries(t *testing.T) {
 	}
 }
 
+func TestReconcileClearsRecoverablePauseAfterSettlementCatchesUp(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+
+	if _, err := engine.PlaceBid(ctx, auctionID, "user_1", "reconcile-auto-resume", auction.BidInput{
+		ClientBidID: "reconcile-auto-resume", AmountCents: 15_000,
+	}, "tr_reconcile_auto_resume"); err != nil {
+		t.Fatalf("place bid: %v", err)
+	}
+	report, err := worker.Reconcile(ctx, auctionID)
+	if err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	if report.Status != "DB_BEHIND_REDIS" {
+		t.Fatalf("first reconcile status = %q, want DB_BEHIND_REDIS", report.Status)
+	}
+	assertEnginePaused(t, db, auctionID, "REDIS_ENGINE_DB_BEHIND_REDIS")
+
+	if _, err := worker.ProcessKafka(ctx, 10); err != nil {
+		t.Fatalf("settle recovered decision: %v", err)
+	}
+	report, err = worker.Reconcile(ctx, auctionID)
+	if err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	if report.Status != "OK" || report.Paused {
+		t.Fatalf("second reconcile report = %#v, want OK and unpaused", report)
+	}
+	assertEngineNotPaused(t, db, auctionID)
+
+	var anomalies int
+	if err := db.QueryRow(ctx, `
+		SELECT count(*)
+		FROM system_anomaly_events
+		WHERE auction_id = $1
+		  AND type = 'REDIS_ENGINE_AUTO_RESUMED'
+	`, auctionID).Scan(&anomalies); err != nil {
+		t.Fatalf("count auto-resume anomaly: %v", err)
+	}
+	if anomalies != 1 {
+		t.Fatalf("auto-resume anomalies = %d, want 1", anomalies)
+	}
+}
+
 // TestRelayCursorAdvancesAfterBatch verifies the relay cursor advances so subsequent
 // passes don't re-produce already-relayed stream entries.
 func TestRelayCursorAdvancesAfterBatch(t *testing.T) {
@@ -1977,8 +2020,6 @@ func (failingLedger) Commit(context.Context, LedgerMessage) error          { ret
 func (failingLedger) WriteDLQ(context.Context, LedgerMessage, error) error { return nil }
 func (failingLedger) Close() error                                         { return nil }
 
-
-
 func assertAPIErrorCode(t *testing.T, err error, want apierrors.Code) {
 	t.Helper()
 	var apiErr apierrors.APIError
@@ -2029,7 +2070,7 @@ func cleanupRedisEngineKeys(t *testing.T, rdb *redis.Client) {
 		"bid:{*}:engine:pending:append-lock",
 		"bid:{*}:engine:idem:*",
 		// v3 group-commit relay keys
-		"bid:{*}:engine:log",        // decision log stream (WAL)
+		"bid:{*}:engine:log",          // decision log stream (WAL)
 		"bid:{*}:engine:relay-cursor", // relay position cursor
 	}
 	for _, pattern := range patterns {
@@ -2224,8 +2265,6 @@ func insertEngineUsers(t *testing.T, db *pgxpool.Pool, prefix string, count int)
 		}
 	}
 }
-
-
 
 func int64Ptr(value int64) *int64 {
 	return &value

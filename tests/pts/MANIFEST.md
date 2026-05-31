@@ -191,6 +191,7 @@ any new latency regression to the specific protocol interaction.
 | `L2-P3` | `L2-protocol/pts-2p3-bid-ws-reads.jmx` | CURRENT | bid p99 ≤ 60ms | bid + WS + reads combined |
 
 See `docs/perf/pts/l2-l4-upload-and-pressure-config.md` for upload files and Alibaba PTS/JMeter configuration.
+See `docs/current/chaos-test-runbook.md` for L1-F and Toxiproxy fault execution.
 
 **Prerequisite**: L1-C1 must pass before any L2 run.
 

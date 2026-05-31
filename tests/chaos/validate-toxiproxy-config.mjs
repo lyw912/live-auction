@@ -8,8 +8,8 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-const compose = readFileSync(join(root, 'infra/docker-compose.yml'), 'utf8');
-assert(compose.includes('toxiproxy:'), 'compose missing toxiproxy service');
+const compose = readFileSync(join(root, 'infra/docker-compose.toxiproxy.yml'), 'utf8');
+assert(/^  toxiproxy:/m.test(compose), 'toxiproxy override compose missing toxiproxy service');
 assert(compose.includes('8474:8474'), 'compose missing toxiproxy API port');
 assert(compose.includes('15432:15432'), 'compose missing postgres proxy port');
 assert(compose.includes('16379:16379'), 'compose missing redis proxy port');

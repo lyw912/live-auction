@@ -16,8 +16,12 @@ KAFKA_BID_TOPIC="${KAFKA_BID_TOPIC:-auction.bid-events}"
 KAFKA_DLQ_TOPIC="${KAFKA_DLQ_TOPIC:-auction.dlq}"
 KAFKA_CONSUMER_GROUP="${KAFKA_CONSUMER_GROUP:-settlement-workers}"
 FINAL_WAIT_SECONDS="${FINAL_WAIT_SECONDS:-30}"
-EXPECTED_UNIQUE_BIDS="${EXPECTED_UNIQUE_BIDS:-${EXPECTED_BIDS:-}}"
-if [ -z "$EXPECTED_UNIQUE_BIDS" ]; then
+REDIS_DATA_LOSS_OK="${REDIS_DATA_LOSS_OK:-0}"
+if [ "${EXPECTED_UNIQUE_BIDS+x}" = "x" ]; then
+  EXPECTED_UNIQUE_BIDS="${EXPECTED_UNIQUE_BIDS}"
+elif [ "${EXPECTED_BIDS+x}" = "x" ]; then
+  EXPECTED_UNIQUE_BIDS="${EXPECTED_BIDS}"
+else
   EXPECTED_UNIQUE_BIDS="${SESSION_COUNT:-1000}"
 fi
 
@@ -1590,10 +1594,26 @@ redis_pending_gate_file="$OUT_DIR/l4b-redis-pending-gates.tsv"
   stream_len="$(docker exec "$REDIS_CONTAINER" redis-cli XLEN "bid:{$AUCTION_ID}:engine:log" 2>/dev/null | tr -d '\r' || echo 0)"
   relay_cursor="$(docker exec "$REDIS_CONTAINER" redis-cli GET "bid:{$AUCTION_ID}:engine:relay-cursor" 2>/dev/null | tr -d '\r' || echo '0-0')"
   pending_count="$(docker exec "$REDIS_CONTAINER" redis-cli HLEN "bid:{$AUCTION_ID}:engine:pending" | tr -d '\r')"
+  settlement_total="$(docker exec -i "$DB_CONTAINER" psql -q -A -t -U "$DB_USER" -d "$DB_NAME" \
+    -v ON_ERROR_STOP=1 -v auction_id="$AUCTION_ID" -f - <<'SQL' | tr -d '[:space:]'
+select count(*) from redis_engine_settlements where auction_id = :'auction_id';
+SQL
+)"
 
-  printf 'P0\tv3_relay_stream_complete\t%s\tDecision log stream must have exactly %s entries (one per bid decision); got %s; relay cursor=%s\n' \
-    "$([ "${stream_len:-0}" = "${EXPECTED_UNIQUE_BIDS}" ] && echo PASS || echo FAIL)" \
-    "${EXPECTED_UNIQUE_BIDS}" "${stream_len}" "${relay_cursor}"
+  if [ -n "${EXPECTED_UNIQUE_BIDS}" ]; then
+    printf 'P0\tv3_relay_stream_complete\t%s\tDecision log stream must have exactly %s entries (one per PTS bid decision); got %s; relay cursor=%s\n' \
+      "$([ "${stream_len:-0}" = "${EXPECTED_UNIQUE_BIDS}" ] && echo PASS || echo FAIL)" \
+      "${EXPECTED_UNIQUE_BIDS}" "${stream_len}" "${relay_cursor}"
+  else
+    if [ "$REDIS_DATA_LOSS_OK" = "1" ]; then
+      printf 'P0\tv3_relay_stream_complete\tPASS\tRedis data-loss profile: decision log stream may be empty after FLUSHALL; PG/Kafka settlement rows remain authoritative; settlements=%s stream_len=%s relay_cursor=%s\n' \
+        "${settlement_total:-0}" "${stream_len:-0}" "${relay_cursor}"
+    else
+      printf 'P0\tv3_relay_stream_complete\t%s\tDecision log stream length must match PG settlement rows when exact PTS bid count is disabled; settlements=%s stream_len=%s relay_cursor=%s\n' \
+        "$([ "${stream_len:-0}" = "${settlement_total:-0}" ] && echo PASS || echo FAIL)" \
+        "${settlement_total:-0}" "${stream_len:-0}" "${relay_cursor}"
+    fi
+  fi
   printf 'P0\tredis_pending_decisions_empty\t%s\tRedis pending hash must be zero after full relay drain\n' \
     "$([ "${pending_count:-0}" = "0" ] && echo PASS || echo FAIL)"
 
@@ -1627,6 +1647,7 @@ where auction_id = :'auction_id'
     'AUCTION_SOLD',
     'AUCTION_NOT_ACTIVE',
     'AUCTION_ENDED',
+    'REJECTED_SELF_LEADING',
     'DUPLICATE_BID'
   );
 SQL
