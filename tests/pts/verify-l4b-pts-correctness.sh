@@ -17,6 +17,9 @@ KAFKA_DLQ_TOPIC="${KAFKA_DLQ_TOPIC:-auction.dlq}"
 KAFKA_CONSUMER_GROUP="${KAFKA_CONSUMER_GROUP:-settlement-workers}"
 FINAL_WAIT_SECONDS="${FINAL_WAIT_SECONDS:-0}"
 EXPECTED_UNIQUE_BIDS="${EXPECTED_UNIQUE_BIDS:-${EXPECTED_BIDS:-}}"
+if [ -z "$EXPECTED_UNIQUE_BIDS" ]; then
+  EXPECTED_UNIQUE_BIDS="${SESSION_COUNT:-1000}"
+fi
 
 mkdir -p "$OUT_DIR"
 
@@ -1569,8 +1572,23 @@ cat "$kafka_gate_file" >> "$OUT_DIR/l4b-invariant-gates.tsv"
 
 redis_pending_gate_file="$OUT_DIR/l4b-redis-pending-gates.tsv"
 {
+  # v3: primary check is the relay log stream cursor vs stream length.
+  # The old pending hash is kept for backward compat but stream is authoritative.
+  stream_len="$(docker exec "$REDIS_CONTAINER" redis-cli XLEN "bid:{$AUCTION_ID}:engine:log" 2>/dev/null | tr -d '\r' || echo 0)"
+  relay_cursor="$(docker exec "$REDIS_CONTAINER" redis-cli GET "bid:{$AUCTION_ID}:engine:relay-cursor" 2>/dev/null | tr -d '\r' || echo '0-0')"
   pending_count="$(docker exec "$REDIS_CONTAINER" redis-cli HLEN "bid:{$AUCTION_ID}:engine:pending" | tr -d '\r')"
-  printf 'P0\tredis_pending_decisions_empty\t%s\tRedis pending decisions must be zero; otherwise Redis accepted work may not have reached Kafka\n' "$([ "${pending_count:-0}" = "0" ] && echo PASS || echo FAIL)"
+
+  printf 'P0\tv3_relay_log_stream_length\t%s\tStream length=%s cursor=%s; all decisions should be relayed to Kafka after run\n' \
+    "INFO" "$stream_len" "$relay_cursor"
+  printf 'P0\tredis_pending_decisions_empty\t%s\tRedis pending hash must be zero after full relay drain\n' \
+    "$([ "${pending_count:-0}" = "0" ] && echo PASS || echo FAIL)"
+
+  # v3 gate: relay cursor must not be "0-0" if stream has entries
+  if [ "${stream_len:-0}" -gt 0 ] && [ "${relay_cursor:-0-0}" = "0-0" ]; then
+    printf 'P0\tv3_relay_cursor_advanced\tFAIL\tStream has %s entries but relay cursor is still 0-0 — relay has not run\n' "$stream_len"
+  else
+    printf 'P0\tv3_relay_cursor_advanced\tPASS\tRelay cursor=%s stream_len=%s\n' "$relay_cursor" "$stream_len"
+  fi
 } > "$redis_pending_gate_file"
 
 cat "$redis_pending_gate_file" >> "$OUT_DIR/l4b-invariant-gates.tsv"

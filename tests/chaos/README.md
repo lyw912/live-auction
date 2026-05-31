@@ -1,36 +1,28 @@
-# P1 Toxiproxy Weak-Network Scenarios
+# Chaos / Fault-Injection Test Scripts
 
-These assets implement P1-04 from `docs/design-v2-industrial/01-scope-and-roadmap.md`.
+Each script tests one fault scenario from the v3 correctness matrix.
 
-Start Toxiproxy:
+Business scenario context (what you tell the judges):
+  A live jewellery auction is in its final 30 seconds.
+  We inject each failure mode and prove the system either recovers safely
+  or fails closed — never producing a false winner, duplicate charge,
+  or hidden data loss.
 
-```powershell
-docker compose -f infra\docker-compose.yml up -d toxiproxy
-```
+Scripts:
+  01-redis-unavailable.sh      Redis down before decision → ENGINE_PAUSED fail-closed
+  02-redis-state-flush.sh      Redis FLUSHDB mid-auction → rebuild from Kafka+PG
+  03-kafka-relay-down.sh       Kafka down during relay → relay fails; hot path unaffected
+  04-settlement-crash.sh       Settlement worker killed → replay idempotently from Kafka
+  05-pg-unavailable.sh         PostgreSQL down → live engine continues; orders wait
+  06-reconnect-storm.sh        WS disconnect/reconnect storm → snapshot+diff recovery
+  07-relay-backpressure.sh     Stream > relay batch ceiling → alert; drains; no silent queue
+  08-settlement-idempotency.sh Kafka redelivers 3× → exactly one settlement row
 
-Configure a scenario:
+Running:
+  export PTS_HOST=172.16.179.112:18080
+  export AUCTION_ID=auc_live
+  export REDIS_ADDR=localhost:6380
+  export REDIS_CLI="redis-cli -p 6380"
+  bash tests/chaos/01-redis-unavailable.sh
 
-```powershell
-node tests/chaos/run-toxiproxy-scenario.mjs redis_latency_reconnect
-node tests/chaos/run-toxiproxy-scenario.mjs redis_timeout_reconnect
-node tests/chaos/run-toxiproxy-scenario.mjs postgres_bid_latency
-```
-
-Inspect or clear configured toxics:
-
-```powershell
-node tests/chaos/run-toxiproxy-scenario.mjs --status
-node tests/chaos/run-toxiproxy-scenario.mjs --clear
-```
-
-Run the backend through proxies when testing faults:
-
-```powershell
-$env:DATABASE_URL='postgres://live_auction:live_auction@localhost:15432/live_auction?sslmode=disable'
-$env:REDIS_ADDR='localhost:16379'
-$env:HTTP_ADDR='127.0.0.1:18080'
-cd backend
-go run ./cmd/server
-```
-
-Use the existing Playwright live smoke or k6 reconnect scripts against that backend. Record raw command output under `docs/evidence/` or `docs/perf/raw/` and do not claim production chaos resilience from local smoke alone.
+Pass criteria: each script prints PASS or FAIL with reason; exit 0 = pass.
