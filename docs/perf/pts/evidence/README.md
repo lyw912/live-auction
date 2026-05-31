@@ -44,6 +44,7 @@ index entry instead.
 
 | Label/report | Classification | Current use |
 |---|---|---|
+| `incoming/HA5YX7ZG` | `CURRENT_FAILING` raw evidence | Current PTS-1B failure: PTS sampling log has 1000 successful HTTP 202 responses, but verifier found only 300 persisted bid decisions, 49 failed settlements, and engine pause. Root cause follow-up traced this to settlement refresh rewinding Redis live `engine_seq` and causing duplicate Kafka ledger sequences |
 | `archive/current-adjacent/UF5DX7GG` | `CURRENT_ADJACENT`/investigation | Use to inspect latest business distribution and verifier state; not final success by name alone |
 | `archive/current-adjacent/MT50X7MG` | `CURRENT_ADJACENT`/bottleneck evidence | Useful for gateway/Redis stage bottleneck analysis; not final success |
 | `archive/current-adjacent/after-0Z57X76G-pts1b` | `CURRENT_ADJACENT`/partial | Correctness direction; did not prove p99 50ms or full fault gates |

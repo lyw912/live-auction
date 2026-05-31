@@ -1,0 +1,1302 @@
+# L4B PTS correctness verification
+label=UE67X7FG
+auction_id=auc_live
+expected_unique_bids=1000
+collected_at=2026-05-31T23:05:07+08:00
+
+Pager usage is off.
+Timing is on.
+## auction state
+    id    | status | current_price_cents | current_winner_id | accepted_bid_count | seq | engine_seq | engine_epoch | engine_paused | engine_pause_reason |           end_at           
+----------+--------+---------------------+-------------------+--------------------+-----+------------+--------------+---------------+---------------------+----------------------------
+ auc_live | ACTIVE |          5000010000 | k6_bidder_143_5   |                  7 |   7 |       1000 |            1 | f             |                     | 2026-05-31 16:28:28.057+00
+(1 row)
+
+Time: 1.256 ms
+## bid status counts
+  status  | settlement_status | count 
+----------+-------------------+-------
+ ACCEPTED | SETTLED           |     7
+ REJECTED | SETTLED           |   993
+(2 rows)
+
+Time: 1.793 ms
+## settlement status counts
+ status  |     result      | ledger_source | count | min_engine_seq | max_engine_seq | min_ledger_offset | max_ledger_offset 
+---------+-----------------+---------------+-------+----------------+----------------+-------------------+-------------------
+ SETTLED | ENGINE_ACCEPTED | kafka         |     7 |              1 |            211 |                 0 |               210
+ SETTLED | ENGINE_REJECTED | kafka         |   993 |              3 |           1000 |                 2 |               999
+(2 rows)
+
+Time: 1.689 ms
+## invariant gates
+ severity |                 name                 | pass |                                     detail                                     
+----------+--------------------------------------+------+--------------------------------------------------------------------------------
+ P0       | accepted_settlement_has_public_event | t    | accepted/sold settlements must have matching bid and public auction_event rows
+ P0       | at_most_one_order                    | t    | one auction can create at most one order
+ P0       | auction_accepted_count_matches_pg    | t    | auction accepted counter must match PG accepted bids
+ P0       | auction_exists                       | t    | auction row must exist
+ P0       | engine_epoch_seq_monotonic           | t    | engine_epoch/engine_seq must be monotonic
+ P0       | engine_not_paused                    | t    | auction engine must not be paused after a valid PTS run
+ P0       | increment_grid_valid                 | t    | accepted bid deltas must follow auction increment_cents
+ P0       | kafka_offset_matches_engine_order    | t    | Kafka offset order must preserve engine_seq order for the auction partition
+ P0       | kafka_position_present               | t    | every Kafka ledger settlement must record topic/partition/offset
+ P0       | no_accepted_after_final_end          | t    | no accepted bid may appear after final end_at
+ P0       | no_created_at_seq_inversion          | t    | created_at must not go backward relative to accepted seq
+ P0       | no_cross_auction_event_payload_leak  | t    | event payload bid_id/auction_id must belong to the same auction
+ P0       | no_duplicate_client_bid_id           | t    | client_bid_id must not create duplicate bid rows
+ P0       | no_duplicate_engine_seq              | t    | engine_epoch/engine_seq must identify at most one accepted bid
+ P0       | no_non_terminal_settlements          | t    | no PROCESSING/FAILED/DLQ settlement rows after the chosen settle window
+ P0       | no_public_auction_event_seq_gap      | t    | public auction event seq must be continuous
+ P0       | redis_engine_seq_matches_settlement  | t    | auction engine_seq must equal the latest settled Redis/Kafka engine ledger seq
+ P0       | redis_kafka_pg_accepted_match        | t    | accepted/sold Kafka ledger rows must match PG accepted bids
+ P1       | outbox_drained                       | t    | outbox should drain after the chosen settle window
+(19 rows)
+
+Time: 10.342 ms
+## l4b hard gate summary
+ auction_accepted | auction_seq | auction_engine_seq | settlement_total | settlement_accepted_or_sold | open_or_failed_settlements | missing_kafka_position | kafka_partitions | pg_accepted_bids | accepted_not_settled | auction_events | orders 
+------------------+-------------+--------------------+------------------+-----------------------------+----------------------------+------------------------+------------------+------------------+----------------------+----------------+--------
+                7 |           7 |               1000 |             1000 |                           7 |                          0 |                      0 |                1 |                7 |                    0 |              7 |      0
+(1 row)
+
+Time: 1.467 ms
+## non-terminal settlements
+ id | engine_epoch | engine_seq | status | result | attempts | last_error | dlq_error | created_at | updated_at 
+----+--------------+------------+--------+--------+----------+------------+-----------+------------+------------
+(0 rows)
+
+Time: 0.403 ms
+## duplicate client_bid_id
+ client_bid_id | count 
+---------------+-------
+(0 rows)
+
+Time: 0.562 ms
+## duplicate successful idempotency keys
+ scope_type | scope_id | user_id | idempotency_key | count 
+------------+----------+---------+-----------------+-------
+(0 rows)
+
+Time: 1.142 ms
+## duplicate engine sequence rows
+ engine_epoch | engine_seq | bids | client_bid_ids 
+--------------+------------+------+----------------
+(0 rows)
+
+Time: 0.305 ms
+## engine epoch/seq monotonicity violations in settlements
+ engine_epoch | engine_seq | prev_epoch | prev_seq 
+--------------+------------+------------+----------
+(0 rows)
+
+Time: 0.974 ms
+## kafka offset ordering violations
+ engine_epoch | engine_seq | ledger_partition | ledger_offset | prev_engine_seq | prev_offset_same_epoch 
+--------------+------------+------------------+---------------+-----------------+------------------------
+(0 rows)
+
+Time: 1.140 ms
+## public auction_events sequence gap count
+ min_seq | max_seq | actual_count | missing_count 
+---------+---------+--------------+---------------
+       1 |       7 |            7 |             0
+(1 row)
+
+Time: 0.321 ms
+## accepted/sold settlement public event coverage
+ engine_epoch | engine_seq | result | bid_id | bid_seq | event_id | event_seq | event_type 
+--------------+------------+--------+--------+---------+----------+-----------+------------
+(0 rows)
+
+Time: 0.710 ms
+## created_at inversion by seq
+ inversion_count 
+-----------------
+               0
+(1 row)
+
+Time: 0.326 ms
+## soft close accepted after final end_at
+ accepted_after_final_end 
+--------------------------
+                        0
+(1 row)
+
+Time: 0.397 ms
+## increment grid violations
+ off_grid_count 
+----------------
+              0
+(1 row)
+
+Time: 0.487 ms
+## outbox status counts
+  status   | count |     max_age     
+-----------+-------+-----------------
+ PUBLISHED |     7 | 00:00:51.063071
+(1 row)
+
+Time: 0.498 ms
+## order count
+ orders | winners | min_amount | max_amount 
+--------+---------+------------+------------
+      0 |       0 |            |           
+(1 row)
+
+Time: 0.233 ms
+## duplicate order rows
+ auction_id | count 
+------------+-------
+(0 rows)
+
+Time: 0.122 ms
+## recent settlement errors
+ id | engine_seq | status | result | attempts | last_error | dlq_topic | dlq_error | dlq_at 
+----+------------+--------+--------+----------+------------+-----------+-----------+--------
+(0 rows)
+
+Time: 0.529 ms
+## auction winner/highest accepted consistency
+ current_winner_id | current_price_cents | accepted_bid_count | highest_accepted_user | highest_accepted_amount | highest_accepted_engine_seq | winner_matches_highest_accepted 
+-------------------+---------------------+--------------------+-----------------------+-------------------------+-----------------------------+---------------------------------
+ k6_bidder_143_5   |          5000010000 |                  7 | k6_bidder_143_5       |              5000010000 |                         211 | t
+(1 row)
+
+Time: 0.544 ms
+## engine sequence completeness
+ min_seq | max_seq | actual_count | auction_engine_seq | missing_engine_seq 
+---------+---------+--------------+--------------------+--------------------
+       1 |    1000 |         1000 |               1000 |                  0
+(1 row)
+
+Time: 1.039 ms
+## BID_TOO_LOW justification violations
+ id | client_bid_id | user_id | amount_cents | engine_seq | reject_reason | prior_price | start_price_cents | increment_cents 
+----+---------------+---------+--------------+------------+---------------+-------------+-------------------+-----------------
+(0 rows)
+
+Time: 2.541 ms
+## idempotency response consistency violations
+ engine_seq | status | client_bid_id | user_id | idem_status | http_status | result_code | response_result | response_amount | response_engine_seq | response_reject_reason 
+------------+--------+---------------+---------+-------------+-------------+-------------+-----------------+-----------------+---------------------+------------------------
+(0 rows)
+
+Time: 2.114 ms
+
+## machine-readable invariant gates
+severity	name	status	detail
+P0	accepted_settlement_has_public_event	PASS	accepted/sold settlements must have matching bid and public auction_event rows
+P0	at_most_one_order	PASS	one auction can create at most one order
+P0	auction_accepted_count_matches_pg	PASS	auction accepted counter must match PG accepted bids
+P0	auction_exists	PASS	auction row must exist
+P0	engine_epoch_seq_monotonic	PASS	engine_epoch/engine_seq must be monotonic
+P0	engine_not_paused	PASS	auction engine must not be paused after a valid PTS run
+P0	increment_grid_valid	PASS	accepted bid deltas must follow auction increment_cents
+P0	kafka_offset_matches_engine_order	PASS	Kafka offset order must preserve engine_seq order for the auction partition
+P0	kafka_position_present	PASS	every Kafka ledger settlement must record topic/partition/offset
+P0	no_accepted_after_final_end	PASS	no accepted bid may appear after final end_at
+P0	no_created_at_seq_inversion	PASS	created_at must not go backward relative to accepted seq
+P0	no_cross_auction_event_payload_leak	PASS	event payload bid_id/auction_id must belong to the same auction
+P0	no_duplicate_client_bid_id	PASS	client_bid_id must not create duplicate bid rows
+P0	no_duplicate_engine_seq	PASS	engine_epoch/engine_seq must identify at most one accepted bid
+P0	no_non_terminal_settlements	PASS	no PROCESSING/FAILED/DLQ settlement rows after the chosen settle window
+P0	no_public_auction_event_seq_gap	PASS	public auction event seq must be continuous
+P0	pts_expected_total_bid_rows	PASS	PTS post-run gate: total persisted bid decisions must match expected_unique_bids
+P0	pts_expected_unique_client_bid_ids	PASS	PTS post-run gate: distinct client_bid_id count must match expected_unique_bids; detects duplicated CSV rows/idempotency replay workload
+P0	pts_expected_unique_users	PASS	PTS post-run gate: distinct user_id count must match expected_unique_bids; detects disabled Alibaba PTS CSV split
+P0	redis_engine_seq_matches_settlement	PASS	auction engine_seq must equal the latest settled Redis/Kafka engine ledger seq
+P0	redis_kafka_pg_accepted_match	PASS	accepted/sold Kafka ledger rows must match PG accepted bids
+P1	outbox_drained	PASS	outbox should drain after the chosen settle window
+(22 rows)
+severity	name	status	detail
+P0	accepted_public_event_exact_mapping	PASS	each accepted bid must have an exact public event payload match
+P0	auction_winner_matches_highest_accepted	PASS	auction winner/current price must equal the highest accepted bid
+P0	bid_too_low_rejects_justified	PASS	each BID_TOO_LOW reject must be below the engine price floor at its engine_seq
+P0	cap_terminal_single_sold_order	PASS	cap price is terminal: exactly one ENGINE_SOLD/order, no equal-cap loser misclassified as BID_TOO_LOW
+P0	engine_seq_complete	PASS	settled engine_seq must be complete from 1 through total bid decisions
+P0	every_bid_has_settled_ledger	PASS	each bid decision must have a matching terminal Redis/Kafka settlement row
+P0	idempotency_response_matches_bid	PASS	completed bid idempotency response_json must match the persisted bid decision
+P0	public_events_have_published_outbox	PASS	each public auction_event must have a published outbox delivery
+P0	soft_close_no_stacked_subwindow_extension	PASS	soft close must not stack multiple extensions inside one old end_at window
+(9 rows)
+
+## kafka topics
+Topic: auction.bid-events	TopicId: 4KxmPwa3QBeCFY3VKoNHLg	PartitionCount: 16	ReplicationFactor: 1	Configs: min.insync.replicas=1,unclean.leader.election.enable=false
+	Topic: auction.bid-events	Partition: 0	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+	Topic: auction.bid-events	Partition: 1	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+	Topic: auction.bid-events	Partition: 2	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+	Topic: auction.bid-events	Partition: 3	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+	Topic: auction.bid-events	Partition: 4	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+	Topic: auction.bid-events	Partition: 5	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+	Topic: auction.bid-events	Partition: 6	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+	Topic: auction.bid-events	Partition: 7	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+	Topic: auction.bid-events	Partition: 8	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+	Topic: auction.bid-events	Partition: 9	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+	Topic: auction.bid-events	Partition: 10	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+	Topic: auction.bid-events	Partition: 11	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+	Topic: auction.bid-events	Partition: 12	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+	Topic: auction.bid-events	Partition: 13	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+	Topic: auction.bid-events	Partition: 14	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+	Topic: auction.bid-events	Partition: 15	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+Topic: auction.dlq	TopicId: nhcaqsKuQqigw6pEJhBBIA	PartitionCount: 16	ReplicationFactor: 1	Configs: min.insync.replicas=1,unclean.leader.election.enable=false
+	Topic: auction.dlq	Partition: 0	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+	Topic: auction.dlq	Partition: 1	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+	Topic: auction.dlq	Partition: 2	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+	Topic: auction.dlq	Partition: 3	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+	Topic: auction.dlq	Partition: 4	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+	Topic: auction.dlq	Partition: 5	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+	Topic: auction.dlq	Partition: 6	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+	Topic: auction.dlq	Partition: 7	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+	Topic: auction.dlq	Partition: 8	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+	Topic: auction.dlq	Partition: 9	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+	Topic: auction.dlq	Partition: 10	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+	Topic: auction.dlq	Partition: 11	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+	Topic: auction.dlq	Partition: 12	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+	Topic: auction.dlq	Partition: 13	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+	Topic: auction.dlq	Partition: 14	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+	Topic: auction.dlq	Partition: 15	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 
+
+## kafka dlq sample
+A timeout with zero processed messages means the sampled DLQ is empty.
+[2026-05-31 15:05:13,516] ERROR Error processing message, terminating consumer process:  (org.apache.kafka.tools.consumer.ConsoleConsumer)
+org.apache.kafka.common.errors.TimeoutException
+Processed a total of 0 messages
+
+## kafka consumer group offsets
+
+GROUP              TOPIC              PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG             CONSUMER-ID                                      HOST            CLIENT-ID
+settlement-workers auction.bid-events 0          -               0               -               pts-cloud-1-1dbc99eb-1598-4c47-953c-8771c556daf3 /172.18.0.1     pts-cloud-1
+settlement-workers auction.bid-events 1          -               0               -               pts-cloud-1-1dbc99eb-1598-4c47-953c-8771c556daf3 /172.18.0.1     pts-cloud-1
+settlement-workers auction.bid-events 2          -               0               -               pts-cloud-1-1dbc99eb-1598-4c47-953c-8771c556daf3 /172.18.0.1     pts-cloud-1
+settlement-workers auction.bid-events 3          -               0               -               pts-cloud-1-1dbc99eb-1598-4c47-953c-8771c556daf3 /172.18.0.1     pts-cloud-1
+settlement-workers auction.bid-events 4          -               0               -               pts-cloud-1-1dbc99eb-1598-4c47-953c-8771c556daf3 /172.18.0.1     pts-cloud-1
+settlement-workers auction.bid-events 5          -               0               -               pts-cloud-1-1dbc99eb-1598-4c47-953c-8771c556daf3 /172.18.0.1     pts-cloud-1
+settlement-workers auction.bid-events 14         -               0               -               pts-cloud-1-1dbc99eb-1598-4c47-953c-8771c556daf3 /172.18.0.1     pts-cloud-1
+settlement-workers auction.bid-events 15         1000            1000            0               pts-cloud-1-1dbc99eb-1598-4c47-953c-8771c556daf3 /172.18.0.1     pts-cloud-1
+settlement-workers auction.bid-events 6          -               0               -               pts-cloud-1-1dbc99eb-1598-4c47-953c-8771c556daf3 /172.18.0.1     pts-cloud-1
+settlement-workers auction.bid-events 7          -               0               -               pts-cloud-1-1dbc99eb-1598-4c47-953c-8771c556daf3 /172.18.0.1     pts-cloud-1
+settlement-workers auction.bid-events 8          -               0               -               pts-cloud-1-1dbc99eb-1598-4c47-953c-8771c556daf3 /172.18.0.1     pts-cloud-1
+settlement-workers auction.bid-events 9          -               0               -               pts-cloud-1-1dbc99eb-1598-4c47-953c-8771c556daf3 /172.18.0.1     pts-cloud-1
+settlement-workers auction.bid-events 10         -               0               -               pts-cloud-1-1dbc99eb-1598-4c47-953c-8771c556daf3 /172.18.0.1     pts-cloud-1
+settlement-workers auction.bid-events 11         -               0               -               pts-cloud-1-1dbc99eb-1598-4c47-953c-8771c556daf3 /172.18.0.1     pts-cloud-1
+settlement-workers auction.bid-events 12         -               0               -               pts-cloud-1-1dbc99eb-1598-4c47-953c-8771c556daf3 /172.18.0.1     pts-cloud-1
+settlement-workers auction.bid-events 13         -               0               -               pts-cloud-1-1dbc99eb-1598-4c47-953c-8771c556daf3 /172.18.0.1     pts-cloud-1
+## redis auction keys
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_37_3-1-256
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_107_1-1-744
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_47_1-1-324
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_122_2-1-850
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_68_3-1-473
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_24_2-1-164
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_94_4-1-656
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_68_5-1-475
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_67_1-1-464
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_134_2-1-934
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_15_0-1-99
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_119_0-1-827
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_72_2-1-500
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_118_3-1-823
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_91_2-1-633
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_106_6-1-742
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_59_6-1-413
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_76_4-1-530
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_105_5-1-734
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_88_0-1-610
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_42_6-1-294
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_100_3-1-697
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_106_5-1-741
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_107_2-1-745
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_72_6-1-504
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_69_5-1-482
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_34_3-1-235
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_97_4-1-677
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_78_5-1-545
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_108_6-1-756
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_14_4-1-96
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_2_6-1-14
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_16_1-1-107
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_35_5-1-244
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_6_2-1-38
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_97_2-1-675
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_82_6-1-574
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_123_4-1-859
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_59_2-1-409
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_24_6-1-168
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_139_5-1-972
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_96_0-1-666
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_130_3-1-907
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_3_0-1-15
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_132_4-1-922
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_97_0-1-673
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_113_1-1-786
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_138_0-1-960
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_10_6-1-70
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_96_1-1-667
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_107_0-1-743
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_101_0-1-701
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_3_4-1-19
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_45_6-1-315
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_89_3-1-620
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_111_3-1-774
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_104_1-1-723
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_46_4-1-320
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_33_2-1-227
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_66_6-1-462
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_7_5-1-48
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_34_1-1-233
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_133_0-1-925
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_10_0-1-64
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_101_4-1-705
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_94_2-1-654
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_131_3-1-914
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_120_1-1-835
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_130_2-1-906
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_15_1-1-100
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_124_4-1-866
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_94_0-1-652
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_28_3-1-193
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_99_5-1-692
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_70_5-1-489
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_103_6-1-721
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_85_1-1-590
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_123_1-1-856
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_22_4-1-152
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_125_2-1-871
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_86_3-1-599
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_83_3-1-578
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_73_0-1-505
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_36_0-1-246
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_109_1-1-758
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_129_3-1-900
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_79_4-1-551
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_124_6-1-868
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_74_4-1-516
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_48_3-1-333
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_109_2-1-759
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_20_1-1-135
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_51_2-1-353
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_46_6-1-322
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_3_5-1-20
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_135_2-1-941
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_39_5-1-272
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_107_3-1-746
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_6_5-1-41
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_53_2-1-367
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_105_3-1-732
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_123_3-1-858
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_99_6-1-693
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_17_5-1-118
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_40_2-1-276
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_28_2-1-192
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_81_5-1-566
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_71_1-1-492
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_66_4-1-460
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_126_1-1-877
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_49_4-1-341
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_91_6-1-637
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_52_1-1-359
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_49_1-1-338
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_3_1-1-16
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_10_1-1-65
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_2_1-1-9
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_6_4-1-40
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_22_2-1-150
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_119_4-1-831
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_31_4-1-215
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_57_6-1-399
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_50_0-1-344
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_61_3-1-424
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_65_0-1-449
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_58_4-1-404
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_36_4-1-250
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_50_6-1-350
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_93_6-1-651
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_95_4-1-663
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_57_0-1-393
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_107_5-1-748
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_125_5-1-874
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_43_5-1-300
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_8_1-1-51
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_50_3-1-347
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_66_0-1-456
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_23_0-1-155
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_142_0-1-988
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_11_2-1-73
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_139_2-1-969
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_24_3-1-165
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_98_3-1-683
+bid:{auc_live}:engine:relay-cursor
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_89_0-1-617
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_40_0-1-274
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_17_2-1-115
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_86_1-1-597
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_84_5-1-587
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_103_3-1-718
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_35_2-1-241
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_127_2-1-885
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_70_4-1-488
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_115_2-1-801
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_141_5-1-986
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_101_5-1-706
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_101_1-1-702
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_57_4-1-397
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_19_0-1-127
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_121_6-1-847
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_123_5-1-860
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_78_0-1-540
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_57_2-1-395
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_136_3-1-949
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_25_2-1-171
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_89_6-1-623
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_75_2-1-521
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_60_3-1-417
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_86_4-1-600
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_100_0-1-694
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_102_3-1-711
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_38_4-1-264
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_41_5-1-286
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_64_6-1-448
+bid:{auc_live}:guard:projection
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_92_4-1-642
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_134_5-1-937
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_126_6-1-882
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_38_2-1-262
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_143_4-1-999
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_6_6-1-42
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_100_5-1-699
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_129_4-1-901
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_17_3-1-116
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_82_4-1-572
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_92_5-1-643
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_4_1-1-23
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_33_5-1-230
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_133_1-1-926
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_94_3-1-655
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_9_5-1-62
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_42_2-1-290
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_131_2-1-913
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_55_4-1-383
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_104_5-1-727
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_80_6-1-560
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_111_2-1-773
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_12_0-1-78
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_79_6-1-553
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_34_5-1-237
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_22_0-1-148
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_23_5-1-160
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_1_5-1-6
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_96_4-1-670
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_69_3-1-480
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_65_5-1-454
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_112_5-1-783
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_15_6-1-105
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_66_5-1-461
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_53_5-1-370
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_143_1-1-996
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_12_2-1-80
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_108_5-1-755
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_140_3-1-977
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_1_4-1-5
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_125_0-1-869
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_11_0-1-71
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_112_6-1-784
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_117_6-1-819
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_4_0-1-22
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_125_3-1-872
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_104_3-1-725
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_15_3-1-102
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_105_1-1-730
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_38_0-1-260
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_76_0-1-526
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_105_6-1-735
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_51_0-1-351
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_41_2-1-283
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_39_0-1-267
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_61_4-1-425
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_109_0-1-757
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_75_3-1-522
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_105_4-1-733
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_135_1-1-940
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_39_6-1-273
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_56_5-1-391
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_47_3-1-326
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_90_3-1-627
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_27_2-1-185
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_102_0-1-708
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_83_0-1-575
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_59_1-1-408
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_90_6-1-630
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_65_4-1-453
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_52_0-1-358
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_71_6-1-497
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_49_2-1-339
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_122_4-1-852
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_43_3-1-298
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_67_6-1-469
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_136_6-1-952
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_32_5-1-223
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_81_6-1-567
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_115_6-1-805
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_64_5-1-447
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_64_3-1-445
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_134_4-1-936
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_21_4-1-145
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_130_1-1-905
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_88_3-1-613
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_97_1-1-674
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_72_0-1-498
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_128_1-1-891
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_116_2-1-808
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_96_5-1-671
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_139_4-1-971
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_56_4-1-390
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_132_3-1-921
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_75_6-1-525
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_17_4-1-117
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_115_0-1-799
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_24_4-1-166
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_53_4-1-369
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_20_5-1-139
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_91_3-1-634
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_125_6-1-875
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_46_5-1-321
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_8_3-1-53
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_130_6-1-910
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_79_3-1-550
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_101_3-1-704
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_28_5-1-195
+bid:{auc_live}:engine:log
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_98_1-1-681
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_6_0-1-36
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_17_6-1-119
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_54_1-1-373
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_28_1-1-191
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_137_1-1-954
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_80_4-1-558
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_71_4-1-495
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_78_1-1-541
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_35_4-1-243
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_7_4-1-47
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_5_4-1-33
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_133_3-1-928
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_132_2-1-920
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_67_0-1-463
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_120_6-1-840
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_86_6-1-602
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_17_0-1-113
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_27_6-1-189
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_46_2-1-318
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_20_4-1-138
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_37_2-1-255
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_73_5-1-510
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_143_3-1-998
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_91_1-1-632
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_8_6-1-56
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_100_6-1-700
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_31_0-1-211
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_94_5-1-657
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_109_4-1-761
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_25_3-1-172
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_54_0-1-372
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_37_1-1-254
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_75_0-1-519
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_58_2-1-402
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_63_3-1-438
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_11_5-1-76
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_32_2-1-220
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_129_0-1-897
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_139_3-1-970
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_9_3-1-60
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_62_6-1-434
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_67_2-1-465
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_96_6-1-672
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_85_3-1-592
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_75_1-1-520
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_100_1-1-695
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_78_2-1-542
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_137_5-1-958
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_103_2-1-717
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_90_0-1-624
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_12_1-1-79
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_40_6-1-280
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_71_3-1-494
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_98_0-1-680
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_5_1-1-30
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_95_3-1-662
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_137_0-1-953
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_25_6-1-175
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_114_3-1-795
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_58_3-1-403
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_115_4-1-803
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_6_1-1-37
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_133_4-1-929
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_106_0-1-736
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_123_6-1-861
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_18_3-1-123
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_49_6-1-343
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_50_4-1-348
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_4_2-1-24
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_29_5-1-202
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_55_0-1-379
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_22_5-1-153
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_66_1-1-457
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_30_2-1-206
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_133_2-1-927
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_112_4-1-782
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_84_2-1-584
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_82_0-1-568
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_141_4-1-985
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_27_3-1-186
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_131_4-1-915
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_87_1-1-604
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_48_6-1-336
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_32_4-1-222
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_108_3-1-753
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_43_0-1-295
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_62_0-1-428
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_19_1-1-128
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_20_3-1-137
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_85_5-1-594
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_94_1-1-653
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_64_0-1-442
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_74_6-1-518
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_20_0-1-134
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_65_2-1-451
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_36_3-1-249
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_121_3-1-844
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_108_4-1-754
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_68_6-1-476
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_55_2-1-381
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_62_4-1-432
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_116_4-1-810
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_9_2-1-59
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_65_6-1-455
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_120_4-1-838
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_78_3-1-543
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_54_3-1-375
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_87_5-1-608
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_88_2-1-612
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_105_2-1-731
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_38_5-1-265
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_103_4-1-719
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_110_1-1-765
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_6_3-1-39
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_56_2-1-388
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_89_2-1-619
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_110_4-1-768
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_119_5-1-832
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_114_6-1-798
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_42_1-1-289
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_29_4-1-201
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_35_3-1-242
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_118_6-1-826
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_120_0-1-834
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_11_4-1-75
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_45_2-1-311
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_59_5-1-412
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_137_2-1-955
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_63_1-1-436
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_34_0-1-232
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_97_3-1-676
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_143_2-1-997
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_137_4-1-957
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_11_1-1-72
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_31_1-1-212
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_57_5-1-398
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_31_5-1-216
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_121_0-1-841
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_77_3-1-536
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_2_5-1-13
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_82_3-1-571
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_130_5-1-909
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_95_0-1-659
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_7_0-1-43
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_135_5-1-944
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_36_5-1-251
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_29_6-1-203
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_124_5-1-867
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_70_1-1-485
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_122_6-1-854
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_114_4-1-796
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_128_3-1-893
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_68_2-1-472
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_83_5-1-580
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_37_5-1-258
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_45_3-1-312
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_39_1-1-268
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_121_1-1-842
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_12_4-1-82
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_18_1-1-121
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_86_2-1-598
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_96_3-1-669
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_37_4-1-257
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_11_3-1-74
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_131_0-1-911
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_58_5-1-405
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_77_2-1-535
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_133_6-1-931
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_15_4-1-103
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_142_1-1-989
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_36_1-1-247
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_41_4-1-285
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_108_0-1-750
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_103_0-1-715
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_51_3-1-354
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_49_0-1-337
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_81_2-1-563
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_46_3-1-319
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_56_6-1-392
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_3_6-1-21
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_4_4-1-26
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_43_6-1-301
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_108_1-1-751
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_35_1-1-240
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_23_3-1-158
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_141_6-1-987
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_25_0-1-169
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_19_5-1-132
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_49_5-1-342
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_79_1-1-548
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_58_6-1-406
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_49_3-1-340
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_55_6-1-385
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_63_2-1-437
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_90_2-1-626
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_64_4-1-446
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_79_2-1-549
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_128_5-1-895
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_14_0-1-92
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_118_2-1-822
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_4_6-1-28
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_99_4-1-691
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_87_6-1-609
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_70_3-1-487
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_28_6-1-196
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_2_4-1-12
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_109_5-1-762
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_75_5-1-524
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_44_6-1-308
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_106_1-1-737
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_140_0-1-974
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_3_3-1-18
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_135_3-1-942
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_65_3-1-452
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_143_5-1-1000
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_53_3-1-368
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_68_1-1-471
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_101_6-1-707
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_87_2-1-605
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_64_1-1-443
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_30_1-1-205
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_86_0-1-596
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_77_1-1-534
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_121_4-1-845
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_77_5-1-538
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_26_3-1-179
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_56_1-1-387
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_95_2-1-661
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_55_1-1-380
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_25_5-1-174
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_104_4-1-726
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_103_1-1-716
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_9_0-1-57
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_95_1-1-660
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_135_6-1-945
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_69_1-1-478
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_61_6-1-427
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_28_0-1-190
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_40_1-1-275
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_55_5-1-384
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_58_0-1-400
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_135_4-1-943
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_142_4-1-992
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_67_4-1-467
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_19_3-1-130
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_27_1-1-184
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_132_6-1-924
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_10_5-1-69
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_59_3-1-410
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_68_4-1-474
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_122_1-1-849
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_80_3-1-557
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_57_3-1-396
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_84_0-1-582
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_93_4-1-649
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_114_1-1-793
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_59_0-1-407
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_19_6-1-133
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_83_4-1-579
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_99_0-1-687
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_127_4-1-887
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_98_2-1-682
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_119_6-1-833
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_34_2-1-234
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_20_6-1-140
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_33_6-1-231
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_45_5-1-314
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_37_0-1-253
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_48_2-1-332
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_104_6-1-728
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_8_4-1-54
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_138_1-1-961
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_13_3-1-88
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_137_3-1-956
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_1_0-1-1
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_99_3-1-690
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_60_5-1-419
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_127_3-1-886
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_120_2-1-836
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_74_5-1-517
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_128_4-1-894
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_138_3-1-963
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_77_0-1-533
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_102_5-1-713
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_63_4-1-439
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_52_3-1-361
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_56_3-1-389
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_31_6-1-217
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_127_6-1-889
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_22_3-1-151
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_51_5-1-356
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_30_4-1-208
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_30_5-1-209
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_92_2-1-640
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_27_5-1-188
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_73_2-1-507
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_69_4-1-481
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_90_4-1-628
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_126_4-1-880
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_118_5-1-825
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_21_2-1-143
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_41_3-1-284
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_98_6-1-686
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_141_0-1-981
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_134_0-1-932
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_71_2-1-493
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_32_1-1-219
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_15_2-1-101
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_98_5-1-685
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_88_6-1-616
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_55_3-1-382
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_47_6-1-329
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_41_6-1-287
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_112_1-1-779
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_78_6-1-546
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_121_5-1-846
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_118_4-1-824
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_21_1-1-142
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_74_3-1-515
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_14_5-1-97
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_45_0-1-309
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_113_5-1-790
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_40_4-1-278
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_60_2-1-416
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_119_1-1-828
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_60_6-1-420
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_85_0-1-589
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_24_5-1-167
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_131_6-1-917
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_137_6-1-959
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_87_0-1-603
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_51_1-1-352
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_13_1-1-86
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_84_1-1-583
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_124_1-1-863
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_32_3-1-221
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_16_0-1-106
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_113_4-1-789
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_33_3-1-228
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_90_1-1-625
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_74_1-1-513
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_88_5-1-615
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_12_5-1-83
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_130_0-1-904
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_82_2-1-570
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_54_2-1-374
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_113_3-1-788
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_64_2-1-444
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_2_0-1-8
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_34_4-1-236
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_14_3-1-95
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_48_5-1-335
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_26_2-1-178
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_37_6-1-259
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_95_5-1-664
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_138_2-1-962
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_125_4-1-873
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_27_4-1-187
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_97_5-1-678
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_44_0-1-302
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_69_6-1-483
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_19_2-1-129
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_115_3-1-802
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_105_0-1-729
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_13_2-1-87
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_71_5-1-496
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_74_2-1-514
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_129_1-1-898
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_42_4-1-292
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_62_3-1-431
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_76_2-1-528
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_51_6-1-357
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_18_2-1-122
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_43_2-1-297
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_113_6-1-791
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_18_5-1-125
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_134_1-1-933
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_120_5-1-839
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_38_6-1-266
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_92_1-1-639
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_139_6-1-973
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_128_2-1-892
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_131_5-1-916
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_18_6-1-126
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_1_1-1-2
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_47_4-1-327
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_2_3-1-11
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_8_5-1-55
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_111_5-1-776
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_13_4-1-89
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_121_2-1-843
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_81_3-1-564
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_72_4-1-502
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_63_0-1-435
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_112_0-1-778
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_61_5-1-426
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_132_1-1-919
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_7_1-1-44
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_76_6-1-532
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_129_5-1-902
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_122_5-1-853
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_32_6-1-224
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_83_1-1-576
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_136_5-1-951
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_91_4-1-635
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_10_4-1-68
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_32_0-1-218
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_78_4-1-544
+bid:{auc_live}:engine:state
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_82_5-1-573
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_48_1-1-331
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_4_5-1-27
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_45_1-1-310
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_66_2-1-458
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_134_3-1-935
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_10_3-1-67
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_100_2-1-696
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_109_3-1-760
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_87_4-1-607
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_88_4-1-614
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_138_4-1-964
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_44_4-1-306
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_76_3-1-529
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_13_0-1-85
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_106_3-1-739
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_83_2-1-577
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_100_4-1-698
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_126_0-1-876
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_129_2-1-899
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_26_1-1-177
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_140_2-1-976
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_17_1-1-114
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_117_1-1-814
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_73_1-1-506
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_77_4-1-537
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_77_6-1-539
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_127_5-1-888
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_53_1-1-366
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_58_1-1-401
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_89_4-1-621
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_141_3-1-984
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_142_6-1-994
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_80_0-1-554
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_139_0-1-967
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_52_5-1-363
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_126_2-1-878
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_92_6-1-644
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_118_0-1-820
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_8_2-1-52
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_9_4-1-61
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_63_6-1-441
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_124_0-1-862
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_30_0-1-204
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_21_5-1-146
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_26_6-1-182
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_5_2-1-31
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_34_6-1-238
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_38_3-1-263
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_140_5-1-979
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_50_5-1-349
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_116_1-1-807
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_41_1-1-282
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_112_2-1-780
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_69_0-1-477
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_16_4-1-110
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_25_1-1-170
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_133_5-1-930
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_75_4-1-523
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_72_3-1-501
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_117_4-1-817
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_83_6-1-581
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_91_5-1-636
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_19_4-1-131
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_126_5-1-881
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_66_3-1-459
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_54_6-1-378
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_23_4-1-159
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_93_5-1-650
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_67_3-1-466
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_24_0-1-162
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_102_2-1-710
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_57_1-1-394
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_117_3-1-816
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_130_4-1-908
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_102_1-1-709
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_108_2-1-752
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_134_6-1-938
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_44_5-1-307
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_72_5-1-503
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_142_3-1-991
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_85_6-1-595
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_9_1-1-58
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_86_5-1-601
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_28_4-1-194
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_5_6-1-35
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_73_4-1-509
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_110_5-1-769
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_14_6-1-98
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_102_6-1-714
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_103_5-1-720
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_90_5-1-629
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_65_1-1-450
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_36_6-1-252
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_136_4-1-950
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_93_2-1-647
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_109_6-1-763
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_111_0-1-771
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_142_5-1-993
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_36_2-1-248
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_40_3-1-277
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_119_2-1-829
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_140_1-1-975
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_101_2-1-703
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_99_1-1-688
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_22_6-1-154
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_56_0-1-386
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_81_1-1-562
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_79_0-1-547
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_47_0-1-323
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_8_0-1-50
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_73_6-1-511
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_29_1-1-198
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_140_4-1-978
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_132_5-1-923
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_113_2-1-787
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_42_0-1-288
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_29_0-1-197
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_62_2-1-430
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_61_1-1-422
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_30_3-1-207
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_61_2-1-423
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_115_1-1-800
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_26_0-1-176
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_68_0-1-470
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_141_1-1-982
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_21_0-1-141
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_115_5-1-804
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_98_4-1-684
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_76_5-1-531
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_61_0-1-421
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_111_6-1-777
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_41_0-1-281
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_16_6-1-112
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_60_0-1-414
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_50_2-1-346
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_33_4-1-229
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_29_3-1-200
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_7_2-1-45
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_53_0-1-365
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_127_0-1-883
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_140_6-1-980
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_16_2-1-108
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_84_4-1-586
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_117_5-1-818
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_50_1-1-345
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_54_5-1-377
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_70_6-1-490
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_63_5-1-440
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_39_4-1-271
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_114_2-1-794
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_10_2-1-66
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_44_3-1-305
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_45_4-1-313
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_84_6-1-588
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_128_0-1-890
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_46_1-1-317
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_7_6-1-49
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_3_2-1-17
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_59_4-1-411
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_80_2-1-556
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_31_3-1-214
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_96_2-1-668
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_23_1-1-156
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_117_2-1-815
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_136_2-1-948
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_114_5-1-797
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_54_4-1-376
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_62_1-1-429
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_13_5-1-90
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_12_6-1-84
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_111_4-1-775
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_46_0-1-316
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_104_2-1-724
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_84_3-1-585
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_106_4-1-740
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_43_1-1-296
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_23_2-1-157
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_141_2-1-983
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_120_3-1-837
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_111_1-1-772
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_18_4-1-124
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_71_0-1-491
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_12_3-1-81
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_80_1-1-555
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_5_5-1-34
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_94_6-1-658
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_110_6-1-770
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_127_1-1-884
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_136_1-1-947
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_131_1-1-912
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_47_5-1-328
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_74_0-1-512
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_93_3-1-648
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_25_4-1-173
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_85_4-1-593
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_29_2-1-199
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_44_1-1-303
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_81_4-1-565
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_143_0-1-995
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_92_0-1-638
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_39_2-1-269
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_89_5-1-622
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_97_6-1-679
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_76_1-1-527
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_132_0-1-918
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_42_3-1-291
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_110_3-1-767
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_14_2-1-94
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_48_0-1-330
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_88_1-1-611
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_9_6-1-63
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_16_5-1-111
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_117_0-1-813
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_110_2-1-766
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_39_3-1-270
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_53_6-1-371
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_33_0-1-225
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_80_5-1-559
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_5_3-1-32
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_125_1-1-870
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_79_5-1-552
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_33_1-1-226
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_89_1-1-618
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_31_2-1-213
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_112_3-1-781
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_142_2-1-990
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_4_3-1-25
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_42_5-1-293
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_60_1-1-415
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_106_2-1-738
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_116_3-1-809
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_135_0-1-939
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_116_6-1-812
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_139_1-1-968
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_72_1-1-499
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_60_4-1-418
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_128_6-1-896
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_35_0-1-239
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_122_0-1-848
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_1_2-1-3
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_1_6-1-7
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_52_4-1-362
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_30_6-1-210
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_44_2-1-304
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_52_6-1-364
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_21_6-1-147
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_26_5-1-181
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_102_4-1-712
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_14_1-1-93
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_85_2-1-591
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_116_0-1-806
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_15_5-1-104
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_11_6-1-77
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_48_4-1-334
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_52_2-1-360
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_24_1-1-163
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_47_2-1-325
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_18_0-1-120
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_40_5-1-279
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_114_0-1-792
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_136_0-1-946
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_16_3-1-109
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_87_3-1-606
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_129_6-1-903
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_1_3-1-4
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_21_3-1-144
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_5_0-1-29
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_43_4-1-299
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_81_0-1-561
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_69_2-1-479
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_99_2-1-689
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_118_1-1-821
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_2_2-1-10
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_23_6-1-161
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_67_5-1-468
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_116_5-1-811
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_38_1-1-261
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_51_4-1-355
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_123_0-1-855
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_92_3-1-641
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_107_4-1-747
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_91_0-1-631
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_138_6-1-966
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_62_5-1-433
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_70_0-1-484
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_82_1-1-569
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_35_6-1-245
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_73_3-1-508
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_22_1-1-149
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_13_6-1-91
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_93_0-1-645
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_104_0-1-722
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_113_0-1-785
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_95_6-1-665
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_7_3-1-46
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_138_5-1-965
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_119_3-1-830
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_124_3-1-865
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_126_3-1-879
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_110_0-1-764
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_26_4-1-180
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_70_2-1-486
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_122_3-1-851
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_107_6-1-749
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_27_0-1-183
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_93_1-1-646
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_20_2-1-136
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_123_2-1-857
+bid:{auc_live}:engine:idem:pts-1b-contention-k6_bidder_124_2-1-864
+2
+
+## redis pending decisions
+0
+
+
+## redis memory hard gates
+used_memory:5768344
+maxmemory:0
+maxmemory_policy:noeviction
+rejected_connections:0
+evicted_keys:0
+total_error_replies:607

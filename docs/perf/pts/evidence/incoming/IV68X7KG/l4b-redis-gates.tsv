@@ -1,0 +1,3 @@
+P0	redis_no_eviction	PASS	evicted_keys must stay zero
+P1	redis_no_rejected_connections	PASS	rejected_connections should stay zero
+P0	redis_noeviction_policy	PASS	Redis maxmemory policy must not evict hot auction state
