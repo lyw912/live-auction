@@ -31,7 +31,7 @@ type bidLaneManager struct {
 
 type bidLane struct {
 	auctionID string
-	tasks     chan bidLaneTask
+	tasks     chan *bidLaneTask
 	depth     atomic.Int64
 }
 
@@ -77,7 +77,7 @@ func (m *bidLaneManager) Execute(ctx context.Context, auctionID string, userID s
 	}
 	lane := m.laneFor(auctionID)
 	queuedAt := time.Now()
-	task := bidLaneTask{
+	task := &bidLaneTask{
 		ctx:       ctx,
 		queuedAt:  queuedAt,
 		expiresAt: queuedAt.Add(m.cfg.BidLaneQueueTimeout),
@@ -131,7 +131,7 @@ func (m *bidLaneManager) laneFor(auctionID string) *bidLane {
 	}
 	created := &bidLane{
 		auctionID: auctionID,
-		tasks:     make(chan bidLaneTask, m.cfg.BidLaneQueueSize),
+		tasks:     make(chan *bidLaneTask, m.cfg.BidLaneQueueSize),
 	}
 	actual, loaded := m.lanes.LoadOrStore(auctionID, created)
 	lane := actual.(*bidLane)

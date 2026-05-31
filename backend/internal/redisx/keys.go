@@ -42,6 +42,20 @@ func BidEnginePendingAuctionsKey() string {
 	return "bid:engine:pending:auctions"
 }
 
+// BidEngineLogStreamKey is the append-only Redis Stream that is the in-memory WAL
+// for all bid decisions for a single auction. The hash tag {auctionID} pins it to
+// the same Redis Cluster slot as the engine state, idempotency, and pending keys so
+// Lua scripts can touch all of them atomically.
+func BidEngineLogStreamKey(auctionID string) string {
+	return fmt.Sprintf("bid:{%s}:engine:log", auctionID)
+}
+
+// BidEngineRelayCursorKey stores the last Redis Stream entry ID that has been
+// successfully batch-produced to Kafka. The relay reads forward from this cursor.
+func BidEngineRelayCursorKey(auctionID string) string {
+	return fmt.Sprintf("bid:{%s}:engine:relay-cursor", auctionID)
+}
+
 func WSTicketKey(token string) string {
 	return "ws_ticket:" + token
 }

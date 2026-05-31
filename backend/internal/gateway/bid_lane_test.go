@@ -22,9 +22,9 @@ func TestBidLaneQueueFullReturnsRetryableTooHot(t *testing.T) {
 		BidLaneQueueTimeout: time.Second,
 	}
 	manager := &bidLaneManager{cfg: normalizeBidLaneConfig(cfg)}
-	lane := &bidLane{auctionID: "auc_lane_full", tasks: make(chan bidLaneTask, 1)}
+	lane := &bidLane{auctionID: "auc_lane_full", tasks: make(chan *bidLaneTask, 1)}
 	manager.lanes.Store("auc_lane_full", lane)
-	lane.tasks <- bidLaneTask{
+	lane.tasks <- &bidLaneTask{
 		ctx:       context.Background(),
 		queuedAt:  time.Now(),
 		expiresAt: time.Now().Add(time.Second),

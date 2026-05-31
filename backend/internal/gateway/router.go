@@ -96,8 +96,7 @@ func NewRouterWithRealtimeAndLedger(cfg config.Config, deps *storage.Dependencie
 
 	var engine *redisengine.Engine
 	if cfg.BidEngineMode != bidEngineModePostgresLane && cfg.BidEngineMode != bidEngineModeRedisGuard {
-		engine = redisengine.New(deps.Postgres, deps.Redis, ledger).
-			WithKafkaAppendTimeout(cfg.BidEngineKafkaAppendTimeout)
+		engine = redisengine.New(deps.Postgres, deps.Redis, ledger)
 	}
 	auctionHandler := AuctionHandler{
 		Config: cfg,

@@ -33,10 +33,15 @@ const (
 	DecisionStatusDecided           = "DECIDED"
 	DecisionStatusPendingDurability = "PENDING_DURABILITY"
 	DecisionStatusReconciling       = "RECONCILING"
-	DurabilityStatusKafkaAcked      = "KAFKA_ACKED"
-	DurabilityStatusKafkaUnknown    = "KAFKA_UNKNOWN"
-	DurabilityStatusKafkaFailed     = "KAFKA_FAILED"
-	DurabilityStatusNotRequired     = "NOT_REQUIRED"
+	// ENGINE_DURABLE is returned immediately when the decision has been committed
+	// to the Redis decision log (Stream). Kafka durability follows asynchronously.
+	// This is the user-visible final business decision — p99 is measured to this.
+	DurabilityStatusEngineDurable = "ENGINE_DURABLE"
+
+	DurabilityStatusKafkaAcked   = "KAFKA_ACKED"
+	DurabilityStatusKafkaUnknown = "KAFKA_UNKNOWN"
+	DurabilityStatusKafkaFailed  = "KAFKA_FAILED"
+	DurabilityStatusNotRequired  = "NOT_REQUIRED"
 	SettlementStatusPending         = "PENDING"
 	SettlementStatusSettled         = "SETTLED"
 	SettlementStatusFailed          = "FAILED"

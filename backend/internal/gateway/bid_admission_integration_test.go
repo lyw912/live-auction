@@ -248,9 +248,9 @@ func TestPostgresBidLaneFullReturnsRetryAfterAndRecordsAnomaly(t *testing.T) {
 		Bids:   newBidAdmission(cfg, db, rdb),
 		Lanes:  newBidLaneManager(cfg, db),
 	}
-	lane := &bidLane{auctionID: auctionRow.ID, tasks: make(chan bidLaneTask, 1)}
+	lane := &bidLane{auctionID: auctionRow.ID, tasks: make(chan *bidLaneTask, 1)}
 	handler.Lanes.lanes.Store(auctionRow.ID, lane)
-	lane.tasks <- bidLaneTask{
+	lane.tasks <- &bidLaneTask{
 		ctx:       context.Background(),
 		queuedAt:  time.Now(),
 		expiresAt: time.Now().Add(time.Second),
@@ -323,9 +323,9 @@ func TestPostgresBidLaneCompletedReplayBypassesFullQueue(t *testing.T) {
 	if err := json.Unmarshal(first.Body.Bytes(), &firstResp); err != nil {
 		t.Fatalf("decode first response: %v", err)
 	}
-	lane := &bidLane{auctionID: auctionRow.ID, tasks: make(chan bidLaneTask, 1)}
+	lane := &bidLane{auctionID: auctionRow.ID, tasks: make(chan *bidLaneTask, 1)}
 	handler.Lanes.lanes.Store(auctionRow.ID, lane)
-	lane.tasks <- bidLaneTask{
+	lane.tasks <- &bidLaneTask{
 		ctx:       context.Background(),
 		queuedAt:  time.Now(),
 		expiresAt: time.Now().Add(time.Second),
@@ -383,9 +383,9 @@ func TestPostgresBidLaneCompletedConfirmReplayBypassesFullQueue(t *testing.T) {
 	`, auctionRow.ID, auction.BidResultAccepted, responseJSON); err != nil {
 		t.Fatalf("insert completed confirm replay: %v", err)
 	}
-	lane := &bidLane{auctionID: auctionRow.ID, tasks: make(chan bidLaneTask, 1)}
+	lane := &bidLane{auctionID: auctionRow.ID, tasks: make(chan *bidLaneTask, 1)}
 	handler.Lanes.lanes.Store(auctionRow.ID, lane)
-	lane.tasks <- bidLaneTask{
+	lane.tasks <- &bidLaneTask{
 		ctx:       context.Background(),
 		queuedAt:  time.Now(),
 		expiresAt: time.Now().Add(time.Second),

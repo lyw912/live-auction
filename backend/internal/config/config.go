@@ -40,8 +40,7 @@ type Config struct {
 	BidLaneQueueTimeout         time.Duration
 	BidRedisGuardMaxStaleness   time.Duration
 	BidRedisGuardTimeout        time.Duration
-	BidEngineKafkaAppendTimeout time.Duration
-	FakePaymentWebhookSecret    string
+		FakePaymentWebhookSecret    string
 
 	AdmissionEnabled       bool
 	WSTicketMaxInFlight    int
@@ -101,8 +100,7 @@ func Load() Config {
 		BidLaneQueueTimeout:         getEnvDuration("BID_LANE_QUEUE_TIMEOUT", 750*time.Millisecond),
 		BidRedisGuardMaxStaleness:   getEnvDuration("BID_REDIS_GUARD_MAX_STALENESS", 1500*time.Millisecond),
 		BidRedisGuardTimeout:        getEnvDuration("BID_REDIS_GUARD_TIMEOUT", 30*time.Millisecond),
-		BidEngineKafkaAppendTimeout: getEnvDuration("BID_ENGINE_KAFKA_APPEND_TIMEOUT", 750*time.Millisecond),
-		FakePaymentWebhookSecret:    getEnv("FAKE_PAYMENT_WEBHOOK_SECRET", "local_fake_payment_secret"),
+				FakePaymentWebhookSecret:    getEnv("FAKE_PAYMENT_WEBHOOK_SECRET", "local_fake_payment_secret"),
 
 		AdmissionEnabled:       getEnvBool("ADMISSION_ENABLED", true),
 		WSTicketMaxInFlight:    getEnvInt("WS_TICKET_MAX_IN_FLIGHT", 256),

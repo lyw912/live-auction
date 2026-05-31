@@ -33,7 +33,16 @@ type LedgerMessage struct {
 }
 
 type BidLedger interface {
+	// Append writes a single decision to the durable ledger and returns the
+	// ledger message metadata. Used for fallback/single-decision paths.
 	Append(ctx context.Context, result engineResult) (LedgerMessage, error)
+
+	// AppendBatch writes a batch of decisions in a single round-trip (group commit).
+	// This is the primary path for the relay: one call amortises the fsync/ack cost
+	// over all decisions in the batch, giving throughput proportional to batch size
+	// instead of serialised 1-RTT-per-decision.
+	AppendBatch(ctx context.Context, results []engineResult) ([]LedgerMessage, error)
+
 	Fetch(ctx context.Context) (LedgerMessage, error)
 	Commit(ctx context.Context, message LedgerMessage) error
 	WriteDLQ(ctx context.Context, message LedgerMessage, err error) error
@@ -75,13 +84,19 @@ func NewKafkaLedger(cfg KafkaLedgerConfig) (*KafkaLedger, error) {
 	}
 	addr := kafka.TCP(cfg.Brokers...)
 	writer := &kafka.Writer{
-		Addr:                   addr,
-		Topic:                  cfg.BidTopic,
-		Balancer:               &kafka.Hash{},
-		RequiredAcks:           kafka.RequireAll,
-		Async:                  false,
-		BatchSize:              1,
-		BatchTimeout:           10 * time.Millisecond,
+		Addr:     addr,
+		Topic:    cfg.BidTopic,
+		Balancer: &kafka.Hash{},
+		// RequireAll (acks=-1) for durable commits; exactly-once via idempotent producer.
+		RequiredAcks: kafka.RequireAll,
+		// Async=false so WriteMessages blocks until acks=all, giving the relay
+		// per-batch durability confirmation before advancing the cursor.
+		Async: false,
+		// Large batch ceiling: the relay passes the whole stream-read batch in one call.
+		// kafka-go will split at broker-side limits automatically.
+		BatchSize: 1000,
+		// Low linger: relay loop fires every ~2ms anyway; no extra buffering needed.
+		BatchTimeout:           5 * time.Millisecond,
 		WriteTimeout:           10 * time.Second,
 		ReadTimeout:            3 * time.Second,
 		MaxAttempts:            10,
@@ -151,6 +166,63 @@ func (l *KafkaLedger) Append(ctx context.Context, result engineResult) (LedgerMe
 		return LedgerMessage{}, err
 	}
 	return LedgerMessage{ID: result.ledgerID(), Topic: l.topic, Partition: -1, Offset: -1, Key: key, Value: value}, nil
+}
+
+func (l *KafkaLedger) AppendBatch(ctx context.Context, results []engineResult) ([]LedgerMessage, error) {
+	if l == nil || l.writer == nil {
+		return nil, errors.New("kafka bid ledger is unavailable")
+	}
+	if len(results) == 0 {
+		return nil, nil
+	}
+	msgs := make([]kafka.Message, 0, len(results))
+	for _, result := range results {
+		value, err := json.Marshal(result)
+		if err != nil {
+			return nil, err
+		}
+		headers := []kafka.Header{
+			{Key: "decision_id", Value: []byte(result.ledgerID())},
+			{Key: "auction_id", Value: []byte(result.AuctionID)},
+			{Key: "engine_epoch", Value: []byte(strconv.FormatInt(result.EngineEpoch, 10))},
+			{Key: "engine_seq", Value: []byte(strconv.FormatInt(result.EngineSeq, 10))},
+			{Key: "client_bid_id", Value: []byte(result.ClientBidID)},
+			{Key: "request_hash", Value: []byte(result.RequestHash)},
+			{Key: "trace_id", Value: []byte(result.TraceID)},
+			{Key: "result", Value: []byte(result.Result)},
+			{Key: "server_time_ms", Value: []byte(strconv.FormatInt(result.ServerTimeMS, 10))},
+		}
+		traceHeaders := map[string][]string{}
+		apptracing.InjectHTTP(ctx, traceHeaders)
+		for k, vals := range traceHeaders {
+			for _, v := range vals {
+				headers = append(headers, kafka.Header{Key: k, Value: []byte(v)})
+			}
+		}
+		msgs = append(msgs, kafka.Message{
+			Key:     []byte(result.AuctionID),
+			Value:   value,
+			Time:    time.UnixMilli(result.ServerTimeMS).UTC(),
+			Headers: headers,
+		})
+	}
+	// Single WriteMessages call — kafka-go batches all msgs in one broker round-trip
+	// when RequiredAcks=all, Async=false. This is the group-commit path.
+	if err := l.writer.WriteMessages(ctx, msgs...); err != nil {
+		return nil, err
+	}
+	out := make([]LedgerMessage, len(results))
+	for i, result := range results {
+		out[i] = LedgerMessage{
+			ID:        result.ledgerID(),
+			Topic:     l.topic,
+			Partition: -1,
+			Offset:    -1,
+			Key:       result.AuctionID,
+			Value:     msgs[i].Value,
+		}
+	}
+	return out, nil
 }
 
 func (l *KafkaLedger) Fetch(ctx context.Context) (LedgerMessage, error) {
@@ -260,6 +332,29 @@ func (l *MemoryLedger) Append(_ context.Context, result engineResult) (LedgerMes
 	}
 	l.messages = append(l.messages, msg)
 	return msg, nil
+}
+
+func (l *MemoryLedger) AppendBatch(_ context.Context, results []engineResult) ([]LedgerMessage, error) {
+	out := make([]LedgerMessage, 0, len(results))
+	for i := range results {
+		value, err := json.Marshal(results[i])
+		if err != nil {
+			return out, err
+		}
+		l.mu.Lock()
+		msg := LedgerMessage{
+			ID:        results[i].ledgerID(),
+			Topic:     defaultBidEventsTopic,
+			Partition: l.partition,
+			Offset:    int64(len(l.messages)),
+			Key:       results[i].AuctionID,
+			Value:     value,
+		}
+		l.messages = append(l.messages, msg)
+		l.mu.Unlock()
+		out = append(out, msg)
+	}
+	return out, nil
 }
 
 func (l *MemoryLedger) Fetch(ctx context.Context) (LedgerMessage, error) {
