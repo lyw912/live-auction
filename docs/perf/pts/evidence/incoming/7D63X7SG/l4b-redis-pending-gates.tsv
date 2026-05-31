@@ -1,0 +1,3 @@
+P0	v3_relay_log_stream_length	INFO	Stream length=1000 cursor=1780228261890-3; all decisions should be relayed to Kafka after run
+P0	redis_pending_decisions_empty	PASS	Redis pending hash must be zero after full relay drain
+P0	v3_relay_cursor_advanced	PASS	Relay cursor=1780228261890-3 stream_len=1000

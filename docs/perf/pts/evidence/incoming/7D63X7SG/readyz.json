@@ -1,0 +1,1 @@
+{"checks":{"postgres_ok":true,"redis_ok":true,"minio_ok":true},"status":"ready"}
