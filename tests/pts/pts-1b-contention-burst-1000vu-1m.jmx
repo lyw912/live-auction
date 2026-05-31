@@ -2,27 +2,7 @@
 <jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
   <hashTree>
     <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="PTS-1B contention burst 1000VU 1m (v3 single-writer decision log)" enabled="true">
-      <stringProp name="TestPlan.comments">
-PTS-1B contention burst — v3 single-writer decision log architecture.
-
-BUSINESS SCENARIO (what we tell the judges):
-  A live jewellery auction is in its final second. 1,000 bidders simultaneously
-  attempt to place the winning bid. The server must decide who wins — atomically,
-  monotonically, without duplicate winners — and return a synchronous final
-  business decision to every user within 50ms. This scenario stress-tests the
-  Redis Lua single-writer CAS engine under maximum hot-row contention.
-
-PASS CRITERIA (v3):
-  - Every request returns HTTP 200 with decision_status=DECIDED
-  - durability_status=ENGINE_DURABLE (in-memory WAL) or KAFKA_ACKED (relay done)
-  - 202 is exceptional (relay backpressure edge case) and must be near-zero
-  - User-visible bid decision p99 <= 50ms (HTTP RTT to DECIDED 200)
-  - All 1000 bids uniquely classified; highest valid amount is winner
-  - engine_seq gap-free; no DLQ/pause; durable settlement closed-loop
-
-REQUIRES: ALLOW_MOCK_AUTH=false, ADMISSION_ENABLED=false,
-          BID_ENGINE_MODE=redis_ledger, Kafka topics ready, high auction cap.
-      </stringProp>
+      <stringProp name="TestPlan.comments">PTS-1B contention burst v3 single-writer decision log. Business scenario: final second of a jewellery auction, 1000 bidders simultaneously, server returns synchronous DECIDED in under 50ms. Pass: HTTP 200 + decision_status=DECIDED + durability_status=ENGINE_DURABLE, p99 &lt;= 50ms, all 1000 bids classified, highest amount wins, engine_seq gap-free, no DLQ/pause. Requires ALLOW_MOCK_AUTH=false ADMISSION_ENABLED=false BID_ENGINE_MODE=redis_ledger Kafka topics ready high auction cap.</stringProp>
       <boolProp name="TestPlan.functional_mode">false</boolProp>
       <boolProp name="TestPlan.tearDown_on_shutdown">true</boolProp>
       <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
