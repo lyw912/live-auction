@@ -24,7 +24,12 @@ func writeError(w http.ResponseWriter, r *http.Request, err apierrors.APIError) 
 func writeBidAdmissionResult(w http.ResponseWriter, r *http.Request, result any, err error) {
 	if err == nil {
 		status := http.StatusOK
-		if bid, ok := result.(auction.BidResponse); ok && bid.SettlementStatus == auction.SettlementStatusPending && bid.Result != auction.BidResultConfirmationPending {
+		if bid, ok := result.(auction.BidResponse); ok && bid.SettlementStatus == auction.SettlementStatusPending &&
+			bid.Result != auction.BidResultConfirmationPending &&
+			// v3: DECIDED is the synchronous final decision (ENGINE_DURABLE or KAFKA_ACKED).
+			// Settlement is always async — SettlementStatus=PENDING must not override
+			// the 200 that users see for their bid decision.
+			bid.DecisionStatus != auction.DecisionStatusDecided {
 			status = http.StatusAccepted
 		}
 		if bid, ok := result.(auction.BidResponse); ok && bid.Result == auction.BidResultConfirmationPending {
