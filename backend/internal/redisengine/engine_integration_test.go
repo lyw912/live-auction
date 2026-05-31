@@ -601,6 +601,7 @@ func TestRedisLedgerReplayBeforeSettlementUsesAppendStatus(t *testing.T) {
 	rdb := openStreamsRedis(t)
 	ledger := NewMemoryLedger()
 	engine := New(db, rdb, ledger)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
 	auctionID := createEngineAuction(t, db, 0)
 
 	first, err := engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-phase2-acked", auction.BidInput{
@@ -611,8 +612,12 @@ func TestRedisLedgerReplayBeforeSettlementUsesAppendStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first bid: %v", err)
 	}
+	// v3: relay must run before ledger is populated.
+	if _, err := worker.ProcessPendingAppends(ctx, 100); err != nil {
+		t.Fatalf("relay: %v", err)
+	}
 	if ledger.Len() != 1 {
-		t.Fatalf("ledger len after first = %d, want 1", ledger.Len())
+		t.Fatalf("ledger len after relay = %d, want 1", ledger.Len())
 	}
 	replay, err := engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-phase2-acked", auction.BidInput{
 		ClientBidID:   "redis-ledger-phase2-acked",
@@ -887,6 +892,10 @@ func TestKafkaSettlementDuplicateMessageIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("place bid: %v", err)
 	}
+	// v3: relay must run before ledger is populated.
+	if _, err := worker.ProcessPendingAppends(ctx, 100); err != nil {
+		t.Fatalf("relay: %v", err)
+	}
 	msg, ok := ledger.Message(0)
 	if !ok {
 		t.Fatalf("missing memory ledger message")
@@ -1102,6 +1111,9 @@ func TestKafkaSettlementUniqueSeqConflictWithSamePayloadIsIdempotent(t *testing.
 	}, "tr_seq_conflict"); err != nil {
 		t.Fatalf("place bid: %v", err)
 	}
+	if _, err := worker.ProcessPendingAppends(ctx, 100); err != nil {
+		t.Fatalf("relay: %v", err)
+	}
 	msg, ok := ledger.Message(0)
 	if !ok {
 		t.Fatalf("missing memory ledger message")
@@ -1138,6 +1150,9 @@ func TestKafkaSettlementSameSeqDifferentPayloadFailsAndPauses(t *testing.T) {
 		ClientSeenSeq: 0,
 	}, "tr_seq_payload_conflict"); err != nil {
 		t.Fatalf("place bid: %v", err)
+	}
+	if _, err := worker.ProcessPendingAppends(ctx, 100); err != nil {
+		t.Fatalf("relay: %v", err)
 	}
 	msg, ok := ledger.Message(0)
 	if !ok {
@@ -1197,6 +1212,9 @@ func TestKafkaSettlementSameOffsetDifferentPayloadFailsAndPauses(t *testing.T) {
 		ClientSeenSeq: 0,
 	}, "tr_offset_payload_conflict"); err != nil {
 		t.Fatalf("place bid: %v", err)
+	}
+	if _, err := worker.ProcessPendingAppends(ctx, 100); err != nil {
+		t.Fatalf("relay: %v", err)
 	}
 	msg, ok := ledger.Message(0)
 	if !ok {
@@ -1757,6 +1775,10 @@ func TestKafkaSettlementWritesEngineCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("place bid: %v", err)
 	}
+	// v3: relay must run before ProcessKafka can find messages.
+	if _, err := worker.ProcessPendingAppends(ctx, 100); err != nil {
+		t.Fatalf("relay: %v", err)
+	}
 	if _, err := worker.ProcessKafka(ctx, 1); err != nil {
 		t.Fatalf("settle bid: %v", err)
 	}
@@ -2006,6 +2028,9 @@ func cleanupRedisEngineKeys(t *testing.T, rdb *redis.Client) {
 		"bid:{*}:engine:pending",
 		"bid:{*}:engine:pending:append-lock",
 		"bid:{*}:engine:idem:*",
+		// v3 group-commit relay keys
+		"bid:{*}:engine:log",        // decision log stream (WAL)
+		"bid:{*}:engine:relay-cursor", // relay position cursor
 	}
 	for _, pattern := range patterns {
 		var cursor uint64
@@ -2157,8 +2182,21 @@ func assertBidPublicSeq(t *testing.T, db *pgxpool.Pool, auctionID string, client
 	}
 }
 
+// settleAllLedgerMessages relays all pending stream entries to Kafka (v3) and then
+// settles them in PostgreSQL. In v3 the relay must run before ProcessKafka can
+// consume any messages, since PlaceBid no longer produces to the ledger directly.
 func settleAllLedgerMessages(t *testing.T, ctx context.Context, worker *Worker, want int) {
 	t.Helper()
+	// Relay: drain all stream entries to the memory ledger.
+	for relay := 0; relay < 20; relay++ {
+		n, err := worker.ProcessPendingAppends(ctx, 100)
+		if err != nil {
+			t.Fatalf("relay: %v", err)
+		}
+		if n == 0 {
+			break
+		}
+	}
 	processed := 0
 	var lastErr error
 	for attempts := 0; processed < want && attempts < want*want+20; attempts++ {
