@@ -30,6 +30,9 @@ func main() {
 	liveCapPriceCents := envInt64("P1_LOAD_AUC_LIVE_CAP_PRICE_CENTS", 100_000_000)
 	sideCapPriceCents := envInt64("P1_LOAD_AUC_SIDE_CAP_PRICE_CENTS", 100_000_000)
 	auctionEndMinutes := envInt64("P1_LOAD_AUCTION_END_MINUTES", 30)
+	userCount := envInt64("P1_LOAD_USER_COUNT", 512)
+	bidderVUCount := envInt64("P1_LOAD_BIDDER_VUS", 512)
+	wsUserCount := envInt64("P1_LOAD_WS_COUNT", 512)
 
 	cfg := config.Load()
 	db, err := pgxpool.New(ctx, cfg.DatabaseURL)
@@ -45,7 +48,7 @@ func main() {
 	})
 	defer func() { _ = rdb.Close() }()
 
-	if err := seed(ctx, db, rdb, liveCapPriceCents, sideCapPriceCents, auctionEndMinutes); err != nil {
+	if err := seed(ctx, db, rdb, liveCapPriceCents, sideCapPriceCents, auctionEndMinutes, userCount, bidderVUCount, wsUserCount); err != nil {
 		log.Fatalf("seed p1 load data: %v", err)
 	}
 	_, _ = os.Stdout.WriteString("p1 load data ready\n")
@@ -63,7 +66,7 @@ func envInt64(name string, fallback int64) int64 {
 	return parsed
 }
 
-func seed(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client, liveCapPriceCents, sideCapPriceCents, auctionEndMinutes int64) error {
+func seed(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client, liveCapPriceCents, sideCapPriceCents, auctionEndMinutes, userCount, bidderVUCount, wsUserCount int64) error {
 	tx, err := db.Begin(ctx)
 	if err != nil {
 		return err
@@ -74,6 +77,9 @@ func seed(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client, liveCapPrice
 		"$1", strconv.FormatInt(liveCapPriceCents, 10),
 		"$2", strconv.FormatInt(sideCapPriceCents, 10),
 		"$3", strconv.FormatInt(auctionEndMinutes, 10),
+		"$4", strconv.FormatInt(userCount, 10),
+		"$5", strconv.FormatInt(bidderVUCount, 10),
+		"$6", strconv.FormatInt(wsUserCount, 10),
 	).Replace(`
 		DELETE FROM scheduler_jobs
 		WHERE target_id IN ('auc_live', 'auc_side')
@@ -106,7 +112,7 @@ func seed(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client, liveCapPrice
 		       'user',
 		       'k6 user ' || vu::text,
 		       'load'
-		FROM generate_series(1, 512) AS vu
+		FROM generate_series(1, $4) AS vu
 		ON CONFLICT (id) DO NOTHING;
 
 		INSERT INTO users (id, role, display_name, city)
@@ -114,7 +120,7 @@ func seed(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client, liveCapPrice
 		       'user',
 		       'k6 bidder ' || vu::text || '-' || bucket::text,
 		       'load'
-		FROM generate_series(1, 512) AS vu
+		FROM generate_series(1, $5) AS vu
 		CROSS JOIN generate_series(0, 6) AS bucket
 		ON CONFLICT (id) DO NOTHING;
 
@@ -123,7 +129,7 @@ func seed(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client, liveCapPrice
 		       'user',
 		       'k6 ws ' || vu::text,
 		       'load'
-		FROM generate_series(1, 512) AS vu
+		FROM generate_series(1, $6) AS vu
 		ON CONFLICT (id) DO NOTHING;
 
 		INSERT INTO rooms (id, host_id, status)

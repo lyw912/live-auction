@@ -15,7 +15,7 @@ KAFKA_BOOTSTRAP="${KAFKA_BOOTSTRAP:-localhost:9092}"
 KAFKA_BID_TOPIC="${KAFKA_BID_TOPIC:-auction.bid-events}"
 KAFKA_DLQ_TOPIC="${KAFKA_DLQ_TOPIC:-auction.dlq}"
 KAFKA_CONSUMER_GROUP="${KAFKA_CONSUMER_GROUP:-settlement-workers}"
-FINAL_WAIT_SECONDS="${FINAL_WAIT_SECONDS:-0}"
+FINAL_WAIT_SECONDS="${FINAL_WAIT_SECONDS:-30}"
 EXPECTED_UNIQUE_BIDS="${EXPECTED_UNIQUE_BIDS:-${EXPECTED_BIDS:-}}"
 if [ -z "$EXPECTED_UNIQUE_BIDS" ]; then
   EXPECTED_UNIQUE_BIDS="${SESSION_COUNT:-1000}"
@@ -266,7 +266,7 @@ from (
     ('P0', 'increment_grid_valid', (select violations = 0 from increment_violations), 'accepted bid deltas must follow auction increment_cents'),
     ('P0', 'at_most_one_order', (select orders <= 1 from orders_count), 'one auction can create at most one order'),
     ('P0', 'no_cross_auction_event_payload_leak', (select violations = 0 from cross_auction_mismatch), 'event payload bid_id/auction_id must belong to the same auction'),
-    ('P1', 'outbox_drained', (select pending = 0 from outbox_not_published), 'outbox should drain after the chosen settle window')
+    ('P0', 'outbox_drained', (select pending = 0 from outbox_not_published), 'outbox must drain: unpublished deliveries mean WebSocket push was incomplete and viewer state is stale')
 ) as gates(severity, name, pass, detail)
 order by severity, name;
 
@@ -820,7 +820,7 @@ from (
     ('P0', 'increment_grid_valid', (select violations = 0 from increment_violations), 'accepted bid deltas must follow auction increment_cents'),
     ('P0', 'at_most_one_order', (select orders <= 1 from orders_count), 'one auction can create at most one order'),
     ('P0', 'no_cross_auction_event_payload_leak', (select violations = 0 from cross_auction_mismatch), 'event payload bid_id/auction_id must belong to the same auction'),
-    ('P1', 'outbox_drained', (select pending = 0 from outbox_not_published), 'outbox should drain after the chosen settle window')
+    ('P0', 'outbox_drained', (select pending = 0 from outbox_not_published), 'outbox must drain: unpublished deliveries mean WebSocket push was incomplete and viewer state is stale')
 ) as gates(severity, name, pass, detail)
 order by severity, name;
 SQL
@@ -1110,6 +1110,19 @@ SQL
   docker exec "$REDIS_CONTAINER" redis-cli INFO stats | grep -E '^(evicted_keys:|rejected_connections:|total_error_replies:)' || true
 } > "$OUT_DIR/l4b-correctness.txt"
 
+{
+  echo "## reject reason distribution"
+  docker exec -i "$DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" \
+    -v ON_ERROR_STOP=1 -v auction_id="$AUCTION_ID" -f - <<'SQL'
+\pset pager off
+select status, reject_reason, count(*) as count
+from bids
+where auction_id = :'auction_id'
+group by status, reject_reason
+order by status, count desc;
+SQL
+} >> "$OUT_DIR/l4b-correctness.txt"
+
 docker exec -i "$DB_CONTAINER" psql -q -A -t -F $'\t' -U "$DB_USER" -d "$DB_NAME" \
   -v ON_ERROR_STOP=1 -v auction_id="$AUCTION_ID" -v expected_unique_bids="$EXPECTED_UNIQUE_BIDS" -f - > "$OUT_DIR/l4b-invariant-gates.tsv" <<'SQL'
 with auction_row as (
@@ -1290,7 +1303,7 @@ from (
     ('P0', 'increment_grid_valid', (select violations = 0 from increment_violations), 'accepted bid deltas must follow auction increment_cents'),
     ('P0', 'at_most_one_order', (select orders <= 1 from orders_count), 'one auction can create at most one order'),
     ('P0', 'no_cross_auction_event_payload_leak', (select violations = 0 from cross_auction_mismatch), 'event payload bid_id/auction_id must belong to the same auction'),
-    ('P1', 'outbox_drained', (select pending = 0 from outbox_not_published), 'outbox should drain after the chosen settle window')
+    ('P0', 'outbox_drained', (select pending = 0 from outbox_not_published), 'outbox must drain: unpublished deliveries mean WebSocket push was incomplete and viewer state is stale')
 ) as gates(severity, name, pass, detail)
 order by severity, name;
 SQL
@@ -1565,7 +1578,7 @@ kafka_gate_file="$OUT_DIR/l4b-kafka-gates.tsv"
   dlq_total="$(printf '%s\n' "$dlq_offsets" | awk -F: 'NF >= 3 {sum += $3} END {print sum + 0}')"
   group_lag="$(docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server "$KAFKA_BOOTSTRAP" --describe --group "$KAFKA_CONSUMER_GROUP" 2>/dev/null | awk 'NR > 1 && $6 ~ /^[0-9]+$/ {sum += $6} END {print sum + 0}')"
   printf 'P0\tdlq_empty\t%s\tKafka DLQ must stay empty or be explained before release\n' "$([ "${dlq_total:-0}" = "0" ] && echo PASS || echo FAIL)"
-  printf 'P1\tkafka_consumer_group_lag_zero\t%s\tSettlement consumer group lag should drain to zero after the chosen settle window\n' "$([ "${group_lag:-0}" = "0" ] && echo PASS || echo FAIL)"
+  printf 'P0\tkafka_consumer_group_lag_zero\t%s\tSettlement consumer group lag must drain to zero: outstanding lag means some bid decisions were not settled in PostgreSQL\n' "$([ "${group_lag:-0}" = "0" ] && echo PASS || echo FAIL)"
 } > "$kafka_gate_file"
 
 cat "$kafka_gate_file" >> "$OUT_DIR/l4b-invariant-gates.tsv"
@@ -1578,8 +1591,9 @@ redis_pending_gate_file="$OUT_DIR/l4b-redis-pending-gates.tsv"
   relay_cursor="$(docker exec "$REDIS_CONTAINER" redis-cli GET "bid:{$AUCTION_ID}:engine:relay-cursor" 2>/dev/null | tr -d '\r' || echo '0-0')"
   pending_count="$(docker exec "$REDIS_CONTAINER" redis-cli HLEN "bid:{$AUCTION_ID}:engine:pending" | tr -d '\r')"
 
-  printf 'P0\tv3_relay_log_stream_length\t%s\tStream length=%s cursor=%s; all decisions should be relayed to Kafka after run\n' \
-    "INFO" "$stream_len" "$relay_cursor"
+  printf 'P0\tv3_relay_stream_complete\t%s\tDecision log stream must have exactly %s entries (one per bid decision); got %s; relay cursor=%s\n' \
+    "$([ "${stream_len:-0}" = "${EXPECTED_UNIQUE_BIDS}" ] && echo PASS || echo FAIL)" \
+    "${EXPECTED_UNIQUE_BIDS}" "${stream_len}" "${relay_cursor}"
   printf 'P0\tredis_pending_decisions_empty\t%s\tRedis pending hash must be zero after full relay drain\n' \
     "$([ "${pending_count:-0}" = "0" ] && echo PASS || echo FAIL)"
 
@@ -1592,6 +1606,75 @@ redis_pending_gate_file="$OUT_DIR/l4b-redis-pending-gates.tsv"
 } > "$redis_pending_gate_file"
 
 cat "$redis_pending_gate_file" >> "$OUT_DIR/l4b-invariant-gates.tsv"
+
+reject_reason_gate_file="$OUT_DIR/l4b-reject-reason-gates.tsv"
+{
+  # In L1-C1 (ADMISSION_ENABLED=false), the only legitimate reject reasons are those
+  # produced by the engine's own business rules. RATE_LIMITED / BID_AUCTION_TOO_HOT
+  # indicate admission logic bled through despite the profile config; AUCTION_PAUSED
+  # indicates the engine paused unexpectedly. Any of these corrupt the contention result
+  # because they bypass fair price competition.
+  docker exec -i "$DB_CONTAINER" psql -q -A -t -F $'\t' -U "$DB_USER" -d "$DB_NAME" \
+    -v ON_ERROR_STOP=1 -v auction_id="$AUCTION_ID" -f - <<'SQL'
+select 'P0', 'rejected_bids_have_expected_reason',
+       case when count(*) = 0 then 'PASS' else 'FAIL' end,
+       'all rejected bids must carry a known engine business reason; unexpected codes indicate admission or rate-limiting contamination despite ADMISSION_ENABLED=false'
+from bids
+where auction_id = :'auction_id'
+  and status = 'REJECTED'
+  and coalesce(reject_reason, '') not in (
+    'BID_TOO_LOW',
+    'AUCTION_SOLD',
+    'AUCTION_NOT_ACTIVE',
+    'AUCTION_ENDED',
+    'DUPLICATE_BID'
+  );
+SQL
+} > "$reject_reason_gate_file"
+cat "$reject_reason_gate_file" >> "$OUT_DIR/l4b-invariant-gates.tsv"
+
+soft_close_gate_file="$OUT_DIR/l4b-soft-close-gates.tsv"
+{
+  # Positive assertion: whenever end_at_ms changes between two consecutive settled
+  # decisions, the delta must equal exactly extend_by_seconds * 1000 ms.
+  # The existing soft_close_no_stacked_subwindow_extension gate catches the negative
+  # (stacking bug). This gate catches the positive failure mode: extension ran but
+  # computed the wrong delta, meaning a bidder won more or less time than the rule allows.
+  docker exec -i "$DB_CONTAINER" psql -q -A -t -F $'\t' -U "$DB_USER" -d "$DB_NAME" \
+    -v ON_ERROR_STOP=1 -v auction_id="$AUCTION_ID" -f - <<'SQL'
+with ordered as (
+  select
+    s.engine_seq,
+    (s.payload_json->>'end_at_ms')::bigint                          as curr_end_at_ms,
+    lag((s.payload_json->>'end_at_ms')::bigint) over (
+      order by s.engine_seq
+    )                                                                as prev_end_at_ms,
+    ar.extend_by_seconds
+  from redis_engine_settlements s
+  join bids b
+    on b.auction_id  = s.auction_id
+   and b.engine_epoch = s.engine_epoch
+   and b.engine_seq   = s.engine_seq
+  join auctions a on a.id = b.auction_id
+  join auction_rules ar
+    on ar.auction_id    = a.id
+   and ar.rule_version  = a.rule_version
+  where s.auction_id = :'auction_id'
+    and s.status = 'SETTLED'
+    and s.result in ('ENGINE_ACCEPTED', 'ENGINE_SOLD')
+    and (s.payload_json->>'end_at_ms') ~ '^[0-9]+$'
+    and b.status = 'ACCEPTED'
+)
+select 'P1', 'soft_close_extension_delta_correct',
+       case when count(*) = 0 then 'PASS' else 'FAIL' end,
+       'every soft-close extension must advance end_at_ms by exactly extend_by_seconds * 1000 ms; wrong delta means the engine applied an incorrect window size'
+from ordered
+where prev_end_at_ms is not null
+  and curr_end_at_ms <> prev_end_at_ms
+  and (curr_end_at_ms - prev_end_at_ms) <> (extend_by_seconds * 1000);
+SQL
+} > "$soft_close_gate_file"
+cat "$soft_close_gate_file" >> "$OUT_DIR/l4b-invariant-gates.tsv"
 
 if awk -F '\t' '$1 == "P0" && $3 == "FAIL" { found=1 } END { exit found ? 0 : 1 }' "$OUT_DIR/l4b-invariant-gates.tsv"; then
   echo "[verify] P0 invariant violation; see $OUT_DIR/l4b-invariant-gates.tsv" >&2

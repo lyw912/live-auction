@@ -9,10 +9,10 @@ export SESSION_CSV="${SESSION_CSV:-pts-1ab-1000vu-sessions.csv}"
 export L4B_PROFILE="${L4B_PROFILE:-accepted}"
 case "$L4B_PROFILE" in
   accepted|pts-1a|pts1a)
-    default_jmx="$ROOT_DIR/tests/pts/pts-1a-accepted-ladder-1000vu-1m.jmx"
+    default_jmx="$ROOT_DIR/tests/pts/L1-component/pts-1a-accepted-ladder-1000vu-1m.jmx"
     ;;
   contention|pts-1b|pts1b|reject|bidonly|bid-only)
-    default_jmx="$ROOT_DIR/tests/pts/pts-1b-contention-burst-1000vu-1m.jmx"
+    default_jmx="$ROOT_DIR/tests/pts/L1-component/pts-1b-contention-burst-1000vu-1m.jmx"
     ;;
   *)
     echo "unknown L4B_PROFILE=$L4B_PROFILE; expected pts-1a/accepted or pts-1b/contention" >&2

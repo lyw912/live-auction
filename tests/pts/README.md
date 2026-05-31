@@ -1,16 +1,24 @@
-# Alibaba Cloud PTS JMeter Smoke
+# PTS Performance Test Suite
 
-> 2026-05-31 current entry notice: for PTS-1B performance/correctness claims, read `docs/current/performance-correctness-contract.md` first. This README still documents PTS/JMeter connectivity and diagnostics, but older JMX files in this directory include smoke, accepted-ladder, PG-lane, Redis-guard, and historical L4B workloads. Do not treat every script here as current success evidence.
+> Entry point: read `tests/pts/MANIFEST.md` first. It is the authoritative index of
+> all workloads, their layer, status, and run instructions.
+> Read `docs/current/performance-correctness-contract.md` before interpreting any result.
 
-> Current active PTS-1B workload is `pts-1b-contention-burst-1000vu-1m.jmx` unless a newer current doc explicitly supersedes it. Pair it with reset/preflight/correctness scripts and current evidence rules.
+## Suite Structure
 
-> The active-vs-historical script list is now maintained in `tests/pts/MANIFEST.md`. Use that manifest rather than guessing from file names.
+```
+L0-smoke/         Connectivity + business chain (CI gate, 1 VU)
+L1-component/     Hot bid path isolation — L1-C1 VALIDATED ✅ (p99 ≤ 50ms)
+L2-protocol/      Bid + WS fanout / read traffic stacking (PLANNED)
+L3-scenario/      Realistic lifecycle + bid distribution curve (PLANNED)
+L4-combined/      Full mixed workload, production readiness gate (PLANNED)
+archive/          Historical JMX files (non-current)
+```
 
-> Historical reset scripts are opt-in only. See `tests/pts/HISTORICAL.md`; old
-> PG-lane/Redis-guard reset flows require `ALLOW_HISTORICAL_PTS=1` and must not
-> be cited as current PTS-1B evidence.
+Each layer's `PLANNED.md` contains the full spec for workloads not yet implemented.
+Historical scripts require `ALLOW_HISTORICAL_PTS=1`; see `HISTORICAL.md`.
 
-This folder is for temporary Alibaba Cloud PTS/JMeter validation. It proves PTS can reach the current endpoint and that the core REST business chain works. It is not capacity evidence and must not be used for QPS, P99, or online-user claims.
+---
 
 ## Why `192.168.1.104` Is Not Enough
 

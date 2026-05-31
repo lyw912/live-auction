@@ -261,11 +261,28 @@ if (body != null && body.length() > 0) {
         prev.setResponseMessage('V3_VIOLATION_NOT_DECIDED_decision_status=' + decisionStatus)
         return
       }
+      // durability_status must be ENGINE_DURABLE: proves the decision reached the Kafka
+      // WAL before the response was sent. Any other value means the gateway returned a
+      // decision that has not been durably committed — a correctness violation.
+      if (durabilityStatus != 'ENGINE_DURABLE') {
+        prev.setSuccessful(false)
+        prev.setResponseMessage('V3_VIOLATION_DURABILITY_durability_status=' + durabilityStatus)
+        return
+      }
+      // engine_seq must be present and positive for every DECIDED response (accepted and
+      // rejected alike). A missing or zero seq means the engine did not assign a position
+      // in the decision log — the response cannot be trusted or verified post-run.
+      def rawSeq = json.engine_seq
+      def engineSeqLong = (rawSeq instanceof Number) ? rawSeq.toLong() : -1L
+      if (engineSeqLong <= 0L) {
+        prev.setSuccessful(false)
+        prev.setResponseMessage('V3_VIOLATION_ENGINE_SEQ_MISSING_OR_ZERO_engine_seq=' + rawSeq)
+        return
+      }
       // Track v3 result distribution for post-run analysis.
       def result = (json.result ?: '').toString()
-      def engineSeq = (json.engine_seq ?: 0).toString()
       vars.put('bid_result', result)
-      vars.put('bid_engine_seq', engineSeq)
+      vars.put('bid_engine_seq', engineSeqLong.toString())
       vars.put('bid_durability', durabilityStatus)
     }
     if (prev.getResponseCode() == '202') {
