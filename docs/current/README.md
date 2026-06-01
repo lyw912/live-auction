@@ -71,7 +71,7 @@ Do not treat HTTP status alone as auction outcome.
 | PTS-1B run/review | `docs/current/performance-correctness-contract.md`, `docs/current/evidence-policy.md`, `tests/pts/MANIFEST.md` |
 | Runtime profile choice | `docs/current/runtime-profiles.md` |
 | PTS run review writing | `docs/current/pts-run-review-template.md` |
-| Fault injection | `docs/current/fault-injection-runbook.md` |
+| Fault injection | `docs/current/fault-injection-runbook.md`, `docs/current/chaos-test-runbook.md`, `docs/current/fault-test-matrix.md` |
 | Final PTS-1B readiness | `docs/current/pts1b-readiness-checklist.md` |
 | UI/UX and product scope | `docs/design-v2-industrial/00-project-brief.md`, `07-frontend-ux.md`, `19-extreme-bidding-atmosphere.md`, `20-ui-ux-redesign.md`, then resolve conflicts through `docs/current` |
 | Evidence/progress cleanup | `docs/current/document-map.md`, `docs/archive/evidence-era-map.md`, `docs/archive/progress-history-map.md` |

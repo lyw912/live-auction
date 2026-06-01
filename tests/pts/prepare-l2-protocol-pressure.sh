@@ -8,35 +8,52 @@ REDIS_CONTAINER="${REDIS_CONTAINER:-live-auction-redis}"
 DB_USER="${DB_USER:-live_auction}"
 DB_NAME="${DB_NAME:-live_auction}"
 
-export SESSION_COUNT="${SESSION_COUNT:-5000}"
+export SESSION_COUNT="${SESSION_COUNT:-12000}"
 export SESSION_CSV="${SESSION_CSV:-pts-l2-all-sessions.csv}"
-export P1_LOAD_USER_COUNT="${P1_LOAD_USER_COUNT:-5000}"
-export P1_LOAD_WS_COUNT="${P1_LOAD_WS_COUNT:-2000}"
+export P1_LOAD_USER_COUNT="${P1_LOAD_USER_COUNT:-12000}"
+export P1_LOAD_WS_COUNT="${P1_LOAD_WS_COUNT:-10000}"
 export P1_LOAD_BIDDER_VUS="${P1_LOAD_BIDDER_VUS:-512}"
 export L4B_PROFILE="${L4B_PROFILE:-pts-1b}"
 
 cd "$ROOT_DIR"
 
+SKIP_PTS_CACHE_PRESEED=1 \
 JMX_PATH="$ROOT_DIR/tests/pts/L2-protocol/pts-2p3-bid-ws-reads.jmx" \
   bash tests/pts/reset-l4b-final-second-pressure.sh
 
-generate_csv() {
+generate_csv_with_hash() {
   local prefix="$1"
   local count="$2"
   local file="$3"
   {
-    echo "user_id,token,role"
+    echo "user_id,token,role,token_hash"
     docker exec -i "$DB_CONTAINER" psql -q -A -F ',' -t -v ON_ERROR_STOP=1 \
       -U "$DB_USER" -d "$DB_NAME" \
       -v user_prefix="$prefix" \
       -v session_count="$count" \
-      -f - < "$OUT_DIR/generate-l2-pts-sessions.sql"
+      -f - < "$OUT_DIR/generate-l2-pts-sessions-with-hash.sql"
   } > "$OUT_DIR/$file"
 }
 
-generate_csv "k6_bidder_" 1000 "pts-l2-bidder-1000-sessions.csv"
-generate_csv "k6_ws_" 2000 "pts-l2-viewer-2000-sessions.csv"
-generate_csv "k6_user_" 5000 "pts-l2-reader-5000-sessions.csv"
+strip_hash_csv() {
+  local hashed_file="$1"
+  local public_file="$2"
+  awk -F',' 'BEGIN{OFS=","} {print $1,$2,$3}' "$OUT_DIR/$hashed_file" > "$OUT_DIR/$public_file"
+}
+
+generate_csv_with_hash "k6_bidder_" 1000 "pts-l2-bidder-1000-sessions.with-hash.csv"
+generate_csv_with_hash "k6_bidder_" 1008 "pts-l2-bidder-1008-sessions.with-hash.csv"
+generate_csv_with_hash "k6_ws_" 4998 "pts-l2-viewer-4998-sessions.with-hash.csv"
+generate_csv_with_hash "k6_user_" 994 "pts-l2-reader-994-sessions.with-hash.csv"
+generate_csv_with_hash "k6_ws_" 10000 "pts-l2-viewer-10000-sessions.with-hash.csv"
+generate_csv_with_hash "k6_user_" 5000 "pts-l2-reader-5000-sessions.with-hash.csv"
+
+strip_hash_csv "pts-l2-bidder-1000-sessions.with-hash.csv" "pts-l2-bidder-1000-sessions.csv"
+strip_hash_csv "pts-l2-bidder-1008-sessions.with-hash.csv" "pts-l2-bidder-1008-sessions.csv"
+strip_hash_csv "pts-l2-viewer-4998-sessions.with-hash.csv" "pts-l2-viewer-4998-sessions.csv"
+strip_hash_csv "pts-l2-reader-994-sessions.with-hash.csv" "pts-l2-reader-994-sessions.csv"
+strip_hash_csv "pts-l2-viewer-10000-sessions.with-hash.csv" "pts-l2-viewer-10000-sessions.csv"
+strip_hash_csv "pts-l2-reader-5000-sessions.with-hash.csv" "pts-l2-reader-5000-sessions.csv"
 
 acl_room_id="$(docker exec "$DB_CONTAINER" psql -q -A -t -U "$DB_USER" \
   -d "$DB_NAME" -c "SELECT room_id FROM auctions WHERE id = 'auc_live'")"
@@ -44,26 +61,48 @@ acl_room_id="$(docker exec "$DB_CONTAINER" psql -q -A -t -U "$DB_USER" \
 preseed_csv() {
   local file="$1"
   local total=0
-  while IFS=',' read -r user_id token role; do
+  local pipe_file
+  pipe_file="$(mktemp)"
+  trap 'rm -f "$pipe_file"' RETURN
+  while IFS=',' read -r user_id token role token_hash; do
     [ "$user_id" = "user_id" ] && continue
     [ -z "$user_id" ] && continue
-    token_hash="$(printf '%s' "$token" | sha256sum | cut -d' ' -f1)"
-    docker exec "$REDIS_CONTAINER" redis-cli \
-      SET "auth:session:${token_hash}" "{\"ID\":\"${user_id}\",\"Role\":\"${role}\"}" \
-      EX 43200 >/dev/null
-    docker exec "$REDIS_CONTAINER" redis-cli \
-      SET "acl:membership:{auc_live}:${user_id}" "${acl_room_id}" \
-      EX 43200 >/dev/null
+    append_redis_set "$pipe_file" "auth:session:${token_hash}" "{\"ID\":\"${user_id}\",\"Role\":\"${role}\"}" 43200
+    append_redis_set "$pipe_file" "acl:membership:{auc_live}:${user_id}" "${acl_room_id}" 43200
     total=$((total+1))
   done < "$OUT_DIR/$file"
+  docker exec -i "$REDIS_CONTAINER" redis-cli --pipe < "$pipe_file" >/dev/null
+  rm -f "$pipe_file"
+  trap - RETURN
   echo "preseeded $total sessions from $file"
 }
 
-preseed_csv "pts-l2-bidder-1000-sessions.csv"
-preseed_csv "pts-l2-viewer-2000-sessions.csv"
-preseed_csv "pts-l2-reader-5000-sessions.csv"
+append_redis_set() {
+  local out_file="$1"
+  local key="$2"
+  local value="$3"
+  local ttl="$4"
+  {
+    printf '*5\r\n'
+    printf '$3\r\nSET\r\n'
+    printf '$%s\r\n%s\r\n' "${#key}" "$key"
+    printf '$%s\r\n%s\r\n' "${#value}" "$value"
+    printf '$2\r\nEX\r\n'
+    printf '$%s\r\n%s\r\n' "${#ttl}" "$ttl"
+  } >> "$out_file"
+}
+
+preseed_csv "pts-l2-bidder-1000-sessions.with-hash.csv"
+preseed_csv "pts-l2-bidder-1008-sessions.with-hash.csv"
+preseed_csv "pts-l2-viewer-4998-sessions.with-hash.csv"
+preseed_csv "pts-l2-reader-994-sessions.with-hash.csv"
+preseed_csv "pts-l2-viewer-10000-sessions.with-hash.csv"
+preseed_csv "pts-l2-reader-5000-sessions.with-hash.csv"
 
 echo "L2 protocol pressure data ready:"
 echo "- docs/perf/pts/pts-l2-bidder-1000-sessions.csv"
-echo "- docs/perf/pts/pts-l2-viewer-2000-sessions.csv"
+echo "- docs/perf/pts/pts-l2-bidder-1008-sessions.csv"
+echo "- docs/perf/pts/pts-l2-viewer-4998-sessions.csv"
+echo "- docs/perf/pts/pts-l2-reader-994-sessions.csv"
+echo "- docs/perf/pts/pts-l2-viewer-10000-sessions.csv"
 echo "- docs/perf/pts/pts-l2-reader-5000-sessions.csv"

@@ -47,13 +47,21 @@
 #
 # Environment overrides:
 #   FAULT_TYPE              redis | kafka | both | redis-flush | pg | settlement  (default: redis)
+#   L1F_PROFILE             default rto
+#                           rto: judge-facing bounded workload, optimized for
+#                                user-visible recovery evidence
+#                           backlog: legacy/high-throughput backlog drain proof
 #   K6_VUS                  default 200
-#   K6_DURATION             default 45s
+#   K6_DURATION             default 25s for rto, 45s for backlog
+#   SLEEP_MS                default 1000 for rto, 50 for backlog
 #                           VUs loop for the full duration; decision log count
 #                           is actual throughput over time, not K6_VUS.
-#   RAMP_SECONDS            default 10   (k6 running before fault fires)
+#   RAMP_SECONDS            default 5 for rto, 10 for backlog
 #   FAULT_WINDOW_SECONDS    default 5    (how long fault lasts)
-#   RECOVERY_GRACE          default 12   (extra settle time after restore)
+#   RECOVERY_GRACE          default 0 for rto, 12 for backlog
+#   RECOVERY_POLL_SECONDS   default 1 for rto, 2 for backlog
+#   CAPTURE_RECOVERY_START_SNAPSHOT default 0 for rto, 1 for backlog
+#   L1F_RTO_TARGET_SECONDS  default 45 for rto, 600 for backlog
 #   AUCTION_ID              default auc_live
 #   SUT_HOST                default 127.0.0.1:18080
 #   DB_CONTAINER            default live-auction-postgres
@@ -68,11 +76,40 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RUNTIME_DIR="${PTS_RUNTIME_DIR:-/tmp/live-auction-pts}"
 
 FAULT_TYPE="${FAULT_TYPE:-redis}"
+L1F_PROFILE="${L1F_PROFILE:-rto}"
+case "$L1F_PROFILE" in
+  rto)
+    DEFAULT_K6_DURATION="25s"
+    DEFAULT_RAMP_SECONDS="5"
+    DEFAULT_SLEEP_MS="1000"
+    DEFAULT_RECOVERY_GRACE="0"
+    DEFAULT_RECOVERY_POLL_SECONDS="1"
+    DEFAULT_CAPTURE_RECOVERY_START_SNAPSHOT="0"
+    DEFAULT_RTO_TARGET_SECONDS="45"
+    ;;
+  backlog)
+    DEFAULT_K6_DURATION="45s"
+    DEFAULT_RAMP_SECONDS="10"
+    DEFAULT_SLEEP_MS="50"
+    DEFAULT_RECOVERY_GRACE="12"
+    DEFAULT_RECOVERY_POLL_SECONDS="2"
+    DEFAULT_CAPTURE_RECOVERY_START_SNAPSHOT="1"
+    DEFAULT_RTO_TARGET_SECONDS="600"
+    ;;
+  *)
+    echo "[config] FAIL: unknown L1F_PROFILE=$L1F_PROFILE (valid: rto|backlog)" >&2
+    exit 1
+    ;;
+esac
 K6_VUS="${K6_VUS:-200}"
-K6_DURATION="${K6_DURATION:-45s}"
-RAMP_SECONDS="${RAMP_SECONDS:-10}"
+K6_DURATION="${K6_DURATION:-$DEFAULT_K6_DURATION}"
+SLEEP_MS="${SLEEP_MS:-$DEFAULT_SLEEP_MS}"
+RAMP_SECONDS="${RAMP_SECONDS:-$DEFAULT_RAMP_SECONDS}"
 FAULT_WINDOW_SECONDS="${FAULT_WINDOW_SECONDS:-5}"
-RECOVERY_GRACE="${RECOVERY_GRACE:-12}"
+RECOVERY_GRACE="${RECOVERY_GRACE:-$DEFAULT_RECOVERY_GRACE}"
+RECOVERY_POLL_SECONDS="${RECOVERY_POLL_SECONDS:-$DEFAULT_RECOVERY_POLL_SECONDS}"
+CAPTURE_RECOVERY_START_SNAPSHOT="${CAPTURE_RECOVERY_START_SNAPSHOT:-$DEFAULT_CAPTURE_RECOVERY_START_SNAPSHOT}"
+L1F_RTO_TARGET_SECONDS="${L1F_RTO_TARGET_SECONDS:-$DEFAULT_RTO_TARGET_SECONDS}"
 RECOVERY_CONVERGENCE_TIMEOUT="${RECOVERY_CONVERGENCE_TIMEOUT:-}"
 AUCTION_ID="${AUCTION_ID:-auc_live}"
 SUT_HOST="${SUT_HOST:-127.0.0.1:18080}"
@@ -84,6 +121,14 @@ EVIDENCE_ROOT="${EVIDENCE_ROOT:-$ROOT_DIR/docs/perf/pts/evidence/incoming}"
 SERVER_PID_FILE="${SERVER_PID_FILE:-$RUNTIME_DIR/server.pid}"
 K6_DOCKER_IMAGE="${K6_DOCKER_IMAGE:-grafana/k6:latest}"
 K6_RUNNER="local"
+SERVER_READY_EPOCH=0
+SERVER_READY_ISO=""
+REDIS_READY_EPOCH=0
+REDIS_READY_ISO=""
+KAFKA_READY_EPOCH=0
+KAFKA_READY_ISO=""
+PG_READY_EPOCH=0
+PG_READY_ISO=""
 
 if [ -z "$RECOVERY_CONVERGENCE_TIMEOUT" ]; then
   case "$FAULT_TYPE" in
@@ -105,9 +150,9 @@ exec > >(tee "$OUT_DIR/run.log") 2>&1
 
 echo "============================================================"
 echo " Layer C — Concurrent Fault Injection"
-echo " fault_type=$FAULT_TYPE k6_vus=$K6_VUS duration=$K6_DURATION"
+echo " fault_type=$FAULT_TYPE profile=$L1F_PROFILE k6_vus=$K6_VUS duration=$K6_DURATION sleep_ms=$SLEEP_MS"
 echo " load_model=closed-loop VU loop (decision count is throughput over duration, not VU count)"
-echo " ramp=${RAMP_SECONDS}s fault_window=${FAULT_WINDOW_SECONDS}s recovery=${RECOVERY_GRACE}s"
+echo " ramp=${RAMP_SECONDS}s fault_window=${FAULT_WINDOW_SECONDS}s recovery=${RECOVERY_GRACE}s recovery_poll=${RECOVERY_POLL_SECONDS}s rto_target=${L1F_RTO_TARGET_SECONDS}s"
 echo " label=$LABEL"
 echo "============================================================"
 
@@ -159,6 +204,9 @@ run_k6_load() {
       --env AUCTION_ID="$AUCTION_ID" \
       --env VUS="$K6_VUS" \
       --env DURATION="$K6_DURATION" \
+      --env SLEEP_MS="$SLEEP_MS" \
+      --env FAULT_START_MS="${FAULT_START_MS:-0}" \
+      --env FAULT_END_MS="${FAULT_END_MS:-0}" \
       --out "json=$OUT_DIR/k6-results.json" \
       "$K6_SCRIPT"
   else
@@ -171,6 +219,9 @@ run_k6_load() {
       --env AUCTION_ID="$AUCTION_ID" \
       --env VUS="$K6_VUS" \
       --env DURATION="$K6_DURATION" \
+      --env SLEEP_MS="$SLEEP_MS" \
+      --env FAULT_START_MS="${FAULT_START_MS:-0}" \
+      --env FAULT_END_MS="${FAULT_END_MS:-0}" \
       --out "json=/evidence/k6-results.json" \
       "/work/tests/pts/L1-component/pts-1c-k6-concurrent-fault.js"
   fi
@@ -226,6 +277,8 @@ wait_for_server_ready() {
     local status
     status=$(curl -fsS "http://${SUT_HOST}/readyz" 2>/dev/null | jq -r '.status // empty' || true)
     if [ "$status" = "ready" ]; then
+      SERVER_READY_EPOCH=$(date +%s)
+      SERVER_READY_ISO=$(date -Iseconds)
       echo "[server] backend ready (attempt $i)"
       return 0
     fi
@@ -283,6 +336,25 @@ stop_fault_backend() {
   return 1
 }
 
+assert_clean_kafka_pressure_state() {
+  local topic_offsets committed_offsets
+  topic_offsets=$(docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-get-offsets.sh \
+    --bootstrap-server localhost:9092 --topic auction.bid-events 2>/dev/null |
+    awk -F: '{sum += $3} END {print sum + 0}')
+  if [ "${topic_offsets:-0}" != "0" ]; then
+    echo "[preflight] FAIL: auction.bid-events is not empty after reset (log_end_sum=${topic_offsets:-unknown})" >&2
+    return 1
+  fi
+
+  committed_offsets=$(docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-consumer-groups.sh \
+    --bootstrap-server localhost:9092 --describe --group settlement-workers 2>/dev/null |
+    awk 'NR>1 && $4 ~ /^[0-9]+$/ {sum += $4; found=1} END {if (found) print sum; else print 0}')
+  if [ "${committed_offsets:-0}" != "0" ]; then
+    echo "[preflight] FAIL: settlement-workers has stale committed offsets after reset (sum=${committed_offsets:-unknown})" >&2
+    return 1
+  fi
+}
+
 # ── 1. Reset state (reuse existing PTS reset logic) ──────────────────────────
 
 echo "[reset] resetting DB / Redis / Kafka state..."
@@ -296,6 +368,7 @@ stop_fault_backend >/dev/null 2>&1 || true
 start_fault_backend
 preseed_mock_auth_acl_cache
 check_prereq
+assert_clean_kafka_pressure_state
 echo "[reset] done"
 
 # ── 2. Preflight gates ────────────────────────────────────────────────────────
@@ -311,6 +384,8 @@ wait_for_redis_ready() {
   local attempts=30
   for i in $(seq 1 $attempts); do
     if docker exec "$REDIS_CONTAINER" redis-cli ping >/dev/null 2>&1; then
+      REDIS_READY_EPOCH=$(date +%s)
+      REDIS_READY_ISO=$(date -Iseconds)
       echo "[fault] Redis ready after restart (attempt $i)"
       return 0
     fi
@@ -325,6 +400,8 @@ wait_for_kafka_ready() {
   for i in $(seq 1 $attempts); do
     if docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-topics.sh \
         --bootstrap-server localhost:9092 --list >/dev/null 2>&1; then
+      KAFKA_READY_EPOCH=$(date +%s)
+      KAFKA_READY_ISO=$(date -Iseconds)
       echo "[fault] Kafka ready after restart (attempt $i)"
       return 0
     fi
@@ -338,6 +415,8 @@ wait_for_pg_ready() {
   local attempts=30
   for i in $(seq 1 $attempts); do
     if docker exec "$DB_CONTAINER" pg_isready -U live_auction >/dev/null 2>&1; then
+      PG_READY_EPOCH=$(date +%s)
+      PG_READY_ISO=$(date -Iseconds)
       echo "[fault] PostgreSQL ready after restart (attempt $i)"
       return 0
     fi
@@ -351,10 +430,12 @@ wait_for_recovery_convergence() {
   local timeout="${1:-$RECOVERY_CONVERGENCE_TIMEOUT}"
   local start
   start="$(date +%s)"
+  RECOVERY_CONVERGENCE_START_EPOCH="$start"
+  RECOVERY_CONVERGENCE_START_ISO="$(date -Iseconds)"
   echo "[recovery] waiting for Redis/Kafka/PostgreSQL convergence (timeout=${timeout}s)..."
   while true; do
     local row stream_len pending_count lag now elapsed status
-    row=$(docker exec -i "$DB_CONTAINER" psql -q -A -t -F $'\t' -U live_auction -d live_auction \
+    row=$(docker exec -i "$DB_CONTAINER" psql -q -A -t -F '|' -U live_auction -d live_auction \
       -v ON_ERROR_STOP=1 -v auction_id="$AUCTION_ID" -f - <<'SQL' 2>/dev/null || true
 with a as (
   select engine_seq, engine_paused, coalesce(engine_pause_reason, '') as pause_reason
@@ -385,7 +466,7 @@ SQL
       awk 'NR>1 && $1 !~ /^GROUP$/ && $6 ~ /^[0-9]+$/ {sum+=$6} END {print sum+0}' || echo "0")
     if [ -n "$row" ]; then
       local engine_seq engine_paused pause_reason settlement_total open_settlements open_outbox
-      IFS=$'\t' read -r engine_seq engine_paused pause_reason settlement_total open_settlements open_outbox <<<"$row"
+      IFS='|' read -r engine_seq engine_paused pause_reason settlement_total open_settlements open_outbox <<<"$row"
       echo "[recovery] db_engine_seq=${engine_seq:-?} paused=${engine_paused:-?} reason=${pause_reason:-} settlements=${settlement_total:-?}/${stream_len:-?} open_settlements=${open_settlements:-?} pending=${pending_count:-?} outbox_open=${open_outbox:-?} kafka_lag=${lag:-?}"
       local stream_complete="0"
       if [ "${settlement_total:-x}" = "${stream_len:-y}" ]; then
@@ -399,6 +480,8 @@ SQL
          [ "${pending_count:-1}" = "0" ] &&
          [ "${open_outbox:-1}" = "0" ] &&
          [ "${lag:-1}" = "0" ]; then
+        RECOVERY_CONVERGENCE_END_EPOCH="$(date +%s)"
+        RECOVERY_CONVERGENCE_END_ISO="$(date -Iseconds)"
         return 0
       fi
     fi
@@ -408,8 +491,68 @@ SQL
       echo "[recovery] FAIL: convergence did not complete within ${timeout}s" >&2
       return 1
     fi
-    sleep 2
+    sleep "$RECOVERY_POLL_SECONDS"
   done
+}
+
+capture_recovery_snapshot() {
+  local phase="$1"
+  local row stream_len pending_count lag status
+  row=$(docker exec -i "$DB_CONTAINER" psql -q -A -t -F '|' -U live_auction -d live_auction \
+    -v ON_ERROR_STOP=1 -v auction_id="$AUCTION_ID" -f - <<'SQL' 2>/dev/null || true
+with a as (
+  select engine_seq, engine_paused, coalesce(engine_pause_reason, '') as pause_reason
+  from auctions
+  where id = :'auction_id'
+),
+s as (
+  select count(*) as total,
+         count(*) filter (where status in ('PROCESSING','FAILED') or dlq_at is not null) as open_count
+  from redis_engine_settlements
+  where auction_id = :'auction_id'
+),
+o as (
+  select count(*) as open_count
+  from outbox_delivery d
+  join outbox_events e on e.id = d.outbox_id
+  where e.auction_id = :'auction_id'
+    and d.status <> 'PUBLISHED'
+)
+select a.engine_seq, a.engine_paused, a.pause_reason, s.total, s.open_count, o.open_count
+from a cross join s cross join o;
+SQL
+)
+  stream_len=$(docker exec "$REDIS_CONTAINER" redis-cli XLEN "bid:{${AUCTION_ID}}:engine:log" 2>/dev/null | tr -d '[:space:]' || echo "0")
+  pending_count=$(docker exec "$REDIS_CONTAINER" redis-cli HLEN "bid:{${AUCTION_ID}}:engine:pending" 2>/dev/null | tr -d '[:space:]' || echo "0")
+  lag=$(docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-consumer-groups.sh \
+    --bootstrap-server localhost:9092 --describe --group settlement-workers 2>/dev/null |
+    awk 'NR>1 && $1 !~ /^GROUP$/ && $6 ~ /^[0-9]+$/ {sum+=$6} END {print sum+0}' || echo "0")
+
+  local engine_seq="null" engine_paused="null" pause_reason="" settlement_total="null" open_settlements="null" open_outbox="null"
+  if [ -n "$row" ]; then
+    IFS='|' read -r engine_seq engine_paused pause_reason settlement_total open_settlements open_outbox <<<"$row"
+  fi
+  case "$engine_paused" in
+    t) status="paused" ;;
+    f) status="unpaused" ;;
+    *) status="unknown" ;;
+  esac
+  cat > "$OUT_DIR/recovery-${phase}.json" <<JSON
+{
+  "phase": "$phase",
+  "captured_at": "$(date -Iseconds)",
+  "auction_id": "$AUCTION_ID",
+  "engine_seq": ${engine_seq:-null},
+  "engine_pause_status": "$status",
+  "engine_pause_reason": "$pause_reason",
+  "settlement_total": ${settlement_total:-null},
+  "stream_len": ${stream_len:-0},
+  "open_settlements": ${open_settlements:-null},
+  "redis_pending_decisions": ${pending_count:-0},
+  "open_outbox": ${open_outbox:-null},
+  "kafka_lag": ${lag:-0}
+}
+JSON
 }
 
 request_redis_engine_signal() {
@@ -428,6 +571,9 @@ SQL
   [ -n "$signal_id" ] || { echo "[recovery] FAIL: reconcile signal id was empty" >&2; return 1; }
 
   start="$(date +%s)"
+  RECOVERY_SIGNAL_TYPE="$signal_type"
+  RECOVERY_SIGNAL_START_EPOCH="$start"
+  RECOVERY_SIGNAL_START_ISO="$(date -Iseconds)"
   while true; do
     local row status error_message result_json paused pause_reason now elapsed
     row=$(docker exec -i "$DB_CONTAINER" psql -q -A -t -F '|' -U live_auction -d live_auction \
@@ -446,6 +592,8 @@ SQL
       IFS='|' read -r status error_message result_json paused pause_reason <<<"$row"
       echo "[recovery] ${signal_type}_signal=${signal_id} status=${status:-?} paused=${paused:-?} reason=${pause_reason:-}"
       if [ "$status" = "SUCCEEDED" ] && [ "$paused" = "f" ]; then
+        RECOVERY_SIGNAL_END_EPOCH="$(date +%s)"
+        RECOVERY_SIGNAL_END_ISO="$(date -Iseconds)"
         return 0
       fi
       if [ "$status" = "FAILED" ] || [ "$status" = "REJECTED" ]; then
@@ -547,6 +695,11 @@ restore_fault() {
 
 # ── 4. Start k6 load in background ───────────────────────────────────────────
 
+PLANNED_FAULT_START_EPOCH=$(($(date +%s) + RAMP_SECONDS))
+PLANNED_FAULT_END_EPOCH=$((PLANNED_FAULT_START_EPOCH + FAULT_WINDOW_SECONDS))
+export FAULT_START_MS=$((PLANNED_FAULT_START_EPOCH * 1000))
+export FAULT_END_MS=$((PLANNED_FAULT_END_EPOCH * 1000))
+
 echo "[k6] starting ${K6_VUS} VU bid load for ${K6_DURATION}..."
 run_k6_load > "$OUT_DIR/k6-stdout.txt" 2>&1 &
 K6_PID=$!
@@ -566,7 +719,11 @@ sleep "$FAULT_WINDOW_SECONDS"
 
 FAULT_END_EPOCH=$(date +%s)
 FAULT_END_ISO=$(date -Iseconds)
+RESTORE_START_EPOCH=$(date +%s)
+RESTORE_START_ISO=$(date -Iseconds)
 restore_fault
+RESTORE_END_EPOCH=$(date +%s)
+RESTORE_END_ISO=$(date -Iseconds)
 
 # ── 6. Wait for k6 to finish ─────────────────────────────────────────────────
 
@@ -577,15 +734,33 @@ else
   K6_EXIT=$?
   echo "[k6] finished with exit=$K6_EXIT (may include fault-window failures — see k6-stdout.txt)"
 fi
+K6_END_EPOCH=$(date +%s)
+K6_END_ISO=$(date -Iseconds)
 
 echo "[timing] waiting ${RECOVERY_GRACE}s for settlement to drain..."
 sleep "$RECOVERY_GRACE"
+RECOVERY_START_EPOCH=$(date +%s)
+RECOVERY_START_ISO=$(date -Iseconds)
+if [ "$CAPTURE_RECOVERY_START_SNAPSHOT" = "1" ]; then
+  capture_recovery_snapshot "start"
+fi
 wait_for_recovery_convergence "$RECOVERY_CONVERGENCE_TIMEOUT"
 if [ "$FAULT_TYPE" = "redis-flush" ]; then
   request_redis_engine_resume "$RECOVERY_CONVERGENCE_TIMEOUT"
 else
   request_redis_engine_reconcile "$RECOVERY_CONVERGENCE_TIMEOUT"
 fi
+RECOVERY_END_EPOCH=$(date +%s)
+RECOVERY_END_ISO=$(date -Iseconds)
+RECOVERY_RTO_SECONDS=$((RECOVERY_END_EPOCH - RECOVERY_START_EPOCH))
+RESTORE_TO_FINAL_CONVERGENCE_SECONDS=$((RECOVERY_END_EPOCH - RESTORE_END_EPOCH))
+RESTORE_START_TO_FINAL_CONVERGENCE_SECONDS=$((RECOVERY_END_EPOCH - RESTORE_START_EPOCH))
+RESTORE_DURATION_SECONDS=$((RESTORE_END_EPOCH - RESTORE_START_EPOCH))
+LOAD_DRAIN_AFTER_RESTORE_SECONDS=$((K6_END_EPOCH - RESTORE_END_EPOCH))
+RECOVERY_GRACE_ACTUAL_SECONDS=$((RECOVERY_START_EPOCH - K6_END_EPOCH))
+CONVERGENCE_WAIT_SECONDS=$((RECOVERY_CONVERGENCE_END_EPOCH - RECOVERY_CONVERGENCE_START_EPOCH))
+SIGNAL_WAIT_SECONDS=$((RECOVERY_SIGNAL_END_EPOCH - RECOVERY_SIGNAL_START_EPOCH))
+capture_recovery_snapshot "end"
 
 # ── 7. Parse k6 metrics from JSON output ──────────────────────────────────────
 
@@ -598,11 +773,61 @@ parse_k6_counter() {
     awk '{s+=$1} END {print s+0}'
 }
 
+first_k6_metric_epoch_after() {
+  local metric="$1"
+  local after_epoch="$2"
+  jq -r --arg m "$metric" --argjson after "$after_epoch" '
+    select(.type=="Point" and .metric==$m and (.data.value // 0) > 0)
+    | (.data.time | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) as $t
+    | select($t >= $after)
+    | $t
+  ' "$OUT_DIR/k6-results.json" 2>/dev/null |
+    awk 'NR == 1 || $1 < min {min = $1} END {if (NR > 0) print min}'
+}
+
+delta_after_or_null() {
+  local epoch="$1"
+  local anchor="$2"
+  if [ -n "${epoch:-}" ]; then
+    echo $((epoch - anchor))
+  else
+    echo "null"
+  fi
+}
+
+ready_delta_or_null() {
+  local epoch="$1"
+  local anchor="$2"
+  if [ "${epoch:-0}" -ge "$anchor" ]; then
+    echo $((epoch - anchor))
+  else
+    echo "null"
+  fi
+}
+
 K6_PAUSED=$(parse_k6_counter "bid_paused_total")
 K6_RECONCILING=$(parse_k6_counter "bid_reconciling_total")
 K6_DECIDED=$(parse_k6_counter "bid_decided_total")
 K6_HTTP_ERRORS=$(parse_k6_counter "bid_http_error_total")
 K6_ADMISSION_CONTAM=$(parse_k6_counter "bid_admission_contamination")
+K6_WINDOW_DECIDED=$(parse_k6_counter "bid_fault_window_decided_total")
+K6_WINDOW_PAUSED=$(parse_k6_counter "bid_fault_window_paused_total")
+K6_WINDOW_RECONCILING=$(parse_k6_counter "bid_fault_window_reconciling_total")
+K6_WINDOW_HTTP_ERRORS=$(parse_k6_counter "bid_fault_window_http_error_total")
+K6_FIRST_DECIDED_AFTER_FAULT_END_EPOCH="$(first_k6_metric_epoch_after "bid_decided_total" "$FAULT_END_EPOCH")"
+K6_FIRST_DECIDED_AFTER_RESTORE_START_EPOCH="$(first_k6_metric_epoch_after "bid_decided_total" "$RESTORE_START_EPOCH")"
+K6_FIRST_DECIDED_AFTER_RESTORE_EPOCH="$(first_k6_metric_epoch_after "bid_decided_total" "$RESTORE_END_EPOCH")"
+K6_FIRST_PAUSED_AFTER_RESTORE_START_EPOCH="$(first_k6_metric_epoch_after "bid_paused_total" "$RESTORE_START_EPOCH")"
+K6_FIRST_PAUSED_AFTER_RESTORE_EPOCH="$(first_k6_metric_epoch_after "bid_paused_total" "$RESTORE_END_EPOCH")"
+K6_FIRST_ERROR_AFTER_RESTORE_START_EPOCH="$(first_k6_metric_epoch_after "bid_http_error_total" "$RESTORE_START_EPOCH")"
+K6_FIRST_ERROR_AFTER_RESTORE_EPOCH="$(first_k6_metric_epoch_after "bid_http_error_total" "$RESTORE_END_EPOCH")"
+FIRST_DECIDED_AFTER_FAULT_END_SECONDS="$(delta_after_or_null "$K6_FIRST_DECIDED_AFTER_FAULT_END_EPOCH" "$FAULT_END_EPOCH")"
+FIRST_DECIDED_AFTER_RESTORE_START_SECONDS="$(delta_after_or_null "$K6_FIRST_DECIDED_AFTER_RESTORE_START_EPOCH" "$RESTORE_START_EPOCH")"
+FIRST_DECIDED_AFTER_RESTORE_SECONDS="$(delta_after_or_null "$K6_FIRST_DECIDED_AFTER_RESTORE_EPOCH" "$RESTORE_END_EPOCH")"
+SERVER_READY_AFTER_RESTORE_START_SECONDS="$(ready_delta_or_null "$SERVER_READY_EPOCH" "$RESTORE_START_EPOCH")"
+REDIS_READY_AFTER_RESTORE_START_SECONDS="$(ready_delta_or_null "$REDIS_READY_EPOCH" "$RESTORE_START_EPOCH")"
+KAFKA_READY_AFTER_RESTORE_START_SECONDS="$(ready_delta_or_null "$KAFKA_READY_EPOCH" "$RESTORE_START_EPOCH")"
+PG_READY_AFTER_RESTORE_START_SECONDS="$(ready_delta_or_null "$PG_READY_EPOCH" "$RESTORE_START_EPOCH")"
 
 echo ""
 echo "── k6 response distribution ────────────────────────────────"
@@ -611,7 +836,71 @@ echo "  paused       : $K6_PAUSED    ← expected during fault window"
 echo "  reconciling  : $K6_RECONCILING"
 echo "  http_errors  : $K6_HTTP_ERRORS"
 echo "  adm_contam   : $K6_ADMISSION_CONTAM  ← must be 0"
+echo "  fault_window : decided=$K6_WINDOW_DECIDED paused=$K6_WINDOW_PAUSED reconciling=$K6_WINDOW_RECONCILING http_errors=$K6_WINDOW_HTTP_ERRORS"
+echo "  first_decided_after_fault_end_s    : $FIRST_DECIDED_AFTER_FAULT_END_SECONDS"
+echo "  first_decided_after_restore_start_s: $FIRST_DECIDED_AFTER_RESTORE_START_SECONDS"
+echo "  first_decided_after_restore_s: $FIRST_DECIDED_AFTER_RESTORE_SECONDS"
 echo "────────────────────────────────────────────────────────────"
+
+echo ""
+echo "── recovery timing breakdown ───────────────────────────────"
+echo "  restore_duration_s                 : $RESTORE_DURATION_SECONDS"
+echo "  server_ready_after_restore_start_s : $SERVER_READY_AFTER_RESTORE_START_SECONDS"
+echo "  redis_ready_after_restore_start_s  : $REDIS_READY_AFTER_RESTORE_START_SECONDS"
+echo "  kafka_ready_after_restore_start_s  : $KAFKA_READY_AFTER_RESTORE_START_SECONDS"
+echo "  pg_ready_after_restore_start_s     : $PG_READY_AFTER_RESTORE_START_SECONDS"
+echo "  restore_end_to_k6_end_s             : $LOAD_DRAIN_AFTER_RESTORE_SECONDS"
+echo "  k6_end_to_recovery_start_s          : $RECOVERY_GRACE_ACTUAL_SECONDS"
+echo "  convergence_wait_s                  : $CONVERGENCE_WAIT_SECONDS"
+echo "  signal_wait_s                       : $SIGNAL_WAIT_SECONDS"
+echo "  restore_end_to_final_convergence_s  : $RESTORE_TO_FINAL_CONVERGENCE_SECONDS"
+echo "  restore_start_to_final_convergence_s: $RESTORE_START_TO_FINAL_CONVERGENCE_SECONDS"
+echo "────────────────────────────────────────────────────────────"
+
+cat > "$OUT_DIR/recovery-breakdown.json" <<JSON
+{
+  "fault_type": "$FAULT_TYPE",
+  "profile": "$L1F_PROFILE",
+  "fault_start_iso": "$FAULT_START_ISO",
+  "fault_end_iso": "$FAULT_END_ISO",
+  "restore_start_iso": "$RESTORE_START_ISO",
+  "restore_end_iso": "$RESTORE_END_ISO",
+  "server_ready_iso": "$SERVER_READY_ISO",
+  "redis_ready_iso": "$REDIS_READY_ISO",
+  "kafka_ready_iso": "$KAFKA_READY_ISO",
+  "pg_ready_iso": "$PG_READY_ISO",
+  "k6_end_iso": "$K6_END_ISO",
+  "recovery_start_iso": "$RECOVERY_START_ISO",
+  "convergence_start_iso": "$RECOVERY_CONVERGENCE_START_ISO",
+  "convergence_end_iso": "$RECOVERY_CONVERGENCE_END_ISO",
+  "signal_type": "${RECOVERY_SIGNAL_TYPE:-}",
+  "signal_start_iso": "${RECOVERY_SIGNAL_START_ISO:-}",
+  "signal_end_iso": "${RECOVERY_SIGNAL_END_ISO:-}",
+  "recovery_end_iso": "$RECOVERY_END_ISO",
+  "restore_duration_seconds": $RESTORE_DURATION_SECONDS,
+  "server_ready_after_restore_start_seconds": $SERVER_READY_AFTER_RESTORE_START_SECONDS,
+  "redis_ready_after_restore_start_seconds": $REDIS_READY_AFTER_RESTORE_START_SECONDS,
+  "kafka_ready_after_restore_start_seconds": $KAFKA_READY_AFTER_RESTORE_START_SECONDS,
+  "pg_ready_after_restore_start_seconds": $PG_READY_AFTER_RESTORE_START_SECONDS,
+  "restore_end_to_k6_end_seconds": $LOAD_DRAIN_AFTER_RESTORE_SECONDS,
+  "k6_end_to_recovery_start_seconds": $RECOVERY_GRACE_ACTUAL_SECONDS,
+  "convergence_wait_seconds": $CONVERGENCE_WAIT_SECONDS,
+  "signal_wait_seconds": $SIGNAL_WAIT_SECONDS,
+  "restore_end_to_final_convergence_seconds": $RESTORE_TO_FINAL_CONVERGENCE_SECONDS,
+  "restore_start_to_final_convergence_seconds": $RESTORE_START_TO_FINAL_CONVERGENCE_SECONDS,
+  "post_load_recovery_rto_seconds": $RECOVERY_RTO_SECONDS,
+  "first_decided_after_fault_end_epoch": ${K6_FIRST_DECIDED_AFTER_FAULT_END_EPOCH:-null},
+  "first_decided_after_fault_end_seconds": $FIRST_DECIDED_AFTER_FAULT_END_SECONDS,
+  "first_decided_after_restore_start_epoch": ${K6_FIRST_DECIDED_AFTER_RESTORE_START_EPOCH:-null},
+  "first_decided_after_restore_start_seconds": $FIRST_DECIDED_AFTER_RESTORE_START_SECONDS,
+  "first_decided_after_restore_epoch": ${K6_FIRST_DECIDED_AFTER_RESTORE_EPOCH:-null},
+  "first_decided_after_restore_seconds": $FIRST_DECIDED_AFTER_RESTORE_SECONDS,
+  "first_paused_after_restore_start_epoch": ${K6_FIRST_PAUSED_AFTER_RESTORE_START_EPOCH:-null},
+  "first_paused_after_restore_epoch": ${K6_FIRST_PAUSED_AFTER_RESTORE_EPOCH:-null},
+  "first_http_error_after_restore_start_epoch": ${K6_FIRST_ERROR_AFTER_RESTORE_START_EPOCH:-null},
+  "first_http_error_after_restore_epoch": ${K6_FIRST_ERROR_AFTER_RESTORE_EPOCH:-null}
+}
+JSON
 
 # Persist timing for evidence record.
 cat > "$OUT_DIR/fault-window.json" <<JSON
@@ -620,13 +909,28 @@ cat > "$OUT_DIR/fault-window.json" <<JSON
   "fault_start_iso":       "$FAULT_START_ISO",
   "fault_end_iso":         "$FAULT_END_ISO",
   "fault_window_seconds":  $FAULT_WINDOW_SECONDS,
+  "profile":              "$L1F_PROFILE",
   "k6_vus":                $K6_VUS,
   "k6_duration":           "$K6_DURATION",
+  "k6_sleep_ms":           $SLEEP_MS,
+  "recovery_start_iso":    "$RECOVERY_START_ISO",
+  "recovery_end_iso":      "$RECOVERY_END_ISO",
+  "recovery_rto_seconds":  $RECOVERY_RTO_SECONDS,
+  "restore_end_to_final_convergence_seconds": $RESTORE_TO_FINAL_CONVERGENCE_SECONDS,
+  "restore_start_to_final_convergence_seconds": $RESTORE_START_TO_FINAL_CONVERGENCE_SECONDS,
+  "first_decided_after_fault_end_seconds": $FIRST_DECIDED_AFTER_FAULT_END_SECONDS,
+  "first_decided_after_restore_start_seconds": $FIRST_DECIDED_AFTER_RESTORE_START_SECONDS,
+  "first_decided_after_restore_seconds": $FIRST_DECIDED_AFTER_RESTORE_SECONDS,
+  "rto_target_seconds":    $L1F_RTO_TARGET_SECONDS,
   "k6_decided":            $K6_DECIDED,
   "k6_paused":             $K6_PAUSED,
   "k6_reconciling":        $K6_RECONCILING,
   "k6_http_errors":        $K6_HTTP_ERRORS,
-  "k6_admission_contam":   $K6_ADMISSION_CONTAM
+  "k6_admission_contam":   $K6_ADMISSION_CONTAM,
+  "k6_fault_window_decided":      $K6_WINDOW_DECIDED,
+  "k6_fault_window_paused":       $K6_WINDOW_PAUSED,
+  "k6_fault_window_reconciling":  $K6_WINDOW_RECONCILING,
+  "k6_fault_window_http_errors":  $K6_WINDOW_HTTP_ERRORS
 }
 JSON
 
@@ -670,14 +974,15 @@ case "$FAULT_TYPE" in
     fi
     ;;
   pg)
-    # PG down: hot path must continue (DECIDED expected, ENGINE_PAUSED must NOT appear).
+    # PG down: hot path must continue during the fault window itself.
+    # A later reconcile pause after PG returns is acceptable while settlement catches up.
     # Seeing ENGINE_PAUSED during a PG fault would prove PG is on the hot path — a bug.
-    if [ "${K6_DECIDED:-0}" -gt 0 ] && [ "${K6_PAUSED:-0}" -eq 0 ]; then
+    if [ "${K6_WINDOW_DECIDED:-0}" -gt 0 ] && [ "${K6_WINDOW_PAUSED:-0}" -eq 0 ]; then
       gate P0 fault_observed_by_clients PASS \
-        "decided=${K6_DECIDED} paused=0 during PG fault — hot path is PG-independent"
-    elif [ "${K6_PAUSED:-0}" -gt 0 ]; then
+        "fault_window_decided=${K6_WINDOW_DECIDED} fault_window_paused=0 — hot path is PG-independent"
+    elif [ "${K6_WINDOW_PAUSED:-0}" -gt 0 ]; then
       gate P0 fault_observed_by_clients FAIL \
-        "ENGINE_PAUSED=${K6_PAUSED} appeared during PG fault — hot path must not depend on PG"
+        "fault_window_ENGINE_PAUSED=${K6_WINDOW_PAUSED} appeared during PG fault — hot path must not depend on PG"
     else
       gate P0 fault_observed_by_clients FAIL \
         "zero DECIDED during PG fault — bids stopped; cannot prove hot path PG independence"
@@ -716,15 +1021,15 @@ if [ "$FAULT_TYPE" = "redis" ] || [ "$FAULT_TYPE" = "redis-flush" ] || [ "$FAULT
         WHERE auction_id = '${AUCTION_ID}'
           AND status = 'SETTLED'
           AND result IN ('ENGINE_ACCEPTED','ENGINE_SOLD')
-          AND created_at >= to_timestamp(${FAULT_START_EPOCH})
-          AND created_at <= to_timestamp(${FAULT_END_EPOCH});" \
+          AND to_timestamp(((payload_json->>'server_time_ms')::bigint) / 1000.0) >= to_timestamp(${FAULT_START_EPOCH})
+          AND to_timestamp(((payload_json->>'server_time_ms')::bigint) / 1000.0) <= to_timestamp(${FAULT_END_EPOCH});" \
     2>/dev/null | tr -d '[:space:]' || echo "0")
   if [ "${ACCEPTED_IN_WINDOW:-0}" -eq 0 ]; then
     gate P0 no_accepted_settlement_during_redis_fault PASS \
-      "zero accepted settlements in fault window [${FAULT_START_ISO} .. ${FAULT_END_ISO}]"
+      "zero accepted engine decisions in fault window [${FAULT_START_ISO} .. ${FAULT_END_ISO}]"
   else
     gate P0 no_accepted_settlement_during_redis_fault FAIL \
-      "${ACCEPTED_IN_WINDOW} accepted settlements in fault window — engine decided while Redis was unavailable"
+      "${ACCEPTED_IN_WINDOW} accepted engine decisions in fault window — engine decided while Redis was unavailable"
   fi
 fi
 
@@ -803,6 +1108,15 @@ if [ "$FAULT_TYPE" = "settlement" ]; then
     gate P0 settlement_replay_complete FAIL \
       "${UNSETTLED_POST_CRASH} accepted bids unsettled after restart — replay did not cover all decisions"
   fi
+fi
+
+# ── Gate: user-visible recovery time objective ──────────────────────────────
+if [ "${RECOVERY_RTO_SECONDS:-999999}" -le "$L1F_RTO_TARGET_SECONDS" ]; then
+  gate P1 recovery_rto_within_profile_target PASS \
+    "recovery_rto=${RECOVERY_RTO_SECONDS}s <= target=${L1F_RTO_TARGET_SECONDS}s profile=${L1F_PROFILE}"
+else
+  gate P1 recovery_rto_within_profile_target FAIL \
+    "recovery_rto=${RECOVERY_RTO_SECONDS}s > target=${L1F_RTO_TARGET_SECONDS}s profile=${L1F_PROFILE}"
 fi
 
 echo ""

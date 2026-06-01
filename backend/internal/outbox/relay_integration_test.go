@@ -70,6 +70,7 @@ func TestRelayPublishesPendingOutboxToRedisInOrder(t *testing.T) {
 			EventKey      string          `json:"event_key"`
 			Payload       json.RawMessage `json:"payload"`
 			PayloadSHA256 string          `json:"payload_sha256"`
+			PublishedAtMS int64           `json:"published_at_ms"`
 		}
 		if err := json.Unmarshal([]byte(value), &envelope); err != nil {
 			t.Fatalf("unmarshal envelope: %v", err)
@@ -85,6 +86,9 @@ func TestRelayPublishesPendingOutboxToRedisInOrder(t *testing.T) {
 		}
 		if envelope.PayloadSHA256 == "" || len(envelope.Payload) == 0 {
 			t.Fatalf("missing payload hash/envelope payload: %#v", envelope)
+		}
+		if envelope.PublishedAtMS <= 0 {
+			t.Fatalf("missing published_at_ms in realtime envelope: %#v", envelope)
 		}
 		if envelope.Seq <= lastSeq {
 			t.Fatalf("redis seq not increasing: %d after %d", envelope.Seq, lastSeq)
@@ -721,6 +725,15 @@ func TestRelayProcessBatchDrainsMultipleEvents(t *testing.T) {
 		}
 	}
 	prioritizeOutboxForAuction(t, db, auctionRow.ID)
+	var initiallyPublished int
+	if err := db.QueryRow(ctx, `
+		SELECT count(*)
+		FROM outbox_events e
+		JOIN outbox_delivery d ON d.outbox_id = e.id
+		WHERE e.auction_id = $1 AND d.status = 'PUBLISHED'
+	`, auctionRow.ID).Scan(&initiallyPublished); err != nil {
+		t.Fatalf("count initially published: %v", err)
+	}
 
 	relay := NewRelay(db, rdb, "batch-worker")
 	ownAuctionShard(t, db, auctionRow.ID, relay.workerID)
@@ -740,8 +753,8 @@ func TestRelayProcessBatchDrainsMultipleEvents(t *testing.T) {
 	`, auctionRow.ID).Scan(&published); err != nil {
 		t.Fatalf("count published: %v", err)
 	}
-	if published != 4 {
-		t.Fatalf("published = %d, want 4", published)
+	if published-initiallyPublished != 4 {
+		t.Fatalf("published delta = %d total=%d initially=%d, want 4", published-initiallyPublished, published, initiallyPublished)
 	}
 }
 
@@ -897,6 +910,7 @@ func TestRelayProcessSignalsRebuildsSnapshotAndRetriesDeadOutbox(t *testing.T) {
 	rdb := openRedis(t)
 	ctx := context.Background()
 	repo := auction.NewRepository(db)
+	clearRelaySignals(t, db)
 	auctionRow := createActiveAuctionForRelay(t, repo, db)
 	quiesceOutboxExcept(t, db, auctionRow.ID)
 
@@ -933,13 +947,19 @@ func TestRelayProcessSignalsRebuildsSnapshotAndRetriesDeadOutbox(t *testing.T) {
 	}
 
 	relay := NewRelay(db, rdb, "signal-worker")
-	processed, err := relay.ProcessSignals(ctx, 4)
-	if err != nil {
-		t.Fatalf("ProcessSignals: %v", err)
-	}
-	if processed != 2 {
-		t.Fatalf("processed = %d, want 2", processed)
-	}
+	processRelaySignalsUntil(t, relay, 4, func() bool {
+		var succeeded int
+		if err := db.QueryRow(ctx, `
+			SELECT count(*)
+			FROM system_control_signals
+			WHERE status = 'SUCCEEDED'
+			  AND signal_type IN ($1, $2)
+			  AND target_id IN ($3, $4::bigint::text)
+		`, SignalForceSnapshotRebuild, SignalRetryDeadOutbox, auctionRow.ID, outboxID).Scan(&succeeded); err != nil {
+			t.Fatalf("count succeeded signals: %v", err)
+		}
+		return succeeded == 2
+	})
 	var succeeded int
 	if err := db.QueryRow(ctx, `
 		SELECT count(*)
@@ -979,6 +999,7 @@ func TestRelayProcessSignalsPauseAndResumeShard(t *testing.T) {
 	rdb := openRedis(t)
 	ctx := context.Background()
 	repo := auction.NewRepository(db)
+	clearRelaySignals(t, db)
 	auctionRow := createActiveAuctionForRelay(t, repo, db)
 	quiesceOutboxExcept(t, db, auctionRow.ID)
 
@@ -1005,13 +1026,15 @@ func TestRelayProcessSignalsPauseAndResumeShard(t *testing.T) {
 	}
 
 	relay := NewRelay(db, rdb, "signal-shard-worker")
-	processed, err := relay.ProcessSignals(ctx, 1)
-	if err != nil {
-		t.Fatalf("ProcessSignals pause: %v", err)
-	}
-	if processed != 1 {
-		t.Fatalf("pause processed = %d, want 1", processed)
-	}
+	processRelaySignalsUntil(t, relay, 1, func() bool {
+		var ownerID string
+		err := db.QueryRow(ctx, `
+			SELECT owner_id
+			FROM outbox_relay_shard_leases
+			WHERE shard_id = $1
+		`, shardID).Scan(&ownerID)
+		return err == nil && ownerID == "paused:"+relay.workerID
+	})
 	var ownerID string
 	if err := db.QueryRow(ctx, `
 		SELECT owner_id
@@ -1023,13 +1046,27 @@ func TestRelayProcessSignalsPauseAndResumeShard(t *testing.T) {
 	if ownerID != "paused:"+relay.workerID {
 		t.Fatalf("paused owner = %q, want %q", ownerID, "paused:"+relay.workerID)
 	}
-	processed, err = relay.ProcessSignals(ctx, 1)
-	if err != nil {
-		t.Fatalf("ProcessSignals resume: %v", err)
+	if _, err := db.Exec(ctx, `
+		UPDATE system_control_signals
+		SET locked_until = NULL
+		WHERE signal_type = $1
+		  AND target_type = 'relay_shard'
+		  AND target_id = $2::int::text
+		  AND reason = 'test resume'
+	`, SignalResumeRelayShard, shardID); err != nil {
+		t.Fatalf("unlock resume signal: %v", err)
 	}
-	if processed != 1 {
-		t.Fatalf("resume processed = %d, want 1", processed)
-	}
+	processRelaySignalsUntil(t, relay, 1, func() bool {
+		var remaining int
+		if err := db.QueryRow(ctx, `
+			SELECT count(*)
+			FROM outbox_relay_shard_leases
+			WHERE shard_id = $1 AND owner_id LIKE 'paused:%'
+		`, shardID).Scan(&remaining); err != nil {
+			t.Fatalf("count paused shard leases: %v", err)
+		}
+		return remaining == 0
+	})
 	var remaining int
 	if err := db.QueryRow(ctx, `
 		SELECT count(*)
@@ -1041,6 +1078,81 @@ func TestRelayProcessSignalsPauseAndResumeShard(t *testing.T) {
 	if remaining != 0 {
 		t.Fatalf("paused shard leases = %d, want 0", remaining)
 	}
+}
+
+func TestRelayProcessSignalsIgnoresRedisEngineSignals(t *testing.T) {
+	db := openDB(t)
+	rdb := openRedis(t)
+	ctx := context.Background()
+	clearRelaySignals(t, db)
+
+	if _, err := db.Exec(ctx, `
+		INSERT INTO system_control_signals (signal_type, target_type, target_id, requested_by, reason)
+		VALUES ('reconcile_redis_engine', 'auction', 'auc_live', 'host_1', 'redis engine should own this')
+	`); err != nil {
+		t.Fatalf("insert redis engine signal: %v", err)
+	}
+
+	relay := NewRelay(db, rdb, "signal-filter-worker")
+	processed, err := relay.ProcessSignals(ctx, 4)
+	if err != nil {
+		t.Fatalf("ProcessSignals: %v", err)
+	}
+	if processed != 0 {
+		t.Fatalf("processed = %d, want 0", processed)
+	}
+
+	var status string
+	if err := db.QueryRow(ctx, `
+		SELECT status
+		FROM system_control_signals
+		WHERE signal_type = 'reconcile_redis_engine'
+		ORDER BY id DESC
+		LIMIT 1
+	`).Scan(&status); err != nil {
+		t.Fatalf("select redis engine signal status: %v", err)
+	}
+	if status != "PENDING" {
+		t.Fatalf("redis engine signal status = %q, want PENDING", status)
+	}
+}
+
+func clearRelaySignals(t *testing.T, db *pgxpool.Pool) {
+	t.Helper()
+	if _, err := db.Exec(context.Background(), `
+		DELETE FROM system_control_signals
+		WHERE signal_type = ANY($1)
+	`, []string{
+		SignalForceSnapshotRebuild,
+		SignalRetryDeadOutbox,
+		SignalPauseRelayShard,
+		SignalResumeRelayShard,
+	}); err != nil {
+		t.Fatalf("clear relay signals: %v", err)
+	}
+}
+
+func processRelaySignalsUntil(t *testing.T, relay *Relay, limit int, done func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		if done() {
+			return
+		}
+		_, err := relay.ProcessSignals(context.Background(), limit)
+		if err != nil {
+			lastErr = err
+		}
+		if done() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if lastErr != nil {
+		t.Fatalf("ProcessSignals did not reach expected state: %v", lastErr)
+	}
+	t.Fatalf("ProcessSignals did not reach expected state")
 }
 
 func openDB(t *testing.T) *pgxpool.Pool {
@@ -1168,13 +1280,25 @@ func quiesceOutboxExcept(t *testing.T, db *pgxpool.Pool, auctionID string) {
 		SET status = 'PUBLISHED',
 		    published_at = COALESCE(published_at, now()),
 		    locked_by = NULL,
-		    locked_until = NULL
+		    locked_until = NULL,
+		    next_attempt_at = now() + interval '1 day'
 		FROM outbox_events e
 		WHERE e.id = d.outbox_id
 		  AND (e.auction_id IS DISTINCT FROM $1)
 		  AND d.status NOT IN ('PUBLISHED','DEAD')
 	`, auctionID); err != nil {
 		t.Fatalf("quiesce outbox: %v", err)
+	}
+	if _, err := db.Exec(context.Background(), `
+		UPDATE outbox_delivery d
+		SET published_at = '1900-01-01 00:00:00+00'::timestamptz,
+		    next_attempt_at = now() + interval '1 day'
+		FROM outbox_events e
+		WHERE e.id = d.outbox_id
+		  AND (e.auction_id IS DISTINCT FROM $1)
+		  AND d.status = 'PUBLISHED'
+	`, auctionID); err != nil {
+		t.Fatalf("quiesce published outbox timestamps: %v", err)
 	}
 }
 

@@ -16,7 +16,7 @@ The goal is not "the script exits 0". A useful chaos run must prove:
 
 | Layer | Purpose | Scale | Tool |
 |---|---|---:|---|
-| L1-F | concurrent bid pressure while killing Redis/Kafka/PG/backend | 200 VU default | `tests/pts/run-pts-1c-concurrent-fault.sh` + k6 |
+| L1-F | concurrent bid pressure while killing Redis/Kafka/PG/backend | 200 VU default, paced | `tests/pts/run-pts-1c-concurrent-fault.sh` + k6 |
 | Toxiproxy chaos | latency/timeout degradation not tied to VU scale | small bounded probes | `tests/chaos/run-toxiproxy-scenario.mjs --run` |
 
 L1-F and Toxiproxy are complementary. L1-F proves concurrent fault behavior.
@@ -49,6 +49,40 @@ FAULT_TYPE=pg bash tests/pts/run-pts-1c-concurrent-fault.sh
 FAULT_TYPE=settlement bash tests/pts/run-pts-1c-concurrent-fault.sh
 ```
 
+Default L1-F is `L1F_PROFILE=rto`:
+
+```text
+K6_VUS=200
+K6_DURATION=25s
+SLEEP_MS=1000
+RAMP_SECONDS=5
+FAULT_WINDOW_SECONDS=5
+RECOVERY_GRACE=0
+RECOVERY_POLL_SECONDS=1
+L1F_RTO_TARGET_SECONDS=45
+```
+
+This profile is the judge-facing recovery claim: concurrent real bids continue
+around the fault, but the script does not create an artificial tens-of-thousands
+settlement backlog after the dependency comes back. The reported RTO is
+`recovery_rto_seconds` in `fault-window.json`, measured from post-load recovery
+start to convergence of settlement, Redis pending decisions, outbox, Kafka lag,
+and engine pause.
+
+Detailed phase timing is written to `recovery-breakdown.json`, including
+restore start/end, component readiness, post-load convergence wait, and first
+post-fault decided response when k6 still has traffic. Broader follow-up fault
+layers are defined in `docs/current/fault-test-matrix.md`.
+
+For a separate backlog-drain proof, run:
+
+```bash
+L1F_PROFILE=backlog FAULT_TYPE=kafka bash tests/pts/run-pts-1c-concurrent-fault.sh
+```
+
+Do not cite backlog-profile recovery time as user-facing RTO; it deliberately
+manufactures a large queue to prove durable drain.
+
 The runner starts the backend with:
 
 ```text
@@ -63,9 +97,15 @@ Pass evidence must include:
 - `k6-stdout.txt`
 - `k6-results.json`
 - `fault-window.json`
+- `recovery-breakdown.json`
+- `recovery-end.json`
 - `l1c-gates.tsv`
 - `l4b-correctness.txt`
 - `l4b-*-gates.tsv`
+
+`recovery-start.json` is optional in `L1F_PROFILE=rto`; it is enabled by default
+only for `L1F_PROFILE=backlog` to avoid adding measurement delay to the
+judge-facing RTO.
 
 ## Toxiproxy Chaos
 

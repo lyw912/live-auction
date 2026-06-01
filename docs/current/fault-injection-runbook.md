@@ -36,6 +36,9 @@ or seconds-long ambiguous confirmation is a failed gate.
 
 ## Fault Matrix
 
+This table is the fault readiness checklist. The layered execution plan is in
+`docs/current/fault-test-matrix.md`.
+
 | Fault | User contract | Required system behavior | Pass evidence |
 |---|---|---|---|
 | Redis process restart, data retained | no wrong accept; bounded pause/reconcile if needed | reconnect, reload/check hot state, verify against Kafka/PG, resume only when safe | no wrong winner, no missing accepted decision, verifier pass |

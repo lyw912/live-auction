@@ -93,6 +93,7 @@ docker exec live-auction-redis redis-cli del bid:engine:pending:auctions auction
 
 docker exec live-auction-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --delete --if-exists --topic auction.bid-events >/dev/null 2>&1 || true
 docker exec live-auction-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --delete --if-exists --topic auction.dlq >/dev/null 2>&1 || true
+docker exec live-auction-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --delete --group settlement-workers >/dev/null 2>&1 || true
 for _ in $(seq 1 30); do
   if ! docker exec live-auction-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic auction.bid-events >/dev/null 2>&1 &&
      ! docker exec live-auction-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic auction.dlq >/dev/null 2>&1; then
@@ -145,7 +146,7 @@ acl_room_id="$(docker exec live-auction-postgres psql -q -A -t -U live_auction \
   -d live_auction -c "SELECT room_id FROM auctions WHERE id = 'auc_live'")"
 
 PTS_CSV_PATH="$ROOT_DIR/docs/perf/pts/${SESSION_CSV}"
-if [ -n "$acl_room_id" ] && [ -f "$PTS_CSV_PATH" ]; then
+if [ "${SKIP_PTS_CACHE_PRESEED:-0}" != "1" ] && [ -n "$acl_room_id" ] && [ -f "$PTS_CSV_PATH" ]; then
   echo "Pre-seeding auth session + ACL Redis caches for PTS users..."
   total=0
   while IFS=',' read -r user_id token role; do
@@ -162,6 +163,8 @@ if [ -n "$acl_room_id" ] && [ -f "$PTS_CSV_PATH" ]; then
     total=$((total+1))
   done < "$PTS_CSV_PATH"
   echo "  Auth+ACL cache pre-seeded for $total PTS users (TTL=12h)"
+elif [ "${SKIP_PTS_CACHE_PRESEED:-0}" = "1" ]; then
+  echo "Skipping reset-script auth+ACL Redis preseed; caller will preseed caches"
 fi
 
 echo "L4B final-second pressure data reset complete"

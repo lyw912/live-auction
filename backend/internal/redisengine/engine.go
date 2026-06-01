@@ -91,6 +91,9 @@ if existing[1] ~= false then
   if existing[1] ~= request_hash then
     return {'ERROR', 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST'}
   end
+  if existing[2] == false or existing[2] == '' then
+    return {'ERROR', 'ENGINE_PAUSED', 'idempotency replay record is missing result_json'}
+  end
   return {'REPLAY', existing[2]}
 end
 
@@ -534,6 +537,9 @@ func (e *Engine) placeBidWithSnapshot(
 			return auction.BidResponse{}, apierrors.New(apierrors.CodeEngineReconciling, "auction is reconciling", http.StatusConflict)
 		}
 		if code == apierrors.CodeEnginePaused {
+			if len(values) >= 3 && strings.Contains(stringValue(values[2]), "idempotency replay record") {
+				_ = e.pause(ctx, auctionID, "REDIS_IDEMPOTENCY_REPLAY_FAILED", stringValue(values[2]), traceID)
+			}
 			return auction.BidResponse{}, apierrors.New(apierrors.CodeEnginePaused, "auction engine is paused", http.StatusConflict)
 		}
 		return auction.BidResponse{}, apierrors.New(code, "redis ledger engine rejected request", http.StatusConflict)
@@ -687,7 +693,9 @@ func (e *Engine) loadRedisIdempotencyReplay(ctx context.Context, auctionID strin
 		ExpiresAtMS:       parseInt64(values["expires_at_ms"]),
 	}
 	if replay.RequestHash == "" || replay.ResultJSON == "" {
-		return redisIdempotencyReplayLoad{}, fmt.Errorf("redis engine idempotency record %s is missing request_hash/result_json", redisx.BidEngineIdempotencyKey(auctionID, clientBidID))
+		err := fmt.Errorf("redis engine idempotency record %s is missing request_hash/result_json", redisx.BidEngineIdempotencyKey(auctionID, clientBidID))
+		_ = e.pause(ctx, auctionID, "REDIS_IDEMPOTENCY_REPLAY_FAILED", err.Error(), "")
+		return redisIdempotencyReplayLoad{}, apierrors.New(apierrors.CodeEnginePaused, "bid engine paused after idempotency replay failure", http.StatusConflict)
 	}
 	return redisIdempotencyReplayLoad{Record: replay, Found: true}, nil
 }
@@ -706,7 +714,8 @@ func (e *Engine) redisPreDecisionReplay(ctx context.Context, auctionID string, c
 	}
 	var result engineResult
 	if err := json.Unmarshal([]byte(replay.ResultJSON), &result); err != nil {
-		return auction.BidResponse{}, true, err
+		_ = e.pause(ctx, auctionID, "REDIS_IDEMPOTENCY_REPLAY_FAILED", err.Error(), "")
+		return auction.BidResponse{}, true, apierrors.New(apierrors.CodeEnginePaused, "bid engine paused after idempotency replay failure", http.StatusConflict)
 	}
 	resp, err := e.redisIdempotencyReplayResponseFromRecord(replay, result, time.Now())
 	return resp, true, err
@@ -1471,7 +1480,10 @@ func (w *Worker) retryOrDLQ(ctx context.Context, message LedgerMessage, settleEr
 	err := settleErr
 	for {
 		attempts := w.settlementAttempts(ctx, message)
-		if isPermanentSettlementError(err) || attempts <= 0 || attempts >= maxSettleAttempts {
+		if !isPermanentSettlementError(err) && attempts <= 0 {
+			return transientSettlementError{err: fmt.Errorf("settlement attempt not recorded; will retry without committing kafka offset: %w", err)}
+		}
+		if isPermanentSettlementError(err) || attempts >= maxSettleAttempts {
 			_ = w.ledger.WriteDLQ(ctx, message, err)
 			_ = w.markDLQ(ctx, message, err)
 			auctionID := string(message.Key)
@@ -3078,9 +3090,6 @@ func (w *Worker) Reconcile(ctx context.Context, auctionID string) (Report, error
 	if redisSeq < dbSeq {
 		recordViolation(&reconcileViolation{status: "REDIS_BEHIND_DB", reason: "REDIS_ENGINE_REDIS_BEHIND_DB", message: "Redis engine seq is behind PostgreSQL settlement", details: map[string]any{"redis_seq": redisSeq, "db_seq": dbSeq}})
 	}
-	if redisSeq > dbSeq {
-		recordViolation(&reconcileViolation{status: "DB_BEHIND_REDIS", reason: "REDIS_ENGINE_DB_BEHIND_REDIS", message: "PostgreSQL settlement is behind Redis engine ledger", details: map[string]any{"redis_seq": redisSeq, "db_seq": dbSeq}})
-	}
 	if report.DLQSettlements > 0 {
 		recordViolation(&reconcileViolation{status: "KAFKA_LEDGER_DLQ", reason: "KAFKA_LEDGER_DLQ_PRESENT", message: "Kafka bid ledger settlement has dead-lettered events", details: map[string]any{"dlq_settlements": report.DLQSettlements}})
 	}
@@ -3100,6 +3109,11 @@ func (w *Worker) Reconcile(ctx context.Context, auctionID string) (Report, error
 			return report, err
 		}
 		recordViolation(violation)
+	}
+	if first == nil && redisSeq > dbSeq {
+		report.Status = "DB_BEHIND_REDIS"
+		report.Message = "PostgreSQL settlement is behind Redis engine ledger; settlement worker may still be catching up"
+		return report, nil
 	}
 	if first != nil {
 		report.Status = first.status
@@ -3182,8 +3196,10 @@ func isRecoverableRedisEnginePause(reason string) bool {
 	switch reason {
 	case "REDIS_ENGINE_DB_BEHIND_REDIS",
 		"REDIS_ENGINE_REDIS_BEHIND_DB",
+		"REDIS_ENGINE_SCRIPT_ERROR",
 		"REDIS_ENGINE_PENDING_KAFKA_RECOVERY_FAILED",
-		"REDIS_ENGINE_PENDING_KAFKA_APPEND_UNKNOWN":
+		"REDIS_ENGINE_PENDING_KAFKA_APPEND_UNKNOWN",
+		"KAFKA_LEDGER_SETTLEMENT_NOT_TERMINAL":
 		return true
 	default:
 		return false

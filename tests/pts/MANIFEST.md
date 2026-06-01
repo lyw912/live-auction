@@ -41,15 +41,16 @@ dimensions are intentionally separated because:
   are identical at 10 VU and 1000 VU. L1-F at 200 VU exposes these races; higher
   VU count would add queuing delay but would not surface new correctness failure modes.
 
-- **L2–L4 fault tests are not needed.** Adding WebSocket fanout or read traffic
-  (L2) does not change how Redis or Kafka failure propagates to the bid decision
-  path. The bid path is structurally isolated from the read/WS paths; a fault on
-  the bid engine affects L2 scenarios identically to L1. Running L2+fault would
-  add noise (which path caused the failure?) without adding proof value.
+- **L2–L4 fault concerns are separate layers.** Adding WebSocket fanout, reads,
+  multi-room traffic, weak-network UI checks, abuse inputs, or clustered infra
+  failover to L1-F would make failures harder to attribute. Those are tracked in
+  `docs/current/fault-test-matrix.md` with their own pass criteria.
 
 **The complete correctness argument is: L1-C1 (correctness under peak load, no
 faults) + L1-F (correctness under faults, concurrent load) + chaos scripts
-(protocol correctness for each fault mode individually).**
+(protocol correctness for each fault mode individually).** Broader UX, WS,
+multi-room, abuse, and infrastructure fault proofs are follow-up layers, not
+requirements for L1-F completion.
 
 ---
 
@@ -106,11 +107,15 @@ to `current/` or `archive/*/` after classification.
 
 ## L1-F — Concurrent Fault Injection
 
-**Purpose**: inject Redis or Kafka failure while 200 VUs are bidding concurrently.
+**Purpose**: inject Redis/Kafka/PostgreSQL/backend failure while 200 VUs are
+bidding concurrently under a bounded, judge-facing recovery workload.
 Proves that the engine fail-closes correctly (ENGINE\_PAUSED during fault) and that
 the final auction state satisfies all correctness invariants after recovery.
 
 This is **not** a latency test. p99 degrades during the fault window by design.
+The primary user-experience number for L1-F is RTO: after the injected fault is
+cleared, how long until settlement, Redis pending decisions, Kafka lag, outbox,
+and engine pause converge.
 
 | ID | Script | Status | Fault modes | Note |
 |---|---|---|---|---|
@@ -128,6 +133,45 @@ ALLOW_MOCK_AUTH=true        ← k6 uses X-Mock headers; no JWT session pool need
 BID_ENGINE_MODE=redis_ledger
 ADMISSION_ENABLED=false
 ```
+
+### L1-F Load model
+
+Default profile:
+
+```text
+L1F_PROFILE=rto
+K6_VUS=200
+K6_DURATION=25s
+SLEEP_MS=1000
+RAMP_SECONDS=5
+FAULT_WINDOW_SECONDS=5
+RECOVERY_GRACE=0
+RECOVERY_POLL_SECONDS=1
+L1F_RTO_TARGET_SECONDS=45
+```
+
+This keeps the experiment aligned with the user story: 200 users are actively
+trying during a 5s dependency fault, then the system must return to a safe,
+settled state in seconds, not minutes. `SLEEP_MS=1000` is intentional pacing:
+one bid attempt per active user per second is already higher than realistic human
+click cadence, while avoiding a synthetic backlog that hides the actual recovery
+behavior.
+
+Backlog profile:
+
+```bash
+L1F_PROFILE=backlog FAULT_TYPE=kafka bash tests/pts/run-pts-1c-concurrent-fault.sh
+```
+
+The backlog profile preserves the old 45s/50ms closed-loop pressure. It is useful
+to prove durable drain under tens of thousands of decisions, but it is not the
+judge-facing RTO claim because it deliberately manufactures a large settlement
+queue after the fault.
+
+Broader fault work is tracked in `docs/current/fault-test-matrix.md`. Do not
+merge WebSocket reconnect storms, multi-room isolation, UX weak-network checks,
+abuse tests, or clustered infrastructure failover into L1-F; they are separate
+layers with different pass criteria.
 
 ### L1-F Run sequence
 
@@ -163,15 +207,20 @@ SERVER_START_CMD="ALLOW_MOCK_AUTH=true BID_ENGINE_MODE=redis_ledger ADMISSION_EN
 | `pg_recovery_settlement_complete` | pg | P0 | Zero unsettled accepted bids after PG recovery — queued decisions all settled |
 | `settlement_replay_no_duplicates` | settlement | P0 | Zero duplicate (epoch, seq) rows — Kafka at-least-once replay was idempotent |
 | `settlement_replay_complete` | settlement | P0 | All pre-crash decisions settled — consumer group resumed from committed offset |
+| `recovery_rto_within_profile_target` | all | P1 | Fault cleared to safe convergence within profile RTO target |
 | All `verify-l4b-pts-correctness.sh` P0 gates | all | P0 | Final state: winner = highest bid, engine\_seq gap-free, outbox drained |
 
-### Why L2–L4 fault tests are not needed
+### Why L2–L4 fault tests are not part of L1-F
 
 Fault correctness is structural: the Redis single-writer Lua script serialises all
 bid decisions atomically regardless of how many concurrent protocols (WS, reads) are
 also running. Adding L2 background traffic to a fault test would not surface new
 correctness failure modes — it would only add noise that makes root-cause harder.
 **The complete fault argument is L1-F + the individual chaos scripts.**
+
+This does not mean reconnect storms, slow consumers, mobile weak-network UX,
+multi-room isolation, abuse, or clustered failover are unimportant. They belong
+to the future layers documented in `docs/current/fault-test-matrix.md`.
 
 ### Known difference from L1-C1
 
@@ -186,11 +235,15 @@ any new latency regression to the specific protocol interaction.
 
 | ID | File | Status | SLA | Note |
 |---|---|---|---|---|
-| `L2-P1` | `L2-protocol/pts-2p1-bid-plus-ws-fanout.jmx` | CURRENT | bid p99 ≤ 55ms | 1000 bid VU + 500–2000 WS viewers |
+| `L2-P1` | `L2-protocol/pts-2p1-bid-plus-ws-fanout.jmx` | CURRENT | bid p99 ≤ 100ms hard UX ceiling; server-core p99 reported separately | 1000 bid VU + 8000–9000 WS viewers for first formal run; higher WS only as capacity probe |
 | `L2-P2` | `L2-protocol/pts-2p2-bid-plus-reads.jmx` | CURRENT | bid p99 ≤ 55ms | 1000 bid VU + 2000–5000 read VU |
-| `L2-P3` | `L2-protocol/pts-2p3-bid-ws-reads.jmx` | CURRENT | bid p99 ≤ 60ms | bid + WS + reads combined |
+| `L2-P3` | `L2-protocol/pts-2p3-bid-ws-reads.jmx` | CURRENT | bid p99 ≤ 100ms; read p99 ≤ 200ms; client fanout receipt p99 ≤ 1000ms | Mixed-protocol instrumentation gate only: 1008 bid + 4998 WS + 994 read VU on 14 PTS IPs; `verify-l2p3-pts-evidence.sh` must pass before citation |
+| `L2-P4` | `L2-protocol/pts-2p4-steady-interactive-auction.jmx` | CURRENT | bid p99 ≤ 100ms; client fanout p99 ≤ 1000ms; no resource climb | 2400 WS + 360 active bidder + 240 reader VU; paced steady bid arrivals for 10 min; first formal realtime auction gate |
+| `L2-P5` | TBD k6/JMeter | PLANNED | fanout p99 ≤ 1000ms; zero leak trend | 10000 WS fanout soak for 10-30 min with low/medium accepted update rate |
+| `L2-P6` | TBD k6/JMeter | PLANNED | time-to-current-state reported | reconnect storm during ongoing accepted updates |
 
 See `docs/perf/pts/l2-l4-upload-and-pressure-config.md` for upload files and Alibaba PTS/JMeter configuration.
+See `docs/perf/pts/realtime-auction-load-model-2026-06-02.md` for the realtime auction workload rationale.
 See `docs/current/chaos-test-runbook.md` for L1-F and Toxiproxy fault execution.
 
 **Prerequisite**: L1-C1 must pass before any L2 run.
@@ -234,7 +287,13 @@ See `docs/perf/pts/l2-l4-upload-and-pressure-config.md` for upload files and Ali
 |---|---|
 | `docs/perf/pts/pts-1ab-1000vu-sessions.csv` | Current 1000-user PTS session pool (L1 + L2) |
 | `docs/perf/pts/pts-l2-bidder-1000-sessions.csv` | Current L2-L4 bidder session pool generated by `prepare-l2-protocol-pressure.sh` |
-| `docs/perf/pts/pts-l2-viewer-2000-sessions.csv` | Current L2-L4 WebSocket viewer session pool generated by `prepare-l2-protocol-pressure.sh` |
+| `docs/perf/pts/pts-l2-bidder-1008-sessions.csv` | Exact L2-P3 bidder session pool for 14 PTS IPs |
+| `docs/perf/pts/pts-l2-viewer-4998-sessions.csv` | Exact L2-P3 WebSocket viewer session pool for 14 PTS IPs |
+| `docs/perf/pts/pts-l2-reader-994-sessions.csv` | Exact L2-P3 reader session pool for 14 PTS IPs |
+| `docs/perf/pts/pts-l2p4-bidder-360-sessions.csv` | Exact L2-P4 active bidder session pool for 6 PTS IPs |
+| `docs/perf/pts/pts-l2p4-viewer-2400-sessions.csv` | Exact L2-P4 WebSocket viewer session pool for 6 PTS IPs |
+| `docs/perf/pts/pts-l2p4-reader-240-sessions.csv` | Exact L2-P4 reader session pool for 6 PTS IPs |
+| `docs/perf/pts/pts-l2-viewer-10000-sessions.csv` | Current L2-L4 WebSocket viewer session pool generated by `prepare-l2-protocol-pressure.sh` |
 | `docs/perf/pts/pts-l2-reader-5000-sessions.csv` | Current L2-L4 HTTP reader session pool generated by `prepare-l2-protocol-pressure.sh` |
 | `tests/pts/pts_sessions.csv.example` | Example CSV shape only |
 
@@ -246,10 +305,13 @@ See `docs/perf/pts/l2-l4-upload-and-pressure-config.md` for upload files and Ali
 |---|---|
 | `tests/pts/reset-l4b-final-second-pressure.sh` | Reset/seed for L1-C0/L1-C1 (supports `L4B_PROFILE=pts-1a\|pts-1b`) |
 | `tests/pts/prepare-l2-protocol-pressure.sh` | Reset/seed and generate L2 bidder/viewer/reader CSVs |
+| `tests/pts/prepare-l2p4-steady-pressure.sh` | Reset/seed and generate L2-P4 steady interactive auction CSVs |
 | `tests/pts/prepare-l3-l4-pressure.sh` | Extend L2 seed with `auc_inv_001` for L3-S2/L4 |
 | `tests/pts/preflight-l4b-pts-guards.sh` | Preflight gate: Redis/Kafka/settlement protections |
 | `tests/pts/collect-server-evidence.sh` | Post-run server evidence collector |
 | `tests/pts/verify-l4b-pts-correctness.sh` | Correctness verifier (ENGINE_* distribution, seq gaps, DLQ) |
+| `tests/pts/verify-l2p3-pts-evidence.sh` | L2-P3 PTS sampling-log verifier: exact bid/WS counts, fanout receipt, join segments, read p99 |
+| `tests/pts/verify-l2p4-pts-evidence.sh` | L2-P4 PTS sampling-log verifier: minimum steady bids, WS all-seq fanout proof, join/read p99 |
 | `tests/pts/fetch-pts-sampling-logs.sh` | Optional sampling-log helper |
 | `tests/pts/summarize-pts-sampling-logs.sh` | Optional sampling-log summarizer |
 | `tests/pts/prepare-cloud-pressure.sh` | Shared seed/session helper used by reset scripts |

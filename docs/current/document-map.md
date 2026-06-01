@@ -21,6 +21,8 @@
 | `docs/current/runtime-profiles.md` | env/profile split for demo vs PTS-1B |
 | `docs/current/pts-run-review-template.md` | required template for new PTS report reviews |
 | `docs/current/fault-injection-runbook.md` | current Redis/Kafka/PostgreSQL fault gates |
+| `docs/current/chaos-test-runbook.md` | current L1-F and Toxiproxy execution runbook |
+| `docs/current/fault-test-matrix.md` | layered future fault matrix beyond L1-F |
 | `docs/current/pts1b-readiness-checklist.md` | final pre-run PTS-1B checklist |
 | `docs/current/document-map.md` | cleanup and conflict policy |
 | `docs/archive/evidence-era-map.md` | historical evidence classification |

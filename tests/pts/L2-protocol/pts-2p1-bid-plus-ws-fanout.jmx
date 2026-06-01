@@ -2,7 +2,7 @@
 <jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
   <hashTree>
     <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="L2-P1 bid plus WebSocket fanout" enabled="true">
-      <stringProp name="TestPlan.comments">L2-P1: 1000 one-shot hot bids plus 500-2000 long-lived WebSocket viewers. Uses Java HttpClient WebSocket in JSR223, so no external JMeter plugin is required. Upload bidder and viewer CSVs with Split File enabled.</stringProp>
+      <stringProp name="TestPlan.comments">L2-P1: 1000 one-shot hot bids plus 8000-9000 long-lived WebSocket viewers for the first formal run. This models a high-intent live auction room where watchers outnumber active bidders. Uses Java HttpClient WebSocket in JSR223, so no external JMeter plugin is required. The WS sampler pauses SampleResult timing while holding the socket so PTS RT represents connection/open overhead, not long-connection dwell time. Upload bidder and viewer CSVs with Split File enabled.</stringProp>
       <boolProp name="TestPlan.functional_mode">false</boolProp>
       <boolProp name="TestPlan.tearDown_on_shutdown">true</boolProp>
       <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
@@ -41,8 +41,8 @@
         <stringProp name="ThreadGroup.ramp_time">${__P(bid_ramp_sec,1)}</stringProp>
         <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
         <boolProp name="ThreadGroup.scheduler">true</boolProp>
-        <stringProp name="ThreadGroup.duration">${__P(run_duration_sec,180)}</stringProp>
-        <stringProp name="ThreadGroup.delay">${__P(bid_delay_sec,60)}</stringProp>
+        <stringProp name="ThreadGroup.duration">${__P(run_duration_sec,120)}</stringProp>
+        <stringProp name="ThreadGroup.delay">${__P(bid_delay_sec,0)}</stringProp>
         <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" enabled="true">
           <boolProp name="LoopController.continue_forever">false</boolProp>
           <stringProp name="LoopController.loops">1</stringProp>
@@ -82,7 +82,7 @@
             <stringProp name="scriptLanguage">groovy</stringProp>
             <stringProp name="cacheKey">l2-compute-contention-bid</stringProp>
             <stringProp name="script"><![CDATA[
-long wait = Long.parseLong(props.getProperty('burst_wait_ms', '40000'))
+long wait = Long.parseLong(props.getProperty('burst_wait_ms', '15000'))
 long quantum = Long.parseLong(props.getProperty('contention_barrier_quantum_ms', '10000'))
 def target = props.get('l2_bid_target_ms') as java.util.concurrent.atomic.AtomicLong
 if (target == null) {
@@ -152,11 +152,11 @@ if (prev.getResponseCode() == '200') {
         </hashTree>
       </hashTree>
       <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="20 websocket viewers" enabled="true">
-        <stringProp name="ThreadGroup.num_threads">${__P(ws_threads,1000)}</stringProp>
-        <stringProp name="ThreadGroup.ramp_time">${__P(ws_ramp_sec,60)}</stringProp>
+        <stringProp name="ThreadGroup.num_threads">${__P(ws_threads,8000)}</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">${__P(ws_ramp_sec,30)}</stringProp>
         <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
         <boolProp name="ThreadGroup.scheduler">true</boolProp>
-        <stringProp name="ThreadGroup.duration">${__P(run_duration_sec,180)}</stringProp>
+        <stringProp name="ThreadGroup.duration">${__P(run_duration_sec,120)}</stringProp>
         <stringProp name="ThreadGroup.delay">0</stringProp>
         <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" enabled="true">
           <boolProp name="LoopController.continue_forever">false</boolProp>
@@ -167,7 +167,7 @@ if (prev.getResponseCode() == '200') {
         <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="viewer sessions" enabled="true">
           <stringProp name="delimiter">,</stringProp>
           <stringProp name="fileEncoding">UTF-8</stringProp>
-          <stringProp name="filename">${__P(viewer_csv,pts-l2-viewer-2000-sessions.csv)}</stringProp>
+          <stringProp name="filename">${__P(viewer_csv,pts-l2-viewer-10000-sessions.csv)}</stringProp>
           <boolProp name="ignoreFirstLine">true</boolProp>
           <boolProp name="quotedData">false</boolProp>
           <boolProp name="recycle">false</boolProp>
@@ -184,7 +184,9 @@ import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.WebSocket
+import java.nio.ByteBuffer
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.CompletionStage
 import java.util.concurrent.TimeUnit
 
 String protocol = props.getProperty('protocol', 'http')
@@ -220,15 +222,25 @@ def ws = client.newWebSocketBuilder()
         webSocket.request(1)
         return null
       }
+      CompletionStage<?> onPing(WebSocket webSocket, ByteBuffer data) {
+        webSocket.request(1)
+        return null
+      }
+      CompletionStage<?> onPong(WebSocket webSocket, ByteBuffer data) {
+        webSocket.request(1)
+        return null
+      }
       java.util.concurrent.CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason) {
         latch.countDown()
         return null
       }
       void onError(WebSocket webSocket, Throwable error) { latch.countDown() }
     }).join()
-long hold = Long.parseLong(props.getProperty('ws_hold_sec', '180'))
+long hold = Long.parseLong(props.getProperty('ws_hold_sec', '75'))
+SampleResult.samplePause()
 latch.await(hold, TimeUnit.SECONDS)
 try { ws.sendClose(WebSocket.NORMAL_CLOSURE, 'done').join() } catch (Throwable ignored) {}
+SampleResult.sampleResume()
 SampleResult.setSuccessful(true)
 SampleResult.setResponseCode('200')
 SampleResult.setResponseMessage('WS_MESSAGES_' + messages.get())

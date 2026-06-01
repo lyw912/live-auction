@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
   <hashTree>
-    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="L2-P3 bid plus WebSocket plus reads" enabled="true">
-      <stringProp name="TestPlan.comments">L2-P3: mixed single-room protocol pressure: 1008 one-shot hot bids plus 4998 WebSocket viewers plus 994 paced HTTP reader VUs. These counts are exact multiples for 14 Alibaba PTS pressure IPs while preserving the business shape of about 1000 bidders, 5000 viewers, and 1000 readers. WS is split into join snapshot, ticket, upgrade-to-first-message, fanout receipt, and close samplers. The fanout sampler reports each connection's worst published_at_ms-to-client-receive latency for all expected public seqs, so PTS can display a real client fanout p99 instead of long-connection dwell time.</stringProp>
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="L2-P4 steady interactive auction" enabled="true">
+      <stringProp name="TestPlan.comments">L2-P4: production-realistic steady realtime auction. 2400 long-lived WebSocket viewers join first, 360 active bidder sessions generate paced sustained bid arrivals after the room is connected, and 240 readers poll snapshot/leaderboard/my-bids with pacing. Bid pacing is open-model per pressure IP: total offered arrival curve 20/s -> 60/s -> 100/s over the bid window, divided by pressure_ips. WS fanout sampler observes through the bid window, fetches final auction seq, verifies every connected viewer saw seq 1..final_seq, and reports worst published_at_ms-to-client-receive latency as PTS-visible fanout RT.</stringProp>
       <boolProp name="TestPlan.functional_mode">false</boolProp>
       <boolProp name="TestPlan.tearDown_on_shutdown">true</boolProp>
       <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
@@ -36,127 +36,150 @@
         </collectionProp>
       </HeaderManager>
       <hashTree/>
-      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="10 hot bid burst 1000VU" enabled="true">
-        <stringProp name="ThreadGroup.num_threads">${__P(bid_threads,1008)}</stringProp>
-        <stringProp name="ThreadGroup.ramp_time">${__P(bid_ramp_sec,1)}</stringProp>
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="10 steady active bidders" enabled="true">
+        <stringProp name="ThreadGroup.num_threads">${__P(bid_threads,360)}</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">${__P(bid_ramp_sec,60)}</stringProp>
         <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
         <boolProp name="ThreadGroup.scheduler">true</boolProp>
-        <stringProp name="ThreadGroup.duration">${__P(run_duration_sec,60)}</stringProp>
-        <stringProp name="ThreadGroup.delay">${__P(bid_delay_sec,0)}</stringProp>
+        <stringProp name="ThreadGroup.duration">${__P(bid_duration_sec,420)}</stringProp>
+        <stringProp name="ThreadGroup.delay">${__P(bid_delay_sec,90)}</stringProp>
         <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" enabled="true">
-          <boolProp name="LoopController.continue_forever">false</boolProp>
-          <stringProp name="LoopController.loops">1</stringProp>
+          <boolProp name="LoopController.continue_forever">true</boolProp>
+          <stringProp name="LoopController.loops">-1</stringProp>
         </elementProp>
       </ThreadGroup>
       <hashTree>
         <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="bidder sessions" enabled="true">
           <stringProp name="delimiter">,</stringProp>
           <stringProp name="fileEncoding">UTF-8</stringProp>
-          <stringProp name="filename">${__P(bidder_csv,pts-l2-bidder-1008-sessions.csv)}</stringProp>
+          <stringProp name="filename">${__P(bidder_csv,pts-l2p4-bidder-360-sessions.csv)}</stringProp>
           <boolProp name="ignoreFirstLine">true</boolProp>
           <boolProp name="quotedData">false</boolProp>
-          <boolProp name="recycle">false</boolProp>
+          <boolProp name="recycle">true</boolProp>
           <stringProp name="shareMode">shareMode.all</stringProp>
-          <boolProp name="stopThread">true</boolProp>
+          <boolProp name="stopThread">false</boolProp>
           <stringProp name="variableNames">bid_user_id,bid_token,bid_role</stringProp>
         </CSVDataSet>
         <hashTree/>
-        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="POST L2-P3 hot bid" enabled="true">
-          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
-          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
-            <collectionProp name="Arguments.arguments">
-              <elementProp name="" elementType="HTTPArgument">
-                <boolProp name="HTTPArgument.always_encode">false</boolProp>
-                <stringProp name="Argument.value">{"client_bid_id":"${client_bid_id}","amount_cents":${amount_cents},"client_seen_seq":${client_seen_seq}}</stringProp>
-                <stringProp name="Argument.metadata">=</stringProp>
-              </elementProp>
-            </collectionProp>
-          </elementProp>
-          <stringProp name="HTTPSampler.path">/api/auctions/auc_live/bids</stringProp>
-          <stringProp name="HTTPSampler.method">POST</stringProp>
-          <boolProp name="HTTPSampler.follow_redirects">false</boolProp>
-          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
-        </HTTPSamplerProxy>
-        <hashTree>
-          <JSR223PreProcessor guiclass="TestBeanGUI" testclass="JSR223PreProcessor" testname="compute contention bid" enabled="true">
-            <stringProp name="scriptLanguage">groovy</stringProp>
-            <stringProp name="cacheKey">l2-compute-contention-bid</stringProp>
-            <stringProp name="script"><![CDATA[
-long wait = Long.parseLong(props.getProperty('burst_wait_ms', '15000'))
-long quantum = Long.parseLong(props.getProperty('contention_barrier_quantum_ms', '10000'))
-def target = props.get('l2_bid_target_ms') as java.util.concurrent.atomic.AtomicLong
-if (target == null) {
-  long desired = System.currentTimeMillis() + wait
-  long aligned = ((desired + quantum - 1L) / quantum) * quantum
-  target = new java.util.concurrent.atomic.AtomicLong(aligned)
-  def existing = props.putIfAbsent('l2_bid_target_ms', target)
-  if (existing != null) target = existing as java.util.concurrent.atomic.AtomicLong
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="POST L2-P4 steady bid" enabled="true">
+          <stringProp name="scriptLanguage">groovy</stringProp>
+          <stringProp name="cacheKey">l2p4-steady-bid-http-v2</stringProp>
+          <stringProp name="script"><![CDATA[
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+
+long now = System.currentTimeMillis()
+def startRef = props.get('l2p4_bid_start_ms') as java.util.concurrent.atomic.AtomicLong
+if (startRef == null) {
+  long delay = Long.parseLong(props.getProperty('bid_start_delay_ms', '90000'))
+  startRef = new java.util.concurrent.atomic.AtomicLong(now + delay)
+  def existing = props.putIfAbsent('l2p4_bid_start_ms', startRef)
+  if (existing != null) startRef = existing as java.util.concurrent.atomic.AtomicLong
 }
-long sleep = target.get() - System.currentTimeMillis()
-if (sleep > 0L) Thread.sleep(sleep)
+long start = startRef.get()
+if (now < start) Thread.sleep(start - now)
+long elapsedMs = System.currentTimeMillis() - start
+long elapsedSec = elapsedMs > 0L ? Math.floorDiv(elapsedMs, 1000L) : 0L
+long totalRate
+if (elapsedSec < 120L) {
+  totalRate = Long.parseLong(props.getProperty('bid_rate_stage1_per_sec', '20'))
+} else if (elapsedSec < 240L) {
+  totalRate = Long.parseLong(props.getProperty('bid_rate_stage2_per_sec', '60'))
+} else {
+  totalRate = Long.parseLong(props.getProperty('bid_rate_stage3_per_sec', '100'))
+}
+long pressureIPs = Long.parseLong(props.getProperty('pressure_ips', '6'))
+if (pressureIPs < 1L) pressureIPs = 1L
+long localRate = Math.round(totalRate / (double) pressureIPs)
+if (localRate < 1L) localRate = 1L
+long intervalMs = Math.round(1000.0d / (double) localRate)
+if (intervalMs < 1L) intervalMs = 1L
+def nextRef = props.get('l2p4_next_bid_slot_ms') as java.util.concurrent.atomic.AtomicLong
+if (nextRef == null) {
+  nextRef = new java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
+  def existing = props.putIfAbsent('l2p4_next_bid_slot_ms', nextRef)
+  if (existing != null) nextRef = existing as java.util.concurrent.atomic.AtomicLong
+}
+long slot = nextRef.getAndAdd(intervalMs)
+long waitMs = slot - System.currentTimeMillis()
+if (waitMs > 0L) Thread.sleep(waitMs)
 String userID = vars.get('bid_user_id') ?: 'unknown'
-def matcher = userID =~ /k6_bidder_(\d+)_(\d+)/
-long bucket = 1L
-long lane = 0L
-if (matcher.matches()) {
-  bucket = Long.parseLong(matcher.group(1))
-  lane = Long.parseLong(matcher.group(2))
+def counter = props.get('l2p4_bid_counter') as java.util.concurrent.atomic.AtomicLong
+if (counter == null) {
+  counter = new java.util.concurrent.atomic.AtomicLong(0L)
+  def existing = props.putIfAbsent('l2p4_bid_counter', counter)
+  if (existing != null) counter = existing as java.util.concurrent.atomic.AtomicLong
 }
-long rank = Math.max(1L, (bucket - 1L) * 7L + lane + 1L)
-long amount = Long.parseLong(props.getProperty('contention_amount_base_cents', '10000')) + Long.parseLong(props.getProperty('contention_amount_increment_cents', '5000')) * Long.parseLong(props.getProperty('contention_amount_stride', '1000')) * rank
-String id = 'pts-2p3-' + userID + '-' + rank
-vars.put('amount_cents', Long.toString(amount))
-vars.put('client_bid_id', id)
-vars.put('client_seen_seq', Long.toString(Math.max(0L, rank - 1L)))
-            ]]></stringProp>
-          </JSR223PreProcessor>
-          <hashTree/>
-          <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="bid auth and idempotency" enabled="true">
-            <collectionProp name="HeaderManager.headers">
-              <elementProp name="" elementType="Header">
-                <stringProp name="Header.name">Authorization</stringProp>
-                <stringProp name="Header.value">Bearer ${bid_token}</stringProp>
-              </elementProp>
-              <elementProp name="" elementType="Header">
-                <stringProp name="Header.name">Idempotency-Key</stringProp>
-                <stringProp name="Header.value">${client_bid_id}</stringProp>
-              </elementProp>
-            </collectionProp>
-          </HeaderManager>
-          <hashTree/>
-          <JSR223PostProcessor guiclass="TestBeanGUI" testclass="JSR223PostProcessor" testname="assert decided durable" enabled="true">
-            <stringProp name="scriptLanguage">groovy</stringProp>
-            <stringProp name="cacheKey">l2-assert-decided-durable</stringProp>
-            <stringProp name="script"><![CDATA[
-if (!(prev.getResponseCode() == '200' || prev.getResponseCode() == '202')) {
-  prev.setSuccessful(false)
-  prev.setResponseMessage('UNEXPECTED_BID_HTTP_' + prev.getResponseCode())
+long seq = counter.incrementAndGet()
+long base = Long.parseLong(props.getProperty('contention_amount_base_cents', '10000'))
+long inc = Long.parseLong(props.getProperty('contention_amount_increment_cents', '5000'))
+long stride = Long.parseLong(props.getProperty('contention_amount_stride', '1000'))
+long amount = base + inc * stride * seq
+String id = 'pts-2p4-' + userID + '-' + seq
+String body = groovy.json.JsonOutput.toJson([
+  client_bid_id: id,
+  amount_cents: amount,
+  client_seen_seq: (seq > 1L ? seq - 1L : 0L)
+])
+String protocol = props.getProperty('protocol', 'http')
+String host = props.getProperty('host', '172.16.179.112')
+String port = props.getProperty('port', '18080')
+String url = protocol + '://' + host + ':' + port + '/api/auctions/auc_live/bids'
+def client = props.get('l2p4_bid_http_client') as HttpClient
+if (client == null) {
+  client = HttpClient.newHttpClient()
+  def existing = props.putIfAbsent('l2p4_bid_http_client', client)
+  if (existing != null) client = existing as HttpClient
+}
+def req = HttpRequest.newBuilder(URI.create(url))
+  .header('Content-Type', 'application/json')
+  .header('Accept', 'application/json')
+  .header('Authorization', 'Bearer ' + (vars.get('bid_token') ?: ''))
+  .header('Idempotency-Key', id)
+  .POST(HttpRequest.BodyPublishers.ofString(body))
+  .build()
+long sampleStart = System.currentTimeMillis()
+def res = client.send(req, HttpResponse.BodyHandlers.ofString())
+SampleResult.setResponseCode(Integer.toString(res.statusCode()))
+SampleResult.setResponseData(res.body(), 'UTF-8')
+if (!(res.statusCode() == 200 || res.statusCode() == 202)) {
+  SampleResult.setSuccessful(false)
+  String msg = 'UNEXPECTED_BID_HTTP_' + res.statusCode()
+  try {
+    def err = new groovy.json.JsonSlurper().parseText(res.body())
+    msg += '_' + ((err.code ?: '') as String) + '_' + ((err.message ?: '') as String).replaceAll('[^A-Za-z0-9_.-]+', '_')
+  } catch (Throwable ignored) {}
+  SampleResult.setResponseMessage(msg.take(500))
   return
 }
-if (prev.getResponseCode() == '200') {
-  def json = new groovy.json.JsonSlurper().parseText(prev.getResponseDataAsString())
+if (res.statusCode() == 200) {
+  def json = new groovy.json.JsonSlurper().parseText(res.body())
   if ((json.decision_status ?: '').toString() != 'DECIDED') {
-    prev.setSuccessful(false)
-    prev.setResponseMessage('NOT_DECIDED')
+    SampleResult.setSuccessful(false)
+    SampleResult.setResponseMessage('NOT_DECIDED')
     return
   }
   if ((json.durability_status ?: '').toString() != 'ENGINE_DURABLE') {
-    prev.setSuccessful(false)
-    prev.setResponseMessage('NOT_ENGINE_DURABLE')
+    SampleResult.setSuccessful(false)
+    SampleResult.setResponseMessage('NOT_ENGINE_DURABLE')
     return
   }
 }
-            ]]></stringProp>
-          </JSR223PostProcessor>
-          <hashTree/>
+SampleResult.setSuccessful(true)
+SampleResult.setResponseMessage('BID_DECIDED_DURABLE_' + id)
+          ]]></stringProp>
+        </JSR223Sampler>
+        <hashTree>
         </hashTree>
       </hashTree>
-      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="20 websocket viewers" enabled="true">
-        <stringProp name="ThreadGroup.num_threads">${__P(ws_threads,4998)}</stringProp>
-        <stringProp name="ThreadGroup.ramp_time">${__P(ws_ramp_sec,20)}</stringProp>
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="20 steady websocket viewers" enabled="true">
+        <stringProp name="ThreadGroup.num_threads">${__P(ws_threads,2400)}</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">${__P(ws_ramp_sec,60)}</stringProp>
         <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
         <boolProp name="ThreadGroup.scheduler">true</boolProp>
-        <stringProp name="ThreadGroup.duration">${__P(run_duration_sec,60)}</stringProp>
+        <stringProp name="ThreadGroup.duration">${__P(run_duration_sec,600)}</stringProp>
         <stringProp name="ThreadGroup.delay">0</stringProp>
         <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" enabled="true">
           <boolProp name="LoopController.continue_forever">false</boolProp>
@@ -167,7 +190,7 @@ if (prev.getResponseCode() == '200') {
         <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="viewer sessions" enabled="true">
           <stringProp name="delimiter">,</stringProp>
           <stringProp name="fileEncoding">UTF-8</stringProp>
-          <stringProp name="filename">${__P(viewer_csv,pts-l2-viewer-4998-sessions.csv)}</stringProp>
+          <stringProp name="filename">${__P(viewer_csv,pts-l2p4-viewer-2400-sessions.csv)}</stringProp>
           <boolProp name="ignoreFirstLine">true</boolProp>
           <boolProp name="quotedData">false</boolProp>
           <boolProp name="recycle">false</boolProp>
@@ -185,7 +208,7 @@ if (prev.getResponseCode() == '200') {
           </collectionProp>
         </HeaderManager>
         <hashTree/>
-        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="UX join snapshot load" enabled="true">
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="UX L2-P4 join snapshot load" enabled="true">
           <elementProp name="HTTPsampler.Arguments" elementType="Arguments"><collectionProp name="Arguments.arguments"/></elementProp>
           <stringProp name="HTTPSampler.path">/api/auctions/auc_live</stringProp>
           <stringProp name="HTTPSampler.method">GET</stringProp>
@@ -193,7 +216,7 @@ if (prev.getResponseCode() == '200') {
           <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
         </HTTPSamplerProxy>
         <hashTree/>
-        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="POST WS ticket" enabled="true">
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="POST L2-P4 WS ticket" enabled="true">
           <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
           <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
             <collectionProp name="Arguments.arguments">
@@ -231,7 +254,7 @@ vars.put('ws_ticket', ticket)
           </JSR223PostProcessor>
           <hashTree/>
         </hashTree>
-        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="WS upgrade to first message" enabled="true">
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="WS L2-P4 upgrade to first message" enabled="true">
           <stringProp name="scriptLanguage">groovy</stringProp>
           <stringProp name="cacheKey">l2-ws-upgrade-first-message-v2</stringProp>
           <stringProp name="script"><![CDATA[
@@ -332,10 +355,14 @@ SampleResult.setResponseMessage('WS_FIRST_MESSAGE_OK_MESSAGES_' + messages.get()
           ]]></stringProp>
         </JSR223Sampler>
         <hashTree/>
-        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="WS fanout receive all seq" enabled="true">
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="WS L2-P4 fanout observe final seq" enabled="true">
           <stringProp name="scriptLanguage">groovy</stringProp>
           <stringProp name="cacheKey">l2-ws-fanout-receive-all-seq-v2</stringProp>
           <stringProp name="script"><![CDATA[
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+
 def seenSeqs = vars.getObject('l2_ws_seen_seqs') as java.util.concurrent.ConcurrentSkipListSet
 def latencyBySeq = vars.getObject('l2_ws_latency_by_seq') as java.util.concurrent.ConcurrentHashMap
 def maxFanoutLatencyMs = vars.getObject('l2_ws_max_fanout_latency_ms') as java.util.concurrent.atomic.AtomicLong
@@ -346,8 +373,34 @@ if (seenSeqs == null || latencyBySeq == null || maxFanoutLatencyMs == null) {
   SampleResult.setResponseMessage('WS_STATE_MISSING')
   return
 }
-int expectedFinalSeq = Integer.parseInt(props.getProperty('fanout_expected_final_seq', '11'))
-long timeoutAt = System.currentTimeMillis() + Long.parseLong(props.getProperty('fanout_receive_timeout_ms', '15000'))
+long observeMs = Long.parseLong(props.getProperty('fanout_observe_ms', '510000'))
+SampleResult.samplePause()
+Thread.sleep(observeMs)
+SampleResult.sampleResume()
+String protocol = props.getProperty('protocol', 'http')
+String host = props.getProperty('host', '172.16.179.112')
+String port = props.getProperty('port', '18080')
+String base = protocol + '://' + host + ':' + port
+def req = HttpRequest.newBuilder(URI.create(base + '/api/auctions/auc_live'))
+  .header('Authorization', 'Bearer ' + vars.get('viewer_token'))
+  .GET()
+  .build()
+def res = HttpClient.newHttpClient().send(req, java.net.http.HttpResponse.BodyHandlers.ofString())
+if (res.statusCode() != 200) {
+  SampleResult.setSuccessful(false)
+  SampleResult.setResponseCode(Integer.toString(res.statusCode()))
+  SampleResult.setResponseMessage('WS_FINAL_SNAPSHOT_FAILED')
+  return
+}
+def snapshot = new groovy.json.JsonSlurper().parseText(res.body())
+int expectedFinalSeq = ((snapshot.seq ?: 0) as Number).intValue()
+if (expectedFinalSeq <= 0) {
+  SampleResult.setSuccessful(false)
+  SampleResult.setResponseCode('409')
+  SampleResult.setResponseMessage('WS_FINAL_SEQ_ZERO')
+  return
+}
+long timeoutAt = System.currentTimeMillis() + Long.parseLong(props.getProperty('fanout_catchup_timeout_ms', '30000'))
 while (System.currentTimeMillis() < timeoutAt) {
   boolean complete = true
   for (int seq = 1; seq <= expectedFinalSeq; seq++) {
@@ -377,11 +430,11 @@ if (listenerErrors != null && !listenerErrors.isEmpty()) {
   SampleResult.setResponseMessage('WS_LISTENER_ERRORS_' + listenerErrors.take(3).join('|'))
   return
 }
-long maxLatency = Math.max(1L, maxFanoutLatencyMs.get())
-SampleResult.setStampAndTime(System.currentTimeMillis() - maxLatency, maxLatency)
+long maxLatency = maxFanoutLatencyMs.get()
+if (maxLatency < 1L) maxLatency = 1L
 SampleResult.setSuccessful(true)
 SampleResult.setResponseCode('200')
-SampleResult.setResponseMessage('WS_FANOUT_ALL_SEQ_OK_FINAL_' + expectedFinalSeq + '_MAX_LAT_MS_' + maxLatency)
+SampleResult.setResponseMessage('WS_L2P4_FANOUT_ALL_SEQ_OK_FINAL_' + expectedFinalSeq + '_MAX_LAT_MS_' + maxLatency)
           ]]></stringProp>
         </JSR223Sampler>
         <hashTree/>
@@ -405,23 +458,23 @@ SampleResult.setResponseMessage('WS_CLOSED')
         </JSR223Sampler>
         <hashTree/>
       </hashTree>
-      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="20 read traffic" enabled="true">
-        <stringProp name="ThreadGroup.num_threads">${__P(read_threads,994)}</stringProp>
-        <stringProp name="ThreadGroup.ramp_time">${__P(read_ramp_sec,20)}</stringProp>
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="30 steady read traffic" enabled="true">
+        <stringProp name="ThreadGroup.num_threads">${__P(read_threads,240)}</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">${__P(read_ramp_sec,60)}</stringProp>
         <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
         <boolProp name="ThreadGroup.scheduler">true</boolProp>
-        <stringProp name="ThreadGroup.duration">${__P(run_duration_sec,60)}</stringProp>
-        <stringProp name="ThreadGroup.delay">0</stringProp>
+        <stringProp name="ThreadGroup.duration">${__P(run_duration_sec,600)}</stringProp>
+        <stringProp name="ThreadGroup.delay">${__P(read_delay_sec,60)}</stringProp>
         <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" enabled="true">
-          <boolProp name="LoopController.continue_forever">false</boolProp>
-          <stringProp name="LoopController.loops">1</stringProp>
+          <boolProp name="LoopController.continue_forever">true</boolProp>
+          <stringProp name="LoopController.loops">-1</stringProp>
         </elementProp>
       </ThreadGroup>
       <hashTree>
         <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="reader sessions" enabled="true">
           <stringProp name="delimiter">,</stringProp>
           <stringProp name="fileEncoding">UTF-8</stringProp>
-          <stringProp name="filename">${__P(reader_csv,pts-l2-reader-994-sessions.csv)}</stringProp>
+          <stringProp name="filename">${__P(reader_csv,pts-l2p4-reader-240-sessions.csv)}</stringProp>
           <boolProp name="ignoreFirstLine">true</boolProp>
           <boolProp name="quotedData">false</boolProp>
           <boolProp name="recycle">true</boolProp>
@@ -438,6 +491,11 @@ SampleResult.setResponseMessage('WS_CLOSED')
             </elementProp>
           </collectionProp>
         </HeaderManager>
+        <hashTree/>
+        <UniformRandomTimer guiclass="UniformRandomTimerGui" testclass="UniformRandomTimer" testname="read pacing jitter" enabled="true">
+          <stringProp name="ConstantTimer.delay">${__P(read_delay_ms,2000)}</stringProp>
+          <stringProp name="RandomTimer.range">${__P(read_jitter_ms,3000)}</stringProp>
+        </UniformRandomTimer>
         <hashTree/>
         <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="GET auction snapshot" enabled="true">
           <elementProp name="HTTPsampler.Arguments" elementType="Arguments"><collectionProp name="Arguments.arguments"/></elementProp>

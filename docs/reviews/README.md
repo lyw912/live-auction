@@ -37,6 +37,7 @@ authority. For current bid-path, performance, and PTS-1B claims, read:
 | L4b Kafka judge review | `pts-l4b-kafka-ledger-judge-review-2026-05-29.md` | current-adjacent pre-fix review; not PTS-1B success evidence |
 | PTS-1B independent TikTok judge review | `pts1b-independent-tiktok-judge-review-2026-05-31.md` | current-adjacent hostile review focused on Redis/Kafka/PG hot-path correctness and PTS-1B performance claims; not PTS-1B success evidence |
 | PTS report `HA5YX7ZG` review | `pts-report-HA5YX7ZG-review-2026-05-31.md` | `CURRENT_FAILING`; PTS sent 1000 HTTP 202 samples, but only 300 decisions were terminally persisted. Root cause follow-up found settlement refresh rewound Redis live `engine_seq`, causing duplicate Kafka ledger sequences and 49 settlement conflicts |
+| PTS report `5D92X7QG` review | `pts-report-5D92X7QG-review-2026-06-01.md` | `CURRENT_FAILING` for strict client p99 because sampling-log p99 is 64ms > 50ms; correctness and server-core hot-path evidence pass, and comparison with `UQ69X7RG`/`IV68X7KG` shows no L1-F regression |
 
 ## Red Flags
 

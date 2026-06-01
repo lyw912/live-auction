@@ -376,6 +376,7 @@ func (r *Relay) publish(ctx context.Context, event Event) error {
 		"payload":              json.RawMessage(event.Payload),
 		"payload_sha256":       event.PayloadSHA256,
 		"outbox_id":            event.OutboxID,
+		"published_at_ms":      time.Now().UTC().UnixMilli(),
 	}
 	data, err := json.Marshal(envelope)
 	if err != nil {
@@ -888,10 +889,17 @@ func (r *Relay) processOneSignal(ctx context.Context) (bool, error) {
 		SELECT id, signal_type, target_type, target_id
 		FROM system_control_signals
 		WHERE status = 'PENDING'
+		  AND signal_type = ANY($1)
+		  AND (locked_until IS NULL OR locked_until < now())
 		ORDER BY created_at, id
 		LIMIT 1
 		FOR UPDATE SKIP LOCKED
-	`).Scan(&id, &signalType, &targetType, &targetID)
+	`, []string{
+		SignalForceSnapshotRebuild,
+		SignalRetryDeadOutbox,
+		SignalPauseRelayShard,
+		SignalResumeRelayShard,
+	}).Scan(&id, &signalType, &targetType, &targetID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}

@@ -59,11 +59,13 @@ type KafkaLedgerConfig struct {
 }
 
 type KafkaLedger struct {
-	writer   *kafka.Writer
-	dlq      *kafka.Writer
-	reader   *kafka.Reader
-	topic    string
-	dlqTopic string
+	writer      *kafka.Writer
+	dlq         *kafka.Writer
+	reader      *kafka.Reader
+	topic       string
+	dlqTopic    string
+	mu          sync.Mutex
+	uncommitted *LedgerMessage
 }
 
 func NewKafkaLedger(cfg KafkaLedgerConfig) (*KafkaLedger, error) {
@@ -229,29 +231,51 @@ func (l *KafkaLedger) Fetch(ctx context.Context) (LedgerMessage, error) {
 	if l == nil || l.reader == nil {
 		return LedgerMessage{}, errors.New("kafka bid ledger reader is unavailable")
 	}
+	l.mu.Lock()
+	if l.uncommitted != nil {
+		msg := *l.uncommitted
+		l.mu.Unlock()
+		return msg, nil
+	}
+	l.mu.Unlock()
 	msg, err := l.reader.FetchMessage(ctx)
 	if err != nil {
 		return LedgerMessage{}, err
 	}
-	return LedgerMessage{
+	ledgerMessage := LedgerMessage{
 		ID:        kafkaLedgerID(msg.Topic, msg.Partition, msg.Offset),
 		Topic:     msg.Topic,
 		Partition: msg.Partition,
 		Offset:    msg.Offset,
 		Key:       string(msg.Key),
 		Value:     msg.Value,
-	}, nil
+	}
+	l.mu.Lock()
+	l.uncommitted = &ledgerMessage
+	l.mu.Unlock()
+	return ledgerMessage, nil
 }
 
 func (l *KafkaLedger) Commit(ctx context.Context, message LedgerMessage) error {
 	if l == nil || l.reader == nil {
 		return nil
 	}
-	return l.reader.CommitMessages(ctx, kafka.Message{
+	if err := l.reader.CommitMessages(ctx, kafka.Message{
 		Topic:     message.Topic,
 		Partition: message.Partition,
 		Offset:    message.Offset,
-	})
+	}); err != nil {
+		return err
+	}
+	l.mu.Lock()
+	if l.uncommitted != nil &&
+		l.uncommitted.Topic == message.Topic &&
+		l.uncommitted.Partition == message.Partition &&
+		l.uncommitted.Offset == message.Offset {
+		l.uncommitted = nil
+	}
+	l.mu.Unlock()
+	return nil
 }
 
 func (l *KafkaLedger) WriteDLQ(ctx context.Context, message LedgerMessage, eventErr error) error {
