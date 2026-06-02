@@ -49,6 +49,12 @@ type BidLedger interface {
 	Close() error
 }
 
+type BatchBidLedger interface {
+	BidLedger
+	FetchBatch(ctx context.Context, limit int) ([]LedgerMessage, error)
+	CommitBatch(ctx context.Context, messages []LedgerMessage) error
+}
+
 type KafkaLedgerConfig struct {
 	Brokers                []string
 	BidTopic               string
@@ -65,7 +71,7 @@ type KafkaLedger struct {
 	topic       string
 	dlqTopic    string
 	mu          sync.Mutex
-	uncommitted *LedgerMessage
+	uncommitted []LedgerMessage
 }
 
 func NewKafkaLedger(cfg KafkaLedgerConfig) (*KafkaLedger, error) {
@@ -228,21 +234,96 @@ func (l *KafkaLedger) AppendBatch(ctx context.Context, results []engineResult) (
 }
 
 func (l *KafkaLedger) Fetch(ctx context.Context) (LedgerMessage, error) {
-	if l == nil || l.reader == nil {
-		return LedgerMessage{}, errors.New("kafka bid ledger reader is unavailable")
-	}
-	l.mu.Lock()
-	if l.uncommitted != nil {
-		msg := *l.uncommitted
-		l.mu.Unlock()
-		return msg, nil
-	}
-	l.mu.Unlock()
-	msg, err := l.reader.FetchMessage(ctx)
+	messages, err := l.FetchBatch(ctx, 1)
 	if err != nil {
 		return LedgerMessage{}, err
 	}
-	ledgerMessage := LedgerMessage{
+	if len(messages) == 0 {
+		return LedgerMessage{}, context.Canceled
+	}
+	return messages[0], nil
+}
+
+func (l *KafkaLedger) FetchBatch(ctx context.Context, limit int) ([]LedgerMessage, error) {
+	if l == nil || l.reader == nil {
+		return nil, errors.New("kafka bid ledger reader is unavailable")
+	}
+	if limit <= 0 {
+		limit = 1
+	}
+	l.mu.Lock()
+	if len(l.uncommitted) > 0 {
+		messages := append([]LedgerMessage(nil), l.uncommitted...)
+		l.mu.Unlock()
+		if len(messages) > limit {
+			messages = messages[:limit]
+		}
+		return messages, nil
+	}
+	l.mu.Unlock()
+
+	msg, err := l.reader.FetchMessage(ctx)
+	if err != nil {
+		return nil, err
+	}
+	messages := []LedgerMessage{kafkaMessageToLedgerMessage(msg)}
+	for len(messages) < limit {
+		nextCtx, cancel := context.WithTimeout(ctx, 1*time.Millisecond)
+		next, err := l.reader.FetchMessage(nextCtx)
+		cancel()
+		if err != nil {
+			break
+		}
+		messages = append(messages, kafkaMessageToLedgerMessage(next))
+	}
+	l.mu.Lock()
+	l.uncommitted = append([]LedgerMessage(nil), messages...)
+	l.mu.Unlock()
+	return messages, nil
+}
+
+func (l *KafkaLedger) Commit(ctx context.Context, message LedgerMessage) error {
+	return l.CommitBatch(ctx, []LedgerMessage{message})
+}
+
+func (l *KafkaLedger) CommitBatch(ctx context.Context, messages []LedgerMessage) error {
+	if l == nil || l.reader == nil {
+		return nil
+	}
+	if len(messages) == 0 {
+		return nil
+	}
+	kafkaMessages := make([]kafka.Message, 0, len(messages))
+	for _, message := range messages {
+		kafkaMessages = append(kafkaMessages, kafka.Message{
+			Topic:     message.Topic,
+			Partition: message.Partition,
+			Offset:    message.Offset,
+		})
+	}
+	if err := l.reader.CommitMessages(ctx, kafkaMessages...); err != nil {
+		return err
+	}
+	l.mu.Lock()
+	if len(l.uncommitted) > 0 {
+		committed := make(map[string]struct{}, len(messages))
+		for _, message := range messages {
+			committed[ledgerCommitKey(message)] = struct{}{}
+		}
+		remaining := l.uncommitted[:0]
+		for _, message := range l.uncommitted {
+			if _, ok := committed[ledgerCommitKey(message)]; !ok {
+				remaining = append(remaining, message)
+			}
+		}
+		l.uncommitted = remaining
+	}
+	l.mu.Unlock()
+	return nil
+}
+
+func kafkaMessageToLedgerMessage(msg kafka.Message) LedgerMessage {
+	return LedgerMessage{
 		ID:        kafkaLedgerID(msg.Topic, msg.Partition, msg.Offset),
 		Topic:     msg.Topic,
 		Partition: msg.Partition,
@@ -250,32 +331,10 @@ func (l *KafkaLedger) Fetch(ctx context.Context) (LedgerMessage, error) {
 		Key:       string(msg.Key),
 		Value:     msg.Value,
 	}
-	l.mu.Lock()
-	l.uncommitted = &ledgerMessage
-	l.mu.Unlock()
-	return ledgerMessage, nil
 }
 
-func (l *KafkaLedger) Commit(ctx context.Context, message LedgerMessage) error {
-	if l == nil || l.reader == nil {
-		return nil
-	}
-	if err := l.reader.CommitMessages(ctx, kafka.Message{
-		Topic:     message.Topic,
-		Partition: message.Partition,
-		Offset:    message.Offset,
-	}); err != nil {
-		return err
-	}
-	l.mu.Lock()
-	if l.uncommitted != nil &&
-		l.uncommitted.Topic == message.Topic &&
-		l.uncommitted.Partition == message.Partition &&
-		l.uncommitted.Offset == message.Offset {
-		l.uncommitted = nil
-	}
-	l.mu.Unlock()
-	return nil
+func ledgerCommitKey(message LedgerMessage) string {
+	return message.Topic + ":" + strconv.Itoa(message.Partition) + ":" + strconv.FormatInt(message.Offset, 10)
 }
 
 func (l *KafkaLedger) WriteDLQ(ctx context.Context, message LedgerMessage, eventErr error) error {
@@ -382,27 +441,56 @@ func (l *MemoryLedger) AppendBatch(_ context.Context, results []engineResult) ([
 }
 
 func (l *MemoryLedger) Fetch(ctx context.Context) (LedgerMessage, error) {
+	messages, err := l.FetchBatch(ctx, 1)
+	if err != nil {
+		return LedgerMessage{}, err
+	}
+	if len(messages) == 0 {
+		return LedgerMessage{}, context.Canceled
+	}
+	return messages[0], nil
+}
+
+func (l *MemoryLedger) FetchBatch(ctx context.Context, limit int) ([]LedgerMessage, error) {
+	if limit <= 0 {
+		limit = 1
+	}
 	for {
 		l.mu.Lock()
 		if l.next < len(l.messages) {
-			msg := l.messages[l.next]
+			end := l.next + limit
+			if end > len(l.messages) {
+				end = len(l.messages)
+			}
+			messages := append([]LedgerMessage(nil), l.messages[l.next:end]...)
 			l.mu.Unlock()
-			return msg, nil
+			return messages, nil
 		}
 		l.mu.Unlock()
 		select {
 		case <-ctx.Done():
-			return LedgerMessage{}, ctx.Err()
+			return nil, ctx.Err()
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
 }
 
 func (l *MemoryLedger) Commit(_ context.Context, _ LedgerMessage) error {
+	return l.CommitBatch(context.Background(), []LedgerMessage{{}})
+}
+
+func (l *MemoryLedger) CommitBatch(_ context.Context, messages []LedgerMessage) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.next < len(l.messages) {
-		l.next++
+	advance := len(messages)
+	if advance <= 0 {
+		return nil
+	}
+	if l.next+advance > len(l.messages) {
+		advance = len(l.messages) - l.next
+	}
+	if advance > 0 {
+		l.next += advance
 	}
 	return nil
 }

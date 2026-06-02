@@ -52,6 +52,8 @@ docs/perf/pts/server.pid
 docs/perf/pts/pdf-pages/*.ppm
 docs/perf/pts/evidence/after-*/
 docs/perf/pts/evidence/before-*/
+docs/perf/pts/evidence/incoming/*
+!docs/perf/pts/evidence/incoming/.gitkeep
 docs/perf/pts/evidence/archive/**
 !docs/perf/pts/evidence/archive/
 docs/perf/pts/evidence/**/pts-sampling-logs/

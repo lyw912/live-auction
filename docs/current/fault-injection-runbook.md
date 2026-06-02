@@ -12,7 +12,8 @@ Current hot bid boundary:
 
 ```text
 Redis live decision state
--> Kafka durable decision WAL/fence
+-> Redis Stream/idempotency replay record (`ENGINE_DURABLE` response boundary)
+-> Kafka relay/WAL/fence
 -> PostgreSQL settlement/audit/order truth
 -> outbox/realtime projection
 -> reconciler verifies and fails closed on uncertainty
@@ -42,11 +43,23 @@ This table is the fault readiness checklist. The layered execution plan is in
 | Fault | User contract | Required system behavior | Pass evidence |
 |---|---|---|---|
 | Redis process restart, data retained | no wrong accept; bounded pause/reconcile if needed | reconnect, reload/check hot state, verify against Kafka/PG, resume only when safe | no wrong winner, no missing accepted decision, verifier pass |
-| Redis data loss / `FLUSHALL` | fail closed before accepting unsafe bids | pause auction or reject with explicit paused/reconciling state, rebuild from Kafka/PG, verify before resume | RTO measured; no bid accepted against unverified state |
-| Kafka append timeout/broker restart | no final success without durable fence | return explicit pending/paused/reconciling state or fail closed; no silent Redis-only success | pending drains or auction pauses; DLQ/lag evidence clean after recovery |
-| settlement worker crash/restart | accepted fenced decisions eventually settle once | Kafka offsets/engine_seq remain contiguous; idempotent settlement resumes | no duplicate public seq/order; verifier pass |
+| Redis data loss / `FLUSHALL` | fail closed before accepting unsafe bids | pause auction or reject with explicit paused/reconciling state, rebuild from checkpoint/Kafka/PG, verify before resume | RTO measured; no bid accepted against unverified state |
+| Kafka relay timeout/broker restart | no `ENGINE_DURABLE` decision is lost; relay lag is visible | Redis Stream retains decisions; pending count/lag/DLQ visible; relay drains after restart or auction pauses/reconciles | Redis pending drains, Kafka lag/DLQ clean, verifier pass |
+| settlement worker crash/restart | accepted engine decisions eventually settle once | Kafka offsets/engine_seq remain contiguous; idempotent settlement resumes | no duplicate public seq/order; verifier pass |
 | PostgreSQL latency/restart | no wrong settlement/order | hot engine may pause or expose pending; settlement catches up after PG returns | no stale epoch/seq writes; no unresolved settlement gap |
 | WebSocket reconnect storm during bids | clients converge to server truth | history/snapshot recovery returns current price/winner/status | no client-side winner/hammer; server timeline authoritative |
+
+## ENGINE_DURABLE Makes Fault Gates Stricter
+
+Because the HTTP hot path returns at `ENGINE_DURABLE`, Kafka and PostgreSQL are
+not allowed to be vague "eventual" promises. Every fault run must prove:
+
+- Redis AOF/no-eviction and Redis Stream retention protect decisions before relay;
+- Redis pending decisions are bounded and observable;
+- Kafka relay drains after recovery, or the auction stays paused/reconciling;
+- PostgreSQL settlement applies every relayed decision exactly once;
+- outbox/WebSocket projection catches up or reports a gap/recovery state;
+- reconciler detects mismatches and prevents dangerous bidding until safe.
 
 ## Redis Data Loss Is Not Automatically Safe
 
@@ -134,7 +147,8 @@ Classify as `CURRENT_FAILING` if any occurs:
 - any accepted decision is missing from Kafka/PG after recovery window;
 - any low reject lacks a decision-time basis;
 - Redis loss does not pause/reconcile before new accepts;
-- Kafka append uncertainty is hidden behind a normal success response;
+- Redis Stream/idempotency uncertainty is hidden behind a normal `ENGINE_*` response;
+- Kafka relay lag, DLQ, or pending Redis decisions remain unresolved after the recovery window;
 - settlement leaves unresolved gaps, DLQ, pending append, or engine pause;
 - user-visible state remains vague `409` / `PROCESSING_RETRY_LATER` at scale;
 - RTO is unmeasured.

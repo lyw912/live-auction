@@ -334,7 +334,7 @@ SampleResult.setResponseMessage('WS_FIRST_MESSAGE_OK_MESSAGES_' + messages.get()
         <hashTree/>
         <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="WS fanout receive all seq" enabled="true">
           <stringProp name="scriptLanguage">groovy</stringProp>
-          <stringProp name="cacheKey">l2-ws-fanout-receive-all-seq-v2</stringProp>
+          <stringProp name="cacheKey">l2-ws-fanout-receive-all-seq-v3</stringProp>
           <stringProp name="script"><![CDATA[
 def seenSeqs = vars.getObject('l2_ws_seen_seqs') as java.util.concurrent.ConcurrentSkipListSet
 def latencyBySeq = vars.getObject('l2_ws_latency_by_seq') as java.util.concurrent.ConcurrentHashMap
@@ -346,6 +346,7 @@ if (seenSeqs == null || latencyBySeq == null || maxFanoutLatencyMs == null) {
   SampleResult.setResponseMessage('WS_STATE_MISSING')
   return
 }
+SampleResult.samplePause()
 int expectedFinalSeq = Integer.parseInt(props.getProperty('fanout_expected_final_seq', '11'))
 long timeoutAt = System.currentTimeMillis() + Long.parseLong(props.getProperty('fanout_receive_timeout_ms', '15000'))
 while (System.currentTimeMillis() < timeoutAt) {
@@ -366,19 +367,22 @@ for (int seq = 1; seq <= expectedFinalSeq; seq++) {
   if (!latencyBySeq.containsKey(seq as Long)) missingLatency.add(seq)
 }
 if (!missing.isEmpty() || !missingLatency.isEmpty()) {
+  SampleResult.sampleResume()
   SampleResult.setSuccessful(false)
   SampleResult.setResponseCode('504')
   SampleResult.setResponseMessage('WS_FANOUT_MISSING_SEQ_' + missing.join('|') + '_MISSING_LATENCY_' + missingLatency.join('|'))
   return
 }
 if (listenerErrors != null && !listenerErrors.isEmpty()) {
+  SampleResult.sampleResume()
   SampleResult.setSuccessful(false)
   SampleResult.setResponseCode('500')
   SampleResult.setResponseMessage('WS_LISTENER_ERRORS_' + listenerErrors.take(3).join('|'))
   return
 }
 long maxLatency = Math.max(1L, maxFanoutLatencyMs.get())
-SampleResult.setStampAndTime(System.currentTimeMillis() - maxLatency, maxLatency)
+SampleResult.sampleResume()
+Thread.sleep(maxLatency)
 SampleResult.setSuccessful(true)
 SampleResult.setResponseCode('200')
 SampleResult.setResponseMessage('WS_FANOUT_ALL_SEQ_OK_FINAL_' + expectedFinalSeq + '_MAX_LAT_MS_' + maxLatency)

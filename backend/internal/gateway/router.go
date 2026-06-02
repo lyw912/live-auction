@@ -65,22 +65,23 @@ func NewRouterWithRealtimeAndLedger(cfg config.Config, deps *storage.Dependencie
 	bidLaneCfg := normalizeBidLaneConfig(cfg)
 	cfg = bidLaneCfg
 	observability.SetAdmissionConfig(observability.AdmissionConfig{
-		Enabled:               cfg.AdmissionEnabled,
-		BidUserLimit:          cfg.BidUserLimitPerSecond,
-		BidIPLimit:            cfg.BidIPLimitPerSecond,
-		BidAuctionLimit:       cfg.BidAuctionLimitPerSecond,
-		BidAuctionMaxInFlight: cfg.BidAuctionMaxInFlight,
-		BidLaneWorkers:        bidLaneCfg.BidLaneWorkers,
-		BidLaneQueueSize:      bidLaneCfg.BidLaneQueueSize,
-		BidLaneQueueTimeout:   bidLaneCfg.BidLaneQueueTimeout,
-		WSTicketMaxInFlight:   cfg.WSTicketMaxInFlight,
-		WSConnectMaxInFlight:  cfg.WSConnectMaxInFlight,
-		WSQueueMessages:       cfg.WSQueueMessages,
-		WSQueueBytes:          cfg.WSQueueBytes,
-		WSRecoveryMaxEvents:   cfg.WSRecoveryMaxEvents,
-		WSSnapshotRebuildMax:  cfg.WSSnapshotRebuildMax,
-		WSHeartbeatInterval:   cfg.WSHeartbeatInterval,
-		WSHeartbeatTimeout:    cfg.WSHeartbeatTimeout,
+		Enabled:                      cfg.AdmissionEnabled,
+		BidUserLimit:                 cfg.BidUserLimitPerSecond,
+		BidIPLimit:                   cfg.BidIPLimitPerSecond,
+		BidAuctionLimit:              cfg.BidAuctionLimitPerSecond,
+		BidAuctionMaxInFlight:        cfg.BidAuctionMaxInFlight,
+		BidLaneWorkers:               bidLaneCfg.BidLaneWorkers,
+		BidLaneQueueSize:             bidLaneCfg.BidLaneQueueSize,
+		BidLaneQueueTimeout:          bidLaneCfg.BidLaneQueueTimeout,
+		WSTicketMaxInFlight:          cfg.WSTicketMaxInFlight,
+		WSConnectMaxInFlight:         cfg.WSConnectMaxInFlight,
+		WSQueueMessages:              cfg.WSQueueMessages,
+		WSQueueBytes:                 cfg.WSQueueBytes,
+		WSRecoveryMaxEvents:          cfg.WSRecoveryMaxEvents,
+		WSSnapshotRebuildMax:         cfg.WSSnapshotRebuildMax,
+		WSHeartbeatInterval:          cfg.WSHeartbeatInterval,
+		WSHeartbeatTimeout:           cfg.WSHeartbeatTimeout,
+		RedisEngineSettlementWorkers: cfg.RedisEngineSettlementWorkers,
 	})
 
 	r := chi.NewRouter()
@@ -106,6 +107,7 @@ func NewRouterWithRealtimeAndLedger(cfg config.Config, deps *storage.Dependencie
 		ACL:    newRoomACL(deps.Postgres, deps.Redis),
 		Bids:   newBidAdmission(cfg, deps.Postgres, deps.Redis),
 		Lanes:  newBidLaneManager(cfg, deps.Postgres),
+		Guard:  newRedisGuard(cfg, deps.Postgres, deps.Redis),
 		Engine: engine,
 	}
 	authHandler := AuthHandler{Config: cfg, DB: deps.Postgres, Redis: deps.Redis}

@@ -47,6 +47,7 @@ BASE_URL=http://127.0.0.1:18080 bash tests/pts/preflight-l4b-pts-guards.sh befor
 - [ ] Preflight output exists under `docs/perf/pts/evidence/incoming/before-<run-label>/`.
 - [ ] Kafka topic/fence checks pass.
 - [ ] Redis AOF/no-eviction/pending checks are acceptable for the scoped run.
+- [ ] Redis Stream decision log and idempotency replay boundary are healthy; M1 final decisions are expected to be `ENGINE_DURABLE`.
 - [ ] Settlement `engine_seq` gates pass.
 - [ ] Admission metric confirms disabled for downstream pressure.
 
@@ -85,6 +86,7 @@ FINAL_WAIT_SECONDS=0 bash tests/pts/verify-l4b-pts-correctness.sh <report-id-or-
 - [ ] Sampling logs fetched if sampling was enabled.
 - [ ] `ENGINE_*` distribution extracted.
 - [ ] HTTP distribution extracted.
+- [ ] Durability distribution extracted; final hot-path decisions are `ENGINE_DURABLE`.
 - [ ] Settlement status distribution extracted.
 - [ ] Kafka lag/DLQ status recorded.
 - [ ] Redis pending/paused/reconciling status recorded.
@@ -94,6 +96,7 @@ FINAL_WAIT_SECONDS=0 bash tests/pts/verify-l4b-pts-correctness.sh <report-id-or-
 
 - [ ] 1000 intended unique bids classified.
 - [ ] User-visible `ENGINE_*` p99 <= 50ms.
+- [ ] Final decision responses use `durability_status=ENGINE_DURABLE`.
 - [ ] `202` / `PROCESSING_RETRY_LATER` RTT is not used as the PTS-1B p99.
 - [ ] `pending_ratio` and `timeout_ratio` are reported; dominant pending UX
       fails even if HTTP status is 2xx.

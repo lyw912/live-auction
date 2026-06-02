@@ -28,6 +28,8 @@ A run cannot be called current PTS-1B success unless it has all of these:
 - PTS report details or full sampler export;
 - server evidence under `docs/perf/pts/evidence/incoming/<label>/` before review, then under `current/` or `archive/*/` after classification;
 - `ENGINE_*` distribution, HTTP status distribution, durability status, and settlement status;
+- normal final hot-path decisions use `durability_status=ENGINE_DURABLE`; Kafka ack is not required on the HTTP response path;
+- Redis Stream/pending state, Kafka relay lag/DLQ, PostgreSQL settlement coverage, and outbox backlog after convergence;
 - Redis Engine recovery evidence when claiming fault readiness, including `resume_redis_engine` signal result `rto_ms`, preflight/postflight status, checkpoint hash, and Redis Engine diagnostics `last_recovery_rto_ms`;
 - correctness verifier output from `tests/pts/verify-l4b-pts-correctness.sh`;
 - Redis/Kafka/PostgreSQL health evidence;
@@ -41,6 +43,7 @@ New PTS report reviews must use `docs/current/pts-run-review-template.md`.
 All must hold:
 
 - user-visible `ENGINE_*` decision p99 <= 50ms for PTS-1B;
+- final `ENGINE_*` decision responses are `ENGINE_DURABLE`;
 - 1000 intended unique bids are classified;
 - final winner is the highest valid amount;
 - every low reject is justified against decision-time current/required price;
@@ -51,6 +54,9 @@ All must hold:
 ## Historical Evidence Rules
 
 - A failed report can be valuable, but cite it as a failed report.
+- Do not retroactively reclassify a timeout failure as pass by changing the
+  target after the run. If the new target is 110s, rerun with a 110s timeout and
+  cite that evidence separately.
 - Do not combine "fast" from one architecture and "correct" from another.
 - Do not cite old `AUTHORITATIVE` labels in `docs/evidence/index.md` without checking `docs/archive/evidence-era-map.md`.
 - Do not bulk-read raw evidence directories. Use the manifest first, then open only the run needed for the current question.

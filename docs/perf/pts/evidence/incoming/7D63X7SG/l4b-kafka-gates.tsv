@@ -1,2 +1,0 @@
-P0	dlq_empty	PASS	Kafka DLQ must stay empty or be explained before release
-P1	kafka_consumer_group_lag_zero	PASS	Settlement consumer group lag should drain to zero after the chosen settle window

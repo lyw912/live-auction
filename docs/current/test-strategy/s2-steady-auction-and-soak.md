@@ -1,0 +1,181 @@
+# S2 — 正常竞价 / Steady Auction & Soak
+
+> Maps to: brief 挑战二 "毫秒级实时同步" + 规则(加价/自动延时); rubric 性能 + 稳定性.
+> Headline: **steady decision p99 ≤ 100 ms** at a sustained offered rate + **M4 no leak**.
+> Tool: **local k6 soak** for stability + **optional PTS JMeter S2 chart** when budget permits.
+> Source assets: `tests/load/s2-steady-soak.js` and `tests/pts/L2-protocol/pts-2p4-steady-interactive-auction.jmx`.
+
+## 1. The business moment
+
+Not the final-second crush — the *normal* minutes of a live auction. A few
+hundred to a few thousand people watch; a **minority actively bid**; the price
+climbs the increment ladder step by step; auto-extension fires when someone bids
+near the end. This must stay smooth for 10+ minutes with no latency drift and no
+resource leak. It is what proves the system is *stable*, not just *fast once*.
+
+## 2. The realistic bid model (and what to reject)
+
+> **Reject "80% of VUs bid every 2 s on the one auction."** On a single ascending
+> auction that is ~hundreds–thousands of writes/sec onto one key, ~all rejected —
+> a self-inflicted hot-key write storm, not realistic bidding. (Research: this is
+> an adversarial hotspot; it also self-throttles under stress = coordinated
+> omission.) That belongs in S1's burst, clearly labeled, not here.
+
+Defensible steady model:
+
+```
+viewers connected        : 2000–5000 (held; mostly read-only, drive fanout context)
+active bidder sessions   : 5–15% of viewers
+offered bid arrivals     : OPEN model, ramp 20/s → 60/s → 100/s   (intended raises, not re-bids)
+bid amounts              : escalate over time so a HEALTHY fraction accept and climb the ladder
+noise                    : include rejects (stale client_seen_seq), self-leading attempts
+accepted update rate     : measure it (≈ how fast the price legitimately climbs, e.g. 1–10/s)
+duration                 : 10 min (PTS chart) / 30–60 min (local soak)
+```
+
+The fanout pressure is driven by **accepted updates × subscribers**, not by
+rejected attempts. Report offered bids *and* accepted updates separately.
+
+## 3. Two runs, two tools (on purpose)
+
+### 3a. Local k6 soak (30–60 min, the leak gate — 0 VUM)
+k6 `ramping-arrival-rate` is the cleanest current open-model asset and costs
+nothing. Run it against the server; scrape server metrics via Prometheus →
+Grafana. This is the required S2 run.
+
+```javascript
+import http from 'k6/http'; import { check } from 'k6';
+export const options = {
+  scenarios: {
+    steady_bids: {
+      executor: 'ramping-arrival-rate',          // OPEN model
+      startRate: 20, timeUnit: '1s',
+      preAllocatedVUs: 50, maxVUs: 200,
+      stages: [
+        { target: 20,  duration: '10m' },
+        { target: 60,  duration: '10m' },
+        { target: 100, duration: '10m' },
+      ],
+    },
+  },
+  thresholds: { 'http_req_duration{sampler:bid-decision}': ['p(99)<100'], dropped_iterations: ['count<200'] },
+};
+export default function () {
+  const amt = ladderBase + Math.floor((Date.now()-t0)/climbMs)*increment;
+  const res = http.post(`${BASE}/api/auctions/auc_live/bids`,
+    JSON.stringify({ client_bid_id:`s2-${__VU}-${__ITER}`, idempotency_key:`s2-${__VU}-${__ITER}`,
+                     amount_cents: amt }), { headers: authHdr(__VU), tags:{ sampler:'bid-decision' } });
+  check(res, { 'final decision': r => { const j=r.json(); return j.durability_status==='ENGINE_DURABLE'
+                 && /ENGINE_(ACCEPTED|REJECTED|SOLD)/.test(j.result); } });
+}
+```
+> **Report `dropped_iterations`** alongside p99 — it is the explicit overload
+> signal that closed-loop tests hide. Zero (or near-zero) dropped iterations means
+> the offered rate was actually delivered.
+
+### 3b. Optional PTS JMeter chart (10 min, judge export)
+Use this only after the k6 soak is clean and when you need a polished PTS PDF.
+The current executable asset is `pts-2p4-steady-interactive-auction.jmx`; there
+is no separate native-HTTP PTS script in the current plan. Treat the JMX as S2's PTS chart, with the script's
+pacing and sampler exclusions preserved.
+
+```
+JMX: tests/pts/L2-protocol/pts-2p4-steady-interactive-auction.jmx
+Scale: 2400 WS + 360 active bidder + 240 reader VU
+Duration: 10 min
+Sampler: S2 steady bid decision p99, S2 fanout observe final seq
+Verifier: tests/pts/verify-l2p4-pts-evidence.sh
+```
+
+PTS config: JMeter pressure test, VU mode, max VU 3000, specified IPs 6,
+duration 10 min, loop count not specified (`是否指定循环=否`), sampling 1%.
+
+## 4. Auto-extension correctness (a rule the steady run must exercise)
+
+The brief requires 自动延时 (bid near close → extend 10–30 s). The steady run
+should drive bids into the extension window and assert: the auction end time
+advances, late accepts remain valid, and the *final* winner reflects the extended
+window. Add to the M3 verifier a check that `ends_at` moved and no bid accepted
+after the true (extended) end. This is correctness, reported as PASS/FAIL.
+
+## 5. Settlement Convergence And Payment Safety
+
+`ENGINE_DURABLE` is the user-visible decision boundary, not the accounting
+boundary. During the auction, settlement lag does not invalidate bid decisions:
+Redis hot state, `engine_seq`, and fanout carry the live experience. At落槌 and
+payment time, however, PostgreSQL settlement must be complete before order/payment
+is treated as final truth.
+
+Report S2 convergence as:
+
+```
+kafka_settlement_lag_peak
+converged_seconds = k6_end -> Kafka lag 0 + Redis pending 0 + PG settlements complete + outbox drained
+```
+
+Business interpretation for jewellery auctions:
+
+- During live bidding: bounded lag is acceptable if M1/M2 are healthy and
+  verifier later proves no loss.
+- At close/payment: do not issue payment links from incomplete PG truth. The
+  auction enters a short **SETTLING / confirming final result** state until
+  Kafka lag, Redis pending decisions, PG settlements, and outbox backlog reach
+  zero.
+- If convergence exceeds the business window (for example 60s local / 3-5min
+  operational payment buffer), alert and keep payment disabled; recovery may
+  replay Redis/Kafka state into PG, but must not guess the winner from stale PG.
+
+Do **not** make "stop accepting bids 30s before close" the default mitigation:
+it conflicts with soft-close and final-second bidding. The defensible fallback is
+post-close payment gating, not pre-close product degradation.
+
+Current S2 bottleneck evidence (local diagnostic, not a final PTS chart):
+
+- baseline `s2-stair-1000-20260602T184500`: 80,999 `ENGINE_DURABLE` decisions,
+  M1 p99 5.24ms, p99.9 20.03ms, dropped 0; 180s convergence failed with about
+  30k settlement lag.
+- batch-drain `s2-stair-1000-batchdrain-20260602T193000`: same 80,999 decisions,
+  M1 p99 5.79ms, p99.9 30.51ms, dropped 0; convergence PASS in 158s.
+- set-based rejected settlement + settlement log suppression
+  `s2-stair-1000-setbased-logsuppressed-100s-20260602T211311`: 70,999
+  decisions, HTTP p99 5.44ms, p99.9 32.21ms, dropped 0; 100s convergence gate
+  failed at 102s with Kafka lag 1371 and settlement_total 69774/70999; verifier
+  later passed after full drain.
+- direct-SETTLED rejected fast-path trial
+  `s2-stair-1000-directsettled-100s-20260602T212330`: rejected and reverted; it
+  worsened convergence (lag 32033 at 101s) and failed the 100s verifier because
+  settlement had not completed.
+
+Interpretation: the foreground decision path is healthy under the S2 local stair,
+but settlement convergence remains the limiting safety signal. The internal
+target is now **<=110s** for this 2-minute local stair; do not mark that PASS in
+the judge report until a run is executed with
+`S2_CONVERGENCE_TIMEOUT_SECONDS=110`.
+
+Detailed diagnosis and judge-facing answers:
+[s2-settlement-diagnosis-and-judge-defense.md](s2-settlement-diagnosis-and-judge-defense.md).
+
+## 6. Metric → chart / panel mapping
+
+| Claim | Source |
+|---|---|
+| steady decision p99 ≤ 100 ms | PTS `出价决策 bid-decision` p99 (RPS run) / k6 `p(99)` (soak) |
+| offered vs accepted rate | PTS TPS + server accepted count; k6 rate vs server `ENGINE_ACCEPTED/s` |
+| settlement convergence safe for payment | `s2-convergence-summary.env`; Kafka consumer lag; verifier gates `kafka_consumer_group_lag_zero`, `redis_pending_decisions_empty`, `outbox_drained` |
+| **M4 no leak** | Grafana: `process_resident_memory_bytes`, `go_memstats_heap_inuse_bytes` (post-GC floor), `go_goroutines`, `process_open_fds` — flat slope over the soak |
+| auto-extension correct | M3 verifier extension check |
+
+## 7. Pitfalls
+
+- **Using closed VU loop for the sustained claim.** Use RPS mode (PTS) /
+  arrival-rate (k6); otherwise overload hides and p99 is optimistic.
+- **Re-bid storm.** Active bidders should bid to *raise*, not re-fire below the
+  current price every 2 s; otherwise you recreate S1's hotspot and call it steady.
+- **Soak too short.** < 30 min rarely exposes a slow leak; watch the post-GC
+  floor, not the sawtooth peaks.
+- **Reading peaks instead of the floor for M4.** A rising *floor* is the leak; a
+  sawtooth that resets to a stable floor is healthy.
+- **No `pprof` baseline.** Snapshot heap at warm-up and diff at the end
+  (`go tool pprof -base`) to localize any growth.
+- **Calling M1 success "payment safe".** M1 proves the user saw a final engine
+  decision. Payment safety additionally requires settlement convergence.

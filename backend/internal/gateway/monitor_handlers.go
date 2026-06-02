@@ -437,6 +437,27 @@ func anomalyFilterQuery(r *http.Request) (string, []any) {
 }
 
 func (h MonitorHandler) Outbox(w http.ResponseWriter, r *http.Request) {
+	var args []any
+	var clauses []string
+	add := func(clause string, value string) {
+		if strings.TrimSpace(value) == "" {
+			return
+		}
+		args = append(args, strings.TrimSpace(value))
+		clauses = append(clauses, strings.ReplaceAll(clause, "?", "$"+strconv.Itoa(len(args))))
+	}
+	q := r.URL.Query()
+	add("e.auction_id = ?", q.Get("auction_id"))
+	add("e.aggregate_id = ?", q.Get("aggregate_id"))
+	add("e.event_type = ?", q.Get("event_type"))
+	add("d.status = ?", q.Get("status"))
+	whereSQL := ""
+	if len(clauses) > 0 {
+		whereSQL = "WHERE " + strings.Join(clauses, " AND ")
+	}
+	args = append(args, monitorLimit(r))
+	limitPlaceholder := "$" + strconv.Itoa(len(args))
+
 	rows, err := h.Deps.Postgres.Query(r.Context(), `
 		SELECT e.id,
 		       'outbox:' || e.id::text AS delivery_message_id,
@@ -458,10 +479,11 @@ func (h MonitorHandler) Outbox(w http.ResponseWriter, r *http.Request) {
 		FROM outbox_events e
 		JOIN outbox_delivery d ON d.outbox_id = e.id
 		LEFT JOIN outbox_relay_shard_leases l ON l.shard_id = d.shard_id
+		`+whereSQL+`
 		ORDER BY CASE WHEN d.status IN ('PENDING','FAILED','PUBLISHING') THEN 0 ELSE 1 END,
 		         e.created_at DESC, e.id DESC
-		LIMIT $1
-	`, monitorLimit(r))
+		LIMIT `+limitPlaceholder+`
+	`, args...)
 	if err != nil {
 		writeError(w, r, internalMonitorError(err))
 		return

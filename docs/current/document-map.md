@@ -21,15 +21,16 @@
 | `docs/current/runtime-profiles.md` | env/profile split for demo vs PTS-1B |
 | `docs/current/pts-run-review-template.md` | required template for new PTS report reviews |
 | `docs/current/fault-injection-runbook.md` | current Redis/Kafka/PostgreSQL fault gates |
-| `docs/current/chaos-test-runbook.md` | current L1-F and Toxiproxy execution runbook |
-| `docs/current/fault-test-matrix.md` | layered future fault matrix beyond L1-F |
+| `docs/current/chaos-test-runbook.md` | current S4-core and Toxiproxy execution runbook |
+| `docs/current/fault-test-matrix.md` | layered future S4 fault matrix beyond S4-core |
 | `docs/current/pts1b-readiness-checklist.md` | final pre-run PTS-1B checklist |
 | `docs/current/document-map.md` | cleanup and conflict policy |
 | `docs/archive/evidence-era-map.md` | historical evidence classification |
 | `docs/archive/progress-history-map.md` | historical progress/decision-log classification |
 | `docs/archive/progress/` | physically archived phase/progress ledgers |
 | `docs/adr/README.md` | ADR classification and supersession index |
-| `tests/pts/MANIFEST.md` | current PTS workload/script manifest |
+| `docs/current/test-strategy/` | judge-facing test narrative: scenarios→metrics→PTS playbook→fault structure→report template (authority for *why/what-to-show*) |
+| `tests/pts/MANIFEST.md` | current PTS workload/script manifest (implementation index) |
 | `tests/pts/HISTORICAL.md` | historical PTS script/JMX index and opt-in rules |
 | `docs/perf/pts/evidence/README.md` | raw PTS evidence directory policy |
 | `docs/perf/pts/l4b-kafka/report-review-index.md` | historical/current-adjacent PTS report review classification |

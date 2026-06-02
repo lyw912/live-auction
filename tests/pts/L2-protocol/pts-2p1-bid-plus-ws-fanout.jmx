@@ -61,7 +61,7 @@
           <stringProp name="variableNames">bid_user_id,bid_token,bid_role</stringProp>
         </CSVDataSet>
         <hashTree/>
-        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="POST L2-P1 hot bid" enabled="true">
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="出价决策 bid-decision" enabled="true">
           <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
           <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
             <collectionProp name="Arguments.arguments">
@@ -176,7 +176,7 @@ if (prev.getResponseCode() == '200') {
           <stringProp name="variableNames">viewer_user_id,viewer_token,viewer_role</stringProp>
         </CSVDataSet>
         <hashTree/>
-        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="open and hold WebSocket viewer" enabled="true">
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="广播接收 ws-fanout-receive" enabled="true">
           <stringProp name="scriptLanguage">groovy</stringProp>
           <stringProp name="cacheKey">l2-open-hold-websocket-viewer</stringProp>
           <stringProp name="script"><![CDATA[

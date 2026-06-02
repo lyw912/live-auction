@@ -428,7 +428,7 @@ func TestRedisGuardRejectsClearlyTooLowBidBeforePostgresLane(t *testing.T) {
 	cfg := admissionTestConfig()
 	cfg.BidEngineMode = bidEngineModeRedisGuard
 	cfg.BidRedisGuardMaxStaleness = time.Second
-	seedRedisGuardProjection(t, rdb, auctionRow.ID, map[string]any{
+	guardProjection := map[string]any{
 		"status":              "ACTIVE",
 		"current_price_cents": 20_000,
 		"start_price_cents":   10_000,
@@ -439,7 +439,8 @@ func TestRedisGuardRejectsClearlyTooLowBidBeforePostgresLane(t *testing.T) {
 		"accepted_bid_count":  2,
 		"current_winner_id":   "user_2",
 		"projected_at_ms":     time.Now().UnixMilli(),
-	})
+	}
+	seedRedisGuardProjection(t, rdb, auctionRow.ID, guardProjection)
 	handler := AuctionHandler{
 		Config: cfg,
 		Deps:   &storage.Dependencies{Postgres: db, Redis: rdb},
@@ -455,6 +456,7 @@ func TestRedisGuardRejectsClearlyTooLowBidBeforePostgresLane(t *testing.T) {
 	router.Post("/api/auctions/{id}/bids", handler.PlaceBid)
 
 	body := `{"client_bid_id":"guard-too-low","amount_cents":20000,"client_seen_seq":7}`
+	seedRedisGuardProjection(t, rdb, auctionRow.ID, guardProjection)
 	rec := performBid(router, auctionRow.ID, body, "guard-too-low", "user_1")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())

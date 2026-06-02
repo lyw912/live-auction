@@ -1,6 +1,6 @@
 # Performance And Correctness Contract
 
-> Status: governing PTS-1B contract, 2026-05-31.
+> Status: governing PTS-1B contract, 2026-06-02.
 
 ## Target
 
@@ -12,8 +12,30 @@ Passing target:
 - no wrong winner;
 - no unjustified low-price reject;
 - no duplicate accepted decision for one idempotency key/request hash;
-- no hidden data loss across Redis/Kafka/PostgreSQL/outbox;
+- no hidden data loss across Redis decision log, Kafka relay, PostgreSQL settlement, and outbox;
 - fault-injection proof for Redis, Kafka, PostgreSQL, worker crash, reconnect, and replay.
+
+## Synchronous Decision Boundary
+
+Current PTS-1B measures the user-visible hot-engine decision boundary:
+
+```text
+HTTP bid request
+  -> Redis Lua atomic decision
+  -> Redis Stream decision log + idempotency record persisted as ENGINE_DURABLE
+  -> HTTP returns ENGINE_ACCEPTED / ENGINE_REJECTED / ENGINE_SOLD
+```
+
+`ENGINE_DURABLE` means the engine decision has been atomically recorded in Redis
+hot state, the Redis decision stream, and the idempotency replay record. Kafka,
+PostgreSQL settlement, and outbox/WebSocket delivery are asynchronous convergence
+boundaries that must be proven after the run and under faults. Do not put Kafka
+acknowledgement inside the synchronous M1 response boundary.
+
+Because Kafka is no longer the synchronous response boundary, fault evidence must
+be stronger: Redis AOF/no-eviction, Redis Stream retention, relay drain, Kafka
+lag/DLQ, settlement replay idempotency, checkpoint/reconcile, and outbox drain
+must all be collected before a run can be classified as current pass.
 
 ## Correctness Invariants
 
@@ -39,7 +61,7 @@ Recommended fields:
   "result": "ENGINE_ACCEPTED",
   "engine_seq": 123,
   "decision_status": "DECIDED",
-  "durability_status": "KAFKA_ACKED",
+  "durability_status": "ENGINE_DURABLE",
   "settlement_status": "PENDING",
   "current_price_cents": 65000,
   "current_winner_id": "user_42",
@@ -54,10 +76,11 @@ Rules:
 
 - `ENGINE_*` is the user-visible business decision.
 - `settlement_status` is not the decision.
-- `ENGINE_ACCEPTED`, `ENGINE_REJECTED`, and `ENGINE_SOLD` may be returned only after `durability_status = KAFKA_ACKED`.
-- `durability_status = KAFKA_UNKNOWN` must not be paired with an `ENGINE_*` result. It must return an explicit pending/reconciling response such as `PROCESSING_RETRY_LATER` with `decision_status = PENDING_DURABILITY`, and the UI must not show winner/leading truth from it.
-- `durability_status = KAFKA_FAILED` must fail closed as `RECONCILING` / `ENGINE_PAUSED`; dangerous bid actions remain disabled until reconciliation proves safety.
-- `202` is acceptable only for explicit pending durability or pending settlement semantics. It must not hide a normal success before the Kafka fence.
+- `ENGINE_ACCEPTED`, `ENGINE_REJECTED`, and `ENGINE_SOLD` may be returned after `durability_status = ENGINE_DURABLE`.
+- `ENGINE_DURABLE` does not mean PostgreSQL settlement or outbox delivery has completed. The response must expose `settlement_status`, and post-run evidence must prove relay/settlement/outbox convergence.
+- If the Redis decision log/idempotency record cannot be written, the system must fail closed as `RECONCILING` / `ENGINE_PAUSED` or return explicit pending/retry semantics. It must not fabricate an `ENGINE_*` result.
+- Kafka relay failure after `ENGINE_DURABLE` must surface through lag, pending decisions, DLQ, pause/reconcile, and verifier gates. It is not part of M1 latency, but it is part of M3/M5 correctness.
+- `202` is acceptable only for explicit pending engine durability or pending settlement semantics. It must not hide a normal success before the Redis decision-log boundary.
 - Normal PTS-1B must not degrade into bulk `PROCESSING_RETRY_LATER`, vague `409`, or second-level waiting.
 
 ## Performance Evidence Rules
@@ -72,6 +95,8 @@ Every current PTS-1B claim must include:
 - server metrics snapshot;
 - Redis/Kafka/PostgreSQL diagnostics;
 - business distribution by `ENGINE_*`, HTTP status, and settlement status;
+- durability distribution, with normal hot-path final decisions expected to be `ENGINE_DURABLE`;
+- Redis pending-decision count, Kafka lag/DLQ, settlement gap, and outbox backlog after convergence;
 - correctness verifier output;
 - failure-injection result if claiming resilience;
 - explicit statement whether the result is current evidence or historical evidence.
@@ -86,8 +111,8 @@ For PTS-1B, the primary p99 is the user-visible final business decision latency:
 bid click/request start -> final ENGINE_ACCEPTED / ENGINE_REJECTED / ENGINE_SOLD response visible to the user
 ```
 
-HTTP `202` latency is not final bid-decision latency. It is only acceptance or
-enqueue latency:
+HTTP `202` latency is not final bid-decision latency. It is only pending
+acknowledgement latency:
 
 ```text
 bid click/request start -> PROCESSING_RETRY_LATER / PENDING_DURABILITY acknowledgement
@@ -101,8 +126,9 @@ success.
 Every PTS-1B report must separate:
 
 - `accept_latency_ms`: HTTP request to `202` pending acknowledgement;
-- `final_decision_latency_ms`: request start to final `ENGINE_*`;
-- `settlement_latency_ms`: Kafka durable decision to PostgreSQL settlement;
+- `final_decision_latency_ms`: request start to final `ENGINE_*` with `ENGINE_DURABLE`;
+- `relay_latency_ms`: Redis Stream decision to Kafka append acknowledgement;
+- `settlement_latency_ms`: Redis/Kafka durable decision to PostgreSQL settlement;
 - `pending_ratio`: share of requests returning pending durability;
 - `timeout_ratio`: share of requests that do not reach final `ENGINE_*` inside
   the measurement window.
@@ -118,8 +144,8 @@ ingress/queueing evidence.
 |---|---|
 | Redis unavailable before decision | fail closed or safe fallback; no fabricated accept |
 | Redis state lost | pause affected auction, rebuild from Kafka/PG, verify, then resume |
-| Kafka append timeout/unknown | do not claim durable success; expose pending/paused according to contract |
-| Kafka unavailable | fail closed or bounded pending with worker proof; no unbounded silent queue |
+| Kafka relay timeout/unknown after ENGINE_DURABLE | decision remains replayable from Redis Stream; relay lag is visible; auction may pause/reconcile if lag or uncertainty exceeds bound |
+| Kafka unavailable | no loss of `ENGINE_DURABLE` decisions; bounded Redis pending backlog; relay drains after recovery or auction remains paused/reconciling |
 | Settlement worker crash | decisions remain replayable from Kafka; settlement resumes idempotently |
 | PostgreSQL unavailable | live engine may not overclaim final settlement; orders/audit wait safely |
 | Reconciler mismatch | pause, surface anomaly, and block dangerous actions |

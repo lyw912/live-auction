@@ -1,6 +1,6 @@
 version: "1.0"
 name: live-auction-l2-p2-read-only
-description: Auxiliary PTS-native/YML HTTP read traffic for L2-P2 attribution. Formal L2 evidence remains the JMeter scenario.
+description: Auxiliary PTS-native/YML HTTP read traffic for historical read attribution. Not part of the current S0-S5 plan.
 baseUrl: "http://172.16.179.112:18080"
 headers:
   Accept: "application/json"

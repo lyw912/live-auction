@@ -37,6 +37,7 @@ const (
 	maxSettleAttempts          = 3
 	kafkaFetchTimeout          = 2 * time.Second
 	reconcilePendingDrainLimit = 10_000
+	settlementTerminalGrace    = 10 * time.Second
 	// relayBatchSize is the max number of stream entries read in one relay batch.
 	// Tuned to balance throughput (large batch) with tail latency (small batch).
 	relayBatchSize = 512
@@ -1207,6 +1208,24 @@ func (w *Worker) Run(ctx context.Context, interval time.Duration) {
 	}
 }
 
+func (w *Worker) RunKafkaSettlement(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = 10 * time.Millisecond
+	}
+	log := w.logger()
+	log.Info("redis engine kafka settlement worker starting", slog.String("consumer_id", w.consumerID), slog.Duration("interval", interval))
+	done := make(chan struct{}, 1)
+	go w.runPeriodic(ctx, "kafka-settlement", interval, done, func(loopCtx context.Context) (int, error) {
+		if w.ledger == nil {
+			return 0, nil
+		}
+		return w.ProcessKafka(loopCtx, 100)
+	})
+	<-ctx.Done()
+	log.Info("redis engine kafka settlement worker stopping", slog.String("consumer_id", w.consumerID), slog.String("reason", ctx.Err().Error()))
+	<-done
+}
+
 func (w *Worker) runPeriodic(ctx context.Context, name string, interval time.Duration, done chan<- struct{}, fn func(context.Context) (int, error)) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -1228,8 +1247,13 @@ func (w *Worker) runPeriodic(ctx context.Context, name string, interval time.Dur
 		processed, err := fn(ctx)
 		if err != nil {
 			w.logger().Warn("redis engine worker loop failed", slog.String("consumer_id", w.consumerID), slog.String("loop", name), slog.Int("processed", processed), slog.String("error", err.Error()))
-		} else if processed > 0 {
-			w.logger().Info("redis engine worker loop processed", slog.String("consumer_id", w.consumerID), slog.String("loop", name), slog.Int("processed", processed))
+		} else if processed > 0 && name != "kafka-settlement" {
+			attrs := []slog.Attr{
+				slog.String("consumer_id", w.consumerID),
+				slog.String("loop", name),
+				slog.Int("processed", processed),
+			}
+			w.logger().LogAttrs(ctx, slog.LevelInfo, "redis engine worker loop processed", attrs...)
 		}
 		select {
 		case <-ctx.Done():
@@ -1440,40 +1464,473 @@ func (w *Worker) ProcessKafka(ctx context.Context, limit int) (int, error) {
 	if limit <= 0 {
 		limit = 1
 	}
+	start := time.Now()
 	processed := 0
-	for processed < limit {
-		fetchCtx, cancel := context.WithTimeout(ctx, kafkaFetchTimeout)
-		message, err := w.ledger.Fetch(fetchCtx)
-		cancel()
-		if err != nil {
-			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-				return processed, nil
-			}
-			return processed, err
+	messages, err := w.fetchLedgerBatch(ctx, limit)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return 0, nil
 		}
+		return 0, err
+	}
+	if len(messages) == 0 {
+		return 0, nil
+	}
+	observability.Observe("auction_bid_settlement_fetch_batch_size", float64(len(messages)), nil, observability.DefaultLatencyBuckets)
+	batchSettled, batchCommitted, err := w.settleRejectedBatchPrefix(ctx, messages)
+	if err != nil {
+		return 0, err
+	}
+	if batchSettled > 0 {
+		if err := w.commitLedgerBatch(ctx, messages[:batchCommitted]); err != nil {
+			return batchSettled, err
+		}
+		observability.Inc("auction_bid_settlement_batch_total", map[string]string{"status": "fast_rejected"})
+		observability.Observe("auction_bid_settlement_batch_size", float64(batchSettled), nil, observability.DefaultLatencyBuckets)
+		observability.Observe("auction_bid_settlement_batch_seconds", time.Since(start).Seconds(), nil, observability.DefaultLatencyBuckets)
+		return batchSettled, nil
+	}
+	var commitBatch []LedgerMessage
+	commitCollected := func() error {
+		if len(commitBatch) == 0 {
+			return nil
+		}
+		if err := w.commitLedgerBatch(ctx, commitBatch); err != nil {
+			return err
+		}
+		observability.Observe("auction_bid_settlement_commit_batch_size", float64(len(commitBatch)), nil, observability.DefaultLatencyBuckets)
+		commitBatch = commitBatch[:0]
+		return nil
+	}
+	for _, message := range messages {
+		messageStart := time.Now()
 		if err := w.settleLedgerMessage(ctx, message); err != nil {
 			if isSettlementIdentityConflictError(err) {
-				if err := w.ledger.Commit(ctx, message); err != nil {
+				commitBatch = append(commitBatch, message)
+				if err := commitCollected(); err != nil {
 					return processed, err
 				}
 				processed++
 				continue
 			}
 			if isTransientSettlementError(err) {
+				if commitErr := commitCollected(); commitErr != nil {
+					return processed, commitErr
+				}
 				return processed, err
 			}
 			if err := w.retryOrDLQ(ctx, message, err); err != nil {
+				if commitErr := commitCollected(); commitErr != nil {
+					return processed, commitErr
+				}
 				return processed, err
 			}
 			processed++
 			continue
 		}
-		if err := w.ledger.Commit(ctx, message); err != nil {
-			return processed, err
-		}
+		observability.Observe("auction_bid_settlement_message_seconds", time.Since(messageStart).Seconds(), nil, observability.DefaultLatencyBuckets)
+		commitBatch = append(commitBatch, message)
 		processed++
 	}
+	if err := commitCollected(); err != nil {
+		return processed, err
+	}
+	observability.Inc("auction_bid_settlement_batch_total", map[string]string{"status": "processed"})
+	observability.Observe("auction_bid_settlement_batch_size", float64(processed), nil, observability.DefaultLatencyBuckets)
+	observability.Observe("auction_bid_settlement_batch_seconds", time.Since(start).Seconds(), nil, observability.DefaultLatencyBuckets)
 	return processed, nil
+}
+
+func (w *Worker) fetchLedgerBatch(ctx context.Context, limit int) ([]LedgerMessage, error) {
+	fetchCtx, cancel := context.WithTimeout(ctx, kafkaFetchTimeout)
+	defer cancel()
+	if batchLedger, ok := w.ledger.(BatchBidLedger); ok {
+		return batchLedger.FetchBatch(fetchCtx, limit)
+	}
+	message, err := w.ledger.Fetch(fetchCtx)
+	if err != nil {
+		return nil, err
+	}
+	return []LedgerMessage{message}, nil
+}
+
+func (w *Worker) commitLedgerBatch(ctx context.Context, messages []LedgerMessage) error {
+	if len(messages) == 0 {
+		return nil
+	}
+	if batchLedger, ok := w.ledger.(BatchBidLedger); ok {
+		return batchLedger.CommitBatch(ctx, messages)
+	}
+	for _, message := range messages {
+		if err := w.ledger.Commit(ctx, message); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (w *Worker) settleRejectedBatchPrefix(ctx context.Context, messages []LedgerMessage) (settled int, committed int, err error) {
+	if len(messages) < 2 {
+		return 0, 0, nil
+	}
+	decoded := make([]decodedLedgerMessage, 0, len(messages))
+	var auctionID string
+	var epoch int64
+	var nextSeq int64
+	var topic string
+	var partition int
+	var offset int64
+	for i, message := range messages {
+		var result engineResult
+		if err := json.Unmarshal(message.Value, &result); err != nil {
+			if i == 0 {
+				return 0, 0, nil
+			}
+			break
+		}
+		if result.Result != resultRejected || shouldBroadcastReject(result.RejectReason) {
+			if i == 0 {
+				return 0, 0, nil
+			}
+			break
+		}
+		if result.AuctionID == "" || result.EngineEpoch <= 0 || result.EngineSeq <= 0 {
+			if i == 0 {
+				return 0, 0, nil
+			}
+			break
+		}
+		if message.Topic == "" || message.Partition < 0 || message.Offset < 0 {
+			if i == 0 {
+				return 0, 0, nil
+			}
+			break
+		}
+		if i == 0 {
+			auctionID = result.AuctionID
+			epoch = result.EngineEpoch
+			nextSeq = result.EngineSeq
+			topic = message.Topic
+			partition = message.Partition
+			offset = message.Offset
+		}
+		if result.AuctionID != auctionID ||
+			result.EngineEpoch != epoch ||
+			result.EngineSeq != nextSeq ||
+			message.Topic != topic ||
+			message.Partition != partition ||
+			message.Offset != offset {
+			break
+		}
+		payload := append([]byte(nil), message.Value...)
+		decoded = append(decoded, decodedLedgerMessage{
+			message: message,
+			result:  result,
+			payload: payload,
+			hash:    sha256Hex(payload),
+		})
+		nextSeq++
+		offset++
+	}
+	if len(decoded) < 2 {
+		return 0, 0, nil
+	}
+	n, err := w.settleRejectedBatch(ctx, auctionID, decoded)
+	if err != nil {
+		if isTransientSettlementError(err) || isSettlementIdentityConflictError(err) {
+			return 0, 0, nil
+		}
+		return 0, 0, err
+	}
+	return n, n, nil
+}
+
+func (w *Worker) settleRejectedBatch(ctx context.Context, auctionID string, batch []decodedLedgerMessage) (int, error) {
+	tx, err := w.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var dbEpoch int64
+	var dbSeq int64
+	var publicSeq int64
+	if err := tx.QueryRow(ctx, `
+		SELECT engine_epoch, engine_seq, seq
+		FROM auctions
+		WHERE id = $1
+		FOR UPDATE
+	`, auctionID).Scan(&dbEpoch, &dbSeq, &publicSeq); err != nil {
+		return 0, err
+	}
+	first := batch[0].result
+	last := batch[len(batch)-1].result
+	if first.EngineEpoch != dbEpoch {
+		return 0, transientSettlementError{err: fmt.Errorf("batch settlement stale epoch auction=%s redis=%d db=%d", auctionID, first.EngineEpoch, dbEpoch)}
+	}
+	if first.EngineSeq != dbSeq+1 {
+		return 0, transientSettlementError{err: fmt.Errorf("batch settlement seq waiting auction=%s redis_first=%d db_next=%d", auctionID, first.EngineSeq, dbSeq+1)}
+	}
+
+	rows, err := rejectedSettlementBatchRows(batch, publicSeq)
+	if err != nil {
+		return 0, err
+	}
+	rowsJSON, err := json.Marshal(rows)
+	if err != nil {
+		return 0, err
+	}
+	if err := insertRejectedSettlementAttemptsBatch(ctx, tx, auctionID, rowsJSON, len(batch)); err != nil {
+		return 0, err
+	}
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE auctions
+		SET engine_seq = $2,
+		    engine_epoch = $3,
+		    version = version + $4,
+		    updated_at = now()
+		WHERE id = $1 AND engine_epoch = $3 AND engine_seq = $5
+	`, auctionID, last.EngineSeq, last.EngineEpoch, len(batch), dbSeq)
+	if err != nil {
+		return 0, err
+	}
+	if tag.RowsAffected() == 0 {
+		return 0, transientSettlementError{err: fmt.Errorf("batch settlement fenced out auction=%s epoch=%d first_seq=%d db_seq=%d", auctionID, first.EngineEpoch, first.EngineSeq, dbSeq)}
+	}
+
+	if err := insertRejectedBidsBatch(ctx, tx, auctionID, rowsJSON, len(batch)); err != nil {
+		return 0, err
+	}
+	if err := completeRejectedIdempotencyBatch(ctx, tx, auctionID, rowsJSON, len(batch)); err != nil {
+		return 0, err
+	}
+	if err := markRejectedSettlementsSettledBatch(ctx, tx, auctionID, rowsJSON, len(batch)); err != nil {
+		return 0, err
+	}
+	if err := upsertEngineCheckpoint(ctx, tx, auctionID, batch[len(batch)-1].message); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	observability.Add("auction_bid_redis_settlement_total", float64(len(batch)), map[string]string{"result": resultRejected, "status": "settled"})
+	return len(batch), nil
+}
+
+type rejectedSettlementBatchRow struct {
+	StreamID        string          `json:"stream_id"`
+	EngineEpoch     int64           `json:"engine_epoch"`
+	EngineSeq       int64           `json:"engine_seq"`
+	Result          string          `json:"result"`
+	PayloadJSON     json.RawMessage `json:"payload_json"`
+	PayloadSHA256   string          `json:"payload_sha256"`
+	LedgerTopic     string          `json:"ledger_topic"`
+	LedgerPartition int             `json:"ledger_partition"`
+	LedgerOffset    int64           `json:"ledger_offset"`
+	LedgerKey       string          `json:"ledger_key"`
+	BidID           string          `json:"bid_id"`
+	UserID          string          `json:"user_id"`
+	ClientBidID     string          `json:"client_bid_id"`
+	AmountCents     int64           `json:"amount_cents"`
+	RejectReason    string          `json:"reject_reason"`
+	RequestHash     string          `json:"request_hash"`
+	ResponseJSON    json.RawMessage `json:"response_json"`
+	TraceID         string          `json:"trace_id"`
+}
+
+func rejectedSettlementBatchRows(batch []decodedLedgerMessage, publicSeq int64) ([]rejectedSettlementBatchRow, error) {
+	rows := make([]rejectedSettlementBatchRow, 0, len(batch))
+	for _, item := range batch {
+		result := item.result
+		resp := result.response(auction.DurabilityStatusKafkaAcked, auction.DecisionStatusDecided)
+		resp.Result = auction.BidResultRejected
+		resp.SettlementStatus = auction.SettlementStatusSettled
+		resp.Seq = publicSeq
+		respJSON, err := json.Marshal(resp)
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, rejectedSettlementBatchRow{
+			StreamID:        item.message.ID,
+			EngineEpoch:     result.EngineEpoch,
+			EngineSeq:       result.EngineSeq,
+			Result:          result.Result,
+			PayloadJSON:     json.RawMessage(item.payload),
+			PayloadSHA256:   item.hash,
+			LedgerTopic:     item.message.Topic,
+			LedgerPartition: item.message.Partition,
+			LedgerOffset:    item.message.Offset,
+			LedgerKey:       item.message.Key,
+			BidID:           result.BidID,
+			UserID:          result.UserID,
+			ClientBidID:     result.ClientBidID,
+			AmountCents:     result.AmountCents,
+			RejectReason:    stringPtrValue(result.RejectReason),
+			RequestHash:     result.RequestHash,
+			ResponseJSON:    json.RawMessage(respJSON),
+			TraceID:         result.TraceID,
+		})
+	}
+	return rows, nil
+}
+
+func insertRejectedSettlementAttemptsBatch(ctx context.Context, tx pgx.Tx, auctionID string, rowsJSON []byte, expected int) error {
+	tag, err := tx.Exec(ctx, `
+		WITH input AS (
+		  SELECT *
+		  FROM jsonb_to_recordset($2::jsonb) AS x(
+		    stream_id text,
+		    engine_epoch bigint,
+		    engine_seq bigint,
+		    result text,
+		    payload_json jsonb,
+		    payload_sha256 text,
+		    ledger_topic text,
+		    ledger_partition int,
+		    ledger_offset bigint,
+		    ledger_key text
+		  )
+		)
+		INSERT INTO redis_engine_settlements (
+		  auction_id, stream_id, engine_epoch, engine_seq, result, status, attempts, payload_json,
+		  payload_sha256, ledger_source, ledger_topic, ledger_partition, ledger_offset, ledger_key
+		)
+		SELECT $1, stream_id, engine_epoch, engine_seq, result, 'PROCESSING', 1, payload_json,
+		       payload_sha256, 'kafka', ledger_topic, ledger_partition, ledger_offset, ledger_key
+		FROM input
+		ON CONFLICT (auction_id, stream_id) DO UPDATE
+		SET attempts = CASE
+		      WHEN redis_engine_settlements.status IN ('SETTLED','SKIPPED') THEN redis_engine_settlements.attempts
+		      ELSE redis_engine_settlements.attempts + 1
+		    END,
+		    status = CASE
+		      WHEN redis_engine_settlements.status IN ('SETTLED','SKIPPED') THEN redis_engine_settlements.status
+		      ELSE 'PROCESSING'
+		    END,
+		    last_error = CASE
+		      WHEN redis_engine_settlements.payload_sha256 <> EXCLUDED.payload_sha256 THEN 'stream payload hash changed for existing settlement'
+		      ELSE redis_engine_settlements.last_error
+		    END,
+		    updated_at = now()
+		WHERE redis_engine_settlements.payload_sha256 = EXCLUDED.payload_sha256
+	`, auctionID, rowsJSON)
+	if isUniqueViolation(err) {
+		return settlementIdentityConflictError{err: err}
+	}
+	if err != nil {
+		return err
+	}
+	if int(tag.RowsAffected()) != expected {
+		return settlementIdentityConflictError{err: fmt.Errorf("batch settlement identity conflict auction=%s affected=%d expected=%d", auctionID, tag.RowsAffected(), expected)}
+	}
+	return nil
+}
+
+func insertRejectedBidsBatch(ctx context.Context, tx pgx.Tx, auctionID string, rowsJSON []byte, expected int) error {
+	tag, err := tx.Exec(ctx, `
+		WITH input AS (
+		  SELECT *
+		  FROM jsonb_to_recordset($2::jsonb) AS x(
+		    bid_id text,
+		    user_id text,
+		    client_bid_id text,
+		    amount_cents bigint,
+		    reject_reason text,
+		    request_hash text,
+		    response_json jsonb,
+		    trace_id text,
+		    engine_epoch bigint,
+		    engine_seq bigint
+		  )
+		)
+		INSERT INTO bids (
+		  id, auction_id, user_id, client_bid_id, amount_cents, seq, status,
+		  reject_reason, request_hash, response_json, trace_id, source,
+		  engine_epoch, engine_seq, settlement_status
+		)
+		SELECT bid_id, $1, user_id, client_bid_id, amount_cents, NULL, 'REJECTED',
+		       reject_reason, request_hash, response_json, trace_id, $3,
+		       engine_epoch, engine_seq, 'SETTLED'
+		FROM input
+		ON CONFLICT (auction_id, user_id, client_bid_id) DO UPDATE
+		SET response_json = bids.response_json
+		WHERE bids.request_hash = EXCLUDED.request_hash
+		  AND bids.amount_cents = EXCLUDED.amount_cents
+		  AND bids.status = EXCLUDED.status
+		  AND COALESCE(bids.engine_epoch, 0) = COALESCE(EXCLUDED.engine_epoch, 0)
+		  AND COALESCE(bids.engine_seq, 0) = COALESCE(EXCLUDED.engine_seq, 0)
+	`, auctionID, rowsJSON, auction.BidSourceManual)
+	if isUniqueViolation(err) {
+		return settlementIdentityConflictError{err: err}
+	}
+	if err != nil {
+		return err
+	}
+	if int(tag.RowsAffected()) != expected {
+		return settlementIdentityConflictError{err: fmt.Errorf("batch bid idempotency conflict auction=%s affected=%d expected=%d", auctionID, tag.RowsAffected(), expected)}
+	}
+	return nil
+}
+
+func completeRejectedIdempotencyBatch(ctx context.Context, tx pgx.Tx, auctionID string, rowsJSON []byte, expected int) error {
+	tag, err := tx.Exec(ctx, `
+		WITH input AS (
+		  SELECT *
+		  FROM jsonb_to_recordset($2::jsonb) AS x(
+		    user_id text,
+		    client_bid_id text,
+		    request_hash text,
+		    response_json jsonb
+		  )
+		)
+		INSERT INTO idempotency_records (
+		  scope_type, scope_id, user_id, idempotency_key, request_hash, status,
+		  attempts, http_status, result_code, response_json, completed_at
+		)
+		SELECT 'bid', $1, user_id, client_bid_id, request_hash, 'COMPLETED',
+		       1, 200, $3, response_json, now()
+		FROM input
+		ON CONFLICT (scope_type, scope_id, user_id, idempotency_key) DO UPDATE
+		SET status = 'COMPLETED',
+		    http_status = EXCLUDED.http_status,
+		    result_code = EXCLUDED.result_code,
+		    response_json = EXCLUDED.response_json,
+		    completed_at = now(),
+		    locked_until = NULL
+		WHERE idempotency_records.request_hash = EXCLUDED.request_hash
+	`, auctionID, rowsJSON, auction.BidResultRejected)
+	if isUniqueViolation(err) {
+		return settlementIdentityConflictError{err: err}
+	}
+	if err != nil {
+		return err
+	}
+	if int(tag.RowsAffected()) != expected {
+		return settlementIdentityConflictError{err: fmt.Errorf("batch idempotency record conflict auction=%s affected=%d expected=%d", auctionID, tag.RowsAffected(), expected)}
+	}
+	return nil
+}
+
+func markRejectedSettlementsSettledBatch(ctx context.Context, tx pgx.Tx, auctionID string, rowsJSON []byte, expected int) error {
+	tag, err := tx.Exec(ctx, `
+		WITH input AS (
+		  SELECT stream_id
+		  FROM jsonb_to_recordset($2::jsonb) AS x(stream_id text)
+		)
+		UPDATE redis_engine_settlements s
+		SET status = 'SETTLED', settled_at = now(), updated_at = now()
+		FROM input
+		WHERE s.auction_id = $1
+		  AND s.stream_id = input.stream_id
+	`, auctionID, rowsJSON)
+	if err != nil {
+		return err
+	}
+	if int(tag.RowsAffected()) != expected {
+		return settlementIdentityConflictError{err: fmt.Errorf("batch mark settlement settled mismatch auction=%s affected=%d expected=%d", auctionID, tag.RowsAffected(), expected)}
+	}
+	return nil
 }
 
 func (w *Worker) retryOrDLQ(ctx context.Context, message LedgerMessage, settleErr error) error {
@@ -1957,6 +2414,13 @@ func (w *Worker) settlePayload(ctx context.Context, auctionID string, ledgerID s
 type settlementAttempt struct {
 	attempts int
 	status   string
+}
+
+type decodedLedgerMessage struct {
+	message LedgerMessage
+	result  engineResult
+	payload []byte
+	hash    string
 }
 
 func (w *Worker) recordSettlementAttempt(ctx context.Context, auctionID string, streamID string, result engineResult, message LedgerMessage) (settlementAttempt, error) {
@@ -2683,25 +3147,29 @@ func (w *Worker) checkSettlementTerminal(ctx context.Context, auctionID string) 
 	var seq int64
 	var status string
 	var lastErr string
+	var age time.Duration
 	err := w.db.QueryRow(ctx, `
-		SELECT engine_seq, status, COALESCE(last_error, '')
+		SELECT engine_seq, status, COALESCE(last_error, ''), now() - updated_at
 		FROM redis_engine_settlements
 		WHERE auction_id = $1
 		  AND status NOT IN ('SETTLED','SKIPPED')
 		ORDER BY engine_epoch, engine_seq
 		LIMIT 1
-	`, auctionID).Scan(&seq, &status, &lastErr)
+	`, auctionID).Scan(&seq, &status, &lastErr, &age)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	if age < settlementTerminalGrace {
+		return nil, nil
+	}
 	return &reconcileViolation{
 		status:  "KAFKA_LEDGER_SETTLEMENT_NOT_TERMINAL",
 		reason:  "KAFKA_LEDGER_SETTLEMENT_NOT_TERMINAL",
 		message: "Kafka decision has not reached terminal settlement",
-		details: map[string]any{"engine_seq": seq, "settlement_status": status, "last_error": lastErr},
+		details: map[string]any{"engine_seq": seq, "settlement_status": status, "last_error": lastErr, "age_ms": age.Milliseconds(), "grace_ms": settlementTerminalGrace.Milliseconds()},
 	}, nil
 }
 
@@ -2900,7 +3368,7 @@ func (w *Worker) checkOutboxCoverage(ctx context.Context, auctionID string) (*re
 }
 
 func (w *Worker) checkEngineCheckpoint(ctx context.Context, auctionID string) (*reconcileViolation, error) {
-	tx, err := w.db.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := w.db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
 	if err != nil {
 		return nil, err
 	}

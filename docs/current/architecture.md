@@ -14,7 +14,8 @@ Therefore PostgreSQL is no longer the synchronous decision point for the optimiz
 |---|---|---|
 | Gateway | auth, room/ACL, admission, request decoding, fast idempotency, response contract | perform repeated PG reads on every hot bid if Redis/cache can safely answer |
 | Redis Lua engine | atomic live decision, current price/winner/end, engine_seq, engine idempotency | depend on stale PG snapshots during the hot decision |
-| Kafka | durable ordered decision WAL/fence for engine decisions | be optional for decisions that are claimed durable/final |
+| Redis Stream | synchronous `ENGINE_DURABLE` decision log/idempotency replay boundary | be treated as safe if AOF/no-eviction/retention is not proven |
+| Kafka | asynchronous ordered relay/WAL for engine decisions and replay/settlement fence | be optional for post-run correctness, replay, and fault evidence |
 | PostgreSQL | settlement truth, audit truth, order truth, long-term query truth | be the contended synchronous row-lock decision point for PTS-1B |
 | Settlement worker | replay Kafka decisions to PG and outbox | invent decisions not present in the engine/WAL |
 | Reconciler | compare Redis/Kafka/PG/outbox and repair or pause | hide uncertainty from users/operators |
@@ -47,11 +48,15 @@ During rebuild, users must not see fake success. They should see a bounded recov
 The system must distinguish:
 
 - live decision: what the Redis engine decided;
-- WAL durability: whether the decision is safely appended/fenced in Kafka;
+- engine durability: whether the decision is recorded in Redis hot state, Redis Stream, and idempotency replay state as `ENGINE_DURABLE`;
+- relay durability: whether the decision has been appended/fenced in Kafka;
 - settlement: whether PostgreSQL has applied the decision;
 - delivery: whether outbox/WebSocket/snapshots have exposed it.
 
-Any fast-ack contract must expose these states. It must not collapse them into a misleading final success.
+The current fast-ack contract returns final user-visible `ENGINE_*` decisions at
+the `ENGINE_DURABLE` boundary. It must still expose settlement state, and the
+run cannot be called correct until Redis pending decisions, Kafka relay, PG
+settlement, and outbox delivery have converged or the auction has failed closed.
 
 ## Unsupported Or Paused Paths
 

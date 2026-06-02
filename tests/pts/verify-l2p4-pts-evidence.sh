@@ -26,6 +26,8 @@ BID_P99_MAX_MS="${BID_P99_MAX_MS:-100}"
 READ_P99_MAX_MS="${READ_P99_MAX_MS:-200}"
 FANOUT_P99_MAX_MS="${FANOUT_P99_MAX_MS:-1000}"
 JOIN_SEGMENT_P99_MAX_MS="${JOIN_SEGMENT_P99_MAX_MS:-1000}"
+BID_LABEL="${BID_LABEL:-POST L2-P4 steady bid}"
+FANOUT_LABEL="${FANOUT_LABEL:-WS L2-P4 fanout observe final seq}"
 
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
@@ -174,13 +176,9 @@ echo "L2-P4 PTS evidence verifier"
 echo "source: $JSONL"
 echo "expected_ws=$EXPECTED_WS min_bids=$MIN_BIDS"
 
-assert_min_count "POST L2-P4 steady bid" "$MIN_BIDS"
-assert_all_success "POST L2-P4 steady bid"
-if [ "${L2P4_SKIP_BID_P99:-0}" = "1" ]; then
-  echo "SKIP POST L2-P4 steady bid p99: Groovy sampler elapsed includes pacing/hold time"
-else
-  assert_p99_lte "POST L2-P4 steady bid" "$BID_P99_MAX_MS"
-fi
+assert_min_count "$BID_LABEL" "$MIN_BIDS"
+assert_all_success "$BID_LABEL"
+assert_p99_lte "$BID_LABEL" "$BID_P99_MAX_MS"
 
 assert_exact_count "UX L2-P4 join snapshot load" "$EXPECTED_WS"
 assert_all_success "UX L2-P4 join snapshot load"
@@ -194,11 +192,12 @@ assert_exact_count "WS L2-P4 upgrade to first message" "$EXPECTED_WS"
 assert_all_success "WS L2-P4 upgrade to first message"
 assert_p99_lte "WS L2-P4 upgrade to first message" "$JOIN_SEGMENT_P99_MAX_MS"
 
-assert_exact_count "WS L2-P4 fanout observe final seq" "$EXPECTED_WS"
-assert_all_success "WS L2-P4 fanout observe final seq"
-assert_fanout_message_p99_lte "WS L2-P4 fanout observe final seq" "$FANOUT_P99_MAX_MS"
+assert_exact_count "$FANOUT_LABEL" "$EXPECTED_WS"
+assert_all_success "$FANOUT_LABEL"
+assert_p99_lte "$FANOUT_LABEL" "$FANOUT_P99_MAX_MS"
+assert_fanout_message_p99_lte "$FANOUT_LABEL" "$FANOUT_P99_MAX_MS"
 
-fanout_file="$(label_file "WS L2-P4 fanout observe final seq")"
+fanout_file="$(label_file "$FANOUT_LABEL")"
 bad_fanout="$(jq -r 'select((.responseMessage // "") | startswith("WS_L2P4_FANOUT_ALL_SEQ_OK_FINAL_") | not) | .responseMessage' "$fanout_file" | head -n 5)"
 if [ -n "$bad_fanout" ]; then
   echo "FAIL WS fanout samples without all-seq proof:"

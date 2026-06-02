@@ -10,16 +10,17 @@
 #   When Kafka recovers, the relay resumes from its cursor and durably commits
 #   all pending entries in a single batch.
 #
-# KEY v3 INVARIANT:
+# CURRENT INVARIANT:
 #   Hot path (PlaceBid) is NEVER blocked by Kafka availability.
-#   Durability status transitions: ENGINE_DURABLE → KAFKA_ACKED after relay.
-#   A dominant 202/PENDING ratio is a relay health concern, NOT a user concern.
+#   ENGINE_DURABLE is the synchronous response boundary. Kafka relay convergence
+#   is verified through lag/pending/drain evidence, not by waiting for Kafka on
+#   the HTTP response path.
 #
 # EXPECTED:
 #   - Bids during Kafka outage → HTTP 200 with ENGINE_DURABLE (not error)
 #   - Stream accumulates entries
-#   - After Kafka recovers → relay drains all pending entries in one batch
-#   - All decisions become KAFKA_ACKED; settlement proceeds
+#   - After Kafka recovers → relay drains all pending entries
+#   - Settlement proceeds without duplicate or lost decisions
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
@@ -35,9 +36,8 @@ for i in 1 2 3; do
   BODY=$(echo "$RESP" | head -n -1)
   assert_eq "bid $i HTTP code" "$CODE" "200"
   assert_contains "bid $i DECIDED" "$BODY" '"decision_status":"DECIDED"'
-  # Should be ENGINE_DURABLE or KAFKA_ACKED (the latter if relay is fast enough)
-  if echo "$BODY" | grep -q '"ENGINE_DURABLE"\|"KAFKA_ACKED"'; then
-    echo "  ✔ bid $i durability is ENGINE_DURABLE or KAFKA_ACKED (not error)"
+  if echo "$BODY" | grep -q '"ENGINE_DURABLE"'; then
+    echo "  ✔ bid $i durability is ENGINE_DURABLE (not error)"
     ((PASS++)) || true
   else
     echo "  ℹ bid $i durability_status: $(echo "$BODY" | grep -o '"durability_status":"[^"]*"' || echo 'unknown')"

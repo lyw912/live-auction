@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
   <hashTree>
-    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="L2-P4 steady interactive auction" enabled="true">
-      <stringProp name="TestPlan.comments">L2-P4: production-realistic steady realtime auction. 2400 long-lived WebSocket viewers join first, 360 active bidder sessions generate paced sustained bid arrivals after the room is connected, and 240 readers poll snapshot/leaderboard/my-bids with pacing. Bid pacing is open-model per pressure IP: total offered arrival curve 20/s -> 60/s -> 100/s over the bid window, divided by pressure_ips. WS fanout sampler observes through the bid window, fetches final auction seq, verifies every connected viewer saw seq 1..final_seq, and reports worst published_at_ms-to-client-receive latency as PTS-visible fanout RT.</stringProp>
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="L2-P4 smoke interactive auction" enabled="true">
+      <stringProp name="TestPlan.comments">L2-P4 smoke: harness-only 1 minute PTS validation. Uses a 3 bidder / 3 WebSocket viewer / 1 reader ratio under PTS max VU 7, one bid per bidder after WebSockets connect, short fanout observation, and one pressure IP. Intended only to prove that bid and fanout samplers complete and that PTS reports their p99; not capacity evidence.</stringProp>
       <boolProp name="TestPlan.functional_mode">false</boolProp>
       <boolProp name="TestPlan.tearDown_on_shutdown">true</boolProp>
       <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
@@ -36,16 +36,16 @@
         </collectionProp>
       </HeaderManager>
       <hashTree/>
-      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="10 steady active bidders" enabled="true">
-        <stringProp name="ThreadGroup.num_threads">${__P(bid_threads,360)}</stringProp>
-        <stringProp name="ThreadGroup.ramp_time">${__P(bid_ramp_sec,60)}</stringProp>
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="10 smoke active bidders" enabled="true">
+        <stringProp name="ThreadGroup.num_threads">${__P(bid_threads,3)}</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">${__P(bid_ramp_sec,1)}</stringProp>
         <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
         <boolProp name="ThreadGroup.scheduler">true</boolProp>
-        <stringProp name="ThreadGroup.duration">${__P(bid_duration_sec,420)}</stringProp>
-        <stringProp name="ThreadGroup.delay">${__P(bid_delay_sec,90)}</stringProp>
+        <stringProp name="ThreadGroup.duration">${__P(bid_duration_sec,20)}</stringProp>
+        <stringProp name="ThreadGroup.delay">${__P(bid_delay_sec,4)}</stringProp>
         <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" enabled="true">
-          <boolProp name="LoopController.continue_forever">true</boolProp>
-          <stringProp name="LoopController.loops">-1</stringProp>
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <stringProp name="LoopController.loops">1</stringProp>
         </elementProp>
       </ThreadGroup>
       <hashTree>
@@ -61,64 +61,15 @@
           <stringProp name="variableNames">bid_user_id,bid_token,bid_role</stringProp>
         </CSVDataSet>
         <hashTree/>
-        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="POST L2-P4 steady bid" enabled="true">
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="POST L2-P4 smoke bid" enabled="true">
           <stringProp name="scriptLanguage">groovy</stringProp>
-          <stringProp name="cacheKey">l2p4-steady-bid-http-v3</stringProp>
+          <stringProp name="cacheKey">l2p4-smoke-bid-http-v1</stringProp>
           <stringProp name="script"><![CDATA[
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 
-long now = System.currentTimeMillis()
-def startRef = props.get('l2p4_bid_start_ms') as java.util.concurrent.atomic.AtomicLong
-if (startRef == null) {
-  long delay = Long.parseLong(props.getProperty('bid_start_delay_ms', '90000'))
-  startRef = new java.util.concurrent.atomic.AtomicLong(now + delay)
-  def existing = props.putIfAbsent('l2p4_bid_start_ms', startRef)
-  if (existing != null) startRef = existing as java.util.concurrent.atomic.AtomicLong
-}
-long start = startRef.get()
-if (now < start) {
-  SampleResult.samplePause()
-  try {
-    Thread.sleep(start - now)
-  } finally {
-    SampleResult.sampleResume()
-  }
-}
-long elapsedMs = System.currentTimeMillis() - start
-long elapsedSec = elapsedMs > 0L ? Math.floorDiv(elapsedMs, 1000L) : 0L
-long totalRate
-if (elapsedSec < 120L) {
-  totalRate = Long.parseLong(props.getProperty('bid_rate_stage1_per_sec', '20'))
-} else if (elapsedSec < 240L) {
-  totalRate = Long.parseLong(props.getProperty('bid_rate_stage2_per_sec', '60'))
-} else {
-  totalRate = Long.parseLong(props.getProperty('bid_rate_stage3_per_sec', '100'))
-}
-long pressureIPs = Long.parseLong(props.getProperty('pressure_ips', '6'))
-if (pressureIPs < 1L) pressureIPs = 1L
-long localRate = Math.round(totalRate / (double) pressureIPs)
-if (localRate < 1L) localRate = 1L
-long intervalMs = Math.round(1000.0d / (double) localRate)
-if (intervalMs < 1L) intervalMs = 1L
-def nextRef = props.get('l2p4_next_bid_slot_ms') as java.util.concurrent.atomic.AtomicLong
-if (nextRef == null) {
-  nextRef = new java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
-  def existing = props.putIfAbsent('l2p4_next_bid_slot_ms', nextRef)
-  if (existing != null) nextRef = existing as java.util.concurrent.atomic.AtomicLong
-}
-long slot = nextRef.getAndAdd(intervalMs)
-long waitMs = slot - System.currentTimeMillis()
-if (waitMs > 0L) {
-  SampleResult.samplePause()
-  try {
-    Thread.sleep(waitMs)
-  } finally {
-    SampleResult.sampleResume()
-  }
-}
 String userID = vars.get('bid_user_id') ?: 'unknown'
 def counter = props.get('l2p4_bid_counter') as java.util.concurrent.atomic.AtomicLong
 if (counter == null) {
@@ -131,7 +82,7 @@ long base = Long.parseLong(props.getProperty('contention_amount_base_cents', '10
 long inc = Long.parseLong(props.getProperty('contention_amount_increment_cents', '5000'))
 long stride = Long.parseLong(props.getProperty('contention_amount_stride', '1000'))
 long amount = base + inc * stride * seq
-String id = 'pts-2p4-' + userID + '-' + seq
+String id = 'pts-2p4-smoke-' + userID + '-' + seq
 String body = groovy.json.JsonOutput.toJson([
   client_bid_id: id,
   amount_cents: amount,
@@ -188,12 +139,12 @@ SampleResult.setResponseMessage('BID_DECIDED_DURABLE_' + id)
         <hashTree>
         </hashTree>
       </hashTree>
-      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="20 steady websocket viewers" enabled="true">
-        <stringProp name="ThreadGroup.num_threads">${__P(ws_threads,2400)}</stringProp>
-        <stringProp name="ThreadGroup.ramp_time">${__P(ws_ramp_sec,60)}</stringProp>
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="20 smoke websocket viewers" enabled="true">
+        <stringProp name="ThreadGroup.num_threads">${__P(ws_threads,3)}</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">${__P(ws_ramp_sec,1)}</stringProp>
         <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
         <boolProp name="ThreadGroup.scheduler">true</boolProp>
-        <stringProp name="ThreadGroup.duration">${__P(run_duration_sec,600)}</stringProp>
+        <stringProp name="ThreadGroup.duration">${__P(run_duration_sec,60)}</stringProp>
         <stringProp name="ThreadGroup.delay">0</stringProp>
         <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" enabled="true">
           <boolProp name="LoopController.continue_forever">false</boolProp>
@@ -387,7 +338,7 @@ if (seenSeqs == null || latencyBySeq == null || maxFanoutLatencyMs == null) {
   SampleResult.setResponseMessage('WS_STATE_MISSING')
   return
 }
-long observeMs = Long.parseLong(props.getProperty('fanout_observe_ms', '510000'))
+long observeMs = Long.parseLong(props.getProperty('fanout_observe_ms', '12000'))
 boolean timerPaused = false
 def pauseTimer = {
   if (!timerPaused) {
@@ -428,7 +379,7 @@ if (expectedFinalSeq <= 0) {
   SampleResult.setResponseMessage('WS_FINAL_SEQ_ZERO')
   return
 }
-long timeoutAt = System.currentTimeMillis() + Long.parseLong(props.getProperty('fanout_catchup_timeout_ms', '30000'))
+long timeoutAt = System.currentTimeMillis() + Long.parseLong(props.getProperty('fanout_catchup_timeout_ms', '5000'))
 while (System.currentTimeMillis() < timeoutAt) {
   boolean complete = true
   for (int seq = 1; seq <= expectedFinalSeq; seq++) {
@@ -490,13 +441,13 @@ SampleResult.setResponseMessage('WS_CLOSED')
         </JSR223Sampler>
         <hashTree/>
       </hashTree>
-      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="30 steady read traffic" enabled="true">
-        <stringProp name="ThreadGroup.num_threads">${__P(read_threads,240)}</stringProp>
-        <stringProp name="ThreadGroup.ramp_time">${__P(read_ramp_sec,60)}</stringProp>
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="30 smoke read traffic" enabled="true">
+        <stringProp name="ThreadGroup.num_threads">${__P(read_threads,1)}</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">${__P(read_ramp_sec,1)}</stringProp>
         <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
         <boolProp name="ThreadGroup.scheduler">true</boolProp>
-        <stringProp name="ThreadGroup.duration">${__P(run_duration_sec,600)}</stringProp>
-        <stringProp name="ThreadGroup.delay">${__P(read_delay_sec,60)}</stringProp>
+        <stringProp name="ThreadGroup.duration">${__P(run_duration_sec,60)}</stringProp>
+        <stringProp name="ThreadGroup.delay">${__P(read_delay_sec,1)}</stringProp>
         <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" enabled="true">
           <boolProp name="LoopController.continue_forever">true</boolProp>
           <stringProp name="LoopController.loops">-1</stringProp>
@@ -525,8 +476,8 @@ SampleResult.setResponseMessage('WS_CLOSED')
         </HeaderManager>
         <hashTree/>
         <UniformRandomTimer guiclass="UniformRandomTimerGui" testclass="UniformRandomTimer" testname="read pacing jitter" enabled="true">
-          <stringProp name="ConstantTimer.delay">${__P(read_delay_ms,2000)}</stringProp>
-          <stringProp name="RandomTimer.range">${__P(read_jitter_ms,3000)}</stringProp>
+          <stringProp name="ConstantTimer.delay">${__P(read_delay_ms,1000)}</stringProp>
+          <stringProp name="RandomTimer.range">${__P(read_jitter_ms,500)}</stringProp>
         </UniformRandomTimer>
         <hashTree/>
         <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="GET auction snapshot" enabled="true">

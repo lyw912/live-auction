@@ -1,7 +1,12 @@
-# Chaos L1-F Final Progress - 2026-06-01
+# S4-Core Chaos Final Progress - 2026-06-01
 
-Status: L1-F concurrent fault injection is complete for the six current fault
+Status: S4-core concurrent fault injection is complete for the six current fault
 modes under the judge-facing `L1F_PROFILE=rto` profile.
+
+Naming note: `L1-F` was the old harness/evidence label. In the current test
+strategy this evidence belongs to **S4-core**. Keep old file names, environment
+variables, and evidence directories as asset aliases only; use S4/S4-core in
+plans and judge-facing reports.
 
 ## Parameter Decision
 
@@ -99,7 +104,7 @@ Latest breakdown for the three slowest/most interesting paths:
 
 ## Gates Passed
 
-Every run passed the L1-F P0 gates:
+Every run passed the S4-core P0 gates:
 
 - fault reached clients with the expected signature;
 - zero admission contamination;
@@ -114,7 +119,7 @@ Every run passed the L1-F P0 gates:
 
 `recovery_rto_within_profile_target` is P1 and passed for all six modes.
 
-## Fixes Made During L1-F
+## Fixes Made During S4-Core
 
 - Added `L1F_PROFILE=rto|backlog` so judge-facing recovery and backlog-drain
   proof are no longer conflated.
@@ -177,7 +182,7 @@ Safe future optimization candidates:
 - production-like Kafka multi-broker, Redis Sentinel/Cluster, and PostgreSQL
   failover labs.
 
-Rejected optimization: make the default L1-F profile more aggressive again.
+Rejected optimization: make the default S4-core rto profile more aggressive again.
 That lowers credibility by measuring backlog drain instead of user-visible RTO.
 
 ## Verification Commands

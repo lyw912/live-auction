@@ -1,4 +1,4 @@
-# Chaos And L1-F Runbook
+# S4 Chaos And Fault Runbook
 
 > Status: current local fault-injection runbook.
 
@@ -8,7 +8,8 @@ The goal is not "the script exits 0". A useful chaos run must prove:
 
 - the fault reached the system;
 - user-visible results are explicit (`ENGINE_*`, `RECONCILING`, bounded failure);
-- no normal success is returned without a durable fence;
+- no normal success is returned without an `ENGINE_DURABLE` decision record;
+- Redis pending decisions, Kafka relay lag/DLQ, PostgreSQL settlement, and outbox converge after recovery;
 - the system recovers after clearing the fault;
 - verifier output and raw evidence are stored under `docs/perf/pts/evidence/incoming/<label>/`.
 
@@ -16,10 +17,10 @@ The goal is not "the script exits 0". A useful chaos run must prove:
 
 | Layer | Purpose | Scale | Tool |
 |---|---|---:|---|
-| L1-F | concurrent bid pressure while killing Redis/Kafka/PG/backend | 200 VU default, paced | `tests/pts/run-pts-1c-concurrent-fault.sh` + k6 |
+| S4-core | concurrent bid pressure while killing Redis/Kafka/PG/backend | 200 VU default, paced | `tests/pts/run-pts-1c-concurrent-fault.sh` + k6 |
 | Toxiproxy chaos | latency/timeout degradation not tied to VU scale | small bounded probes | `tests/chaos/run-toxiproxy-scenario.mjs --run` |
 
-L1-F and Toxiproxy are complementary. L1-F proves concurrent fault behavior.
+S4-core and Toxiproxy are complementary. S4-core proves concurrent fault behavior.
 Toxiproxy proves degraded dependency behavior through proxy latency/timeout
 without requiring large VU counts.
 
@@ -32,11 +33,11 @@ jq --version
 k6 version
 ```
 
-`k6` is required for L1-F only. If local `k6` is absent, the runner uses
+`k6` is required for S4-core only. If local `k6` is absent, the runner uses
 `docker run --network host grafana/k6:latest`, so Docker must be able to pull or
 already have that image. Toxiproxy chaos probes use Node `fetch`.
 
-## L1-F
+## S4-core
 
 Run one fault at a time:
 
@@ -49,7 +50,7 @@ FAULT_TYPE=pg bash tests/pts/run-pts-1c-concurrent-fault.sh
 FAULT_TYPE=settlement bash tests/pts/run-pts-1c-concurrent-fault.sh
 ```
 
-Default L1-F is `L1F_PROFILE=rto`:
+Default S4-core is `L1F_PROFILE=rto`:
 
 ```text
 K6_VUS=200
@@ -99,7 +100,7 @@ Pass evidence must include:
 - `fault-window.json`
 - `recovery-breakdown.json`
 - `recovery-end.json`
-- `l1c-gates.tsv`
+- `l1c-gates.tsv` (legacy filename)
 - `l4b-correctness.txt`
 - `l4b-*-gates.tsv`
 
@@ -147,7 +148,7 @@ Pass evidence must include:
 ## Claims Not Allowed
 
 - Do not claim production durability from local single-broker Kafka.
-- Do not claim PTS-1B latency from L1-F; faults intentionally degrade latency.
+- Do not claim PTS-1B latency from S4-core; faults intentionally degrade latency.
 - Do not claim dependency degradation proof if the backend did not connect
   through `localhost:15432` / `localhost:16379`.
 - Do not cite toxiproxy `--status` alone as evidence; it only proves toxic

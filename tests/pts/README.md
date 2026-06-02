@@ -1,22 +1,23 @@
 # PTS Performance Test Suite
 
-> Entry point: read `tests/pts/MANIFEST.md` first. It is the authoritative index of
-> all workloads, their layer, status, and run instructions.
+> Entry point: read `docs/current/test-strategy/README.md` first for the only
+> current S0-S5 test plan. Then read `tests/pts/MANIFEST.md` for script/data
+> asset locations.
 > Read `docs/current/performance-correctness-contract.md` before interpreting any result.
 
-## Suite Structure
+## Asset Directory Structure
 
 ```
-L0-smoke/         Connectivity + business chain (CI gate, 1 VU)
-L1-component/     Hot bid path isolation — L1-C1 VALIDATED ✅ (p99 ≤ 50ms)
-L2-protocol/      Bid + WS fanout / read traffic stacking (PLANNED)
-L3-scenario/      Realistic lifecycle + bid distribution curve (PLANNED)
-L4-combined/      Full mixed workload, production readiness gate (PLANNED)
+L0-smoke/         S0 smoke assets
+L1-component/     S1 contention and S4 fault harness assets
+L2-protocol/      S2/S3 optional PTS assets plus legacy diagnostics
+L3-scenario/      legacy/future asset aliases, not current plan stages
+L4-combined/      legacy/future asset aliases, not current plan stages
 archive/          Historical JMX files (non-current)
 ```
 
-Each layer's `PLANNED.md` contains the full spec for workloads not yet implemented.
-Historical scripts require `ALLOW_HISTORICAL_PTS=1`; see `HISTORICAL.md`.
+Old `L*` names in directory names or JMX sampler labels are asset aliases only.
+Do not create new plans or reports named L2/L3/L4.
 
 ---
 

@@ -46,9 +46,15 @@ PTS-1B is not an admission-protection test. It is a hot-engine decision-path tes
 
 If admission `429`, `RATE_LIMITED`, or `BID_AUCTION_TOO_HOT` dominates a run, that run is not PTS-1B success evidence.
 
-## Kafka Is Not Optional For PTS-1B
+## Kafka Relay Is Not Optional For PTS-1B
 
-Redis live decisions must be fenced through Kafka and settled to PostgreSQL. If Kafka append/fence is unknown or failed, the system must expose pending/paused/reconciling state according to `docs/current/performance-correctness-contract.md`; it must not present final settled success.
+Redis live decisions return at the `ENGINE_DURABLE` boundary: Redis hot state,
+Redis Stream, and idempotency replay state. Kafka append/fence is asynchronous,
+but it is still mandatory evidence for replay, settlement, and fault recovery.
+If Kafka relay is unavailable or lagging, the system must expose lag/pending/DLQ
+state and either drain after recovery or pause/reconcile. It must not claim
+settled/fault-ready correctness while Redis pending decisions, Kafka lag, DLQ,
+or settlement gaps remain.
 
 ## Do Not Mix Profiles
 

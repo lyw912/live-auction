@@ -1327,6 +1327,177 @@ func TestKafkaSettlementSameClientBidDifferentRequestHashFailsAndPauses(t *testi
 	}
 }
 
+func TestRejectedBatchSetBasedSettlementSettlesContiguousRejects(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+	rejectReason := "BID_TOO_LOW"
+	for i := 1; i <= 2; i++ {
+		userID := "user_" + strconv.Itoa(i)
+		clientBidID := "redis-ledger-reject-batch-ok-" + strconv.Itoa(i)
+		result := engineResult{
+			Result:            resultRejected,
+			BidID:             "bid_reject_batch_ok_" + strconv.Itoa(i) + "_" + uuid.NewString(),
+			AuctionID:         auctionID,
+			UserID:            userID,
+			ClientBidID:       clientBidID,
+			AmountCents:       10_000,
+			RejectReason:      &rejectReason,
+			EngineSeq:         int64(i),
+			EngineEpoch:       1,
+			SettlementStatus:  auction.SettlementStatusPending,
+			CurrentPriceCents: 10_000,
+			ServerTimeMS:      time.Now().UTC().UnixMilli(),
+			TraceID:           "tr_reject_batch_ok_" + strconv.Itoa(i),
+			RequestHash:       requestHash(auctionID, userID, clientBidID, 10_000),
+		}
+		if _, err := ledger.Append(ctx, result); err != nil {
+			t.Fatalf("append rejected %d: %v", i, err)
+		}
+	}
+
+	processed, err := worker.ProcessKafka(ctx, 10)
+	if err != nil {
+		t.Fatalf("process rejected batch: %v", err)
+	}
+	if processed != 2 {
+		t.Fatalf("processed = %d, want 2", processed)
+	}
+	if memoryLedgerNext(t, ledger) != 2 {
+		t.Fatalf("memory ledger next = %d, want 2", memoryLedgerNext(t, ledger))
+	}
+	var engineSeq int64
+	if err := db.QueryRow(ctx, `SELECT engine_seq FROM auctions WHERE id = $1`, auctionID).Scan(&engineSeq); err != nil {
+		t.Fatalf("load auction engine_seq: %v", err)
+	}
+	if engineSeq != 2 {
+		t.Fatalf("auction engine_seq = %d, want 2", engineSeq)
+	}
+	var settled int
+	if err := db.QueryRow(ctx, `
+		SELECT count(*)
+		FROM redis_engine_settlements
+		WHERE auction_id = $1 AND status = 'SETTLED'
+	`, auctionID).Scan(&settled); err != nil {
+		t.Fatalf("count settled settlements: %v", err)
+	}
+	if settled != 2 {
+		t.Fatalf("settled settlements = %d, want 2", settled)
+	}
+	var rejectedBids int
+	if err := db.QueryRow(ctx, `
+		SELECT count(*)
+		FROM bids
+		WHERE auction_id = $1 AND status = 'REJECTED' AND settlement_status = 'SETTLED'
+	`, auctionID).Scan(&rejectedBids); err != nil {
+		t.Fatalf("count rejected bids: %v", err)
+	}
+	if rejectedBids != 2 {
+		t.Fatalf("rejected bids = %d, want 2", rejectedBids)
+	}
+	var completedIdem int
+	if err := db.QueryRow(ctx, `
+		SELECT count(*)
+		FROM idempotency_records
+		WHERE scope_type = 'bid' AND scope_id = $1 AND status = 'COMPLETED' AND result_code = $2
+	`, auctionID, auction.BidResultRejected).Scan(&completedIdem); err != nil {
+		t.Fatalf("count idempotency records: %v", err)
+	}
+	if completedIdem != 2 {
+		t.Fatalf("completed idempotency records = %d, want 2", completedIdem)
+	}
+}
+
+func TestRejectedBatchIdentityConflictFallsBackToSequentialSettlement(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+	clientBidID := "redis-ledger-reject-batch-conflict"
+	conflictingHash := requestHash(auctionID, "user_2", clientBidID, 10_000)
+	if _, err := db.Exec(ctx, `
+		INSERT INTO bids (
+		  id, auction_id, user_id, client_bid_id, amount_cents, status,
+		  reject_reason, request_hash, response_json, trace_id, source,
+		  engine_epoch, engine_seq, settlement_status
+		)
+		VALUES ($1, $2, 'user_1', $3, 10000, 'REJECTED',
+		        'BID_TOO_LOW', $4, '{}'::jsonb, 'tr_conflict_seed', 'MANUAL',
+		        1, 99, 'SETTLED')
+	`, "bid_conflict_seed_"+uuid.NewString(), auctionID, clientBidID, conflictingHash); err != nil {
+		t.Fatalf("seed conflicting bid: %v", err)
+	}
+	rejectReason := "BID_TOO_LOW"
+	first := engineResult{
+		Result:            resultRejected,
+		BidID:             "bid_reject_batch_conflict_1_" + uuid.NewString(),
+		AuctionID:         auctionID,
+		UserID:            "user_1",
+		ClientBidID:       clientBidID,
+		AmountCents:       10_000,
+		RejectReason:      &rejectReason,
+		EngineSeq:         1,
+		EngineEpoch:       1,
+		SettlementStatus:  auction.SettlementStatusPending,
+		CurrentPriceCents: 10_000,
+		ServerTimeMS:      time.Now().UTC().UnixMilli(),
+		TraceID:           "tr_reject_batch_conflict_1",
+		RequestHash:       requestHash(auctionID, "user_1", clientBidID, 10_000),
+	}
+	second := first
+	second.BidID = "bid_reject_batch_conflict_2_" + uuid.NewString()
+	second.UserID = "user_2"
+	second.ClientBidID = "redis-ledger-reject-batch-conflict-2"
+	second.EngineSeq = 2
+	second.TraceID = "tr_reject_batch_conflict_2"
+	second.RequestHash = requestHash(auctionID, "user_2", second.ClientBidID, second.AmountCents)
+	if _, err := ledger.Append(ctx, first); err != nil {
+		t.Fatalf("append first rejected: %v", err)
+	}
+	if _, err := ledger.Append(ctx, second); err != nil {
+		t.Fatalf("append second rejected: %v", err)
+	}
+
+	processed, err := worker.ProcessKafka(ctx, 10)
+	if err != nil {
+		t.Fatalf("process batch fallback conflict: %v", err)
+	}
+	if processed != 2 {
+		t.Fatalf("processed = %d, want conflicted offset committed then contiguous follower settled", processed)
+	}
+	if memoryLedgerNext(t, ledger) != 2 {
+		t.Fatalf("memory ledger next = %d, want both fetched offsets committed", memoryLedgerNext(t, ledger))
+	}
+	assertEnginePaused(t, db, auctionID, "KAFKA_LEDGER_SETTLEMENT_IDENTITY_CONFLICT")
+	var status string
+	var lastErr string
+	if err := db.QueryRow(ctx, `
+		SELECT status, COALESCE(last_error, '')
+		FROM redis_engine_settlements
+		WHERE auction_id = $1 AND engine_seq = 1
+	`, auctionID).Scan(&status, &lastErr); err != nil {
+		t.Fatalf("load conflicted settlement: %v", err)
+	}
+	if status != "FAILED" || !strings.Contains(lastErr, "bid idempotency conflict") {
+		t.Fatalf("settlement status=%q lastErr=%q, want FAILED bid idempotency conflict", status, lastErr)
+	}
+	if err := db.QueryRow(ctx, `
+		SELECT status
+		FROM redis_engine_settlements
+		WHERE auction_id = $1 AND engine_seq = 2
+	`, auctionID).Scan(&status); err != nil {
+		t.Fatalf("load follower settlement: %v", err)
+	}
+	if status != "SETTLED" {
+		t.Fatalf("follower settlement status=%q, want SETTLED", status)
+	}
+}
+
 func TestKafkaSettlementStaleEpochPauses(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)

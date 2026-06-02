@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,8 +36,9 @@ func TestMonitorRoutesReturnRealDBRowsAndRequireHost(t *testing.T) {
 	assertMonitorForbiddenForUser(t, router, "/api/monitor/auctions")
 	assertMonitorHasItems(t, router, "/api/monitor/auctions", "auction_id", row.ID)
 	assertMonitorHasItems(t, router, "/api/monitor/anomalies", "type", "MONITOR_TEST")
-	assertMonitorHasItems(t, router, "/api/monitor/outbox", "aggregate_id", row.ID)
-	assertMonitorHasItems(t, router, "/api/monitor/outbox", "delivery_state", "READY")
+	outboxPath := "/api/monitor/outbox?auction_id=" + row.ID
+	assertMonitorHasItems(t, router, outboxPath, "aggregate_id", row.ID)
+	assertMonitorHasItems(t, router, outboxPath, "delivery_state", "ACK_PENDING")
 	assertMonitorHasItems(t, router, "/api/monitor/outbox/watermarks", "ack_pending_count", float64(1))
 	assertMonitorHasItems(t, router, "/api/monitor/scheduler", "target_id", row.ID)
 	assertMonitorHasItems(t, router, "/api/monitor/rejects", "auction_id", row.ID)
@@ -96,7 +98,11 @@ func assertMonitorForbiddenForUser(t *testing.T, router http.Handler, path strin
 
 func assertMonitorHasItems(t *testing.T, router http.Handler, path string, field string, want any) {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, path+"?limit=100", nil)
+	separator := "?"
+	if strings.Contains(path, "?") {
+		separator = "&"
+	}
+	req := httptest.NewRequest(http.MethodGet, path+separator+"limit=100", nil)
 	req.Header.Set("X-Mock-Role", "host")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
