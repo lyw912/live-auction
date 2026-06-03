@@ -25,7 +25,10 @@ This split follows two pressure-model rules:
 
 Every run must also collect service-side evidence. PTS and k6 provide client
 pressure and client-observed latency; they do not by themselves prove Kafka,
-Redis, PostgreSQL, outbox, or runtime health.
+Redis, PostgreSQL, outbox, or runtime health. When k6 runs on an independent
+ECS, follow [independent-k6-runbook.md](independent-k6-runbook.md) and preserve
+k6 host CPU, memory, network, socket, and `dropped_iterations` evidence so the
+pressure generator is not mistaken for the service bottleneck.
 
 ## 2. `S2-long-soak`
 
@@ -273,4 +276,3 @@ For formal evidence, store raw artifacts under
 5. `S3-mixed-final-burst` after the isolated tests are clean.
 
 This order reduces paid debugging and makes each later failure attributable.
-

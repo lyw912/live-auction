@@ -112,6 +112,7 @@ MANIFEST is preserved — only the *names and headline framing* change).
 | [`s2-steady-auction-and-soak.md`](s2-steady-auction-and-soak.md) | 稳态: open-model arrival, realistic bid mix, leak detection |
 | [`s2-settlement-diagnosis-and-judge-defense.md`](s2-settlement-diagnosis-and-judge-defense.md) | S2 settlement bottleneck diagnosis, rejected write amplification, and judge Q&A |
 | [`s2-s3-expanded-test-design.md`](s2-s3-expanded-test-design.md) | S2/S3 split into long soak, convergence, capacity, read interference, live-only fanout, and mixed final burst |
+| [`independent-k6-runbook.md`](independent-k6-runbook.md) | independent ECS k6 deployment, host monitoring, evidence gates, and S1-S5 tool choice |
 | [`s3-room-fanout.md`](s3-room-fanout.md) | 围观: fanout latency measurement, 10k headline + cost variant, RAM/conn |
 | [`s4-fault-resilience.md`](s4-fault-resilience.md) | 故障: chaos structure, minimal fault set, RTO/RPO, no-double-charge test |
 | [`s4-fault-resilience-judge-defense.md`](s4-fault-resilience-judge-defense.md) | S4 exact workload, user-visible fault meaning, current evidence, and judge Q&A |
