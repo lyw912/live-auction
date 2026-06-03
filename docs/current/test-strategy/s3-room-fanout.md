@@ -4,8 +4,13 @@
 > Headline: **M2 fanout publish→receive p99 ≤ 1 s** at the target connection count
 > + connections held + RAM/connection.
 > Tool: **PTS** (clean per-connection p99 chart) + **local k6** (10 000 soak).
-> Source assets: `tests/pts/L2-protocol/pts-2p1-bid-plus-ws-fanout.jmx` and
-> `tests/load/s3-fanout-soak.js`; old `L2-*` names are file aliases only.
+> Current PTS assets:
+> `tests/pts/S3-room-fanout/s3-live-fanout-smoke-30vu-single-branch-20ws-5bid-5read.jmx`
+> and
+> `tests/pts/S3-room-fanout/s3-live-fanout-4500vu-single-branch-3000ws-1000bid-500read.jmx`.
+> Do not use old L2/P3 filenames for new S3 reports.
+> Expanded split: `S3-live-only-fanout` and `S3-mixed-final-burst` are governed
+> by [s2-s3-expanded-test-design.md](s2-s3-expanded-test-design.md).
 
 ## 1. The business moment
 
@@ -58,13 +63,24 @@ server clock; `recv_local_ms` is the load-generator clock. Mitigation:
 **PTS WebSocket sampler shape** (plugin; each sampler times only its op — see
 [pts-playbook §4](pts-playbook.md)):
 ```
-"建立连接 ws-connect"        Open Connection        → handshake p99 (join context)
-(send nothing; viewers only watch)
-"广播接收 ws-fanout-receive" Single Read, in a loop  → elapsed = wait for ONE broadcast = M2
+"S3 WS handshake complete"              → WebSocket open/accept latency
+"S3 WS first snapshot/business message" → realtime-ready latency for room entry
+"S3 live fanout receive"                → live published_at_ms -> client receive latency
 ```
-The Single-Read elapsed time *is* the fanout latency; the multi-minute hold never
-enters it. Each connection records its worst `MAX_LAT_MS` in `responseMessage` as
-a cross-check, but the chart value is the sampler p99.
+The live fanout sampler must not poll `/api/auctions/{id}` per viewer. S3 v6
+records live fanout only from WebSocket messages whose `published_at_ms` is not
+older than the viewer connection time. Read traffic is isolated in the explicit
+reader thread group.
+
+Handshake interpretation: `S3 WS handshake complete` is a client-observed
+JMeter sampler around Java `HttpClient.newWebSocketBuilder().buildAsync(...).join()`.
+It includes TCP/HTTP Upgrade and pressure-agent/client scheduling effects, not
+just backend `websocket.Accept`. The sampler reuses a shared Java `HttpClient`
+and pauses timing while constructing listener/client state; its response message
+records both `SETUP_MS` and `HANDSHAKE_MS` so a slow chart can be separated from
+client-side setup noise. Server-side `auction_ws_join_stage_seconds` remains the
+backend attribution source for ticket consume, room/access validation, accept,
+recovery, first write, and total join.
 
 ## 4. Decouple connection count from bid rate
 
@@ -74,10 +90,14 @@ bidders   : a SMALL fixed source of accepted updates (e.g. 1–10 accepted/s) �
 viewers   : the variable under test — ramp 1k → 2k → 5k → 10k, hold each tier
 observe   : at each tier, M2 p99 + connections held + RAM/conn + CPU
 ```
-This isolates "fanout p99 vs connection count" — the curve a judge wants to see —
-instead of confounding it with bid throughput. If M2 grows roughly linearly with
-connections, that is the WS downlink (serialization/JSON/sendbuf) cost, and the
-scale-out path is gateway sharding.
+This is `S3-live-only-fanout`. It isolates "fanout p99 vs connection count" —
+the curve a judge wants to see — instead of confounding it with bid throughput.
+If M2 grows roughly linearly with connections, that is the WS downlink
+(serialization/JSON/sendbuf) cost, and the scale-out path is gateway sharding.
+
+`S3-mixed-final-burst` is a later integration rehearsal, not the M2 baseline. It
+adds final-window bid pressure and controlled read traffic only after
+`S3-live-only-fanout` and `S2-read-interference` are clean.
 
 ## 5. Connection cost & node prep (state these numbers)
 
@@ -105,11 +125,40 @@ sysctl -w net.ipv4.ip_local_port_range="1024 65535"
 | RAM / connection | Grafana RSS ÷ connections at each tier |
 | every viewer got every seq | scenario verifier: each sampled connection received seq 1..final, all with `published_at_ms` (`verify-l2p3/p4` style) |
 
+For S3 PTS reports, use Alibaba Cloud `GetJMeterReportDetails` /
+`SamplerMetricsList` as the source for sampler `AllCount`, `SuccessRateReq`, and
+`Seg99Rt`. Alibaba Cloud documents `GetJMeterSamplingLogs` as the API for
+sampler log rows with filters such as `SamplerId`; those rows are useful for
+request/response-body forensics, but they are not the S3 exact-count source.
+`VAH7X7CG` showed this concretely: 100% sampling-log retrieval returned only
+sampler ids 0,4,5,6,7, while report details showed all S3 HTTP, WS, and reader
+samplers ran with the expected counts and 100% success.
+
+PTS full-run configuration must set `是否指定循环=是` and `循环次数=1`.
+Alibaba Cloud PTS documents that console concurrency/loop settings override main
+Thread Group settings in uploaded JMeter scripts. If loop count is not specified,
+PTS can keep the main Thread Groups running until the configured duration, which
+turns the reader group into continuous polling. `VLH9X7NG` demonstrated this
+failure mode: the 994-reader group produced about 1.31 million GET requests
+instead of the intended `994 * 3`, saturated the DB pool, and invalidated the
+report as clean S3 fanout evidence.
+
+The current mixed PTS asset uses one main Thread Group with a mixed-role CSV:
+3000 WebSocket viewers, 1000 bidders, and 500 readers. This is intentional.
+Earlier multi-main-ThreadGroup variants depended on PTS distributing several
+groups proportionally; small and full runs repeatedly ended with wrong role
+counts or reader loops. The single-branch asset makes the expected count equal
+to the mixed CSV rows and verifies it through sampler counts.
+
 ## 7. Pitfalls
 
 - **Hold counted as latency.** If `ws-fanout-receive` p99 is tens of seconds, the
   hold leaked into elapsed — split samplers per [playbook §4](pts-playbook.md)
   (`58A5X7KG`).
+- **History/recovery counted as live fanout.** A reconnect or newly joined viewer
+  can receive older public events that still carry `published_at_ms`. Those
+  events answer snapshot/recovery correctness, not M2 live fanout. The k6 S3
+  script must only measure messages with `published_at_ms >= connectedAtMs`.
 - **Local 10k to the same box.** Ephemeral-port exhaustion / CPU contention on the
   generator looks like a server limit but is not — prefer PTS multi-IP, document
   the local limit.
@@ -121,3 +170,49 @@ sysctl -w net.ipv4.ip_local_port_range="1024 65535"
   realtime sync.
 - **Heartbeat closing idle viewers.** The viewer sampler must answer ping/pong so
   the server's 20 s+5 s heartbeat does not close the cohort mid-run.
+- **Sampling-log row coverage.** A 100% sampling setting does not make
+  `GetJMeterSamplingLogs` the S3 exact-count ledger. Verify counts and p99 from
+  `GetJMeterReportDetails`; use sampling logs only to inspect diagnostic
+  response messages such as `S3_V6_LIVE_FANOUT_OK...WS_ONLY`.
+- **Too few accepted updates.** Thousands of viewers with only a dozen accepted
+  public updates is useful connection evidence, not a rich fanout sample. Report
+  accepted update count, receive sample count, and publish subscriber count
+  together.
+- **Read traffic mislabeled as fanout.** High reader RPS belongs to
+  `S2-read-interference`; S3's M2 baseline should keep reads absent or tightly
+  controlled.
+- **PTS loop override.** Do not rely on JMX `LoopController.loops=1` alone in PTS
+  JMeter mode. For the full S3 asset, set PTS `是否指定循环=是` and `循环次数=1`;
+  the formal JMX also sets reader CSV `recycle=false` and `stopThread=true` as a
+  guardrail.
+- **Handshake p99 misread.** If PTS reports a high `S3 WS handshake complete`
+  p99, compare it with server `auction_ws_join_stage_seconds{stage="total"}` and
+  response markers `SETUP_MS/HANDSHAKE_MS`. In `VAH7X7CG`, server total join was
+  below 10ms for all 20 connections while the client-observed PTS handshake p99
+  was 596ms, pointing at pressure-agent/network/client timing rather than the
+  backend accept path.
+
+## 8. Current Local Evidence Snapshot
+
+> Status: raw incoming evidence, not yet a final PTS PDF. Use for judge rehearsal
+> only with the scope below.
+
+| Run | Scale | Fanout p99 | Viewer errors | Interpretation |
+|---|---:|---:|---:|---|
+| `s3-local-scale-1000-liveonly-20260602T2303` | 1000 WS, 60s, 301 accepted updates | 22 ms | 0 | Current local S3/M2 evidence: live publish-to-online-viewer receive latency passes the 1s target |
+| `s3-local-scale-1000-20260602T2300` | 1000 WS, 60s, 74 accepted updates | 59.6 s | 9 | Harness-contaminated run: history/recovery messages were counted as fanout latency |
+| `s3-local-scale-2000-20260602T2305` | attempted 2000 WS | no complete summary | unknown | Failed/incomplete run; usable only as single-node/local-generator ceiling evidence |
+
+Judge-safe wording:
+
+> "The first 1000-WS local run exposed a measurement bug: historical/recovery
+> messages were being included in M2, producing a false 59.6s fanout p99. After
+> fixing the harness to count only live messages published after the viewer
+> connection opened, the 1000-WS rerun produced p99 22ms with zero viewer errors.
+> We cite the live-only run for S3/M2 and keep the earlier run as a harness
+> correction record."
+
+Do not claim 2000 or 10000 WS success from the current local artifacts. The next
+judge-grade S3 artifact should be either the PTS 2000-WS cost variant or a
+completed local 10k hold with Grafana resource panels and a clear generator-limit
+statement.

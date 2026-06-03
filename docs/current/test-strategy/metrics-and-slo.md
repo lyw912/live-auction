@@ -24,6 +24,11 @@ offered bid rate, decisions-serialized/sec, accepted-update rate, connections
 held, RAM/connection, join-latency components (snapshot/ticket/upgrade),
 outbox lag, Kafka consumer lag.
 
+S2/S3 expanded workloads are named by business question:
+`S2-long-soak`, `S2-convergence-drain`, `S2-capacity-stair`,
+`S2-read-interference`, `S3-live-only-fanout`, and
+`S3-mixed-final-burst`.
+
 S2 also reports a supporting **settlement convergence** safety signal:
 `k6_end -> Kafka lag 0 + Redis pending 0 + PG settlements complete + outbox
 drained`. This is measured in seconds, not milliseconds. The current local S2
@@ -131,7 +136,8 @@ steady-state SLI (e.g. *decision success ≥ 99% AND p99 ≤ 50 ms*) holds over 
 trailing window — **never** on a single good sample. `RTO = slo_recovered −
 fault_injected` (or, for the user-visible bid path, fault-clear → first sustained
 DECIDED). Targets: ≤ 10 s excellent, ≤ 30 s acceptable, ≤ 45 s hard local ceiling
-(single-container Kafka cold start). Already realized: S4 measured 3–26 s.
+(single-container Kafka cold start). Current S4 evidence measured RTO gates of
+2–16 s, with the slowest restore-start-to-final convergence at 33 s.
 
 **RPO.** A *data-loss* measure, proven by reconciliation, not uptime:
 

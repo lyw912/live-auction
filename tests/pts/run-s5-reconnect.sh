@@ -1,23 +1,17 @@
 #!/usr/bin/env bash
 # run-s5-reconnect.sh — S5 断连重连 / Reconnect & Recovery runner
 #
-# Tests that a WebSocket client reconnecting with a stale last_seq correctly
-# catches up to the current auction state without gaps, duplicates, or stale truth.
+# Tests that a WebSocket client first connects, disconnects, misses real public
+# seq updates, then reconnects with last_seq and catches up without gaps,
+# duplicates, or stale truth.
 #
 # Two modes (controlled by DISCONNECT_MODE env):
 #   clean   — clients disconnect cleanly and reconnect with stale seq (default)
 #   network — Toxiproxy reset_peer simulates abrupt network drop (more realistic)
 #
-# Toxiproxy setup for "network" mode (run before this script):
-#   # Add Toxiproxy proxy for the WS port:
-#   curl -s -X POST http://localhost:8474/proxies \
-#     -d '{"name":"ws-port","listen":"0.0.0.0:18081","upstream":"127.0.0.1:18080"}'
-#   # Then set DISCONNECT_MODE=network WS_URL=ws://127.0.0.1:18081
-#
 # Usage:
 #   bash tests/pts/run-s5-reconnect.sh                                 # clean mode
-#   DISCONNECT_MODE=network WS_URL=ws://127.0.0.1:18081 \
-#     bash tests/pts/run-s5-reconnect.sh                               # toxiproxy mode
+#   DISCONNECT_MODE=network bash tests/pts/run-s5-reconnect.sh          # toxiproxy mode
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://127.0.0.1:18080}"
@@ -25,51 +19,99 @@ WS_URL="${WS_URL:-ws://127.0.0.1:18080}"
 DISCONNECT_MODE="${DISCONNECT_MODE:-clean}"
 VUS="${VUS:-20}"
 DURATION="${DURATION:-2m}"
-SEQ_LAG="${SEQ_LAG:-5}"     # simulated stale gap (client missed last N events)
+MISSED_EVENTS="${MISSED_EVENTS:-3}"
+BID_RATE_PER_S="${BID_RATE_PER_S:-10}"
+BID_SOURCE_VUS="${BID_SOURCE_VUS:-5}"
+SESSION_CSV="${SESSION_CSV:-../../docs/perf/pts/pts-1ab-1000vu-sessions.csv}"
+K6_DOCKER_IMAGE="${K6_DOCKER_IMAGE:-grafana/k6:latest}"
 LABEL="${LABEL:-s5-$(date +%Y%m%dT%H%M%S)}"
+EVIDENCE_DIR="docs/perf/pts/evidence/incoming/${LABEL}"
 
 echo "=== S5 断连重连 — mode=${DISCONNECT_MODE}, VUs=${VUS}, duration=${DURATION} ==="
-echo "    Each VU: initial connect → simulate disconnect → reconnect with last_seq=(current-${SEQ_LAG})"
+echo "    Each VU: initial connect → disconnect → miss ${MISSED_EVENTS} real seqs → reconnect with last_seq"
 echo "    Measures: time-to-current-state p99, seq gaps, server-truth consistency"
 
-# Pre-check: ensure there are live price updates happening (so reconnect has something to catch up to)
-echo ""
-echo "Starting a background bid source to generate price updates..."
-k6 run \
-  --env BASE_URL="$BASE_URL" \
-  --env STAGE1_RATE=3 --env STAGE2_RATE=3 --env STAGE3_RATE=3 \
-  --env STAGE_DUR="$DURATION" \
-  tests/load/s2-steady-soak.js \
-  --no-summary &
-BID_PID=$!
-trap 'kill $BID_PID 2>/dev/null || true' EXIT
+mkdir -p "$EVIDENCE_DIR"
 
-sleep 5   # let price move before reconnect wave starts
-echo ""
+if [[ "$DISCONNECT_MODE" == "network" ]]; then
+  echo "Starting Toxiproxy WS proxy on :18081 -> host.docker.internal:18080..."
+  docker compose -f infra/docker-compose.yml -f infra/docker-compose.toxiproxy.yml up -d toxiproxy
+  node tests/chaos/s5-toxiproxy-ws-fault.mjs inject | tee "$EVIDENCE_DIR/toxiproxy-ws.json"
+  WS_URL="${WS_URL:-ws://127.0.0.1:18081}"
+fi
 
-mkdir -p "docs/perf/pts/evidence/incoming/${LABEL}"
+curl -s "$BASE_URL/readyz" > "$EVIDENCE_DIR/readyz-before.json" || true
+if command -v docker >/dev/null 2>&1; then
+  docker exec live-auction-postgres psql -U live_auction -d live_auction -A -F ',' -c \
+    "select event_type, payload_json->>'source' as source, count(*) from user_activity_events where created_at >= now() - interval '10 minutes' and event_type in ('ws_reconnect','ws_recovered','ws_slow_consumer_closed') group by 1,2 order by 1,2;" \
+    > "$EVIDENCE_DIR/recovery-before.csv" 2>/dev/null || true
+fi
+
+cat > "$EVIDENCE_DIR/run-env.json" <<EOF
+{
+  "label": "$LABEL",
+  "base_url": "$BASE_URL",
+  "ws_url": "$WS_URL",
+  "disconnect_mode": "$DISCONNECT_MODE",
+  "vus": $VUS,
+  "duration": "$DURATION",
+  "missed_events": $MISSED_EVENTS,
+  "bid_rate_per_s": $BID_RATE_PER_S,
+  "bid_source_vus": $BID_SOURCE_VUS,
+  "session_csv": "$SESSION_CSV"
+}
+EOF
 
 echo "Running S5 reconnect recovery test..."
-k6 run \
-  --env BASE_URL="$BASE_URL" \
-  --env WS_URL="$WS_URL" \
-  --env DISCONNECT_MODE="$DISCONNECT_MODE" \
-  --env VUS="$VUS" \
-  --env DURATION="$DURATION" \
-  --env INITIAL_SEQ_LAG="$SEQ_LAG" \
+K6_ARGS=(
+  run
+  --env "BASE_URL=$BASE_URL"
+  --env "WS_URL=$WS_URL"
+  --env "DISCONNECT_MODE=$DISCONNECT_MODE"
+  --env "VUS=$VUS"
+  --env "DURATION=$DURATION"
+  --env "MISSED_EVENTS=$MISSED_EVENTS"
+  --env "BID_RATE_PER_S=$BID_RATE_PER_S"
+  --env "BID_SOURCE_VUS=$BID_SOURCE_VUS"
+  --env "SESSION_CSV=$SESSION_CSV"
+  --summary-export "$EVIDENCE_DIR/s5-k6-summary.json"
+  --out "json=$EVIDENCE_DIR/s5-k6-reconnect.json"
   tests/load/s5-reconnect-recovery.js \
-  --out "json=docs/perf/pts/evidence/incoming/${LABEL}/s5-k6-reconnect.json"
+)
 
-kill $BID_PID 2>/dev/null || true
+K6_EXIT=0
+if command -v k6 >/dev/null 2>&1; then
+  k6 "${K6_ARGS[@]}" || K6_EXIT=$?
+else
+  echo "   local k6 not found; using Docker image ${K6_DOCKER_IMAGE}"
+  docker run --rm --network host --user "$(id -u):$(id -g)" \
+    -v "$PWD:/work" -w /work \
+    "$K6_DOCKER_IMAGE" "${K6_ARGS[@]}" || K6_EXIT=$?
+fi
+
+curl -s "$BASE_URL/readyz" > "$EVIDENCE_DIR/readyz-after.json" || true
+if command -v docker >/dev/null 2>&1; then
+  docker exec live-auction-postgres psql -U live_auction -d live_auction -A -F ',' -c \
+    "select event_type, payload_json->>'source' as source, count(*) from user_activity_events where created_at >= now() - interval '10 minutes' and event_type in ('ws_reconnect','ws_recovered','ws_slow_consumer_closed') group by 1,2 order by 1,2;" \
+    > "$EVIDENCE_DIR/recovery-after.csv" 2>/dev/null || true
+fi
+
+if [[ "$DISCONNECT_MODE" == "network" ]]; then
+  node tests/chaos/s5-toxiproxy-ws-fault.mjs clear > "$EVIDENCE_DIR/toxiproxy-clear.json" || true
+fi
+
+echo "$K6_EXIT" > "$EVIDENCE_DIR/k6-exit.txt"
 
 echo ""
-echo "=== S5 done. Evidence: docs/perf/pts/evidence/incoming/${LABEL}/ ==="
+echo "=== S5 done. Evidence: ${EVIDENCE_DIR}/ ==="
 echo ""
 echo "   Key metrics to report:"
 echo "     s5_ttcs_ms p99        — time-to-current-state p99 (target ≤ 2s)"
 echo "     s5_recovered_total    — connections that successfully caught up"
 echo "     s5_recovery_errors    — must be 0"
 echo "     s5_seq_gaps_after_reconnect — must be 0"
+echo "     s5_duplicate_seq_after_reconnect — must be 0"
 echo ""
-echo "   Recovery source: server logs will show 'incremental replay' vs 'snapshot rebuild'."
-echo "   grep the server logs for 'reconnect' or 'snapshot' to get the distribution."
+echo "   Recovery source distribution is captured in recovery-before/after monitor snapshots."
+
+exit "$K6_EXIT"

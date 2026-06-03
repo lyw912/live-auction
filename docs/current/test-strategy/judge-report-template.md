@@ -7,6 +7,12 @@
 
 ## Structure (one section each)
 
+Every scenario explanation must follow
+[explanation-template.md](explanation-template.md). In particular, each number
+must include load scale, per-user behavior/pacing, duration, metric boundary,
+user-visible interpretation, safety gates, and claim boundary. Do not publish
+bare numbers such as "RTO 19s" or "1000 WS pass" without that context.
+
 ### 1. Executive summary — conclusion first
 Lead with the verdict and the pass/fail matrix. Example wording:
 
@@ -14,8 +20,8 @@ Lead with the verdict and the pass/fail matrix. Example wording:
 > decision p99 = __ ms (≤ 50 ms), the winner is the highest valid bid, and every
 > reject carries a decision-time basis. Sustained 10-min realtime load holds p99 =
 > __ ms with flat heap/goroutine/fd. A single room held __ WS with fanout p99 =
-> __ ms (≤ 1 s). Six fault injections recovered in 3–26 s with RPO = 0 and zero
-> duplicate settlements. Per-node capacity is one shard; the horizontal path is
+> __ ms (≤ 1 s). Seven fault injections recovered with RTO gates of 2–16 s,
+> RPO = 0, and zero duplicate settlements. Per-node capacity is one shard; the horizontal path is
 > room-sharded gateways + sharded pub/sub + auction-partitioned Kafka."
 
 | Scenario | 正确性 (M3) | 性能 | 韧性 | Verdict |
@@ -24,7 +30,7 @@ Lead with the verdict and the pass/fail matrix. Example wording:
 | S1 绝杀 (PTS) | PASS | decision p99 = __ ms | — | ✅ |
 | S2 稳态 + soak | PASS | p99 = __ ms | no leak | ✅ |
 | S3 围观 (PTS) | PASS | fanout p99 = __ ms @ __ WS | — | ✅ / ⚠ ceiling@__ |
-| S4 故障 ×6 | PASS | — | RTO 3–26 s, RPO=0 | ✅ |
+| S4 故障 ×7 | PASS | — | RTO gate 2–16 s, RPO=0 | ✅ |
 | S5 重连 | PASS | TTCS = __ s | no lost/dup | ✅ |
 
 ### 2. Test architecture — what was measured, where
@@ -42,7 +48,7 @@ State: PTS = same-VPC (clean latency, M2 clock valid); server metrics from
 Prometheus; correctness from `verify-*.sh`; faults local (0 VUM).
 
 ### 3. Per-scenario pages (one per S1/S2/S3)
-Each page carries exactly four things — no more:
+Each page carries the required explanation template plus these four artifacts:
 1. **Config**: VU/RPS, duration, offered rate, connection count, profile.
 2. **The latency chart** — the exported PTS per-sampler p99 (the named sampler =
    the metric; see [pts-playbook](pts-playbook.md)). For S2/S3 soak, the Grafana
@@ -56,7 +62,9 @@ Each page carries exactly four things — no more:
    > backlog, no pending Redis settlement."
 
 ### 4. Fault timeline page (highest technical signal)
-For each P0 fault, the four artifacts from [s4 §8](s4-fault-resilience.md):
+For each P0 fault, first state the load model and user-visible meaning using
+[explanation-template.md](explanation-template.md), then show the four artifacts
+from [s4 §8](s4-fault-resilience.md):
 RTO timeline with timestamps, RPO=0 reconciliation table, fail-closed statement
 (zero phantom accepts), recovery curve. Example timeline:
 ```

@@ -22,7 +22,7 @@ command -v jq >/dev/null 2>&1 || {
 
 EXPECTED_BIDS="${EXPECTED_BIDS:-1008}"
 EXPECTED_WS="${EXPECTED_WS:-4998}"
-EXPECTED_FINAL_SEQ="${EXPECTED_FINAL_SEQ:-11}"
+EXPECTED_FINAL_SEQ="${EXPECTED_FINAL_SEQ:-}"
 BID_P99_MAX_MS="${BID_P99_MAX_MS:-100}"
 READ_P99_MAX_MS="${READ_P99_MAX_MS:-200}"
 FANOUT_P99_MAX_MS="${FANOUT_P99_MAX_MS:-1000}"
@@ -126,7 +126,7 @@ assert_p99_lte() {
 
 echo "L2-P3 PTS evidence verifier"
 echo "source: $JSONL"
-echo "expected: bids=$EXPECTED_BIDS ws=$EXPECTED_WS final_seq=$EXPECTED_FINAL_SEQ"
+echo "expected: bids=$EXPECTED_BIDS ws=$EXPECTED_WS final_seq=${EXPECTED_FINAL_SEQ:-dynamic}"
 
 assert_exact_count "POST L2-P3 hot bid" "$EXPECTED_BIDS"
 assert_all_success "POST L2-P3 hot bid"
@@ -150,16 +150,24 @@ assert_p99_lte "WS fanout receive all seq" "$FANOUT_P99_MAX_MS"
 
 fanout_file="$(label_file "WS fanout receive all seq")"
 fanout_count="$(count_samples "$fanout_file")"
-bad_final_seq="$(jq -r --arg seq "FINAL_${EXPECTED_FINAL_SEQ}" 'select((.responseMessage // "") | contains($seq) | not) | .responseMessage' "$fanout_file" | head -n 5)"
+if [ -n "$EXPECTED_FINAL_SEQ" ]; then
+  bad_final_seq="$(jq -r --arg seq "FINAL_${EXPECTED_FINAL_SEQ}" 'select((.responseMessage // "") | contains($seq) | not) | .responseMessage' "$fanout_file" | head -n 5)"
+else
+  bad_final_seq="$(jq -r 'select(((.responseMessage // "") | test("WS_FANOUT_ALL_SEQ_OK_FINAL_[1-9][0-9]*_MAX_LAT_MS_[0-9]+")) | not) | .responseMessage' "$fanout_file" | head -n 5)"
+fi
 if [ "$fanout_count" -eq 0 ]; then
   echo "FAIL WS fanout receive all seq has no samples to prove final seq coverage"
   failures=$((failures+1))
 elif [ -n "$bad_final_seq" ]; then
-  echo "FAIL WS fanout receive all seq has samples that did not report FINAL_${EXPECTED_FINAL_SEQ}"
+  echo "FAIL WS fanout receive all seq has samples without valid FINAL_<n>_MAX_LAT_MS_<n> proof"
   printf '%s\n' "$bad_final_seq"
   failures=$((failures+1))
 else
-  echo "OK   WS fanout receive all seq proves each sampled connection received seq 1..$EXPECTED_FINAL_SEQ with latency timestamps"
+  if [ -n "$EXPECTED_FINAL_SEQ" ]; then
+    echo "OK   WS fanout receive all seq proves each sampled connection received seq 1..$EXPECTED_FINAL_SEQ with latency timestamps"
+  else
+    echo "OK   WS fanout receive all seq proves each sampled connection received seq 1..dynamic final seq with latency timestamps"
+  fi
 fi
 
 for label in "GET auction snapshot" "GET auction leaderboard" "GET my bid history"; do

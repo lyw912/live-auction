@@ -1,0 +1,529 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
+  <hashTree>
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="S3 live room fanout smoke 30VU single-branch" enabled="true">
+      <stringProp name="TestPlan.comments">S3 single-main-thread-group live room fanout pressure. A single 30-row mixed CSV drives 5 bidders, 20 WebSocket viewers, and 5 readers via JMeter IfController branches. This avoids Alibaba Cloud PTS proportional redistribution of multiple main Thread Groups and makes exact role counts verifiable from sampler counts.</stringProp>
+      <boolProp name="TestPlan.functional_mode">false</boolProp>
+      <boolProp name="TestPlan.tearDown_on_shutdown">true</boolProp>
+      <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
+      <elementProp name="TestPlan.user_defined_variables" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments" testname="User Defined Variables" enabled="true">
+        <collectionProp name="Arguments.arguments" />
+      </elementProp>
+    </TestPlan>
+    <hashTree>
+      <ConfigTestElement guiclass="HttpDefaultsGui" testclass="ConfigTestElement" testname="HTTP Request Defaults" enabled="true">
+        <elementProp name="HTTPsampler.Arguments" elementType="Arguments" guiclass="HTTPArgumentsPanel" testclass="Arguments" enabled="true">
+          <collectionProp name="Arguments.arguments" />
+        </elementProp>
+        <stringProp name="HTTPSampler.domain">${__P(host,172.16.179.112)}</stringProp>
+        <stringProp name="HTTPSampler.port">${__P(port,18080)}</stringProp>
+        <stringProp name="HTTPSampler.protocol">${__P(protocol,http)}</stringProp>
+        <stringProp name="HTTPSampler.contentEncoding">UTF-8</stringProp>
+        <stringProp name="HTTPSampler.connect_timeout">5000</stringProp>
+        <stringProp name="HTTPSampler.response_timeout">15000</stringProp>
+      </ConfigTestElement>
+      <hashTree />
+      <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="JSON headers" enabled="true">
+        <collectionProp name="HeaderManager.headers">
+          <elementProp name="" elementType="Header">
+            <stringProp name="Header.name">Content-Type</stringProp>
+            <stringProp name="Header.value">application/json</stringProp>
+          </elementProp>
+          <elementProp name="" elementType="Header">
+            <stringProp name="Header.name">Accept</stringProp>
+            <stringProp name="Header.value">application/json</stringProp>
+          </elementProp>
+        </collectionProp>
+      </HeaderManager>
+      <hashTree />
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="S3 mixed role dispatcher 30VU" enabled="true">
+        <stringProp name="ThreadGroup.num_threads">${__P(total_threads,30)}</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">${__P(total_ramp_sec,20)}</stringProp>
+        <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
+        <boolProp name="ThreadGroup.scheduler">true</boolProp>
+        <stringProp name="ThreadGroup.duration">${__P(run_duration_sec,90)}</stringProp>
+        <stringProp name="ThreadGroup.delay">0</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" enabled="true">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <stringProp name="LoopController.loops">1</stringProp>
+        </elementProp>
+      </ThreadGroup>
+      <hashTree>
+        <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="S3 mixed role sessions" enabled="true">
+          <stringProp name="delimiter">,</stringProp>
+          <stringProp name="fileEncoding">UTF-8</stringProp>
+          <stringProp name="filename">${__P(mixed_csv,s3-mixed-smoke-30-sessions.csv)}</stringProp>
+          <boolProp name="ignoreFirstLine">true</boolProp>
+          <boolProp name="quotedData">false</boolProp>
+          <boolProp name="recycle">false</boolProp>
+          <stringProp name="shareMode">shareMode.all</stringProp>
+          <boolProp name="stopThread">true</boolProp>
+          <stringProp name="variableNames">load_role,user_id,token,role</stringProp>
+        </CSVDataSet>
+        <hashTree />
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="S3 mixed VU start barrier" enabled="true">
+          <stringProp name="scriptLanguage">groovy</stringProp>
+          <stringProp name="cacheKey">s3-mixed-vu-start-barrier-v1</stringProp>
+          <stringProp name="script"><![CDATA[
+long wait = Long.parseLong(props.getProperty('s3_start_barrier_wait_ms', '15000'))
+long quantum = Long.parseLong(props.getProperty('s3_start_barrier_quantum_ms', '1000'))
+def target = props.get('s3_start_barrier_target_ms') as java.util.concurrent.atomic.AtomicLong
+if (target == null) {
+  long desired = System.currentTimeMillis() + wait
+  long aligned = ((desired + quantum - 1L) / quantum) * quantum
+  target = new java.util.concurrent.atomic.AtomicLong(aligned)
+  def existing = props.putIfAbsent('s3_start_barrier_target_ms', target)
+  if (existing != null) target = existing as java.util.concurrent.atomic.AtomicLong
+}
+long sleep = target.get() - System.currentTimeMillis()
+if (sleep > 0L) Thread.sleep(sleep)
+SampleResult.setSuccessful(true)
+SampleResult.setResponseCode('200')
+SampleResult.setResponseMessage('S3_MIXED_START_BARRIER_OK_ROLE_' + (vars.get('load_role') ?: 'missing'))
+          ]]></stringProp>
+        </JSR223Sampler>
+        <hashTree />
+        <IfController guiclass="IfControllerPanel" testclass="IfController" testname="S3 bidder branch" enabled="true">
+          <stringProp name="IfController.condition">${__groovy(vars.get('load_role') == 'bidder')}</stringProp>
+          <boolProp name="IfController.useExpression">true</boolProp>
+          <boolProp name="IfController.evaluateAll">false</boolProp>
+        </IfController>
+        <hashTree>
+          <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="S3 POST accepted-update bid" enabled="true">
+            <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+            <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+              <collectionProp name="Arguments.arguments">
+                <elementProp name="" elementType="HTTPArgument">
+                  <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                  <stringProp name="Argument.value">{"client_bid_id":"${client_bid_id}","amount_cents":${amount_cents},"client_seen_seq":${client_seen_seq}}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+              </collectionProp>
+            </elementProp>
+            <stringProp name="HTTPSampler.path">/api/auctions/auc_live/bids</stringProp>
+            <stringProp name="HTTPSampler.method">POST</stringProp>
+            <boolProp name="HTTPSampler.follow_redirects">false</boolProp>
+            <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+          </HTTPSamplerProxy>
+          <hashTree>
+            <JSR223PreProcessor guiclass="TestBeanGUI" testclass="JSR223PreProcessor" testname="compute contention bid" enabled="true">
+              <stringProp name="scriptLanguage">groovy</stringProp>
+              <stringProp name="cacheKey">s3-compute-contention-bid</stringProp>
+              <stringProp name="script">
+long wait = Long.parseLong(props.getProperty('burst_wait_ms', '5000'))
+long quantum = Long.parseLong(props.getProperty('contention_barrier_quantum_ms', '1000'))
+def target = props.get('s3_bid_target_ms') as java.util.concurrent.atomic.AtomicLong
+if (target == null) {
+  long desired = System.currentTimeMillis() + wait
+  long aligned = ((desired + quantum - 1L) / quantum) * quantum
+  target = new java.util.concurrent.atomic.AtomicLong(aligned)
+  def existing = props.putIfAbsent('s3_bid_target_ms', target)
+  if (existing != null) target = existing as java.util.concurrent.atomic.AtomicLong
+}
+long sleep = target.get() - System.currentTimeMillis()
+if (sleep &gt; 0L) Thread.sleep(sleep)
+String userID = vars.get('user_id') ?: 'unknown'
+def matcher = userID =~ /k6_bidder_(\d+)_(\d+)/
+def simpleMatcher = userID =~ /k6_bidder_(\d+)/
+long bucket = 1L
+long lane = 0L
+if (matcher.matches()) {
+  bucket = Long.parseLong(matcher.group(1))
+  lane = Long.parseLong(matcher.group(2))
+} else if (simpleMatcher.matches()) {
+  bucket = Long.parseLong(simpleMatcher.group(1))
+  lane = 0L
+}
+long rank = Math.max(1L, (bucket - 1L) * 7L + lane + 1L)
+long amount = Long.parseLong(props.getProperty('contention_amount_base_cents', '10000')) + Long.parseLong(props.getProperty('contention_amount_increment_cents', '5000')) * Long.parseLong(props.getProperty('contention_amount_stride', '1000')) * rank
+String id = 's3-live-fanout-' + userID + '-' + rank
+vars.put('amount_cents', Long.toString(amount))
+vars.put('client_bid_id', id)
+vars.put('client_seen_seq', Long.toString(Math.max(0L, rank - 1L)))
+            </stringProp>
+            </JSR223PreProcessor>
+            <hashTree />
+            <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="bid auth and idempotency" enabled="true">
+              <collectionProp name="HeaderManager.headers">
+                <elementProp name="" elementType="Header">
+                  <stringProp name="Header.name">Authorization</stringProp>
+                  <stringProp name="Header.value">Bearer ${token}</stringProp>
+                </elementProp>
+                <elementProp name="" elementType="Header">
+                  <stringProp name="Header.name">Idempotency-Key</stringProp>
+                  <stringProp name="Header.value">${client_bid_id}</stringProp>
+                </elementProp>
+              </collectionProp>
+            </HeaderManager>
+            <hashTree />
+            <JSR223PostProcessor guiclass="TestBeanGUI" testclass="JSR223PostProcessor" testname="assert decided durable" enabled="true">
+              <stringProp name="scriptLanguage">groovy</stringProp>
+              <stringProp name="cacheKey">s3-assert-decided-durable</stringProp>
+              <stringProp name="script">
+if (!(prev.getResponseCode() == '200' || prev.getResponseCode() == '202')) {
+  prev.setSuccessful(false)
+  prev.setResponseMessage('UNEXPECTED_BID_HTTP_' + prev.getResponseCode())
+  return
+}
+if (prev.getResponseCode() == '200') {
+  def json = new groovy.json.JsonSlurper().parseText(prev.getResponseDataAsString())
+  if ((json.decision_status ?: '').toString() != 'DECIDED') {
+    prev.setSuccessful(false)
+    prev.setResponseMessage('NOT_DECIDED')
+    return
+  }
+  if ((json.durability_status ?: '').toString() != 'ENGINE_DURABLE') {
+    prev.setSuccessful(false)
+    prev.setResponseMessage('NOT_ENGINE_DURABLE')
+    return
+  }
+}
+            </stringProp>
+            </JSR223PostProcessor>
+            <hashTree />
+          </hashTree>
+        </hashTree>
+        <IfController guiclass="IfControllerPanel" testclass="IfController" testname="S3 viewer branch" enabled="true">
+          <stringProp name="IfController.condition">${__groovy(vars.get('load_role') == 'viewer')}</stringProp>
+          <boolProp name="IfController.useExpression">true</boolProp>
+          <boolProp name="IfController.evaluateAll">false</boolProp>
+        </IfController>
+        <hashTree>
+          <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="viewer auth" enabled="true">
+            <collectionProp name="HeaderManager.headers">
+              <elementProp name="" elementType="Header">
+                <stringProp name="Header.name">Authorization</stringProp>
+                <stringProp name="Header.value">Bearer ${token}</stringProp>
+              </elementProp>
+            </collectionProp>
+          </HeaderManager>
+          <hashTree />
+          <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="S3 viewer join snapshot" enabled="true">
+            <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+              <collectionProp name="Arguments.arguments" />
+            </elementProp>
+            <stringProp name="HTTPSampler.path">/api/auctions/auc_live</stringProp>
+            <stringProp name="HTTPSampler.method">GET</stringProp>
+            <boolProp name="HTTPSampler.follow_redirects">false</boolProp>
+            <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+          </HTTPSamplerProxy>
+          <hashTree />
+          <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="S3 POST WS ticket" enabled="true">
+            <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+            <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+              <collectionProp name="Arguments.arguments">
+                <elementProp name="" elementType="HTTPArgument">
+                  <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                  <stringProp name="Argument.value">{"room_id":"room_main","auction_id":"auc_live"}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+              </collectionProp>
+            </elementProp>
+            <stringProp name="HTTPSampler.path">/api/auth/ws-ticket</stringProp>
+            <stringProp name="HTTPSampler.method">POST</stringProp>
+            <boolProp name="HTTPSampler.follow_redirects">false</boolProp>
+            <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+          </HTTPSamplerProxy>
+          <hashTree>
+            <JSR223PostProcessor guiclass="TestBeanGUI" testclass="JSR223PostProcessor" testname="extract ws ticket" enabled="true">
+              <stringProp name="scriptLanguage">groovy</stringProp>
+              <stringProp name="cacheKey">s3-extract-ws-ticket</stringProp>
+              <stringProp name="script">
+if (prev.getResponseCode() != '200') {
+  prev.setSuccessful(false)
+  prev.setResponseMessage('WS_TICKET_FAILED_' + prev.getResponseCode())
+  return
+}
+def json = new groovy.json.JsonSlurper().parseText(prev.getResponseDataAsString())
+String ticket = (json.ticket ?: '').toString()
+if (ticket == '') {
+  prev.setSuccessful(false)
+  prev.setResponseMessage('WS_TICKET_MISSING')
+  return
+}
+vars.put('ws_ticket', ticket)
+            </stringProp>
+            </JSR223PostProcessor>
+            <hashTree />
+          </hashTree>
+          <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="S3 WS handshake complete" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="cacheKey">s3-ws-handshake-complete-v6</stringProp>
+            <stringProp name="script">
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.WebSocket
+import java.nio.ByteBuffer
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.CompletionStage
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentSkipListSet
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
+
+String protocol = props.getProperty('protocol', 'http')
+String wsProtocol = protocol == 'https' ? 'wss' : 'ws'
+String host = props.getProperty('host', '172.16.179.112')
+String port = props.getProperty('port', '18080')
+String ticket = vars.get('ws_ticket') ?: ''
+if (ticket == '') {
+  SampleResult.setSuccessful(false)
+  SampleResult.setResponseCode('500')
+  SampleResult.setResponseMessage('WS_TICKET_NOT_IN_VARS')
+  return
+}
+long setupStartMs = System.currentTimeMillis()
+def jmeterProps = org.apache.jmeter.util.JMeterUtils.getJMeterProperties()
+String clientKey = 's3_ws_shared_http_client_v7'
+def client = jmeterProps.get(clientKey)
+if (client == null) {
+  synchronized (jmeterProps) {
+    client = jmeterProps.get(clientKey)
+    if (client == null) {
+      client = HttpClient.newBuilder()
+        .connectTimeout(java.time.Duration.ofSeconds(Long.parseLong(props.getProperty('ws_connect_timeout_sec', '3'))))
+        .build()
+      jmeterProps.put(clientKey, client)
+    }
+  }
+}
+def firstMessage = new CountDownLatch(1)
+def closed = new CountDownLatch(1)
+def messages = new AtomicInteger(0)
+def maxSeq = new AtomicLong(0)
+def maxFanoutLatencyMs = new AtomicLong(0)
+def liveMessages = new AtomicInteger(0)
+def seenSeqs = new ConcurrentSkipListSet&lt;Long&gt;()
+def latencyBySeq = new ConcurrentHashMap&lt;Long, Long&gt;()
+def liveSeqs = new ConcurrentSkipListSet&lt;Long&gt;()
+def liveLatencyBySeq = new ConcurrentHashMap&lt;Long, Long&gt;()
+def listenerErrors = new java.util.concurrent.ConcurrentLinkedQueue&lt;String&gt;()
+def textBuffer = new StringBuilder()
+def maxFn = { long a, long b -&gt; Math.max(a, b) } as java.util.function.LongBinaryOperator
+long setupMs = System.currentTimeMillis() - setupStartMs
+long connectedAtMs = System.currentTimeMillis()
+long handshakeStartMs = System.currentTimeMillis()
+def ws = client.newWebSocketBuilder()
+  .header('X-Auction-WS-Ticket', ticket)
+  .buildAsync(URI.create(wsProtocol + '://' + host + ':' + port + '/ws?room_id=room_main&amp;auction_id=auc_live&amp;last_seq=0'),
+    new WebSocket.Listener() {
+      void onOpen(WebSocket webSocket) { webSocket.request(1) }
+      java.util.concurrent.CompletionStage&lt;?&gt; onText(WebSocket webSocket, CharSequence data, boolean last) {
+        String payload
+        synchronized (textBuffer) {
+          textBuffer.append(data)
+          if (!last) {
+            webSocket.request(1)
+            return null
+          }
+          payload = textBuffer.toString()
+          textBuffer.setLength(0)
+        }
+        messages.incrementAndGet()
+        long receivedAt = System.currentTimeMillis()
+        try {
+          def event = new groovy.json.JsonSlurper().parseText(payload)
+          long seq = ((event.seq ?: 0) as Number).longValue()
+          if (seq &gt; 0L) {
+            seenSeqs.add(seq)
+            maxSeq.accumulateAndGet(seq, maxFn)
+            if (event.published_at_ms != null) {
+              long publishedAt = (event.published_at_ms as Number).longValue()
+              if (publishedAt &gt;= connectedAtMs) {
+                long latency = Math.max(0L, receivedAt - publishedAt)
+                liveSeqs.add(seq)
+                liveLatencyBySeq.put(seq, latency)
+                latencyBySeq.put(seq, latency)
+                liveMessages.incrementAndGet()
+                maxFanoutLatencyMs.accumulateAndGet(latency, maxFn)
+              }
+            }
+          }
+        } catch (Throwable t) {
+          listenerErrors.add('PARSE_' + t.getClass().getSimpleName() + '_' + payload.take(40))
+        }
+        firstMessage.countDown()
+        webSocket.request(1)
+        return null
+      }
+      CompletionStage&lt;?&gt; onPing(WebSocket webSocket, ByteBuffer data) {
+        webSocket.request(1)
+        return null
+      }
+      CompletionStage&lt;?&gt; onPong(WebSocket webSocket, ByteBuffer data) {
+        webSocket.request(1)
+        return null
+      }
+      java.util.concurrent.CompletionStage&lt;?&gt; onClose(WebSocket webSocket, int statusCode, String reason) {
+        closed.countDown()
+        return null
+      }
+      void onError(WebSocket webSocket, Throwable error) {
+        listenerErrors.add('WS_ERROR_' + error.getClass().getSimpleName())
+        closed.countDown()
+      }
+    }).join()
+long handshakeMs = System.currentTimeMillis() - handshakeStartMs
+vars.putObject('s3_ws_first_message', firstMessage)
+vars.putObject('s3_ws', ws)
+vars.putObject('s3_ws_closed', closed)
+vars.putObject('s3_ws_messages', messages)
+vars.putObject('s3_ws_max_seq', maxSeq)
+vars.putObject('s3_ws_seen_seqs', seenSeqs)
+vars.putObject('s3_ws_latency_by_seq', latencyBySeq)
+vars.putObject('s3_ws_live_seqs', liveSeqs)
+vars.putObject('s3_ws_live_latency_by_seq', liveLatencyBySeq)
+vars.putObject('s3_ws_max_fanout_latency_ms', maxFanoutLatencyMs)
+vars.putObject('s3_ws_live_messages', liveMessages)
+vars.putObject('s3_ws_listener_errors', listenerErrors)
+SampleResult.setSuccessful(true)
+SampleResult.setResponseCode('200')
+SampleResult.setResponseMessage('S3_WS_HANDSHAKE_OK_SETUP_MS_' + setupMs + '_HANDSHAKE_MS_' + handshakeMs)
+          </stringProp>
+          </JSR223Sampler>
+          <hashTree />
+          <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="S3 WS first snapshot/business message" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="cacheKey">s3-ws-first-message-v6</stringProp>
+            <stringProp name="script">
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+
+def firstMessage = vars.getObject('s3_ws_first_message') as CountDownLatch
+def messages = vars.getObject('s3_ws_messages') as java.util.concurrent.atomic.AtomicInteger
+def maxSeq = vars.getObject('s3_ws_max_seq') as java.util.concurrent.atomic.AtomicLong
+if (firstMessage == null || messages == null || maxSeq == null) {
+  SampleResult.setSuccessful(false)
+  SampleResult.setResponseCode('500')
+  SampleResult.setResponseMessage('S3_WS_FIRST_MESSAGE_STATE_MISSING')
+  return
+}
+boolean gotFirst = firstMessage.await(Long.parseLong(props.getProperty('ws_first_message_timeout_ms', '5000')), TimeUnit.MILLISECONDS)
+if (!gotFirst) {
+  SampleResult.setSuccessful(false)
+  SampleResult.setResponseCode('504')
+  SampleResult.setResponseMessage('WS_FIRST_MESSAGE_TIMEOUT')
+  return
+}
+SampleResult.setSuccessful(true)
+SampleResult.setResponseCode('200')
+SampleResult.setResponseMessage('S3_WS_FIRST_MESSAGE_OK_MESSAGES_' + messages.get() + '_MAX_SEQ_' + maxSeq.get())
+          </stringProp>
+          </JSR223Sampler>
+          <hashTree />
+          <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="S3 live fanout receive" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="cacheKey">s3-live-fanout-receive-v6-full-wsonly-fixedhold</stringProp>
+            <stringProp name="script">
+def seenSeqs = vars.getObject('s3_ws_live_seqs') as java.util.concurrent.ConcurrentSkipListSet
+def latencyBySeq = vars.getObject('s3_ws_live_latency_by_seq') as java.util.concurrent.ConcurrentHashMap
+def maxFanoutLatencyMs = vars.getObject('s3_ws_max_fanout_latency_ms') as java.util.concurrent.atomic.AtomicLong
+def liveMessages = vars.getObject('s3_ws_live_messages') as java.util.concurrent.atomic.AtomicInteger
+def listenerErrors = vars.getObject('s3_ws_listener_errors') as java.util.concurrent.ConcurrentLinkedQueue
+if (seenSeqs == null || latencyBySeq == null || maxFanoutLatencyMs == null) {
+  SampleResult.setSuccessful(false)
+  SampleResult.setResponseCode('500')
+  SampleResult.setResponseMessage('S3_WS_STATE_MISSING')
+  return
+}
+SampleResult.samplePause()
+int minLiveMessages = 1
+long waitMs = Long.parseLong(props.getProperty('s3_live_observe_ms', '30000'))
+long finalSeqDeadline = System.currentTimeMillis() + waitMs
+while (System.currentTimeMillis() &lt; finalSeqDeadline) {
+  Thread.sleep(250)
+}
+int observedLiveMessages = liveMessages == null ? 0 : liveMessages.get()
+if (observedLiveMessages &lt; minLiveMessages) {
+  SampleResult.sampleResume()
+  SampleResult.setSuccessful(false)
+  SampleResult.setResponseCode('409')
+  SampleResult.setResponseMessage('S3_V6_LIVE_MESSAGES_TOO_LOW_' + observedLiveMessages + '_MIN_' + minLiveMessages + '_LIVE_SEQS_' + seenSeqs.size() + '_OBSERVE_MS_' + waitMs)
+  return
+}
+if (listenerErrors != null &amp;&amp; !listenerErrors.isEmpty()) {
+  SampleResult.sampleResume()
+  SampleResult.setSuccessful(false)
+  SampleResult.setResponseCode('500')
+  SampleResult.setResponseMessage('S3_WS_LISTENER_ERRORS_' + listenerErrors.take(3).join('|'))
+  return
+}
+long maxLatency = Math.max(1L, maxFanoutLatencyMs.get())
+SampleResult.sampleResume()
+SampleResult.setSuccessful(true)
+SampleResult.setResponseCode('200')
+SampleResult.setResponseMessage('S3_V6_LIVE_FANOUT_OK_LIVE_MESSAGES_' + observedLiveMessages + '_LIVE_SEQS_' + seenSeqs.size() + '_FINAL_SEQ_' + seenSeqs.size() + '_MAX_LAT_MS_' + maxLatency + '_OBSERVE_MS_' + waitMs + '_WS_ONLY')
+          </stringProp>
+          </JSR223Sampler>
+          <hashTree />
+          <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="S3 WS close" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="cacheKey">s3-ws-close-v1</stringProp>
+            <stringProp name="script">
+import java.net.http.WebSocket
+import java.util.concurrent.TimeUnit
+
+def ws = vars.getObject('s3_ws')
+def closed = vars.getObject('s3_ws_closed') as java.util.concurrent.CountDownLatch
+if (ws != null) {
+  try { ws.sendClose(WebSocket.NORMAL_CLOSURE, 'done').join() } catch (Throwable ignored) {}
+}
+if (closed != null) closed.await(1000, TimeUnit.MILLISECONDS)
+SampleResult.setSuccessful(true)
+SampleResult.setResponseCode('200')
+SampleResult.setResponseMessage('WS_CLOSED')
+          </stringProp>
+          </JSR223Sampler>
+          <hashTree />
+        </hashTree>
+        <IfController guiclass="IfControllerPanel" testclass="IfController" testname="S3 reader branch" enabled="true">
+          <stringProp name="IfController.condition">${__groovy(vars.get('load_role') == 'reader')}</stringProp>
+          <boolProp name="IfController.useExpression">true</boolProp>
+          <boolProp name="IfController.evaluateAll">false</boolProp>
+        </IfController>
+        <hashTree>
+          <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="reader auth" enabled="true">
+            <collectionProp name="HeaderManager.headers">
+              <elementProp name="" elementType="Header">
+                <stringProp name="Header.name">Authorization</stringProp>
+                <stringProp name="Header.value">Bearer ${token}</stringProp>
+              </elementProp>
+            </collectionProp>
+          </HeaderManager>
+          <hashTree />
+          <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="S3 GET auction snapshot" enabled="true">
+            <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+              <collectionProp name="Arguments.arguments" />
+            </elementProp>
+            <stringProp name="HTTPSampler.path">/api/auctions/auc_live</stringProp>
+            <stringProp name="HTTPSampler.method">GET</stringProp>
+            <boolProp name="HTTPSampler.follow_redirects">false</boolProp>
+            <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+          </HTTPSamplerProxy>
+          <hashTree />
+          <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="S3 GET auction leaderboard" enabled="true">
+            <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+              <collectionProp name="Arguments.arguments" />
+            </elementProp>
+            <stringProp name="HTTPSampler.path">/api/auctions/auc_live/leaderboard?limit=5</stringProp>
+            <stringProp name="HTTPSampler.method">GET</stringProp>
+            <boolProp name="HTTPSampler.follow_redirects">false</boolProp>
+            <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+          </HTTPSamplerProxy>
+          <hashTree />
+          <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="S3 GET my bid history" enabled="true">
+            <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+              <collectionProp name="Arguments.arguments" />
+            </elementProp>
+            <stringProp name="HTTPSampler.path">/api/users/me/bids</stringProp>
+            <stringProp name="HTTPSampler.method">GET</stringProp>
+            <boolProp name="HTTPSampler.follow_redirects">false</boolProp>
+            <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+          </HTTPSamplerProxy>
+          <hashTree />
+        </hashTree>
+      </hashTree>
+    </hashTree>
+  </hashTree>
+</jmeterTestPlan>

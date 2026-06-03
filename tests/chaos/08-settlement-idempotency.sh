@@ -22,86 +22,24 @@
 #   - No duplicate orders, no duplicate outbox events
 #   - Settlement status: SETTLED (not multiple SETTLED rows)
 set -euo pipefail
-source "$(dirname "$0")/common.sh"
+cd "$(dirname "$0")/../.."
 
 echo "=== Fault 08: Settlement idempotency (3x Kafka redelivery) ==="
-echo "Business scenario: network jitter causes Kafka to redeliver the same decision 3x"
-
-BID_ID="chaos-08-idem-$(date +%s)"
-
-echo "[1] Place a bid and relay to Kafka"
-BID_RESP=$(bid "user_1" 15000 "$BID_ID")
-BID_CODE=$(echo "$BID_RESP" | tail -1)
-BID_BODY=$(echo "$BID_RESP" | head -n -1)
-assert_eq "bid HTTP" "$BID_CODE" "200"
-assert_contains "bid DECIDED" "$BID_BODY" '"decision_status":"DECIDED"'
-sleep 1  # Let relay run
+echo "Business scenario: Kafka at-least-once delivery redelivers the same decision 3x; settlement must have exactly one business effect."
 
 echo ""
-echo "[2] Simulate 3x settlement by calling settleLedgerMessage 3 times"
-echo "    (approximated by checking idempotency constraints in PG)"
+echo "[1] Run targeted backend integration gate"
+echo "    Gate: TestKafkaSettlementTripleDuplicateMessageHasSingleBusinessEffect"
+echo "    Fault model: call settlement on the same Kafka ledger message three times"
+echo "    Assertions:"
+echo "      - exactly one redis_engine_settlements row"
+echo "      - exactly one SETTLED row"
+echo "      - exactly one bid row"
+echo "      - exactly one order"
+echo "      - exactly one outbox delivery per legitimate business event"
+echo "      - engine is not paused"
 
-# Check settlement table uniqueness constraints
-SETTLE_DUP=$(pg_query "
-  SELECT count(*) FROM (
-    SELECT auction_id, engine_epoch, engine_seq, count(*) as cnt
-    FROM redis_engine_settlements
-    WHERE auction_id='${AUCTION_ID}'
-    GROUP BY auction_id, engine_epoch, engine_seq
-    HAVING count(*) > 1
-  ) dups
-" 2>/dev/null || echo "0")
-
-if [ "$SETTLE_DUP" = "0" ] || [ "$SETTLE_DUP" = "N/A" ]; then
-  echo "  ✔ no duplicate settlement rows (UNIQUE index holds)"
-  ((PASS++)) || true
-else
-  echo "  ✘ duplicate settlement rows: $SETTLE_DUP (idempotency broken!)"
-  ((FAIL++)) || true
-fi
+(cd backend && go test ./internal/redisengine -run '^TestKafkaSettlementTripleDuplicateMessageHasSingleBusinessEffect$' -count=1 -v)
 
 echo ""
-echo "[3] Verify exactly one bid row per (auction_id, engine_seq)"
-BID_DUP=$(pg_query "
-  SELECT count(*) FROM (
-    SELECT auction_id, engine_epoch, engine_seq, count(*) as cnt
-    FROM bids
-    WHERE auction_id='${AUCTION_ID}'
-    GROUP BY auction_id, engine_epoch, engine_seq
-    HAVING count(*) > 1
-  ) dups
-" 2>/dev/null || echo "0")
-if [ "$BID_DUP" = "0" ] || [ "$BID_DUP" = "N/A" ]; then
-  echo "  ✔ no duplicate bid rows"
-  ((PASS++)) || true
-else
-  echo "  ✘ duplicate bid rows: $BID_DUP"
-  ((FAIL++)) || true
-fi
-
-echo ""
-echo "[4] Verify at most one SETTLED settlement per (auction_id, engine_seq)"
-SETTLED_COUNT=$(pg_query "
-  SELECT max(cnt) FROM (
-    SELECT auction_id, engine_epoch, engine_seq, count(*) as cnt
-    FROM redis_engine_settlements
-    WHERE auction_id='${AUCTION_ID}' AND status='SETTLED'
-    GROUP BY auction_id, engine_epoch, engine_seq
-  ) counts
-" 2>/dev/null || echo "1")
-if [ "$SETTLED_COUNT" = "1" ] || [ "$SETTLED_COUNT" = "" ] || [ "$SETTLED_COUNT" = "N/A" ]; then
-  echo "  ✔ each decision settled at most once"
-  ((PASS++)) || true
-else
-  echo "  ✘ a decision was settled $SETTLED_COUNT times (must be 1)"
-  ((FAIL++)) || true
-fi
-
-echo ""
-echo "[5] Check fencing token on auction prevents duplicate SOLD"
-FENCE=$(pg_query "SELECT settlement_fence FROM auctions WHERE id='${AUCTION_ID}'" 2>/dev/null || echo "N/A")
-echo "    settlement_fence: $FENCE"
-echo "  ℹ fencing token is set only when SOLD; this may be null if auction is still ACTIVE"
-((PASS++)) || true
-
-summary
+echo "PASS"

@@ -28,6 +28,7 @@ PRE_ALLOC_VUS="${PRE_ALLOC_VUS:-50}"
 MAX_VUS="${MAX_VUS:-200}"
 S2_CONVERGENCE_TIMEOUT_SECONDS="${S2_CONVERGENCE_TIMEOUT_SECONDS:-120}"
 S2_CONVERGENCE_POLL_SECONDS="${S2_CONVERGENCE_POLL_SECONDS:-2}"
+S2_RUNTIME_SAMPLE_SECONDS="${S2_RUNTIME_SAMPLE_SECONDS:-5}"
 
 DB_CONTAINER="${DB_CONTAINER:-live-auction-postgres}"
 KAFKA_CONTAINER="${KAFKA_CONTAINER:-live-auction-kafka}"
@@ -59,6 +60,92 @@ SQL
 
 redis_scalar() {
   docker exec "$REDIS_CONTAINER" redis-cli "$@" 2>/dev/null | tr -d '\r[:space:]'
+}
+
+metric_scalar() {
+  local metric="$1"
+  local metrics_text="$2"
+  awk -v name="$metric" '$1 == name { print $2; found=1; exit } END { if (!found) print "nan" }' "$metrics_text"
+}
+
+collect_runtime_samples() {
+  local out_file="${EVIDENCE_DIR}/s2-runtime-samples.tsv"
+  printf 'epoch_ms\telapsed_seconds\truntime_rss_bytes\truntime_heap_alloc_bytes\truntime_heap_inuse_bytes\truntime_heap_sys_bytes\truntime_goroutines\truntime_open_fds\tdb_pool_acquired\tdb_pool_total\n' > "$out_file"
+  local start_ts
+  start_ts="$(date +%s)"
+  while true; do
+    local tmp now_ts epoch_ms elapsed rss heap_alloc heap_inuse heap_sys goroutines open_fds db_acquired db_total
+    tmp="$(mktemp)"
+    if curl -fsS "${BASE_URL}/metrics" > "$tmp"; then
+      now_ts="$(date +%s)"
+      epoch_ms="$(date +%s%3N)"
+      elapsed=$(( now_ts - start_ts ))
+      rss="$(metric_scalar runtime_rss_bytes "$tmp")"
+      heap_alloc="$(metric_scalar runtime_heap_alloc_bytes "$tmp")"
+      heap_inuse="$(metric_scalar runtime_heap_inuse_bytes "$tmp")"
+      heap_sys="$(metric_scalar runtime_heap_sys_bytes "$tmp")"
+      goroutines="$(metric_scalar runtime_goroutines "$tmp")"
+      open_fds="$(metric_scalar runtime_open_fds "$tmp")"
+      db_acquired="$(awk '$1 == "db_pool_conns{state=\"acquired\"}" { print $2; found=1; exit } END { if (!found) print "nan" }' "$tmp")"
+      db_total="$(awk '$1 == "db_pool_conns{state=\"total\"}" { print $2; found=1; exit } END { if (!found) print "nan" }' "$tmp")"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$epoch_ms" "$elapsed" "$rss" "$heap_alloc" "$heap_inuse" "$heap_sys" "$goroutines" "$open_fds" "$db_acquired" "$db_total" >> "$out_file"
+    fi
+    rm -f "$tmp"
+    sleep "$S2_RUNTIME_SAMPLE_SECONDS"
+  done
+}
+
+write_runtime_summary() {
+  local samples="${EVIDENCE_DIR}/s2-runtime-samples.tsv"
+  local out="${EVIDENCE_DIR}/s2-runtime-summary.env"
+  if [ ! -f "$samples" ]; then
+    echo "runtime_samples_status=missing" > "$out"
+    return 0
+  fi
+  awk -F '\t' '
+    NR == 1 {
+      for (i = 1; i <= NF; i++) idx[$i] = i
+      next
+    }
+    function numeric(v) { return v != "" && v != "nan" }
+    {
+      n++
+      fields["runtime_rss_bytes"] = idx["runtime_rss_bytes"]
+      fields["runtime_heap_alloc_bytes"] = idx["runtime_heap_alloc_bytes"]
+      fields["runtime_heap_inuse_bytes"] = idx["runtime_heap_inuse_bytes"]
+      fields["runtime_heap_sys_bytes"] = idx["runtime_heap_sys_bytes"]
+      fields["runtime_goroutines"] = idx["runtime_goroutines"]
+      fields["runtime_open_fds"] = idx["runtime_open_fds"]
+      fields["db_pool_acquired"] = idx["db_pool_acquired"]
+      fields["db_pool_total"] = idx["db_pool_total"]
+      for (name in fields) {
+        col = fields[name]
+        if (numeric($col)) {
+          value = $col + 0
+          if (!(name in seen)) {
+            first[name] = value
+            min[name] = value
+            max[name] = value
+            seen[name] = 1
+          }
+          last[name] = value
+          if (value < min[name]) min[name] = value
+          if (value > max[name]) max[name] = value
+        }
+      }
+    }
+    END {
+      print "runtime_samples=" n
+      for (name in seen) {
+        printf "%s_first=%s\n", name, first[name]
+        printf "%s_last=%s\n", name, last[name]
+        printf "%s_min=%s\n", name, min[name]
+        printf "%s_max=%s\n", name, max[name]
+        printf "%s_delta=%s\n", name, last[name] - first[name]
+      }
+    }
+  ' "$samples" > "$out"
 }
 
 write_s2_backlog_snapshot() {
@@ -173,8 +260,8 @@ preseed_local_k6_bidders
 
 echo ""
 echo "=== Part A: local k6 soak (M4 leak gate, ${SOAK_MINUTES} min) ==="
-echo "   Open Grafana: watch process_resident_memory_bytes, go_goroutines,"
-echo "   go_memstats_heap_inuse_bytes (post-GC floor), process_open_fds."
+echo "   Runtime samples: ${EVIDENCE_DIR}/s2-runtime-samples.tsv every ${S2_RUNTIME_SAMPLE_SECONDS}s."
+echo "   Watch runtime_rss_bytes, runtime_heap_inuse_bytes, runtime_goroutines, runtime_open_fds."
 echo "   Auth profile: ALLOW_MOCK_AUTH=${ALLOW_MOCK_AUTH} for local k6 role headers."
 echo ""
 curl -fsS "${BASE_URL}/readyz" > "${EVIDENCE_DIR}/readyz-before.json" || true
@@ -186,6 +273,16 @@ else
   rm -f "${EVIDENCE_DIR}/heap-before.pprof"
   echo "   pprof heap endpoint unavailable; using /metrics runtime gauges for M4."
 fi
+
+collect_runtime_samples &
+RUNTIME_SAMPLER_PID=$!
+cleanup_runtime_sampler() {
+  if [ -n "${RUNTIME_SAMPLER_PID:-}" ] && kill -0 "$RUNTIME_SAMPLER_PID" 2>/dev/null; then
+    kill "$RUNTIME_SAMPLER_PID" 2>/dev/null || true
+    wait "$RUNTIME_SAMPLER_PID" 2>/dev/null || true
+  fi
+}
+trap cleanup_runtime_sampler EXIT
 
 # Stage durations for soak: total ~= SOAK_MINUTES plus 30s ramp-down.
 STAGE_SECONDS=$(( SOAK_MINUTES * 60 / 3 ))
@@ -217,6 +314,9 @@ else
     grafana/k6:latest "${K6_ARGS[@]}" || K6_EXIT=$?
 fi
 K6_EXIT="${K6_EXIT:-0}"
+cleanup_runtime_sampler
+trap - EXIT
+write_runtime_summary
 
 echo ""
 echo "=== S2 post-run: runtime snapshots ==="

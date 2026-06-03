@@ -20,7 +20,6 @@ import (
 	"nhooyr.io/websocket"
 
 	"live-auction/backend/internal/auction"
-	"live-auction/backend/internal/outbox"
 )
 
 func TestServeWSBrowserTicketAuthAndReuse(t *testing.T) {
@@ -113,7 +112,7 @@ func TestServeWSRejectsTicketAfterMembershipRevoked(t *testing.T) {
 	}
 }
 
-func TestServeWSHistoryRecoveryAndSnapshotFallback(t *testing.T) {
+func TestServeWSInitialJoinUsesSnapshotAndReconnectCanUseHistory(t *testing.T) {
 	db := openDBForRealtime(t)
 	rdb := openRedisForRealtime(t)
 	repo := auction.NewRepository(db)
@@ -131,8 +130,17 @@ func TestServeWSHistoryRecoveryAndSnapshotFallback(t *testing.T) {
 
 	token := issueRealtimeTicket(t, rt, auctionRow.RoomID, auctionRow.ID)
 	conn := dialRealtime(t, server.URL, auctionRow.RoomID, auctionRow.ID, 0, token)
-	assertWSMessageType(t, conn, "auction_started")
-	assertWSMessageType(t, conn, "bid_accepted")
+	assertWSMessageType(t, conn, "snapshot")
+	_ = conn.Close(websocket.StatusNormalClosure, "")
+
+	token = issueRealtimeTicket(t, rt, auctionRow.RoomID, auctionRow.ID)
+	conn = dialRealtime(t, server.URL, auctionRow.RoomID, auctionRow.ID, 0, token)
+	assertWSMessageType(t, conn, "snapshot")
+	_ = conn.Close(websocket.StatusNormalClosure, "")
+
+	token = issueRealtimeTicket(t, rt, auctionRow.RoomID, auctionRow.ID)
+	conn = dialRealtime(t, server.URL, auctionRow.RoomID, auctionRow.ID, 1, token)
+	assertWSMessageType(t, conn, "snapshot")
 	_ = conn.Close(websocket.StatusNormalClosure, "")
 
 	if err := rdb.Del(context.Background(), eventsKey, "auction:"+auctionRow.ID+":snapshot").Err(); err != nil {
@@ -143,6 +151,31 @@ func TestServeWSHistoryRecoveryAndSnapshotFallback(t *testing.T) {
 	conn = dialRealtime(t, server.URL, auctionRow.RoomID, auctionRow.ID, 1, token)
 	defer conn.Close(websocket.StatusNormalClosure, "")
 	assertWSMessageType(t, conn, "snapshot")
+}
+
+func TestRecoveryMessagesReturnsCleanHistoryWhenNoGap(t *testing.T) {
+	db := openDBForRealtime(t)
+	rdb := openRedisForRealtime(t)
+	rt := NewServer(db, rdb)
+	auctionID := "auc_history_" + uuid.NewString()
+
+	eventsKey := "auction:" + auctionID + ":events"
+	if err := rdb.Del(context.Background(), eventsKey, "auction:"+auctionID+":snapshot").Err(); err != nil {
+		t.Fatalf("redis cleanup: %v", err)
+	}
+	pushRealtimeEvent(t, rdb, auctionID, 2, "bid_accepted")
+	pushRealtimeEvent(t, rdb, auctionID, 3, "bid_accepted")
+
+	messages, source := rt.recoveryMessages(context.Background(), auctionID, 1)
+	if source != "history" {
+		t.Fatalf("source = %q, want history", source)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+	if !messageEventTypeIs(messages[0], "bid_accepted") || !messageEventTypeIs(messages[1], "bid_accepted") {
+		t.Fatalf("unexpected history messages: %q", messages)
+	}
 }
 
 func TestServeWSRecoveryWindowGapFallsBackToSnapshot(t *testing.T) {
@@ -185,17 +218,17 @@ func TestServeWSReceivesOutboxFanoutWhileConnected(t *testing.T) {
 	defer conn.Close(websocket.StatusNormalClosure, "")
 	assertWSMessageType(t, conn, "snapshot")
 
-	bid := auction.BidInput{ClientBidID: "ws-fanout-" + uuid.NewString(), AmountCents: 15_000}
-	if _, err := repo.PlaceBid(ctx, auctionRow.ID, "user_1", bid.ClientBidID, bid, "tr_ws_fanout"); err != nil {
-		t.Fatalf("PlaceBid: %v", err)
-	}
-	ok, err := outbox.NewRelay(db, rdb, "ws-fanout-worker").WithPublisher(rt.PublishAuctionEvent).ProcessOne(ctx)
+	payload, err := json.Marshal(map[string]any{
+		"event_type":      "bid_accepted",
+		"auction_id":      auctionRow.ID,
+		"seq":             auctionRow.Seq + 1,
+		"published_at_ms": time.Now().UTC().UnixMilli(),
+		"payload":         map[string]any{"current_price_cents": 15000},
+	})
 	if err != nil {
-		t.Fatalf("ProcessOne: %v", err)
+		t.Fatalf("marshal fanout payload: %v", err)
 	}
-	if !ok {
-		t.Fatalf("expected one outbox event")
-	}
+	rt.PublishAuctionEvent(ctx, auctionRow.ID, payload)
 	assertWSMessageType(t, conn, "bid_accepted")
 }
 
@@ -268,6 +301,15 @@ func TestSnapshotSourceMarksStaleRedisRecovery(t *testing.T) {
 	payload := []byte(`{"event_type":"snapshot","auction_id":"auc","seq":7,"source":"redis","stale":true,"payload":{}}`)
 	if got := snapshotSource(payload, "redis"); got != "redis_stale" {
 		t.Fatalf("snapshotSource = %q, want redis_stale", got)
+	}
+}
+
+func TestSnapshotPayloadRejectsLatestEventEnvelope(t *testing.T) {
+	if !isSnapshotPayload([]byte(`{"event_type":"snapshot","auction_id":"auc","seq":7,"payload":{}}`)) {
+		t.Fatalf("snapshot payload was not accepted")
+	}
+	if isSnapshotPayload([]byte(`{"event_type":"bid_accepted","auction_id":"auc","seq":7,"payload":{}}`)) {
+		t.Fatalf("latest event envelope must not be treated as a snapshot")
 	}
 }
 
@@ -383,12 +425,13 @@ func TestSnapshotRebuildSaturationFallsBackToStaleOrUnavailable(t *testing.T) {
 		t.Fatalf("expected SNAPSHOT_REBUILD_SATURATED anomaly")
 	}
 
-	stale := `{"event_type":"snapshot","auction_id":"` + auctionRow.ID + `","seq":1,"source":"redis","stale":false,"payload":{}}`
-	if err := rdb.Set(context.Background(), "auction:"+auctionRow.ID+":snapshot", stale, time.Minute).Err(); err != nil {
+	staleAuctionID := "auc_stale_" + uuid.NewString()
+	stale := `{"event_type":"snapshot","auction_id":"` + staleAuctionID + `","seq":1,"source":"redis","stale":false,"payload":{}}`
+	if err := rdb.Set(context.Background(), "auction:"+staleAuctionID+":snapshot", stale, time.Minute).Err(); err != nil {
 		t.Fatalf("set stale snapshot: %v", err)
 	}
-	messages, _ = rt.snapshotMessage(context.Background(), auctionRow.ID)
-	if len(messages) != 1 || !strings.Contains(string(messages[0]), `"stale":false`) {
+	messages, _ = rt.snapshotMessage(context.Background(), staleAuctionID)
+	if len(messages) != 1 || !messageEventTypeIs(messages[0], "snapshot") || !strings.Contains(string(messages[0]), `"stale":false`) {
 		t.Fatalf("redis snapshot should be returned before rebuild, got %q", messages)
 	}
 }
@@ -419,6 +462,14 @@ func wsURL(serverURL string, roomID string, auctionID string, lastSeq int64) str
 
 func assertWSMessageType(t *testing.T, conn *websocket.Conn, want string) {
 	t.Helper()
+	got := nextWSMessageType(t, conn)
+	if got != want {
+		t.Fatalf("event_type = %q, want %q", got, want)
+	}
+}
+
+func nextWSMessageType(t *testing.T, conn *websocket.Conn) string {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_, data, err := conn.Read(ctx)
@@ -431,9 +482,14 @@ func assertWSMessageType(t *testing.T, conn *websocket.Conn, want string) {
 	if err := json.Unmarshal(data, &message); err != nil {
 		t.Fatalf("unmarshal ws message %s: %v", string(data), err)
 	}
-	if message.EventType != want {
-		t.Fatalf("event_type = %q, want %q; payload=%s", message.EventType, want, string(data))
+	return message.EventType
+}
+
+func messageEventTypeIs(data []byte, want string) bool {
+	var message struct {
+		EventType string `json:"event_type"`
 	}
+	return json.Unmarshal(data, &message) == nil && message.EventType == want
 }
 
 func issueRealtimeTicket(t *testing.T, rt *Server, roomID string, auctionID string) string {

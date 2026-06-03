@@ -29,6 +29,15 @@ type Server struct {
 	snapshotSemaphore chan struct{}
 	snapshotGroup     *snapshotGroup
 	rebuildSnapshotFn func(context.Context, string) ([]byte, error)
+	activityQueue     chan wsActivityEvent
+}
+
+type wsActivityEvent struct {
+	roomID    string
+	auctionID string
+	userID    string
+	eventType string
+	payload   map[string]any
 }
 
 type Options struct {
@@ -88,8 +97,12 @@ func newServer(db *pgxpool.Pool, redisClient *redis.Client, hub *Hub, options Op
 		options:           options,
 		snapshotSemaphore: make(chan struct{}, options.SnapshotRebuildLimit),
 		snapshotGroup:     newSnapshotGroup(),
+		activityQueue:     make(chan wsActivityEvent, 8192),
 	}
 	server.rebuildSnapshotFn = server.rebuildSnapshotFromDB
+	if db != nil {
+		go server.runActivityWriter()
+	}
 	return server
 }
 
@@ -197,52 +210,80 @@ func (s *Server) ValidateTicketRoomAccess(ctx context.Context, ticket Ticket) er
 }
 
 func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
+	joinStart := time.Now()
 	roomID := r.URL.Query().Get("room_id")
 	auctionID := r.URL.Query().Get("auction_id")
 	lastSeq, _ := strconv.ParseInt(r.URL.Query().Get("last_seq"), 10, 64)
 
+	stageStart := time.Now()
 	releaseConnect, ok := s.admission.TryConnect()
 	if !ok {
+		observeWSJoinStage("connect_admission", "rejected", stageStart)
+		observeWSJoinStage("total", "rejected", joinStart)
 		s.admission.WriteRejected(w)
 		return
 	}
+	observeWSJoinStage("connect_admission", "ok", stageStart)
 	defer releaseConnect()
 
 	token := ticketFromRequest(r)
 	if token == "" {
+		observeWSJoinStage("ticket_consume", "missing", time.Now())
+		observeWSJoinStage("total", "unauthorized", joinStart)
 		http.Error(w, "missing ticket", http.StatusUnauthorized)
 		return
 	}
+	stageStart = time.Now()
 	ticket, err := s.ticket.Consume(r.Context(), token)
 	if err != nil {
+		observeWSJoinStage("ticket_consume", "invalid", stageStart)
+		observeWSJoinStage("total", "unauthorized", joinStart)
 		http.Error(w, "invalid ticket", http.StatusUnauthorized)
 		return
 	}
+	observeWSJoinStage("ticket_consume", "ok", stageStart)
 	if ticket.RoomID != roomID || ticket.AuctionID != auctionID {
+		observeWSJoinStage("scope_validate", "mismatch", time.Now())
+		observeWSJoinStage("total", "forbidden", joinStart)
 		http.Error(w, "ticket scope mismatch", http.StatusForbidden)
 		return
 	}
+	observeWSJoinStage("scope_validate", "ok", time.Now())
+	stageStart = time.Now()
 	if err := s.ValidateRoomAuction(r.Context(), roomID, auctionID); err != nil {
+		observeWSJoinStage("room_validate", "forbidden", stageStart)
+		observeWSJoinStage("total", "forbidden", joinStart)
 		http.Error(w, "forbidden room", http.StatusForbidden)
 		return
 	}
+	observeWSJoinStage("room_validate", "ok", stageStart)
+	stageStart = time.Now()
 	if err := s.ValidateTicketRoomAccess(r.Context(), ticket); err != nil {
+		observeWSJoinStage("access_validate", "forbidden", stageStart)
+		observeWSJoinStage("total", "forbidden", joinStart)
 		http.Error(w, "forbidden room", http.StatusForbidden)
 		return
 	}
+	observeWSJoinStage("access_validate", "ok", stageStart)
 
+	stageStart = time.Now()
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		Subprotocols: []string{"auction.v1"},
 	})
 	if err != nil {
+		observeWSJoinStage("accept", "error", stageStart)
+		observeWSJoinStage("total", "accept_error", joinStart)
 		return
 	}
+	observeWSJoinStage("accept", "ok", stageStart)
 	defer conn.Close(websocket.StatusNormalClosure, "")
 	connCtx, cancelConn := context.WithCancel(r.Context())
 	defer cancelConn()
+	connCtx = conn.CloseRead(connCtx)
 	writeMu := &sync.Mutex{}
 	go s.keepAlive(connCtx, cancelConn, conn, roomID, auctionID, ticket.UserID)
 
+	stageStart = time.Now()
 	slow := make(chan SlowConsumerInfo, 1)
 	var closeSlow sync.Once
 	sub := s.hub.Subscribe(auctionID, func(info SlowConsumerInfo) {
@@ -252,6 +293,7 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 		})
 	})
 	defer s.hub.Unsubscribe(auctionID, sub)
+	observeWSJoinStage("subscribe", "ok", stageStart)
 	observability.AddGauge("auction_ws_connections", 1, map[string]string{"room": roomID})
 	defer observability.AddGauge("auction_ws_connections", -1, map[string]string{"room": roomID})
 
@@ -259,18 +301,23 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 	defer cancelWrite()
 	ctx, cancel := context.WithTimeout(connCtx, 10*time.Second)
 	defer cancel()
+	stageStart = time.Now()
 	messages, recoverySource := s.recoveryMessages(ctx, auctionID, lastSeq)
+	observeWSJoinStage("recovery", metricRecoveryResult(recoverySource), stageStart)
 	observability.Inc("auction_ws_recover_total", map[string]string{"result": metricRecoveryResult(recoverySource)})
 	observability.Inc("auction_snapshot_source_total", map[string]string{"source": recoverySource})
-	_ = s.recordWSActivity(ctx, roomID, auctionID, ticket.UserID, "ws_reconnect", map[string]any{
+	s.recordWSActivityAsync(roomID, auctionID, ticket.UserID, "ws_reconnect", map[string]any{
 		"last_seq": lastSeq,
 	})
-	_ = s.recordWSActivity(ctx, roomID, auctionID, ticket.UserID, "ws_recovered", map[string]any{
+	s.recordWSActivityAsync(roomID, auctionID, ticket.UserID, "ws_recovered", map[string]any{
 		"source": recoverySource,
 		"stale":  recoverySource == "redis_stale",
 	})
+	stageStart = time.Now()
 	for _, message := range messages {
 		if err := writeWS(writeCtx, conn, writeMu, websocket.MessageText, message); err != nil {
+			observeWSJoinStage("first_write", "error", stageStart)
+			observeWSJoinStage("total", "slow_consumer", joinStart)
 			observability.Inc("auction_ws_slow_consumer_disconnect_total", nil)
 			_ = s.recordWSActivity(ctx, roomID, auctionID, ticket.UserID, "ws_slow_consumer_closed", map[string]any{
 				"phase": "recovery",
@@ -279,6 +326,8 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	observeWSJoinStage("first_write", "ok", stageStart)
+	observeWSJoinStage("total", metricRecoveryResult(recoverySource), joinStart)
 
 	for {
 		select {
@@ -374,6 +423,9 @@ func (s *Server) PublishAuctionEvent(ctx context.Context, auctionID string, payl
 }
 
 func (s *Server) recoveryMessages(ctx context.Context, auctionID string, lastSeq int64) ([][]byte, string) {
+	if lastSeq <= 0 {
+		return s.snapshotMessage(ctx, auctionID)
+	}
 	redisStart := time.Now()
 	values, err := s.redis.LRange(ctx, "auction:"+auctionID+":events", -s.options.RecoveryMaxEvents, -1).Result()
 	observability.Observe("redis_command_latency_seconds", time.Since(redisStart).Seconds(), map[string]string{"command": "lrange_recovery_events"}, observability.DefaultLatencyBuckets)
@@ -403,7 +455,7 @@ func (s *Server) snapshotMessage(ctx context.Context, auctionID string) ([][]byt
 	redisStart := time.Now()
 	payload, err := s.redis.Get(ctx, "auction:"+auctionID+":snapshot").Bytes()
 	observability.Observe("redis_command_latency_seconds", time.Since(redisStart).Seconds(), map[string]string{"command": "get_snapshot"}, observability.DefaultLatencyBuckets)
-	if err == nil && len(payload) > 0 {
+	if err == nil && isSnapshotPayload(payload) {
 		return [][]byte{payload}, snapshotSource(payload, "redis")
 	}
 	snapshot, err := s.snapshotGroup.Do(ctx, auctionID, func() ([]byte, error) {
@@ -413,7 +465,7 @@ func (s *Server) snapshotMessage(ctx context.Context, auctionID string) ([][]byt
 		if errors.Is(err, errSnapshotRebuildSaturated) {
 			_ = s.recordSnapshotSaturated(ctx, auctionID)
 		}
-		if stale := s.staleSnapshot(ctx, auctionID); len(stale) > 0 {
+		if stale := s.staleSnapshot(ctx, auctionID); len(stale) > 0 && isSnapshotPayload(stale) {
 			return [][]byte{stale}, snapshotSource(stale, "redis")
 		}
 		return [][]byte{snapshotUnavailable(auctionID)}, "snapshot_unavailable"
@@ -478,6 +530,9 @@ func (s *Server) rebuildSnapshotFromDB(ctx context.Context, auctionID string) ([
 func (s *Server) staleSnapshot(ctx context.Context, auctionID string) []byte {
 	payload, err := s.redis.Get(ctx, "auction:"+auctionID+":snapshot").Bytes()
 	if err != nil || len(payload) == 0 {
+		return nil
+	}
+	if !isSnapshotPayload(payload) {
 		return nil
 	}
 	var message map[string]any
@@ -560,6 +615,16 @@ func snapshotSource(payload []byte, fallback string) string {
 	return fallback
 }
 
+func isSnapshotPayload(payload []byte) bool {
+	var event struct {
+		EventType string `json:"event_type"`
+	}
+	if err := json.Unmarshal(payload, &event); err != nil {
+		return false
+	}
+	return event.EventType == "snapshot"
+}
+
 func metricRecoveryResult(source string) string {
 	switch source {
 	case "history", "snapshot_unavailable":
@@ -584,6 +649,42 @@ func (s *Server) recordWSActivity(ctx context.Context, roomID string, auctionID 
 		VALUES ($1, $2, $3, $4, 'ws', $5)
 	`, roomID, auctionID, userID, eventType, data)
 	return err
+}
+
+func (s *Server) recordWSActivityAsync(roomID string, auctionID string, userID string, eventType string, payload map[string]any) {
+	if s.db == nil || s.activityQueue == nil {
+		return
+	}
+	event := wsActivityEvent{
+		roomID:    roomID,
+		auctionID: auctionID,
+		userID:    userID,
+		eventType: eventType,
+		payload:   payload,
+	}
+	select {
+	case s.activityQueue <- event:
+	default:
+		observability.Inc("auction_ws_activity_dropped_total", map[string]string{"event_type": eventType})
+	}
+}
+
+func (s *Server) runActivityWriter() {
+	for event := range s.activityQueue {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		err := s.recordWSActivity(ctx, event.roomID, event.auctionID, event.userID, event.eventType, event.payload)
+		cancel()
+		if err != nil {
+			observability.Inc("auction_ws_activity_write_failed_total", map[string]string{"event_type": event.eventType})
+		}
+	}
+}
+
+func observeWSJoinStage(stage string, result string, started time.Time) {
+	observability.Observe("auction_ws_join_stage_seconds", time.Since(started).Seconds(), map[string]string{
+		"stage":  stage,
+		"result": result,
+	}, observability.DefaultLatencyBuckets)
 }
 
 func IsInvalidTicket(err error) bool {

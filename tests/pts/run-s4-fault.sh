@@ -15,6 +15,7 @@
 #   F-kafka    P1  Kafka SIGKILL → relay drains after restart
 #   F-flush    P1  Redis FLUSHALL → reconcile/rebuild from Kafka/PG
 #   F-both     P1  Redis + Kafka simultaneous → correlated failure
+#   F-partial  P2  Toxiproxy Redis latency/timeout → weak-network fail-closed
 #
 # Prerequisites:
 #   ALLOW_MOCK_AUTH=true BID_ENGINE_MODE=redis_ledger ADMISSION_ENABLED=false
@@ -79,6 +80,10 @@ else
     run_fault "kafka"    "Kafka SIGKILL → relay drains after restart"           "P1"
     run_fault "redis-flush" "Redis FLUSHALL → reconcile/rebuild"               "P1"
     run_fault "both"     "Redis+Kafka simultaneous → correlated failure"        "P1"
+  fi
+
+  if [ "$TIER" = "P2" ] || [ "$TIER" = "all" ]; then
+    run_fault "partial"  "Toxiproxy Redis latency/timeout → weak-network fail-closed" "P2"
   fi
 fi
 

@@ -44,6 +44,13 @@ docs/perf/pts/pts_sessions.csv
 docs/perf/pts/pts_*_sessions.csv
 docs/perf/pts/pts-l2*.csv
 docs/perf/pts/pts-l2*.with-hash.csv
+docs/perf/pts/s3-*.with-hash.csv
+docs/perf/pts/s3-bidder-*.csv
+docs/perf/pts/s3-viewer-*.csv
+docs/perf/pts/s3-reader-*.csv
+docs/perf/pts/s3-mixed-*.csv
+!docs/perf/pts/s3-mixed-4500-sessions.csv
+!docs/perf/pts/s3-mixed-smoke-30-sessions.csv
 docs/perf/pts/archive/data/*.csv
 !docs/perf/pts/archive/data/README.md
 !docs/perf/pts/pts-1ab-1000vu-sessions.csv

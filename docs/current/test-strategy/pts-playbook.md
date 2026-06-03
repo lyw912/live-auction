@@ -116,7 +116,7 @@ Two hard rules from the docs:
 
 | Workload | Mode | Engine | Why |
 |---|---|---|---|
-| S1 绝杀 (HTTP burst) | VU mode, loop=1 | **PTS JMeter current asset** | 1000 distinct one-shot clients; reuse the validated JMX and CSV/verifier path |
+| S1 绝杀 (HTTP burst) | VU mode, loop=1 | **PTS JMeter current asset** | 1000 distinct one-shot clients; default release is within one final-second window; reuse the validated JMX and CSV/verifier path |
 | S2 稳态 soak | local k6 `ramping-arrival-rate` | k6 | current open-model asset; reports dropped iterations and supports long soak/Grafana |
 | S2 optional PTS chart | VU mode, duration-driven | PTS JMeter current asset | use `pts-2p4-steady-interactive-auction.jmx` only when a polished PTS PDF is worth the VUM |
 | S3 围观 (WS hold) | **VU mode** | PTS JMeter + local k6 | VUs == held connections == online users; the metric is connection count and fanout receive p99 |
@@ -129,6 +129,29 @@ Two hard rules from the docs:
 - RPS mode is Alibaba's stated best practice for short-connection systems; VU
   mode is correct for long-lived connections ("并发用户数即并发接入能力").
   ([metrics doc](https://help.aliyun.com/zh/pts/performance-test-pts-3-0/product-overview/test-metrics))
+
+### S1 release-window property
+
+The current S1 JMX uses `contention_release_window_ms=500` by default. That
+means the cohort is synchronized to a common final-second start, then 1000
+one-shot bids are released deterministically across a short 500 ms target
+window. This is the judge-facing default: it still tests "1000 users bid in the
+final second", while avoiding a load-generator-only zero-ms scheduling wall.
+If PTS agent scheduling widens the observed span, cite the observed span from
+100% sampling logs rather than the configured target.
+
+Set `contention_release_window_ms=0` only for a diagnostic strict microburst.
+Label those results separately; they are useful to attack Redis/JMeter tail
+latency, but they are not the default S1 evidence model.
+Set `contention_release_window_ms=1000` only as the conservative one-second
+fallback if PTS cannot consistently launch the 500 ms target window.
+
+Do not infer the actual burst span from PTS 平均TPS alone. The report chart/table
+may aggregate TPS over a wider time bucket than the one-shot burst. For
+R4FWX72G, the 1000 bid samples had about 252 ms of PTS start-time span and about
+255 ms of server-time span, yet a 5-second bucket would display roughly
+`1000 / 5 = 200 TPS`. Use sampling logs or server request timestamps for the
+arrival-span claim.
 
 ## 7. Pressure source = same VPC
 
@@ -147,12 +170,15 @@ assumption. Same-VPC keeps `published_at_ms → recv` skew negligible.
 ## 9. When to actually pull sampling logs (and how)
 
 Only to prove the *business distribution* behind the latency chart — that the
-fast responses were real `ENGINE_*` decisions, not `202`/`409`. Pull a **small**
-sample (the default 1% is plenty for distribution), using the existing helpers:
+fast responses were real `ENGINE_*` decisions, not `202`/`409`. For ordinary
+runs, a small sample is enough. For judge-facing S1 runs where the PTS report
+fields disagree or arrival span is challenged, use **100% sampling** and preserve
+the JSONL locally:
 
 ```bash
 bash tests/pts/fetch-pts-sampling-logs.sh   <report-id>
 bash tests/pts/summarize-pts-sampling-logs.sh <report-id>   # ENGINE_* / HTTP / settlement histogram
+bash tests/pts/review-s1-pts-run.sh <report-id>             # full S1 recomputation
 ```
 
 Then the verifier ties it together:

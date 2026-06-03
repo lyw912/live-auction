@@ -211,7 +211,12 @@ func (r *Registry) Render(ctx context.Context) []byte {
 }
 
 func (r *Registry) collectRuntime() {
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
 	r.Set("runtime_goroutines", float64(runtime.NumGoroutine()), nil)
+	r.Set("runtime_heap_alloc_bytes", float64(mem.HeapAlloc), nil)
+	r.Set("runtime_heap_inuse_bytes", float64(mem.HeapInuse), nil)
+	r.Set("runtime_heap_sys_bytes", float64(mem.HeapSys), nil)
 	if rssBytes, ok := linuxRSSBytes(); ok {
 		r.Set("runtime_rss_bytes", float64(rssBytes), nil)
 	}

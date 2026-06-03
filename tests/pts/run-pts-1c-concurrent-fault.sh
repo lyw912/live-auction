@@ -39,6 +39,7 @@
 #   both         SIGKILL Redis + Kafka simultaneously → correlated infrastructure failure
 #   redis-flush  FLUSHALL Redis while container lives → engine detects missing state → RECONCILING → rebuild
 #                Different from 'redis': process stays up, state evaporates (models OOM eviction / maxmemory)
+#   partial      Toxiproxy Redis partial latency/timeout → weak-network fail-closed/recovery proof
 #   pg           SIGKILL PostgreSQL → hot path must continue accepting bids (DECIDED); settlement queues
 #                Key assertion: decided_total > 0 during PG fault proves hot path does NOT depend on PG
 #   settlement   SIGKILL backend process → bid engine + settlement worker both down; restart; Kafka replay
@@ -46,7 +47,7 @@
 #                Key assertion: after restart, all pre-crash decisions are settled exactly once
 #
 # Environment overrides:
-#   FAULT_TYPE              redis | kafka | both | redis-flush | pg | settlement  (default: redis)
+#   FAULT_TYPE              redis | kafka | both | redis-flush | partial | pg | settlement  (default: redis)
 #   L1F_PROFILE             default rto
 #                           rto: judge-facing bounded workload, optimized for
 #                                user-visible recovery evidence
@@ -117,6 +118,10 @@ DB_CONTAINER="${DB_CONTAINER:-live-auction-postgres}"
 REDIS_CONTAINER="${REDIS_CONTAINER:-live-auction-redis}"
 KAFKA_CONTAINER="${KAFKA_CONTAINER:-live-auction-kafka}"
 SERVER_START_CMD="${SERVER_START_CMD:-}"  # optional custom restart command
+BACKEND_REDIS_ADDR="${REDIS_ADDR:-localhost:6380}"
+if [ "$FAULT_TYPE" = "partial" ]; then
+  BACKEND_REDIS_ADDR="${REDIS_ADDR:-localhost:16379}"
+fi
 EVIDENCE_ROOT="${EVIDENCE_ROOT:-$ROOT_DIR/docs/perf/pts/evidence/incoming}"
 SERVER_PID_FILE="${SERVER_PID_FILE:-$RUNTIME_DIR/server.pid}"
 K6_DOCKER_IMAGE="${K6_DOCKER_IMAGE:-grafana/k6:latest}"
@@ -302,7 +307,7 @@ start_fault_backend() {
     APP_ENV=local \
     HTTP_ADDR="0.0.0.0:${SUT_HOST##*:}" \
     DATABASE_URL="${DATABASE_URL:-postgres://live_auction:live_auction@localhost:5432/live_auction?sslmode=disable}" \
-    REDIS_ADDR="${REDIS_ADDR:-localhost:6380}" \
+    REDIS_ADDR="$BACKEND_REDIS_ADDR" \
     KAFKA_BROKERS="${KAFKA_BROKERS:-localhost:9092}" \
     KAFKA_BID_TOPIC="${KAFKA_BID_TOPIC:-auction.bid-events}" \
     KAFKA_DLQ_TOPIC="${KAFKA_DLQ_TOPIC:-auction.dlq}" \
@@ -358,6 +363,11 @@ assert_clean_kafka_pressure_state() {
 # ── 1. Reset state (reuse existing PTS reset logic) ──────────────────────────
 
 echo "[reset] resetting DB / Redis / Kafka state..."
+if [ "$FAULT_TYPE" = "partial" ]; then
+  echo "[toxiproxy] starting and clearing Redis proxy"
+  docker compose -f "$ROOT_DIR/infra/docker-compose.yml" -f "$ROOT_DIR/infra/docker-compose.toxiproxy.yml" up -d postgres redis kafka kafka-init toxiproxy
+  node "$ROOT_DIR/tests/chaos/s4-toxiproxy-fault.mjs" init
+fi
 ALLOW_MOCK_AUTH=true \
 L4B_PROFILE=pts-1b SESSION_COUNT=0 \
   P1_LOAD_AUC_LIVE_CAP_PRICE_CENTS=100000000000000 \
@@ -471,7 +481,13 @@ SQL
       local stream_complete="0"
       if [ "${settlement_total:-x}" = "${stream_len:-y}" ]; then
         stream_complete="1"
-      elif [ "$FAULT_TYPE" = "redis-flush" ] && [ "${stream_len:-0}" = "0" ]; then
+      elif [ "$FAULT_TYPE" = "redis-flush" ] &&
+           [ "${settlement_total:-0}" -gt 0 ] &&
+           [ "${settlement_total:-0}" -ge "${stream_len:-0}" ]; then
+        # FLUSHALL models Redis data loss. Redis hot state is rebuilt from the
+        # PostgreSQL checkpoint; Redis Stream entries before the flush are not
+        # reconstructed. RPO is proven by Kafka/PG settlement coverage and the
+        # verifier runs with REDIS_DATA_LOSS_OK=1.
         stream_complete="1"
       fi
       if [ "$stream_complete" = "1" ] &&
@@ -619,6 +635,20 @@ request_redis_engine_resume() {
   request_redis_engine_signal resume_redis_engine "${1:-$RECOVERY_CONVERGENCE_TIMEOUT}"
 }
 
+prewarm_redis_engine() {
+  local prev_signal_type="${RECOVERY_SIGNAL_TYPE:-}"
+  local prev_signal_start_epoch="${RECOVERY_SIGNAL_START_EPOCH:-0}"
+  local prev_signal_start_iso="${RECOVERY_SIGNAL_START_ISO:-}"
+  local prev_signal_end_epoch="${RECOVERY_SIGNAL_END_EPOCH:-0}"
+  local prev_signal_end_iso="${RECOVERY_SIGNAL_END_ISO:-}"
+  request_redis_engine_resume "${1:-$RECOVERY_CONVERGENCE_TIMEOUT}"
+  RECOVERY_SIGNAL_TYPE="$prev_signal_type"
+  RECOVERY_SIGNAL_START_EPOCH="$prev_signal_start_epoch"
+  RECOVERY_SIGNAL_START_ISO="$prev_signal_start_iso"
+  RECOVERY_SIGNAL_END_EPOCH="$prev_signal_end_epoch"
+  RECOVERY_SIGNAL_END_ISO="$prev_signal_end_iso"
+}
+
 inject_fault() {
   echo "[fault] injecting fault_type=$FAULT_TYPE at $(date -Iseconds)"
   case "$FAULT_TYPE" in
@@ -641,6 +671,10 @@ inject_fault() {
       docker exec "$REDIS_CONTAINER" redis-cli FLUSHALL >/dev/null
       echo "[fault] Redis FLUSHALL executed (container still running)"
       ;;
+    partial)
+      node "$ROOT_DIR/tests/chaos/s4-toxiproxy-fault.mjs" inject
+      echo "[fault] Redis partial network latency/timeout injected through Toxiproxy"
+      ;;
     pg)
       docker kill "$DB_CONTAINER" >/dev/null
       echo "[fault] PostgreSQL killed (SIGKILL) — hot path must continue via Redis"
@@ -653,7 +687,7 @@ inject_fault() {
       echo "[fault] backend process killed via pid file"
       ;;
     *)
-      echo "[fault] unknown FAULT_TYPE=$FAULT_TYPE (valid: redis|kafka|both|redis-flush|pg|settlement)" >&2
+      echo "[fault] unknown FAULT_TYPE=$FAULT_TYPE (valid: redis|kafka|both|redis-flush|partial|pg|settlement)" >&2
       exit 1
       ;;
   esac
@@ -682,6 +716,9 @@ restore_fault() {
       echo "[fault] reseeding Redis ACL cache after FLUSHALL..."
       preseed_mock_auth_acl_cache || true
       ;;
+    partial)
+      node "$ROOT_DIR/tests/chaos/s4-toxiproxy-fault.mjs" clear
+      ;;
     pg)
       docker start "$DB_CONTAINER" >/dev/null
       wait_for_pg_ready
@@ -694,6 +731,9 @@ restore_fault() {
 }
 
 # ── 4. Start k6 load in background ───────────────────────────────────────────
+
+echo "[prewarm] initializing Redis engine state/checkpoint before fault load..."
+prewarm_redis_engine "$RECOVERY_CONVERGENCE_TIMEOUT"
 
 PLANNED_FAULT_START_EPOCH=$(($(date +%s) + RAMP_SECONDS))
 PLANNED_FAULT_END_EPOCH=$((PLANNED_FAULT_START_EPOCH + FAULT_WINDOW_SECONDS))
@@ -744,10 +784,11 @@ RECOVERY_START_ISO=$(date -Iseconds)
 if [ "$CAPTURE_RECOVERY_START_SNAPSHOT" = "1" ]; then
   capture_recovery_snapshot "start"
 fi
-wait_for_recovery_convergence "$RECOVERY_CONVERGENCE_TIMEOUT"
-if [ "$FAULT_TYPE" = "redis-flush" ]; then
+if [ "$FAULT_TYPE" = "redis-flush" ] || [ "$FAULT_TYPE" = "partial" ]; then
   request_redis_engine_resume "$RECOVERY_CONVERGENCE_TIMEOUT"
+  wait_for_recovery_convergence "$RECOVERY_CONVERGENCE_TIMEOUT"
 else
+  wait_for_recovery_convergence "$RECOVERY_CONVERGENCE_TIMEOUT"
   request_redis_engine_reconcile "$RECOVERY_CONVERGENCE_TIMEOUT"
 fi
 RECOVERY_END_EPOCH=$(date +%s)
@@ -962,6 +1003,15 @@ case "$FAULT_TYPE" in
         "k6 saw zero ENGINE_PAUSED/RECONCILING — fault may not have fired or was silently absorbed"
     fi
     ;;
+  partial)
+    if [ "$((K6_PAUSED + K6_RECONCILING + K6_HTTP_ERRORS))" -gt 0 ]; then
+      gate P0 fault_observed_by_clients PASS \
+        "ENGINE_PAUSED=${K6_PAUSED} RECONCILING=${K6_RECONCILING} http_errors=${K6_HTTP_ERRORS} — Redis proxy partial outage reached clients"
+    else
+      gate P0 fault_observed_by_clients FAIL \
+        "k6 saw zero ENGINE_PAUSED/RECONCILING/HTTP errors — Toxiproxy partial fault may not have affected the backend"
+    fi
+    ;;
   kafka)
     # Kafka down: hot path continues (DECIDED responses expected), relay falls behind.
     # If decided = 0, the test ran against a server that was already broken before the fault.
@@ -1108,6 +1158,42 @@ if [ "$FAULT_TYPE" = "settlement" ]; then
     gate P0 settlement_replay_complete FAIL \
       "${UNSETTLED_POST_CRASH} accepted bids unsettled after restart — replay did not cover all decisions"
   fi
+fi
+
+# ── Gate: payment/finality must wait for full convergence ───────────────────
+#
+# This is the business safety boundary for high-value live auctions: payment,
+# finance export, and final winner confirmation are allowed only after Redis
+# pending, Kafka lag, PostgreSQL settlement, and outbox delivery have converged.
+PAYMENT_OPEN_SETTLEMENTS=$(docker exec -i "$DB_CONTAINER" psql \
+  -q -A -t -U live_auction -d live_auction \
+  -c "SELECT count(*)
+      FROM redis_engine_settlements
+      WHERE auction_id = '${AUCTION_ID}'
+        AND (status IN ('PROCESSING','FAILED') OR dlq_at IS NOT NULL);" \
+  2>/dev/null | tr -d '[:space:]' || echo "unknown")
+PAYMENT_OPEN_OUTBOX=$(docker exec -i "$DB_CONTAINER" psql \
+  -q -A -t -U live_auction -d live_auction \
+  -c "SELECT count(*)
+      FROM outbox_delivery d
+      JOIN outbox_events e ON e.id = d.outbox_id
+      WHERE e.auction_id = '${AUCTION_ID}'
+        AND d.status <> 'PUBLISHED';" \
+  2>/dev/null | tr -d '[:space:]' || echo "unknown")
+PAYMENT_REDIS_PENDING=$(docker exec "$REDIS_CONTAINER" \
+  redis-cli HLEN "bid:{${AUCTION_ID}}:engine:pending" 2>/dev/null | tr -d '[:space:]' || echo "unknown")
+PAYMENT_KAFKA_LAG=$(docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-consumer-groups.sh \
+  --bootstrap-server localhost:9092 --describe --group settlement-workers 2>/dev/null |
+  awk 'NR>1 && $1 !~ /^GROUP$/ && $6 ~ /^[0-9]+$/ {sum+=$6} END {print sum+0}' || echo "unknown")
+if [ "${PAYMENT_OPEN_SETTLEMENTS:-unknown}" = "0" ] &&
+   [ "${PAYMENT_OPEN_OUTBOX:-unknown}" = "0" ] &&
+   [ "${PAYMENT_REDIS_PENDING:-unknown}" = "0" ] &&
+   [ "${PAYMENT_KAFKA_LAG:-unknown}" = "0" ]; then
+  gate P0 payment_finality_convergence_gate PASS \
+    "payment/final confirmation safe: open_settlements=0 open_outbox=0 redis_pending=0 kafka_lag=0"
+else
+  gate P0 payment_finality_convergence_gate FAIL \
+    "payment/final confirmation must remain blocked: open_settlements=${PAYMENT_OPEN_SETTLEMENTS} open_outbox=${PAYMENT_OPEN_OUTBOX} redis_pending=${PAYMENT_REDIS_PENDING} kafka_lag=${PAYMENT_KAFKA_LAG}"
 fi
 
 # ── Gate: user-visible recovery time objective ──────────────────────────────

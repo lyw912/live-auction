@@ -175,6 +175,7 @@ func TestPlaceBidCapSoldCreatesOrderAndPaymentIsIdempotent(t *testing.T) {
 	if status != OrderStatusPending || depositStatus != DepositStatusHeld {
 		t.Fatalf("order status = %s/%s, want pending/held", status, depositStatus)
 	}
+	markAuctionOutboxPublished(t, db, auction.ID)
 
 	_, err = repo.PayMock(ctx, orderID, "user_1", "pay-missing-confirm", PaymentInput{}, "tr_pay")
 	if !hasCode(err, apierrors.CodeInvalidArgument) {
@@ -217,6 +218,71 @@ func TestPlaceBidCapSoldCreatesOrderAndPaymentIsIdempotent(t *testing.T) {
 	}
 	if orderPaidOutbox != 1 {
 		t.Fatalf("order_paid outbox = %d, want 1", orderPaidOutbox)
+	}
+}
+
+func TestPaymentWaitsForSettlementConvergence(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	repo := NewRepository(db)
+	capPrice := int64(20_000)
+	auction := createActiveAuction(t, repo, db, &capPrice)
+
+	input := BidInput{ClientBidID: "bid-cap-convergence-gate", AmountCents: 20_000}
+	if _, err := repo.PlaceBid(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_bid_convergence_gate"); err != nil {
+		t.Fatalf("PlaceBid cap: %v", err)
+	}
+	var orderID string
+	if err := db.QueryRow(ctx, `SELECT id FROM orders WHERE auction_id = $1`, auction.ID).Scan(&orderID); err != nil {
+		t.Fatalf("select order: %v", err)
+	}
+
+	if _, err := repo.PayMock(ctx, orderID, "user_1", "pay-before-outbox-converged", PaymentInput{Confirm: true}, "tr_pay_blocked"); !hasCode(err, apierrors.CodeProcessingRetryLater) {
+		t.Fatalf("PayMock before outbox convergence err = %v, want PROCESSING_RETRY_LATER", err)
+	}
+
+	markAuctionOutboxPublished(t, db, auction.ID)
+	pay, err := repo.PayMock(ctx, orderID, "user_1", "pay-after-converged", PaymentInput{Confirm: true}, "tr_pay_converged")
+	if err != nil {
+		t.Fatalf("PayMock after convergence: %v", err)
+	}
+	if pay.OrderStatus != OrderStatusPaid {
+		t.Fatalf("payment status = %s, want PAID", pay.OrderStatus)
+	}
+}
+
+func TestPaymentWaitsForOpenRedisEngineSettlement(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	repo := NewRepository(db)
+	capPrice := int64(20_000)
+	auction := createActiveAuction(t, repo, db, &capPrice)
+
+	input := BidInput{ClientBidID: "bid-cap-open-settlement-gate", AmountCents: 20_000}
+	if _, err := repo.PlaceBid(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_bid_open_settlement_gate"); err != nil {
+		t.Fatalf("PlaceBid cap: %v", err)
+	}
+	var orderID string
+	if err := db.QueryRow(ctx, `SELECT id FROM orders WHERE auction_id = $1`, auction.ID).Scan(&orderID); err != nil {
+		t.Fatalf("select order: %v", err)
+	}
+	markAuctionOutboxPublished(t, db, auction.ID)
+	if _, err := db.Exec(ctx, `
+		INSERT INTO redis_engine_settlements (
+		  id, auction_id, stream_id, engine_epoch, engine_seq, result,
+		  status, payload_json, payload_sha256, created_at, updated_at
+		)
+		VALUES (
+		  $1, $2, $3, 1, 999, 'ENGINE_ACCEPTED',
+		  'PROCESSING', '{"result":"ENGINE_ACCEPTED"}'::jsonb,
+		  encode(digest(convert_to('{"result":"ENGINE_ACCEPTED"}', 'UTF8'), 'sha256'), 'hex'), now(), now()
+		)
+	`, time.Now().UnixNano(), auction.ID, "open-stream-"+auction.ID); err != nil {
+		t.Fatalf("insert open settlement: %v", err)
+	}
+
+	if _, err := repo.PayMock(ctx, orderID, "user_1", "pay-before-settlement-converged", PaymentInput{Confirm: true}, "tr_pay_blocked_settlement"); !hasCode(err, apierrors.CodeProcessingRetryLater) {
+		t.Fatalf("PayMock before settlement convergence err = %v, want PROCESSING_RETRY_LATER", err)
 	}
 }
 
@@ -653,6 +719,20 @@ func assertBidTruthRows(t *testing.T, db *pgxpool.Pool, auctionID string, bidCou
 	}
 	if idem != idemCount {
 		t.Fatalf("idempotency records = %d, want %d", idem, idemCount)
+	}
+}
+
+func markAuctionOutboxPublished(t *testing.T, db *pgxpool.Pool, auctionID string) {
+	t.Helper()
+	if _, err := db.Exec(context.Background(), `
+		UPDATE outbox_delivery d
+		SET status = 'PUBLISHED',
+		    published_at = COALESCE(published_at, now())
+		FROM outbox_events e
+		WHERE e.id = d.outbox_id
+		  AND e.auction_id = $1
+	`, auctionID); err != nil {
+		t.Fatalf("mark auction outbox published: %v", err)
 	}
 }
 

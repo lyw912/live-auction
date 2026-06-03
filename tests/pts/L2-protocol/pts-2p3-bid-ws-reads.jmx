@@ -96,11 +96,15 @@ long sleep = target.get() - System.currentTimeMillis()
 if (sleep > 0L) Thread.sleep(sleep)
 String userID = vars.get('bid_user_id') ?: 'unknown'
 def matcher = userID =~ /k6_bidder_(\d+)_(\d+)/
+def simpleMatcher = userID =~ /k6_bidder_(\d+)/
 long bucket = 1L
 long lane = 0L
 if (matcher.matches()) {
   bucket = Long.parseLong(matcher.group(1))
   lane = Long.parseLong(matcher.group(2))
+} else if (simpleMatcher.matches()) {
+  bucket = Long.parseLong(simpleMatcher.group(1))
+  lane = 0L
 }
 long rank = Math.max(1L, (bucket - 1L) * 7L + lane + 1L)
 long amount = Long.parseLong(props.getProperty('contention_amount_base_cents', '10000')) + Long.parseLong(props.getProperty('contention_amount_increment_cents', '5000')) * Long.parseLong(props.getProperty('contention_amount_stride', '1000')) * rank
@@ -336,6 +340,10 @@ SampleResult.setResponseMessage('WS_FIRST_MESSAGE_OK_MESSAGES_' + messages.get()
           <stringProp name="scriptLanguage">groovy</stringProp>
           <stringProp name="cacheKey">l2-ws-fanout-receive-all-seq-v3</stringProp>
           <stringProp name="script"><![CDATA[
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+
 def seenSeqs = vars.getObject('l2_ws_seen_seqs') as java.util.concurrent.ConcurrentSkipListSet
 def latencyBySeq = vars.getObject('l2_ws_latency_by_seq') as java.util.concurrent.ConcurrentHashMap
 def maxFanoutLatencyMs = vars.getObject('l2_ws_max_fanout_latency_ms') as java.util.concurrent.atomic.AtomicLong
@@ -347,7 +355,39 @@ if (seenSeqs == null || latencyBySeq == null || maxFanoutLatencyMs == null) {
   return
 }
 SampleResult.samplePause()
-int expectedFinalSeq = Integer.parseInt(props.getProperty('fanout_expected_final_seq', '11'))
+String protocol = props.getProperty('protocol', 'http')
+String host = props.getProperty('host', '172.16.179.112')
+String port = props.getProperty('port', '18080')
+String base = protocol + '://' + host + ':' + port
+def httpClient = HttpClient.newHttpClient()
+int minFinalSeq = Integer.parseInt(props.getProperty('fanout_min_final_seq', '1'))
+long finalSeqDeadline = System.currentTimeMillis() + Long.parseLong(props.getProperty('fanout_final_seq_timeout_ms', '45000'))
+int expectedFinalSeq = 0
+while (System.currentTimeMillis() < finalSeqDeadline) {
+  def req = HttpRequest.newBuilder(URI.create(base + '/api/auctions/auc_live'))
+    .header('Authorization', 'Bearer ' + vars.get('viewer_token'))
+    .GET()
+    .build()
+  def res = httpClient.send(req, java.net.http.HttpResponse.BodyHandlers.ofString())
+  if (res.statusCode() != 200) {
+    SampleResult.sampleResume()
+    SampleResult.setSuccessful(false)
+    SampleResult.setResponseCode(Integer.toString(res.statusCode()))
+    SampleResult.setResponseMessage('WS_FINAL_SNAPSHOT_FAILED')
+    return
+  }
+  def snapshot = new groovy.json.JsonSlurper().parseText(res.body())
+  expectedFinalSeq = ((snapshot.seq ?: 0) as Number).intValue()
+  if (expectedFinalSeq >= minFinalSeq) break
+  Thread.sleep(100)
+}
+if (expectedFinalSeq < minFinalSeq) {
+  SampleResult.sampleResume()
+  SampleResult.setSuccessful(false)
+  SampleResult.setResponseCode('409')
+  SampleResult.setResponseMessage('WS_FINAL_SEQ_TOO_LOW_' + expectedFinalSeq + '_MIN_' + minFinalSeq)
+  return
+}
 long timeoutAt = System.currentTimeMillis() + Long.parseLong(props.getProperty('fanout_receive_timeout_ms', '15000'))
 while (System.currentTimeMillis() < timeoutAt) {
   boolean complete = true

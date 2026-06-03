@@ -46,8 +46,8 @@ Old `L*` names are not plan stages; they are script/data aliases only.
 |---|---|---|---|---|---|
 | **S0** | 单人闭环 — one user completes the whole flow | engineering chain closes (login→join→bid→broadcast→settle→pay) | smoke / local | PASS/FAIL | `tests/pts/L0-smoke/live-auction-pts-business-smoke.jmx` |
 | **S1** | 绝杀时刻 — N users bid in the final second on one auction | contention correctness + tail latency | **PTS JMeter** | **bid decision p99 ≤ 50ms** + winner correct + every reject justified | `tests/pts/L1-component/pts-1b-contention-burst-1000vu-1m.jmx`; ladder control `pts-1a-*` |
-| **S2** | 正常竞价 — minority bid steadily, price climbs the ladder, auto-extend | sustained stability + no leak (open model) | **local k6 required** + optional PTS JMeter chart | steady decision p99 + accepted-update rate + flat resources | `tests/load/s2-steady-soak.js`; optional `tests/pts/L2-protocol/pts-2p4-steady-interactive-auction.jmx` |
-| **S3** | 万人围观 — one room, 10 000 online, price broadcast to all | the **bonus**: "1000+ in one room / 10×" + 秒级同步 | **PTS JMeter** + **local k6** | **fanout publish→receive p99 ≤ 1s** + connections held + RAM/conn | `tests/pts/L2-protocol/pts-2p1-bid-plus-ws-fanout.jmx`; `tests/load/s3-fanout-soak.js` |
+| **S2** | 正常竞价 — minority bid steadily, price climbs the ladder, auto-extend | long soak, convergence drain, capacity knee, and read interference | **independent-ECS k6 required** + optional PTS RPS chart | steady decision p99 + accepted-update rate + backlog/convergence + flat resources | `tests/load/s2-steady-soak.js`; expanded split in `s2-s3-expanded-test-design.md` |
+| **S3** | 万人围观 — one room, 10 000 online, price broadcast to all | live-only fanout plus final-burst integration | **PTS VU/JMeter** + local or independent-source k6 | **fanout publish→receive p99 ≤ 1s** + connections held + RAM/conn | `tests/pts/S3-room-fanout/*`; `tests/load/s3-fanout-soak.js`; expanded split in `s2-s3-expanded-test-design.md` |
 | **S4** | 故障韧性 — Redis/Kafka/PG/worker fault under live bidding | fail-closed, relay/replay convergence, RTO, RPO=0, no double-charge | **local k6 + Toxiproxy/SIGKILL** | **RTO** + **RPO=0** + zero phantom accepts + zero duplicate settlement | `tests/pts/run-pts-1c-concurrent-fault.sh`; `tests/chaos/*` |
 | **S5** | 断连重连 — weak network drops WS, client recovers to current state | WebSocket stability / auto-reconnect / heartbeat | **local k6** | time-to-current-state + no lost/dup notifications | `tests/load/s5-reconnect-recovery.js` |
 
@@ -93,8 +93,8 @@ variant; S2 can be local k6 unless a polished PTS steady chart is worth the cost
 
 | Tier | Contents | Story it tells | State |
 |---|---|---|---|
-| **P0** (minimum credible) | S0 + S1 (PTS) + S4 {Redis fail-closed, settlement no-double-charge, PG-down no-loss} | "Correct under peak contention, resilient, never double-charges." Covers the 50% core. | S1 ✅, S4 mostly ✅ |
-| **P1** (completes realtime story) | S2 steady soak (local) + S3 fanout cost variant + S4 {Kafka, redis-flush, both} | "Stable under sustained realtime load; the bonus 1000+ room works." | assets exist, needs fresh evidence |
+| **P0** (minimum credible) | S0 + S1 (PTS) + S4 {Redis fail-closed, settlement no-double-charge, PG-down no-loss} | "Correct under peak contention, resilient, never double-charges." Covers the 50% core. | S1 ✅, S4 P0 ✅ |
+| **P1** (completes realtime story) | S2 steady soak (local) + S3 fanout cost variant + S4 {Kafka, redis-flush, both} | "Stable under sustained realtime load; the bonus 1000+ room works." | S4 P1 ✅, S2/S3 evidence tracked separately |
 | **P2** (stretch / capacity) | S2 optional PTS chart + S3 10 000-WS PTS headline + S5 reconnect + multi-room | "We know the single-node ceiling and the horizontal path." | optional |
 
 Do not start a tier before the one below it passes. A higher-layer regression is
@@ -111,10 +111,15 @@ MANIFEST is preserved — only the *names and headline framing* change).
 | [`s1-final-second-contention.md`](s1-final-second-contention.md) | 绝杀: burst vs ladder, script logic, PTS config, metric→chart |
 | [`s2-steady-auction-and-soak.md`](s2-steady-auction-and-soak.md) | 稳态: open-model arrival, realistic bid mix, leak detection |
 | [`s2-settlement-diagnosis-and-judge-defense.md`](s2-settlement-diagnosis-and-judge-defense.md) | S2 settlement bottleneck diagnosis, rejected write amplification, and judge Q&A |
+| [`s2-s3-expanded-test-design.md`](s2-s3-expanded-test-design.md) | S2/S3 split into long soak, convergence, capacity, read interference, live-only fanout, and mixed final burst |
 | [`s3-room-fanout.md`](s3-room-fanout.md) | 围观: fanout latency measurement, 10k headline + cost variant, RAM/conn |
 | [`s4-fault-resilience.md`](s4-fault-resilience.md) | 故障: chaos structure, minimal fault set, RTO/RPO, no-double-charge test |
+| [`s4-fault-resilience-judge-defense.md`](s4-fault-resilience-judge-defense.md) | S4 exact workload, user-visible fault meaning, current evidence, and judge Q&A |
 | [`s5-reconnect-recovery.md`](s5-reconnect-recovery.md) | 断连重连: time-to-current-state |
+| [`s5-reconnect-judge-defense.md`](s5-reconnect-judge-defense.md) | S5 workload, user-visible meaning, current numbers, and judge Q&A |
 | [`scale-out-and-architecture-ceilings.md`](scale-out-and-architecture-ceilings.md) | infra-vs-architecture boundary, per-shard framing, judge Q&A prep |
+| [`s1-s5-vs-legacy-pts-chaos-audit.md`](s1-s5-vs-legacy-pts-chaos-audit.md) | internal audit: S1-S5 vs legacy L1-L4 assets and chaos-script gaps |
+| [`s1-s5-debug-and-system-change-log.md`](s1-s5-debug-and-system-change-log.md) | S1-S5 debugging history, failed attempts, system-code changes, and judge-defense engineering narrative |
 | [`judge-report-template.md`](judge-report-template.md) | the report structure to present, with PTS PDFs slotted in |
 
 ## 7. Naming rule

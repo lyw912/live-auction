@@ -6,6 +6,9 @@ services:
       - "8474:8474"
       - "15432:15432"
       - "16379:16379"
+      - "18081:18081"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy

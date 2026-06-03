@@ -12,7 +12,8 @@
  *   - Clock skew assumption: run against same-box server (loopback) or same-VPC
  *     PTS IPs with NTP discipline. published_at_ms is the server clock; k6
  *     Date.now() is the load-generator clock. Same-region residual skew ≪ 1s.
- *   - Heartbeat: k6 k6/ws responds to server pings automatically (RFC 6455).
+ *   - Heartbeat: uses k6/websockets so server ping/pong is handled by the
+ *     standard WebSocket event loop during long holds.
  *   - Connection hold: WS connections stay open for HOLD_SECONDS; the viewer
  *     closes cleanly after that to avoid leaving fd/goroutine leaks.
  *
@@ -24,8 +25,10 @@
  *   VIEWER_VUS        WS connections to hold, default 1000 (use 10000 for headline)
  *   BIDDER_VUS        simultaneous bid sources, default 3
  *   BID_RATE_PER_S    accepted bid arrivals/s from bidders, default 5
+ *   BID_BASE_AMOUNT   starting amount_cents for accepted-update source, default 1000000000
  *   HOLD_SECONDS      how long each viewer holds its connection, default 300
  *   FANOUT_P99_SLA_MS M2 SLO in ms, default 1000
+ *   RUN_ID            idempotency key namespace, default Date.now() at init
  *   VIEWER_CSV        viewer session CSV, default docs/perf/pts/pts-l2-viewer-10000-sessions.csv
  *   BIDDER_CSV        bidder session CSV, default docs/perf/pts/pts-l2-bidder-1000-sessions.csv
  *
@@ -38,7 +41,7 @@
 
 import { check, sleep } from 'k6';
 import http from 'k6/http';
-import ws from 'k6/ws';
+import { WebSocket } from 'k6/websockets';
 import exec from 'k6/execution';
 import { Counter, Rate, Trend } from 'k6/metrics';
 
@@ -49,8 +52,10 @@ const ROOM_ID      = __ENV.ROOM_ID    || 'room_main';
 const VIEWER_VUS   = Number(__ENV.VIEWER_VUS    || 1000);
 const BIDDER_VUS   = Number(__ENV.BIDDER_VUS    || 3);
 const BID_RATE     = Number(__ENV.BID_RATE_PER_S|| 5);
+const BID_BASE_AMOUNT = Number(__ENV.BID_BASE_AMOUNT || 1000000000);
 const HOLD_SECONDS = Number(__ENV.HOLD_SECONDS  || 300);
 const FANOUT_SLA   = Number(__ENV.FANOUT_P99_SLA_MS || 1000);
+const RUN_ID       = __ENV.RUN_ID || String(Date.now());
 const VIEWER_CSV   = __ENV.VIEWER_CSV || '../../docs/perf/pts/pts-l2-viewer-10000-sessions.csv';
 const BIDDER_CSV   = __ENV.BIDDER_CSV || '../../docs/perf/pts/pts-l2-bidder-1000-sessions.csv';
 
@@ -136,21 +141,36 @@ export function viewerFn() {
 
   const wsUrl = `${WS_BASE}/ws?room_id=${ROOM_ID}&auction_id=${AUCTION_ID}&last_seq=0`;
   let receivedCount = 0;
+  let connectedAtMs = 0;
 
-  const response = ws.connect(wsUrl, { headers: { 'X-Auction-WS-Ticket': ticket } }, function (socket) {
+  const socket = new WebSocket(wsUrl, undefined, {
+    headers: { 'X-Auction-WS-Ticket': ticket },
+  });
+
+  let intendedClose = false;
+  socket.addEventListener('open', () => {
+    connectedAtMs = Date.now();
     viewerConnected.add(1);
+    setTimeout(() => {
+      intendedClose = true;
+      socket.close();
+    }, HOLD_SECONDS * 1000);
+  });
 
-    socket.on('message', (rawMsg) => {
+  socket.addEventListener('message', (event) => {
       // M2 measurement: server embeds published_at_ms in every broadcast envelope.
       // fanout_latency = client_receive_ms − published_at_ms
       // Clock assumption: same-region NTP-disciplined (residual skew ≪ 1s target).
       const recvMs = Date.now();
       let msg;
-      try { msg = JSON.parse(rawMsg); } catch (_) { return; }
+      try { msg = JSON.parse(event.data); } catch (_) { return; }
 
       // Only price/event updates carry published_at_ms (not heartbeats/pings).
       const publishedAtMs = msg.published_at_ms || msg.data?.published_at_ms;
-      if (publishedAtMs && publishedAtMs > 0) {
+      // Recovery/history messages can also carry published_at_ms. They answer
+      // reconnect correctness, not M2 live fanout, so only measure messages
+      // published after this viewer's connection opened.
+      if (publishedAtMs && publishedAtMs >= connectedAtMs) {
         const latMs = recvMs - publishedAtMs;
         if (latMs >= 0 && latMs < 60000) {  // sanity: ignore clock skew anomalies > 60s
           fanoutLatency.add(latMs);
@@ -160,18 +180,26 @@ export function viewerFn() {
 
       viewerMsgRate.add(1);
       receivedCount++;
+  });
+
+  socket.addEventListener('error', () => {
+    if (!intendedClose) {
+      viewerErrors.add(1);
+    }
+  });
+
+  socket.addEventListener('close', (event) => {
+    const normalClose = intendedClose || event.code === 1000 || event.code === undefined;
+    if (!normalClose) {
+      viewerErrors.add(1);
+    }
+    check(null, {
+      's3 viewer received at least one message': () => receivedCount > 0,
+      's3 viewer closed normally': () => normalClose,
     });
-
-    socket.on('error', () => { viewerErrors.add(1); });
-
-    // Hold for the configured duration, then close cleanly.
-    socket.setTimeout(() => { socket.close(); }, HOLD_SECONDS * 1000);
+    viewerSessionOK.add(receivedCount > 0);
   });
 
-  check(response, {
-    's3 viewer received at least one message': () => receivedCount > 0,
-  });
-  viewerSessionOK.add(receivedCount > 0);
 }
 
 // --- bidder VU: place bids to generate accepted updates (fanout source) ---
@@ -179,10 +207,10 @@ export function bidderFn() {
   const globalIter  = exec.scenario.iterationInTest;
   const session     = bidderSessions[globalIter % bidderSessions.length];
   const userID      = session.userID;
-  const clientBidID = `s3-${globalIter}`;
+  const clientBidID = `s3-${RUN_ID}-${globalIter}`;
   // Use an escalating amount so bids are periodically accepted and fan out.
   // Bidders start well above any initial price so most are accepted (they are the fanout source).
-  const amount = 1000000 + globalIter * 5000;
+  const amount = BID_BASE_AMOUNT + globalIter * 5000;
 
   const res = http.post(
     `${BASE_URL}/api/auctions/${AUCTION_ID}/bids`,

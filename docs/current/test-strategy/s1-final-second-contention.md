@@ -49,7 +49,8 @@ ThreadGroup "bidders" (loop = 1):
     1. auth: reuse a pre-issued session token from the CSV pool (no login in the hot window)
     2. compute bid amount = current_price + step*increment, step ∈ weighted{1,1,1,2,3,4,5}
     3. build unique client_bid_id + idempotency_key  (per VU, stable across retries)
-    4. BARRIER: align all VUs to a single fire moment  (burst_wait_ms after cohort ready)
+    4. FINAL-SECOND WINDOW: align all VUs to a shared final-second start, then
+       deterministically spread them inside `contention_release_window_ms`
     5. SAMPLER "出价决策 bid-decision": POST /api/auctions/auc_live/bids   ← the ONE measured sampler
     6. assert response is FINAL (durability_status=ENGINE_DURABLE, result ∈ ENGINE_*), not 202
     7. HOLD the VU briefly so PTS keeps the full cohort during aggregation
@@ -72,11 +73,15 @@ def k = steps[ (vu * 2654435761L & 0x7fffffff) % steps.size() ]   // determinist
 vars.put("bid_amount_cents", (cur + k*inc).toString())
 ```
 ```groovy
-// 4 — synchronized fire barrier (align cohort; do NOT use a JMeter SyncTimer that waits for ALL,
-//     which stalls if PTS ramps unevenly — gate on an absolute offset from cohort-ready instead)
+// 4 — final-second release window.
+// Default judge-facing value: contention_release_window_ms=500, so 1000 users
+// still bid in a short final-second window, but do not depend on a zero-ms
+// load-generator scheduling wall. Diagnostic microburst: set
+// contention_release_window_ms=0. Conservative one-second fallback: set 1000.
 long fireAt = vars.get("cohort_ready_ms").toLong() + props.get("burst_wait_ms").toLong()
+long offset = Long.parseLong(vars.get("bid_release_offset_ms") ?: "0")
 long now = System.currentTimeMillis()
-if (now < fireAt) Thread.sleep(fireAt - now)
+if (now < fireAt + offset) Thread.sleep(fireAt + offset - now)
 ```
 Bid body:
 ```json
@@ -103,6 +108,7 @@ if (r.durability_status != "ENGINE_DURABLE" || !(r.result ==~ /ENGINE_(ACCEPTED|
 | 压测时长 | 1–2 分钟 | burst + brief hold; stop when concurrency hits 0 |
 | 是否指定循环 / 循环次数 | 是 / **1** | one-shot; console loop would override the script |
 | 指定IP数 | 2 | ⌈1000/500⌉ |
+| JMeter property | default `contention_release_window_ms=500` | 1000 bids target a 500 ms final-second window; set `0` only for diagnostic strict microburst; set `1000` for conservative one-second fallback |
 
 Cost: 2×500×1×1.01 ≈ **1 000 VUM ≈ ¥3** (inside the free 5000-VUM tier).
 
@@ -114,6 +120,7 @@ Cost: 2×500×1×1.01 ≈ **1 000 VUM ≈ ¥3** (inside the free 5000-VUM tier).
 | decisions/sec (engine capacity) | sampler 平均TPS over the burst window | total accept+reject adjudicated |
 | accepted updates (ladder) | server `ENGINE_ACCEPTED` count from `summarize-pts-sampling-logs.sh` | the few that climbed the price |
 | winner correct / rejects justified | `verify-l4b-pts-correctness.sh` output | M3 gate |
+| arrival span | `review-s1-pts-run.sh` sampling-log `startTimeTS` and response `server_time_ms` spans | proves whether PTS actually delivered the target window |
 
 ## 6. Correctness gates (M3 — must PASS to cite M1)
 
@@ -123,6 +130,8 @@ BASE_URL=http://127.0.0.1:18080 bash tests/pts/preflight-l4b-pts-guards.sh befor
 # ... run PTS ...
 BASE_URL=http://127.0.0.1:18080 bash tests/pts/collect-server-evidence.sh s1-<label>
 FINAL_WAIT_SECONDS=0 bash tests/pts/verify-l4b-pts-correctness.sh s1-<label>
+PAGE_SIZE=100 bash tests/pts/fetch-pts-sampling-logs.sh <report-id>
+bash tests/pts/review-s1-pts-run.sh <report-id>
 ```
 Gate asserts: winner == highest valid engine decision; `engine_seq` gap-free;
 each reject carries `required_min_price`/`current_price` basis; zero duplicate
@@ -137,6 +146,12 @@ outbox drained.
   is not bid latency (this is why `L1-C1` uses the JWT session pool).
 - **`SyncTimer` waiting for all VUs.** If PTS ramps unevenly it deadlocks; use the
   absolute-offset barrier in §3 instead.
+- **Reading PTS peak TPS as the burst width.** PTS charts/report tables can
+  display TPS over a coarser bucket than the actual request timestamps. For
+  example, R4FWX72G's 1000 bid samples reached PTS start/server timestamps in
+  about 255 ms, while a 5-second chart bucket would still render near 200 TPS.
+  Use sampling logs or server request timestamps to prove the actual arrival
+  span when defending "within the final second".
 - **Burst lands after sockets closed.** Keep `burst_wait_ms` inside the server
   heartbeat window (20 s ping + 5 s timeout); `3W9CX76G` fired too late.
 - **Citing accepted-TPS as the headline.** Report decision p99 + decisions/sec;

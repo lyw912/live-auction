@@ -2,7 +2,7 @@
 <jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
   <hashTree>
     <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="PTS-1B contention burst 1000VU 1m (v3 single-writer decision log)" enabled="true">
-      <stringProp name="TestPlan.comments">PTS-1B contention burst v3 single-writer decision log. Business scenario: final second of a jewellery auction, 1000 bidders simultaneously, server returns synchronous DECIDED in under 50ms. Pass: HTTP 200 + decision_status=DECIDED + durability_status=ENGINE_DURABLE, p99 &lt;= 50ms, all 1000 bids classified, highest amount wins, engine_seq gap-free, no DLQ/pause. Requires ALLOW_MOCK_AUTH=false ADMISSION_ENABLED=false BID_ENGINE_MODE=redis_ledger Kafka topics ready high auction cap.</stringProp>
+      <stringProp name="TestPlan.comments">PTS-1B contention burst v3 single-writer decision log. Business scenario: final second of a jewellery auction, 1000 bidders submit one bid each inside a short final-second release window. Default contention_release_window_ms=500; diagnostic strict microburst can set it to 0, and conservative one-second burst can set it to 1000. Server returns synchronous DECIDED in under 50ms. Pass: HTTP 200 + decision_status=DECIDED + durability_status=ENGINE_DURABLE, p99 &lt;= 50ms, all 1000 bids classified, highest amount wins, engine_seq gap-free, no DLQ/pause. Requires ALLOW_MOCK_AUTH=false ADMISSION_ENABLED=false BID_ENGINE_MODE=redis_ledger Kafka topics ready high auction cap.</stringProp>
       <boolProp name="TestPlan.functional_mode">false</boolProp>
       <boolProp name="TestPlan.tearDown_on_shutdown">true</boolProp>
       <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
@@ -19,6 +19,7 @@
         <stringProp name="HTTPSampler.port">18080</stringProp>
         <stringProp name="HTTPSampler.protocol">http</stringProp>
         <stringProp name="HTTPSampler.contentEncoding">UTF-8</stringProp>
+        <stringProp name="HTTPSampler.implementation">HttpClient4</stringProp>
         <stringProp name="HTTPSampler.connect_timeout">5000</stringProp>
         <stringProp name="HTTPSampler.response_timeout">15000</stringProp>
       </ConfigTestElement>
@@ -70,6 +71,7 @@
           </elementProp>
           <stringProp name="HTTPSampler.path">/readyz</stringProp>
           <stringProp name="HTTPSampler.method">GET</stringProp>
+          <stringProp name="HTTPSampler.implementation">HttpClient4</stringProp>
           <boolProp name="HTTPSampler.follow_redirects">false</boolProp>
           <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
           <boolProp name="HTTPSampler.postBodyRaw">false</boolProp>
@@ -137,6 +139,29 @@
           <stringProp name="ConstantTimer.delay">0</stringProp>
         </ConstantTimer>
         <hashTree/>
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="connection warmup ignored" enabled="true">
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments"/>
+          </elementProp>
+          <stringProp name="HTTPSampler.path">/readyz</stringProp>
+          <stringProp name="HTTPSampler.method">GET</stringProp>
+          <stringProp name="HTTPSampler.implementation">HttpClient4</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">false</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+          <boolProp name="HTTPSampler.postBodyRaw">false</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <JSR223PostProcessor guiclass="TestBeanGUI" testclass="JSR223PostProcessor" testname="hide connection warmup from report" enabled="true">
+            <stringProp name="cacheKey">live-auction-hide-connection-warmup-v1</stringProp>
+            <stringProp name="filename"></stringProp>
+            <stringProp name="parameters"></stringProp>
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="script"><![CDATA[
+prev.setIgnore()
+            ]]></stringProp>
+          </JSR223PostProcessor>
+          <hashTree/>
+        </hashTree>
         <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="出价决策 bid-decision" enabled="true">
           <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
           <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
@@ -150,6 +175,7 @@
           </elementProp>
           <stringProp name="HTTPSampler.path">/api/auctions/auc_live/bids</stringProp>
           <stringProp name="HTTPSampler.method">POST</stringProp>
+          <stringProp name="HTTPSampler.implementation">HttpClient4</stringProp>
           <boolProp name="HTTPSampler.follow_redirects">false</boolProp>
           <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
         </HTTPSamplerProxy>
@@ -160,8 +186,25 @@
                     <stringProp name="parameters"></stringProp>
                     <stringProp name="scriptLanguage">groovy</stringProp>
                     <stringProp name="script"><![CDATA[
+          long base = Long.parseLong(props.getProperty('contention_amount_base_cents', '10000'))
+          long inc = Long.parseLong(props.getProperty('contention_amount_increment_cents', '5000'))
+          long stride = Long.parseLong(props.getProperty('contention_amount_stride', '1000'))
+          long localCount = Long.parseLong(vars.get('bid_local_count') ?: '0') + 1L
+          vars.put('bid_local_count', Long.toString(localCount))
+
+          String userID = vars.get('user_id') ?: 'unknown_user'
+          def matcher = userID =~ /k6_bidder_(\d+)_(\d+)/
+          long bucket = 0L
+          long lane = 0L
+          if (matcher.matches()) {
+            bucket = Long.parseLong(matcher.group(1))
+            lane = Long.parseLong(matcher.group(2))
+          }
+          long globalRank = Math.max(1L, (bucket - 1L) * 7L + lane + 1L)
+
           long burstWaitMS = Long.parseLong(props.getProperty('burst_wait_ms', '40000'))
           long barrierQuantumMS = Long.parseLong(props.getProperty('contention_barrier_quantum_ms', '10000'))
+          long releaseWindowMS = Long.parseLong(props.getProperty('contention_release_window_ms', '500'))
           def target = props.get('l4b_final_second_target_ms') as java.util.concurrent.atomic.AtomicLong
           if (target == null) {
             long now = System.currentTimeMillis()
@@ -173,32 +216,21 @@
               target = existingTarget as java.util.concurrent.atomic.AtomicLong
             }
           }
-          long sleepMS = target.get() - System.currentTimeMillis()
+          String runID = props.getProperty('contention_run_id', Long.toString(target.get()))
+          long releaseOffsetMS = releaseWindowMS > 0L ? ((globalRank - 1L) % releaseWindowMS) : 0L
+          long sleepMS = target.get() + releaseOffsetMS - System.currentTimeMillis()
           if (sleepMS > 0L) {
             Thread.sleep(sleepMS)
           }
-          
-          long base = Long.parseLong(props.getProperty('contention_amount_base_cents', '10000'))
-          long inc = Long.parseLong(props.getProperty('contention_amount_increment_cents', '5000'))
-          long stride = Long.parseLong(props.getProperty('contention_amount_stride', '1000'))
-          long localCount = Long.parseLong(vars.get('bid_local_count') ?: '0') + 1L
-          vars.put('bid_local_count', Long.toString(localCount))
-          
-          String userID = vars.get('user_id') ?: 'unknown_user'
-          def matcher = userID =~ /k6_bidder_(\d+)_(\d+)/
-          long bucket = 0L
-          long lane = 0L
-          if (matcher.matches()) {
-            bucket = Long.parseLong(matcher.group(1))
-            lane = Long.parseLong(matcher.group(2))
-          }
-          long globalRank = Math.max(1L, (bucket - 1L) * 7L + lane + 1L)
+
           long amount = base + inc * stride * globalRank
-          String clientBidId = 'pts-1b-contention-' + userID + '-' + localCount + '-' + globalRank
+          String clientBidId = 'pts-1b-contention-' + runID + '-' + userID + '-' + localCount + '-' + globalRank
           vars.put('amount_cents', Long.toString(amount))
           vars.put('client_bid_id', clientBidId)
           vars.put('idempotency_key', clientBidId)
           vars.put('client_seen_seq', Long.toString(Math.max(0L, globalRank - 1L)))
+          vars.put('contention_run_id', runID)
+          vars.put('bid_release_offset_ms', Long.toString(releaseOffsetMS))
                     ]]></stringProp>
                   </JSR223PreProcessor>
                   <hashTree/>
@@ -297,13 +329,12 @@ if (body != null && body.length() > 0) {
             ]]></stringProp>
           </JSR223PostProcessor>
           <hashTree/>
-        </hashTree>
-        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="hold VU after one-shot bid so PTS keeps full cohort" enabled="true">
-          <stringProp name="cacheKey">live-auction-hold-after-one-shot-bid</stringProp>
-          <stringProp name="filename"></stringProp>
-          <stringProp name="parameters"></stringProp>
-          <stringProp name="scriptLanguage">groovy</stringProp>
-          <stringProp name="script"><![CDATA[
+          <JSR223PostProcessor guiclass="TestBeanGUI" testclass="JSR223PostProcessor" testname="hold VU after one-shot bid without report sampler" enabled="true">
+            <stringProp name="cacheKey">live-auction-hold-after-one-shot-bid-postprocessor-v1</stringProp>
+            <stringProp name="filename"></stringProp>
+            <stringProp name="parameters"></stringProp>
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="script"><![CDATA[
 long holdUntilMS = Long.parseLong(props.getProperty('hold_until_ms', '60000'))
 def startedAt = props.get('l4b_plan_started_at_ms') as java.util.concurrent.atomic.AtomicLong
 if (startedAt == null) {
@@ -317,12 +348,10 @@ long sleepMS = startedAt.get() + holdUntilMS - System.currentTimeMillis()
 if (sleepMS > 0L) {
   Thread.sleep(sleepMS)
 }
-SampleResult.setSuccessful(true)
-SampleResult.setResponseCode('200')
-SampleResult.setResponseMessage('HELD')
-          ]]></stringProp>
-        </JSR223Sampler>
-        <hashTree/>
+            ]]></stringProp>
+          </JSR223PostProcessor>
+          <hashTree/>
+        </hashTree>
       </hashTree>
 
       <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="20 PTS-1 snapshot read background" enabled="false">

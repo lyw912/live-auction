@@ -42,9 +42,9 @@ const (
 	DurabilityStatusKafkaUnknown = "KAFKA_UNKNOWN"
 	DurabilityStatusKafkaFailed  = "KAFKA_FAILED"
 	DurabilityStatusNotRequired  = "NOT_REQUIRED"
-	SettlementStatusPending         = "PENDING"
-	SettlementStatusSettled         = "SETTLED"
-	SettlementStatusFailed          = "FAILED"
+	SettlementStatusPending      = "PENDING"
+	SettlementStatusSettled      = "SETTLED"
+	SettlementStatusFailed       = "FAILED"
 
 	BidSourceManual     = "MANUAL"
 	BidSourceAutoMaxBid = "AUTO_MAX_BID"
@@ -393,6 +393,11 @@ func (r *Repository) PayMockWithSecret(ctx context.Context, orderID string, user
 	}
 	if status == OrderStatusExpired {
 		return PaymentResponse{}, apierrors.New(apierrors.CodeOrderAlreadyExpired, "order already expired", http.StatusConflict)
+	}
+	if status != OrderStatusPaid && providerPaymentID == nil {
+		if err := ensurePaymentConvergenceReady(ctx, tx, auctionID); err != nil {
+			return PaymentResponse{}, err
+		}
 	}
 	now := time.Now().UTC()
 	if providerPaymentID == nil {
@@ -1337,6 +1342,42 @@ func mapOrderNotFound(err error) error {
 		return apierrors.New(apierrors.CodeInvalidArgument, "order not found", http.StatusNotFound)
 	}
 	return err
+}
+
+func ensurePaymentConvergenceReady(ctx context.Context, tx pgx.Tx, auctionID string) error {
+	var openSettlements int64
+	var openOutbox int64
+	if err := tx.QueryRow(ctx, `
+		WITH open_settlements AS (
+		  SELECT count(*) AS count
+		  FROM redis_engine_settlements
+		  WHERE auction_id = $1
+		    AND (status IN ('PROCESSING','FAILED') OR dlq_at IS NOT NULL)
+		),
+		open_outbox AS (
+		  SELECT count(*) AS count
+		  FROM outbox_events e
+		  JOIN outbox_delivery d ON d.outbox_id = e.id
+		  WHERE e.auction_id = $1
+		    AND d.status <> 'PUBLISHED'
+		)
+		SELECT open_settlements.count, open_outbox.count
+		FROM open_settlements CROSS JOIN open_outbox
+	`, auctionID).Scan(&openSettlements, &openOutbox); err != nil {
+		return err
+	}
+	if openSettlements > 0 || openOutbox > 0 {
+		return apierrors.WithDetails(
+			apierrors.New(apierrors.CodeProcessingRetryLater, "payment is waiting for auction settlement convergence", http.StatusConflict),
+			map[string]any{
+				"auction_id":        auctionID,
+				"open_settlements":  openSettlements,
+				"open_outbox":       openOutbox,
+				"required_boundary": "settlement_converged",
+			},
+		)
+	}
+	return nil
 }
 
 func (r *Repository) ListOrders(ctx context.Context, userID string, role string) ([]Order, error) {

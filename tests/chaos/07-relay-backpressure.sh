@@ -20,56 +20,25 @@
 #   - Relay pass 2: processes remaining N-512, cursor at entry N
 #   - No entries lost; no duplicates; final ledger count = N
 set -euo pipefail
-source "$(dirname "$0")/common.sh"
+cd "$(dirname "$0")/../.."
 
 echo "=== Fault 07: Relay backpressure (stream > batch ceiling) ==="
-echo "Business scenario: 600 rapid bids, relay must drain in 2 passes"
-
-BATCH_SIZE=512  # matches relayBatchSize in engine.go
-N_BIDS=600      # must exceed one batch
-
-echo "[1] Check stream length before test"
-BEFORE_LEN=$($REDIS_CLI XLEN "bid:{${AUCTION_ID}}:engine:log" 2>/dev/null || echo "0")
-echo "    Stream length before: $BEFORE_LEN"
+echo "Business scenario: 600 rapid decisions exceed the 512-entry relay batch ceiling; relay must drain in multiple passes without losing decisions."
 
 echo ""
-echo "[2] Verify that a burst of bids all return DECIDED (relay backpressure does not block hot path)"
-# Send 10 bids quickly and verify all return DECIDED
-SUCCESS=0
-for i in $(seq 1 10); do
-  RESP=$(bid "user_${i}" "$((15000 + i * 1000))" "chaos-07-burst-${i}")
-  CODE=$(echo "$RESP" | tail -1)
-  if [ "$CODE" = "200" ]; then ((SUCCESS++)) || true; fi
-done
-echo "    Bids with HTTP 200: $SUCCESS/10"
-if [ "$SUCCESS" -ge 9 ]; then
-  echo "  ✔ hot path not blocked by relay batch size"
-  ((PASS++)) || true
-else
-  echo "  ✘ only $SUCCESS/10 bids returned 200 — hot path may be blocked"
-  ((FAIL++)) || true
-fi
+echo "[1] Run targeted backend integration gate"
+echo "    Gate: TestRelayBackpressureDrainsBeyondBatchCeiling"
+echo "    Scale: relayBatchSize(512) + 88 = 600 Redis engine decisions"
+echo "    Assertions:"
+echo "      - all 600 bids return DECIDED + ENGINE_DURABLE"
+echo "      - Redis Stream contains all 600 decisions"
+echo "      - first 512-entry stream page has valid payloads and seq 1..512"
+echo "      - relay drains all 600 decisions over multiple passes"
+echo "      - Redis pending hash returns to 0"
+echo "      - relay cursor prevents duplicate Kafka append"
+echo "      - engine is not paused"
+
+(cd backend && go test ./internal/redisengine -run '^TestRelayBackpressureDrainsBeyondBatchCeiling$' -count=1 -v)
 
 echo ""
-echo "[3] Check stream grew"
-AFTER_LEN=$($REDIS_CLI XLEN "bid:{${AUCTION_ID}}:engine:log" 2>/dev/null || echo "N/A")
-echo "    Stream length after: $AFTER_LEN"
-if [ "$AFTER_LEN" != "N/A" ] && [ "$AFTER_LEN" -gt "$BEFORE_LEN" ] 2>/dev/null; then
-  echo "  ✔ stream grew from $BEFORE_LEN to $AFTER_LEN"
-  ((PASS++)) || true
-else
-  echo "  ℹ stream length before=$BEFORE_LEN after=$AFTER_LEN (may have been already drained)"
-  ((PASS++)) || true
-fi
-
-echo ""
-echo "[4] Verify relay drains completely (hits worker endpoint)"
-echo "    (In production: worker loop runs every ~2ms; here we check after a short wait)"
-sleep 2
-FINAL_CURSOR=$($REDIS_CLI GET "bid:{${AUCTION_ID}}:engine:relay-cursor" 2>/dev/null || echo "0-0")
-FINAL_LEN=$($REDIS_CLI XLEN "bid:{${AUCTION_ID}}:engine:log" 2>/dev/null || echo "N/A")
-echo "    Relay cursor: $FINAL_CURSOR, stream length: $FINAL_LEN"
-echo "  ℹ relay draining is async; check server logs for 'relay batch' metrics"
-((PASS++)) || true
-
-summary
+echo "PASS"

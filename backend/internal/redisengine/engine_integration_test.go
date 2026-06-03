@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -148,6 +149,120 @@ func TestRedisLedgerMissingHotStateWithUnsettledLedgerFailsClosed(t *testing.T) 
 	}, "tr_state_loss_next")
 	assertAPIErrorCode(t, err, apierrors.CodeEngineReconciling)
 	assertEnginePaused(t, db, auctionID, "REDIS_ENGINE_STATE_MISSING_REQUIRES_RECONCILE")
+}
+
+func TestRedisLedgerMissingHotStateAfterSettledLedgerFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+
+	if _, err := engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-settled-state-loss-seed", auction.BidInput{
+		ClientBidID:   "redis-ledger-settled-state-loss-seed",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_settled_state_loss_seed"); err != nil {
+		t.Fatalf("seed redis state: %v", err)
+	}
+	settleAllLedgerMessages(t, ctx, worker, 1)
+	assertAuctionEngineSeq(t, db, auctionID, 1, 15_000, "ACTIVE")
+	if err := rdb.Del(ctx, redisx.BidEngineStateKey(auctionID)).Err(); err != nil {
+		t.Fatalf("delete redis state: %v", err)
+	}
+
+	_, err := engine.PlaceBid(ctx, auctionID, "user_2", "redis-ledger-settled-state-loss-next", auction.BidInput{
+		ClientBidID:   "redis-ledger-settled-state-loss-next",
+		AmountCents:   20_000,
+		ClientSeenSeq: 0,
+	}, "tr_settled_state_loss_next")
+	assertAPIErrorCode(t, err, apierrors.CodeEngineReconciling)
+	assertEnginePaused(t, db, auctionID, "REDIS_ENGINE_STATE_MISSING_REQUIRES_RECONCILE")
+	assertAuctionEngineSeq(t, db, auctionID, 1, 15_000, "ACTIVE")
+}
+
+func TestRedisLedgerMissingHotStateWithDurableSettlementAttemptFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+
+	if _, err := engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-attempt-state-loss-seed", auction.BidInput{
+		ClientBidID:   "redis-ledger-attempt-state-loss-seed",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_attempt_state_loss_seed"); err != nil {
+		t.Fatalf("seed redis state: %v", err)
+	}
+	if _, err := worker.ProcessPendingAppends(ctx, 100); err != nil {
+		t.Fatalf("relay pending appends: %v", err)
+	}
+	msg, ok := ledger.Message(0)
+	if !ok {
+		t.Fatalf("missing relayed ledger message")
+	}
+	var result engineResult
+	if err := json.Unmarshal(msg.Value, &result); err != nil {
+		t.Fatalf("decode ledger payload: %v", err)
+	}
+	if _, err := worker.recordSettlementAttempt(ctx, auctionID, msg.ID, result, msg); err != nil {
+		t.Fatalf("insert settlement attempt: %v", err)
+	}
+	assertAuctionEngineSeq(t, db, auctionID, 0, 10_000, "ACTIVE")
+	if err := rdb.Del(ctx, redisx.BidEngineStateKey(auctionID)).Err(); err != nil {
+		t.Fatalf("delete redis state: %v", err)
+	}
+
+	_, err := engine.PlaceBid(ctx, auctionID, "user_2", "redis-ledger-attempt-state-loss-next", auction.BidInput{
+		ClientBidID:   "redis-ledger-attempt-state-loss-next",
+		AmountCents:   20_000,
+		ClientSeenSeq: 0,
+	}, "tr_attempt_state_loss_next")
+	assertAPIErrorCode(t, err, apierrors.CodeEngineReconciling)
+	assertEnginePaused(t, db, auctionID, "REDIS_ENGINE_STATE_MISSING_REQUIRES_RECONCILE")
+	assertAuctionEngineSeq(t, db, auctionID, 0, 10_000, "ACTIVE")
+}
+
+func TestRedisLedgerMissingHotStateAfterPrewarmCheckpointFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+
+	report, err := worker.resumeRedisEngine(ctx, auctionID)
+	if err != nil {
+		t.Fatalf("prewarm redis engine: %v", err)
+	}
+	if !report.Resumed || !report.Rebuilt || report.EngineSeq != 0 {
+		t.Fatalf("prewarm report = %#v, want rebuilt seq 0", report)
+	}
+	var checkpointSeq int64
+	if err := db.QueryRow(ctx, `SELECT engine_seq FROM auction_engine_checkpoints WHERE auction_id = $1`, auctionID).Scan(&checkpointSeq); err != nil {
+		t.Fatalf("load prewarm checkpoint: %v", err)
+	}
+	if checkpointSeq != 0 {
+		t.Fatalf("checkpoint seq = %d, want 0", checkpointSeq)
+	}
+	if err := rdb.Del(ctx, redisx.BidEngineStateKey(auctionID)).Err(); err != nil {
+		t.Fatalf("delete redis state: %v", err)
+	}
+
+	_, err = engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-prewarm-state-loss-next", auction.BidInput{
+		ClientBidID:   "redis-ledger-prewarm-state-loss-next",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_prewarm_state_loss_next")
+	assertAPIErrorCode(t, err, apierrors.CodeEngineReconciling)
+	assertEnginePaused(t, db, auctionID, "REDIS_ENGINE_STATE_MISSING_REQUIRES_RECONCILE")
+	assertAuctionEngineSeq(t, db, auctionID, 0, 10_000, "ACTIVE")
 }
 
 func TestRedisLedgerConcurrentAppendRecordsEveryEngineSeq(t *testing.T) {
@@ -748,13 +863,12 @@ func TestRedisLedgerCorruptIdempotencyReplayPausesInsteadOfNewDecision(t *testin
 	assertEnginePaused(t, db, auctionID, "REDIS_IDEMPOTENCY_REPLAY_FAILED")
 }
 
-func TestRedisLedgerStartsAfterExistingAuctionSeq(t *testing.T) {
+func TestRedisLedgerMissingHotStateAfterExistingAuctionSeqFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 	rdb := openStreamsRedis(t)
 	ledger := NewMemoryLedger()
 	engine := New(db, rdb, ledger)
-	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
 	auctionID := createEngineAuction(t, db, 0)
 
 	if _, err := db.Exec(ctx, `
@@ -769,31 +883,26 @@ func TestRedisLedgerStartsAfterExistingAuctionSeq(t *testing.T) {
 		t.Fatalf("seed legacy seq: %v", err)
 	}
 
-	resp, err := engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-after-seq", auction.BidInput{
+	_, err := engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-after-seq", auction.BidInput{
 		ClientBidID:   "redis-ledger-after-seq",
 		AmountCents:   15_000,
 		ClientSeenSeq: 5,
 	}, "tr_after_seq")
-	if err != nil {
-		t.Fatalf("engine bid after legacy seq: %v", err)
-	}
-	if resp.EngineSeq != 6 {
-		t.Fatalf("engine seq = %d, want 6", resp.EngineSeq)
-	}
-	settleAllLedgerMessages(t, ctx, worker, 1, true)
+	assertAPIErrorCode(t, err, apierrors.CodeEngineReconciling)
+	assertEnginePaused(t, db, auctionID, "REDIS_ENGINE_STATE_MISSING_REQUIRES_RECONCILE")
 	var events int
 	if err := db.QueryRow(ctx, `SELECT count(*) FROM auction_events WHERE auction_id = $1 AND seq = 6`, auctionID).Scan(&events); err != nil {
 		t.Fatalf("count event seq 6: %v", err)
 	}
-	if events != 1 {
-		t.Fatalf("event seq 6 count = %d, want 1", events)
+	if events != 0 {
+		t.Fatalf("event seq 6 count = %d, want 0", events)
 	}
 	var auctionSeq int64
-	if err := db.QueryRow(ctx, `SELECT seq FROM auctions WHERE id = $1`, auctionID).Scan(&auctionSeq); err != nil {
+	if err := db.QueryRow(ctx, `SELECT engine_seq FROM auctions WHERE id = $1`, auctionID).Scan(&auctionSeq); err != nil {
 		t.Fatalf("load auction seq: %v", err)
 	}
-	if auctionSeq != 6 {
-		t.Fatalf("auction seq = %d, want 6", auctionSeq)
+	if auctionSeq != 5 {
+		t.Fatalf("auction engine seq = %d, want 5", auctionSeq)
 	}
 }
 
@@ -1090,6 +1199,125 @@ func TestRelayGroupCommitBatchesAllDecisions(t *testing.T) {
 	}
 }
 
+func TestRelayBackpressureDrainsBeyondBatchCeiling(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+
+	const bidders = relayBatchSize + 88
+	insertEngineUsers(t, db, "user_relay_pressure_", bidders)
+
+	for i := 0; i < bidders; i++ {
+		clientBidID := fmt.Sprintf("relay-pressure-%03d", i)
+		resp, err := engine.PlaceBid(ctx, auctionID, "user_relay_pressure_"+strconv.Itoa(i), clientBidID, auction.BidInput{
+			ClientBidID:   clientBidID,
+			AmountCents:   15_000 + int64(i)*5_000,
+			ClientSeenSeq: 0,
+		}, "tr_relay_pressure")
+		if err != nil {
+			t.Fatalf("bid %d: %v", i, err)
+		}
+		if resp.DecisionStatus != auction.DecisionStatusDecided || resp.DurabilityStatus != auction.DurabilityStatusEngineDurable {
+			t.Fatalf("bid %d = %#v, want DECIDED+ENGINE_DURABLE", i, resp)
+		}
+	}
+
+	streamLen, err := rdb.XLen(ctx, redisx.BidEngineLogStreamKey(auctionID)).Result()
+	if err != nil {
+		t.Fatalf("xlen: %v", err)
+	}
+	if streamLen != bidders {
+		t.Fatalf("stream len = %d, want %d", streamLen, bidders)
+	}
+	probe, err := rdb.XRangeN(ctx, redisx.BidEngineLogStreamKey(auctionID), "-", "+", relayBatchSize).Result()
+	if err != nil {
+		t.Fatalf("probe xrange: %v", err)
+	}
+	if len(probe) == 0 {
+		t.Fatalf("probe xrange returned no messages")
+	}
+	validPayloads := 0
+	invalidPayloads := 0
+	minSeq := int64(1<<63 - 1)
+	maxSeq := int64(0)
+	for _, msg := range probe {
+		payload, ok := msg.Values["payload"].(string)
+		if !ok || payload == "" {
+			invalidPayloads++
+			continue
+		}
+		var result engineResult
+		if err := json.Unmarshal([]byte(payload), &result); err != nil || result.AuctionID != auctionID {
+			invalidPayloads++
+			continue
+		}
+		if result.EngineSeq < minSeq {
+			minSeq = result.EngineSeq
+		}
+		if result.EngineSeq > maxSeq {
+			maxSeq = result.EngineSeq
+		}
+		validPayloads++
+	}
+	if validPayloads != relayBatchSize || invalidPayloads != 0 || minSeq != 1 || maxSeq != relayBatchSize {
+		t.Fatalf("first stream page valid=%d invalid=%d min_seq=%d max_seq=%d, want %d/0/1/%d", validPayloads, invalidPayloads, minSeq, maxSeq, relayBatchSize, relayBatchSize)
+	}
+	if err := rdb.Del(ctx, redisx.BidEngineRelayCursorKey(auctionID)).Err(); err != nil {
+		t.Fatalf("reset relay cursor: %v", err)
+	}
+	ledger = NewMemoryLedger()
+	worker = NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+
+	first, err := worker.relayAuctionLogBatch(ctx, auctionID)
+	if err != nil {
+		t.Fatalf("relay first: %v", err)
+	}
+	if first <= 0 || first >= bidders {
+		t.Fatalf("first relay processed = %d, want partial progress below full backlog %d", first, bidders)
+	}
+	if ledger.Len() != first {
+		t.Fatalf("ledger len after first relay = %d, want %d", ledger.Len(), first)
+	}
+	total := first
+	for i := 0; i < 20 && total < bidders; i++ {
+		n, err := worker.relayAuctionLogBatch(ctx, auctionID)
+		if err != nil {
+			t.Fatalf("relay drain %d: %v", i, err)
+		}
+		total += n
+		if n == 0 {
+			break
+		}
+	}
+	if total != bidders {
+		cursor, _ := rdb.Get(ctx, redisx.BidEngineRelayCursorKey(auctionID)).Result()
+		afterCursor, _ := rdb.XRange(ctx, redisx.BidEngineLogStreamKey(auctionID), cursor, "+").Result()
+		t.Fatalf("total relayed = %d, want %d; stream len=%d cursor=%s ledger=%d xrange_from_cursor=%d", total, bidders, streamLen, cursor, ledger.Len(), len(afterCursor))
+	}
+	if ledger.Len() != bidders {
+		t.Fatalf("ledger len after drain = %d, want %d", ledger.Len(), bidders)
+	}
+	pendingFinal, err := rdb.HLen(ctx, redisx.BidEnginePendingKey(auctionID)).Result()
+	if err != nil {
+		t.Fatalf("pending final: %v", err)
+	}
+	if pendingFinal != 0 {
+		t.Fatalf("pending final = %d, want 0", pendingFinal)
+	}
+	n, err := worker.relayAuctionLogBatch(ctx, auctionID)
+	if err != nil {
+		t.Fatalf("relay after cursor: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("relay after cursor processed = %d, want 0", n)
+	}
+	assertEngineNotPaused(t, db, auctionID)
+}
+
 func TestKafkaSettlementUniqueSeqConflictWithSamePayloadIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
@@ -1128,6 +1356,92 @@ func TestKafkaSettlementUniqueSeqConflictWithSamePayloadIsIdempotent(t *testing.
 	if rows != 1 {
 		t.Fatalf("settlement rows = %d, want 1", rows)
 	}
+}
+
+func TestKafkaSettlementTripleDuplicateMessageHasSingleBusinessEffect(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 20_000)
+
+	if _, err := engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-triple-dup", auction.BidInput{
+		ClientBidID:   "redis-ledger-triple-dup",
+		AmountCents:   20_000,
+		ClientSeenSeq: 0,
+	}, "tr_triple_dup"); err != nil {
+		t.Fatalf("place sold bid: %v", err)
+	}
+	if _, err := worker.ProcessPendingAppends(ctx, 100); err != nil {
+		t.Fatalf("relay: %v", err)
+	}
+	msg, ok := ledger.Message(0)
+	if !ok {
+		t.Fatalf("missing memory ledger message")
+	}
+
+	for i := 0; i < 3; i++ {
+		if err := worker.settleLedgerMessage(ctx, msg); err != nil {
+			t.Fatalf("duplicate settlement %d: %v", i+1, err)
+		}
+	}
+
+	var settlementRows, settledRows, bidRows, orderRows, outboxEvents, outboxDeliveries, missingDeliveries, duplicateDeliveries int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM redis_engine_settlements WHERE auction_id = $1 AND engine_seq = 1`, auctionID).Scan(&settlementRows); err != nil {
+		t.Fatalf("count settlements: %v", err)
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM redis_engine_settlements WHERE auction_id = $1 AND engine_seq = 1 AND status = 'SETTLED'`, auctionID).Scan(&settledRows); err != nil {
+		t.Fatalf("count settled: %v", err)
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM bids WHERE auction_id = $1 AND engine_seq = 1`, auctionID).Scan(&bidRows); err != nil {
+		t.Fatalf("count bids: %v", err)
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM orders WHERE auction_id = $1`, auctionID).Scan(&orderRows); err != nil {
+		t.Fatalf("count orders: %v", err)
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE auction_id = $1`, auctionID).Scan(&outboxEvents); err != nil {
+		t.Fatalf("count outbox events: %v", err)
+	}
+	if err := db.QueryRow(ctx, `
+		SELECT count(*)
+		FROM outbox_delivery d
+		JOIN outbox_events e ON e.id = d.outbox_id
+		WHERE e.auction_id = $1
+	`, auctionID).Scan(&outboxDeliveries); err != nil {
+		t.Fatalf("count outbox deliveries: %v", err)
+	}
+
+	if settlementRows != 1 || settledRows != 1 || bidRows != 1 || orderRows != 1 {
+		t.Fatalf("business rows settlement=%d settled=%d bids=%d orders=%d, want 1/1/1/1", settlementRows, settledRows, bidRows, orderRows)
+	}
+	if err := db.QueryRow(ctx, `
+		SELECT count(*)
+		FROM outbox_events e
+		LEFT JOIN outbox_delivery d ON d.outbox_id = e.id
+		WHERE e.auction_id = $1 AND d.outbox_id IS NULL
+	`, auctionID).Scan(&missingDeliveries); err != nil {
+		t.Fatalf("count missing deliveries: %v", err)
+	}
+	if err := db.QueryRow(ctx, `
+		SELECT count(*)
+		FROM (
+			SELECT d.outbox_id, count(*) AS cnt
+			FROM outbox_delivery d
+			JOIN outbox_events e ON e.id = d.outbox_id
+			WHERE e.auction_id = $1
+			GROUP BY d.outbox_id
+			HAVING count(*) > 1
+		) dup
+	`, auctionID).Scan(&duplicateDeliveries); err != nil {
+		t.Fatalf("count duplicate deliveries: %v", err)
+	}
+
+	if outboxEvents != 1 || outboxDeliveries != 1 || missingDeliveries != 0 || duplicateDeliveries != 0 {
+		t.Fatalf("outbox events=%d deliveries=%d missing=%d duplicate=%d, want 1/1/0/0", outboxEvents, outboxDeliveries, missingDeliveries, duplicateDeliveries)
+	}
+	assertEngineNotPaused(t, db, auctionID)
 }
 
 func TestKafkaSettlementSameSeqDifferentPayloadFailsAndPauses(t *testing.T) {

@@ -3,7 +3,6 @@ package redisengine
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -62,18 +61,6 @@ local pending_key = KEYS[3]
 local pending_auctions_key = KEYS[4]
 local log_stream_key = KEYS[5]
 local acl_key = KEYS[6]
-
--- ACL membership check: runs atomically inside the script, so no separate
--- Redis round-trip is needed. The gateway pre-seeds acl:membership:{auction}:{user}
--- when the room opens; the bid hot path never touches the DB for ACL.
--- acl_key is empty string when called without ACL context (tests, non-gateway paths).
-if acl_key and acl_key ~= '' then
-    local acl_val = redis.call('GET', acl_key)
-    if not acl_val or acl_val == false or acl_val == '' then
-        return {'ERROR', 'ACL_FORBIDDEN', 'user does not have active room membership'}
-    end
-end
-
 
 local now_ms = tonumber(ARGV[1])
 local auction_id = ARGV[2]
@@ -253,6 +240,22 @@ end
 if status ~= 'ACTIVE' then
   return reject('AUCTION_NOT_ACTIVE')
 end
+
+-- ACL membership check: runs atomically inside the script, so no separate
+-- Redis round-trip is needed. The gateway pre-seeds acl:membership:{auction}:{user}
+-- when the room opens; the bid hot path never touches the DB for ACL.
+-- acl_key is empty string when called without ACL context (tests, non-gateway paths).
+--
+-- Keep this after state/paused/reconciling checks. If Redis hot state is lost
+-- (for example FLUSHALL), ACL cache is lost too; users must see recovering /
+-- paused semantics rather than a misleading room-access denial.
+if acl_key and acl_key ~= '' then
+    local acl_val = redis.call('GET', acl_key)
+    if not acl_val or acl_val == false or acl_val == '' then
+        return {'ERROR', 'ACL_FORBIDDEN', 'user does not have active room membership'}
+    end
+end
+
 if now_ms > end_at_ms then
   return reject('AUCTION_ENDED')
 end
@@ -832,80 +835,32 @@ func (e *Engine) redisAppendHighWater(ctx context.Context, auctionID string) (in
 }
 
 func (e *Engine) ensureColdSnapshotCanSeedRedis(ctx context.Context, auctionID string, snap snapshot) error {
-	if snap.EngineSeq <= 0 {
-		return nil
-	}
-	tx, err := e.db.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	var pendingSettlements int64
-	if err := tx.QueryRow(ctx, `
+	var settlementRows int64
+	if err := e.db.QueryRow(ctx, `
 		SELECT count(*)
 		FROM redis_engine_settlements
 		WHERE auction_id = $1
-		  AND status NOT IN ('SETTLED','SKIPPED')
-	`, auctionID).Scan(&pendingSettlements); err != nil {
+	`, auctionID).Scan(&settlementRows); err != nil {
 		return err
 	}
-	if pendingSettlements > 0 {
-		return fmt.Errorf("redis state missing while %d settlement decisions are not terminal", pendingSettlements)
+	if settlementRows > 0 {
+		return fmt.Errorf("redis state missing after %d durable settlement attempt rows; controlled resume is required", settlementRows)
 	}
-
-	var settlementCount int64
-	var settledSeq sql.NullInt64
-	if err := tx.QueryRow(ctx, `
-		SELECT count(*), max(engine_seq)
-		FROM redis_engine_settlements
-		WHERE auction_id = $1
-		  AND engine_epoch = $2
-		  AND status IN ('SETTLED','SKIPPED')
-	`, auctionID, snap.EngineEpoch).Scan(&settlementCount, &settledSeq); err != nil {
-		return err
-	}
-	if settlementCount == 0 {
-		return tx.Commit(ctx)
-	}
-	if !settledSeq.Valid || settledSeq.Int64 != snap.EngineSeq {
-		return fmt.Errorf("redis state missing but settled ledger seq %d does not cover postgres engine seq %d", settledSeq.Int64, snap.EngineSeq)
-	}
-
-	var checkpointEpoch int64
-	var checkpointSeq int64
-	var storedHash string
-	var snapshotText string
-	err = tx.QueryRow(ctx, `
-		SELECT engine_epoch, engine_seq, state_hash, snapshot_json::text
+	var checkpointRows int64
+	if err := e.db.QueryRow(ctx, `
+		SELECT count(*)
 		FROM auction_engine_checkpoints
 		WHERE auction_id = $1
-	`, auctionID).Scan(&checkpointEpoch, &checkpointSeq, &storedHash, &snapshotText)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("redis state missing after settled ledger decisions without checkpoint")
-	}
-	if err != nil {
+	`, auctionID).Scan(&checkpointRows); err != nil {
 		return err
 	}
-	if checkpointEpoch != snap.EngineEpoch || checkpointSeq != snap.EngineSeq {
-		return fmt.Errorf("redis state missing but checkpoint epoch/seq %d/%d does not cover postgres epoch/seq %d/%d", checkpointEpoch, checkpointSeq, snap.EngineEpoch, snap.EngineSeq)
+	if checkpointRows > 0 {
+		return fmt.Errorf("redis state missing after engine checkpoint exists; controlled resume is required")
 	}
-	var storedSnapshot engineCheckpointSnapshot
-	if err := json.Unmarshal([]byte(snapshotText), &storedSnapshot); err != nil {
-		return fmt.Errorf("redis state missing and checkpoint snapshot is invalid: %w", err)
+	if snap.EngineSeq <= 0 {
+		return nil
 	}
-	storedPayload, err := json.Marshal(storedSnapshot)
-	if err != nil {
-		return err
-	}
-	_, payload, stateHash, err := checkpointSnapshot(ctx, tx, auctionID)
-	if err != nil {
-		return err
-	}
-	if storedHash != sha256Hex(storedPayload) || storedHash != stateHash || sha256Hex(payload) != stateHash {
-		return fmt.Errorf("redis state missing but checkpoint hash does not match current postgres state")
-	}
-	return tx.Commit(ctx)
+	return fmt.Errorf("redis state missing after postgres engine seq %d; controlled resume is required", snap.EngineSeq)
 }
 
 func (e *Engine) loadSnapshot(ctx context.Context, auctionID string) (snapshot, error) {
@@ -1386,16 +1341,14 @@ func (w *Worker) relayAuctionLogBatch(ctx context.Context, auctionID string) (in
 	for _, msg := range messages {
 		payload, ok := msg.Values["payload"].(string)
 		if !ok || payload == "" {
-			continue
+			return 0, fmt.Errorf("relay stream entry auction=%s stream_id=%s missing payload", auctionID, msg.ID)
 		}
 		var result engineResult
 		if err := json.Unmarshal([]byte(payload), &result); err != nil {
-			w.logger().Warn("relay: skipping malformed stream entry",
-				slog.String("auction_id", auctionID),
-				slog.String("stream_id", msg.ID),
-				slog.String("error", err.Error()),
-			)
-			continue
+			return 0, fmt.Errorf("relay stream entry auction=%s stream_id=%s malformed payload: %w", auctionID, msg.ID, err)
+		}
+		if result.AuctionID != auctionID {
+			return 0, fmt.Errorf("relay stream entry auction mismatch key=%s payload=%s stream_id=%s", auctionID, result.AuctionID, msg.ID)
 		}
 		results = append(results, result)
 		streamIDs = append(streamIDs, msg.ID)
@@ -1410,6 +1363,10 @@ func (w *Worker) relayAuctionLogBatch(ctx context.Context, auctionID string) (in
 	if err != nil {
 		observability.Inc("auction_bid_relay_kafka_batch_fail_total", map[string]string{"auction_id": auctionID})
 		return 0, fmt.Errorf("relay batch produce auction=%s batch=%d: %w", auctionID, len(results), err)
+	}
+	if len(ledgerMsgs) != len(results) {
+		observability.Inc("auction_bid_relay_kafka_batch_fail_total", map[string]string{"auction_id": auctionID})
+		return 0, fmt.Errorf("relay batch produce auction=%s returned %d ledger messages for %d results", auctionID, len(ledgerMsgs), len(results))
 	}
 
 	observability.Inc("auction_bid_relay_kafka_batch_total", map[string]string{"auction_id": auctionID})
@@ -2197,6 +2154,9 @@ func (w *Worker) rebuildRedisFromCheckpoint(ctx context.Context, auctionID strin
 		if err != nil {
 			return err
 		}
+		if err := w.upsertEngineCheckpointFromCurrentState(ctx, auctionID, "", -1, -1); err != nil {
+			return err
+		}
 		return w.writeRedisStateSnapshot(ctx, auctionID, snap, report, "")
 	}
 	if err != nil {
@@ -2221,6 +2181,18 @@ func (w *Worker) rebuildRedisFromCheckpoint(ctx context.Context, auctionID strin
 		return fmt.Errorf("redis engine checkpoint does not match PostgreSQL settlement auction=%s", auctionID)
 	}
 	return w.writeRedisStateSnapshot(ctx, auctionID, snap, report, storedHash)
+}
+
+func (w *Worker) upsertEngineCheckpointFromCurrentState(ctx context.Context, auctionID string, topic string, partition int, nextOffset int64) error {
+	tx, err := w.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := upsertEngineCheckpointSnapshot(ctx, tx, auctionID, topic, partition, nextOffset); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (w *Worker) writeRedisStateSnapshot(ctx context.Context, auctionID string, snap snapshot, report *redisEngineResumeReport, stateHash string) error {
@@ -2971,6 +2943,10 @@ func upsertEngineCheckpoint(ctx context.Context, tx pgx.Tx, auctionID string, me
 	if message.Topic == "" || message.Partition < 0 || message.Offset < 0 {
 		return nil
 	}
+	return upsertEngineCheckpointSnapshot(ctx, tx, auctionID, message.Topic, message.Partition, message.Offset+1)
+}
+
+func upsertEngineCheckpointSnapshot(ctx context.Context, tx pgx.Tx, auctionID string, topic string, partition int, nextOffset int64) error {
 	snapshot, payload, stateHash, err := checkpointSnapshot(ctx, tx, auctionID)
 	if err != nil {
 		return err
@@ -2995,7 +2971,7 @@ func upsertEngineCheckpoint(ctx context.Context, tx pgx.Tx, auctionID string, me
 		     auction_engine_checkpoints.engine_epoch = EXCLUDED.engine_epoch
 		     AND auction_engine_checkpoints.engine_seq <= EXCLUDED.engine_seq
 		   )
-	`, auctionID, snapshot.EngineEpoch, snapshot.EngineSeq, message.Topic, message.Partition, message.Offset+1, stateHash, string(payload))
+	`, auctionID, snapshot.EngineEpoch, snapshot.EngineSeq, topic, partition, nextOffset, stateHash, string(payload))
 	return err
 }
 

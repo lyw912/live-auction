@@ -2,8 +2,11 @@
 
 > Maps to: brief 挑战二 "毫秒级实时同步" + 规则(加价/自动延时); rubric 性能 + 稳定性.
 > Headline: **steady decision p99 ≤ 100 ms** at a sustained offered rate + **M4 no leak**.
-> Tool: **local k6 soak** for stability + **optional PTS JMeter S2 chart** when budget permits.
+> Tool: **independent-ECS k6 soak** for stability + **optional PTS RPS S2 chart** when budget permits.
 > Source assets: `tests/load/s2-steady-soak.js` and `tests/pts/L2-protocol/pts-2p4-steady-interactive-auction.jmx`.
+> Expanded split: `S2-long-soak`, `S2-convergence-drain`,
+> `S2-capacity-stair`, and `S2-read-interference` are governed by
+> [s2-s3-expanded-test-design.md](s2-s3-expanded-test-design.md).
 
 ## 1. The business moment
 
@@ -73,7 +76,7 @@ export default function () {
 > signal that closed-loop tests hide. Zero (or near-zero) dropped iterations means
 > the offered rate was actually delivered.
 
-### 3b. Optional PTS JMeter chart (10 min, judge export)
+### 3b. Optional PTS chart (10 min, judge export)
 Use this only after the k6 soak is clean and when you need a polished PTS PDF.
 The current executable asset is `pts-2p4-steady-interactive-auction.jmx`; there
 is no separate native-HTTP PTS script in the current plan. Treat the JMX as S2's PTS chart, with the script's
@@ -145,12 +148,33 @@ Current S2 bottleneck evidence (local diagnostic, not a final PTS chart):
   `s2-stair-1000-directsettled-100s-20260602T212330`: rejected and reverted; it
   worsened convergence (lag 32033 at 101s) and failed the 100s verifier because
   settlement had not completed.
+- 110s terminal rerun after adding runtime sampling and fixing
+  `REDIS_ENGINE_SETTLEMENT_WORKERS` env propagation:
+  `s2-stair-1000-workers4-110s-20260603T1928`: 70,999 decisions, HTTP p99
+  5.56ms, p99.9 34.25ms, dropped 0, HTTP failures 0, verifier later PASS after
+  full drain; **110s convergence FAIL** at 112s with Kafka lag 1275 and
+  settlement_total 69925/70999.
+- 120s product-buffer rerun:
+  `s2-stair-1000-120s-20260603T1942`: 70,999 decisions, HTTP p99 5.34ms,
+  p99.9 27.68ms, dropped 0, HTTP failures 0, all verifier gates PASS after
+  drain. Convergence samples show 286 records still outstanding at 119s and full
+  drain at the 122s poll (`kafka_group_lag=0`, `settlement_total=70999`,
+  `redis_pending_count=0`, `outbox_unpublished=0`).
 
 Interpretation: the foreground decision path is healthy under the S2 local stair,
-but settlement convergence remains the limiting safety signal. The internal
-target is now **<=110s** for this 2-minute local stair; do not mark that PASS in
-the judge report until a run is executed with
-`S2_CONVERGENCE_TIMEOUT_SECONDS=110`.
+but settlement convergence remains the limiting safety signal. The 110s target
+for this 2-minute local stair was executed and failed. A 120s product payment
+buffer is defensible only with polling tolerance: this run confirmed drain at
+122s, not at a strict 120.000s hard boundary. Mark the current state as
+foreground M1 PASS, final correctness-after-drain PASS, and
+payment/finality convergence **acceptable for a 120s business buffer with
+explicit poll-boundary disclosure**, not as full S2 `CURRENT_PASS` because the
+short stair still does not prove M4 long-soak no-leak.
+
+The 4-worker rerun is also evidence that simply adding settlement workers is not
+a complete fix for one hot auction: the Kafka consumer group showed all
+`auc_live` messages on one partition, so only one consumer can process the
+auction's ordered settlement chain.
 
 Detailed diagnosis and judge-facing answers:
 [s2-settlement-diagnosis-and-judge-defense.md](s2-settlement-diagnosis-and-judge-defense.md).
@@ -161,14 +185,27 @@ Detailed diagnosis and judge-facing answers:
 |---|---|
 | steady decision p99 ≤ 100 ms | PTS `出价决策 bid-decision` p99 (RPS run) / k6 `p(99)` (soak) |
 | offered vs accepted rate | PTS TPS + server accepted count; k6 rate vs server `ENGINE_ACCEPTED/s` |
-| settlement convergence safe for payment | `s2-convergence-summary.env`; Kafka consumer lag; verifier gates `kafka_consumer_group_lag_zero`, `redis_pending_decisions_empty`, `outbox_drained` |
+| settlement convergence safe for payment | `s2-convergence-summary.env`; exact `s2-convergence.tsv` samples; Kafka consumer lag; verifier gates `kafka_consumer_group_lag_zero`, `redis_pending_decisions_empty`, `outbox_drained` |
 | **M4 no leak** | Grafana: `process_resident_memory_bytes`, `go_memstats_heap_inuse_bytes` (post-GC floor), `go_goroutines`, `process_open_fds` — flat slope over the soak |
 | auto-extension correct | M3 verifier extension check |
+
+For current local S2 artifacts, the project also writes self-contained runtime
+samples to `s2-runtime-samples.tsv`: `runtime_rss_bytes`,
+`runtime_heap_inuse_bytes`, `runtime_heap_alloc_bytes`, `runtime_goroutines`,
+`runtime_open_fds`, and DB pool counts. A 2m30s stair can diagnose pressure, but
+it is not a substitute for a 30-60 minute M4 no-leak soak.
 
 ## 7. Pitfalls
 
 - **Using closed VU loop for the sustained claim.** Use RPS mode (PTS) /
   arrival-rate (k6); otherwise overload hides and p99 is optimistic.
+- **Calling a short stair a soak.** A 2-5 minute 1000/s stair can diagnose
+  capacity and convergence, but it cannot prove 30-60 minute M4 no-leak.
+- **Running k6 on the service node for formal soak evidence.** Acceptable for
+  development, but judge-facing S2 should use an independent same-VPC ECS or PTS
+  RPS to avoid load-generator resource contention.
+- **Mixing read interference into fanout.** High-frequency read traffic belongs
+  to `S2-read-interference`; it must not pollute S3 live-fanout samplers.
 - **Re-bid storm.** Active bidders should bid to *raise*, not re-fire below the
   current price every 2 s; otherwise you recreate S1's hotspot and call it steady.
 - **Soak too short.** < 30 min rarely exposes a slow leak; watch the post-GC
