@@ -51,6 +51,64 @@ TestBatchSettlementInsertsSettledDirectly               PASS  ← new P1b proof
 
 **Rule:** if P1 already makes the 400/s accepted ceiling and the reject-heavy soak converge within the product buffer, P2/P3 become optional headroom evidence. Only escalate if a judge specifically pushes on accepted-heavy 600/s end-to-end convergence.
 
+### P1 accepted-heavy clean-ceiling evidence
+
+`s2-capacity-accepted-clean400-p1-ecs-20260604T181824` is the first
+post-P1 accepted-heavy 400/s ceiling run:
+
+| Signal | Result |
+|---|---:|
+| profile | `50/s -> 100/s -> 200/s -> 300/s -> 400/s`, accepted-heavy |
+| k6 exit / dropped / HTTP failed | 0 / 0 / 0 |
+| final decisions | 101,374 |
+| accepted / rejected | 87,374 / 14,000 |
+| bid p99 / p99.9 / max | 37ms / 221.6ms / 318ms |
+| k6 host | max VU 18/400, CPU about 3-21%, RSS about 197MB |
+| final PG settlements | 101,374 terminal, 0 non-terminal, max_seq 101,374 |
+| final Kafka lag | 0 on `auction.bid-events` partition 15 |
+| final outbox | 87,374 `PUBLISHED` deliveries |
+| verifier | all P0/P1 gates PASS |
+
+This is **not** an immediate-zero-backlog result. Early service samples still had
+Kafka lag of about 19,521, then 16,959, 10,937, 2,075, and finally 0. The correct
+claim is: P1 makes the 400/s accepted-heavy foreground decision profile clean and
+settles to a final PASS after late drain. It does not make the previous 600/s
+accepted-heavy runs end-to-end clean, and the p99.9/max tail must be disclosed.
+Because this run produced 101,374 decisions, it also exposed verifier cost at the
+large evidence size; keep it as higher-ceiling evidence, not the smallest
+judge-facing artifact.
+
+`s2-capacity-accepted-display200-p1-ecs-20260604T192002` is the preferred
+judge-facing display run:
+
+| Signal | Result |
+|---|---:|
+| profile | `50/s -> 100/s -> 150/s -> 200/s`, 30s/stage, accepted-heavy |
+| k6 exit / dropped / HTTP failed | 0 / 0 / 0 |
+| final decisions | 15,525 |
+| accepted / rejected | 15,522 / 3 |
+| bid p99 / p99.9 / max | 4ms / 6ms / 20ms |
+| HTTP p99 / p99.9 / max | 3.58ms / 5.70ms / 19.63ms |
+| k6 host | max VU 1/120, CPU about 5-9%, RSS about 83MB |
+| final PG settlements | 15,525 terminal, 0 non-terminal, max_seq 15,525 |
+| final Kafka lag | 0 on `auction.bid-events` partition 15 |
+| final outbox | 15,522 `PUBLISHED` deliveries |
+| verifier | all P0/P1 gates PASS |
+
+This run keeps the capacity claim above 10k decisions while avoiding the 101k-row
+verifier cost. It is the clean S2-capacity artifact to show first; the 400/s and
+600/s runs remain useful escalation evidence when discussing the async
+settlement knee.
+
+Verifier compatibility after P1b: the correctness gate is terminal-state based,
+not transition-shape based. It checks complete `engine_seq`, terminal
+`SETTLED/SKIPPED` coverage, accepted-to-PG/public-event/outbox mapping, reject
+basis, Redis stream completion, Kafka lag zero, Redis pending zero, and outbox
+drain. It does **not** require seeing an intermediate `PROCESSING` row. The
+script now also fails if any required machine-readable gate is missing, so a
+partial verifier output caused by PostgreSQL environment limits cannot be
+mistaken for a pass.
+
 ---
 
 ---
@@ -481,7 +539,9 @@ vs 2k/s single-row is the prize.
 A: Strict phasing, each behind a flag, current path kept as fallback, verifier
 re-run after every phase, and a stop-rule that abandons the structural phase if the
 cheap phases already clear the brief-relevant range. We have precedent for
-data-driven reversal (`direct-SETTLED` was measured and reverted).
+data-driven reversal: the early direct-SETTLED SQL trial regressed and was
+reverted; the later P1b single-write form was reintroduced only with narrower
+batch semantics, a dedicated integration test, and terminal verifier coverage.
 
 **Q: How do you observe/alert on this in production?**
 A: Per-surface settlement histograms (P0), Kafka consumer-group **backlog age**
@@ -512,9 +572,10 @@ orthogonal — it changes the *projection*, not the durability topology.
 
 ## 11. Recommendation
 
-Ship **P0 + P1** now (measurement + fillfactor/HOT + settlements-single-write +
-`COPY` on the existing batch paths): low risk, reversible, real throughput, no
-architectural commitment, directly improves the rubric's 性能/稳定性/数据一致性. Then
+Ship **P0 + P1** now (measurement + fillfactor/HOT + settlements-single-write):
+low risk, reversible, real throughput, no architectural commitment, directly
+improves the rubric's 性能/稳定性/数据一致性. Keep `COPY` for P2, where the narrow
+audit/data-plane schema makes it a meaningful bulk-ingest lever. Then
 **measure against the reject-heavy soak and the 400/s accepted ceiling** (the
 brief-relevant range). Escalate to **P2/P3** only if a judge pushes on accepted-heavy
 600/s capacity. Treat the control/data-plane split (P3) as the headline 技术深度

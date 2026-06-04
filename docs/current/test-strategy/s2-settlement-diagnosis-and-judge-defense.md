@@ -20,6 +20,8 @@ S2 currently proves two different things with different confidence levels:
 | Async settlement convergence within 120s product buffer | ACCEPTABLE WITH POLL DISCLOSURE | `s2-stair-1000-120s-20260603T1942`: 119s still had lag 286; the 122s sample confirmed lag 0, settlement_total 70999/70999, Redis pending 0, outbox unpublished 0 |
 | Direct-SETTLED fast rejected SQL | REJECTED and reverted | `s2-stair-1000-directsettled-100s-20260602T212330`: worse lag 32033 at 101s; verifier failed due to incomplete convergence |
 | HTTP read-interference under bid load | PASS at display profile; attack profiles remain failing | `s2-read-display-postfix-ecs-15m-20260604T140509`: 100 bid/s plus 1500/1800/2000 HTTP reads/s clean pass after P0/P1 fixes, dropped 0, bid p99 3.76ms, snapshot p99 11.54ms, leaderboard p99 4.46ms, my-bids p99 0.87ms. The earlier 2000/5000/10000 and 2000/3000/4000 runs remain CURRENT_FAILING bottleneck evidence. |
+| Accepted-heavy capacity at 400/s ceiling | PASS with late-drain caveat | `s2-capacity-accepted-clean400-p1-ecs-20260604T181824`: k6 exit 0, dropped 0, HTTP failed 0, 101,374 final decisions, 87,374 accepted, 14,000 rejected, bid p99 37ms; final verifier PASS after Kafka/PG/outbox drained. Not immediate async zero-backlog evidence; first samples still had Kafka lag. |
+| Accepted-heavy display capacity at 200/s ceiling | PASS | `s2-capacity-accepted-display200-p1-ecs-20260604T192002`: 50/100/150/200, 30s per stage, 15,525 final decisions, 15,522 accepted, 3 rejected, bid p99 4ms, p99.9 6ms, dropped 0, HTTP failed 0, full service verifier P0/P1 PASS |
 
 The honest judge-facing statement:
 
@@ -679,13 +681,22 @@ If a judge asks why S2 does not include fanout p99:
 | `s2-stair-1000-setbased-logsuppressed-2min-20260602T203614` | set-based + settlement success logs suppressed | 70,999 | 5.52ms / 28.80ms | 0 | PASS in 122s | Stable M1; convergence still noisy |
 | `s2-stair-1000-setbased-workers4-90s-20260602T204827` | 4 settlement workers, 90s gate | 70,999 | 5.38ms / 27.10ms | 0 | FAIL at 90s; lag 84 | Near miss; extra workers do not fully parallelize one hot auction |
 | `s2-stair-1000-setbased-logsuppressed-100s-20260602T211311` | current kept code, 100s gate | 70,999 | 5.44ms / 32.21ms | 0 | FAIL at 102s; lag 1371 | Current best diagnostic evidence; M1 pass, 100s convergence near miss |
-| `s2-stair-1000-directsettled-100s-20260602T212330` | rejected fast path direct SETTLED trial | 70,999 | 5.36ms / 31.74ms | 0 | FAIL at 101s; lag 32033; verifier incomplete | Rejected and reverted; SQL became heavier and did not help |
+| `s2-stair-1000-directsettled-100s-20260602T212330` | early rejected fast path direct SETTLED trial | 70,999 | 5.36ms / 31.74ms | 0 | FAIL at 101s; lag 32033; verifier incomplete | Rejected and reverted; the uninstrumented SQL shape became heavier and did not help |
 | `s2-stair-1000-110s-20260603T1919` | terminal 110s rerun, 1 effective settlement worker | 70,999 | 5.85ms / 25.06ms | 0 | FAIL at 111s; lag 305; verifier later PASS | M1 still strong; 110s convergence not proven |
 | `s2-stair-1000-workers4-110s-20260603T1928` | terminal 110s rerun after fixing worker env propagation, workers=4 | 70,999 | 5.56ms / 34.25ms | 0 | FAIL at 112s; lag 1275; verifier later PASS | Extra consumers did not help one hot auction because all messages were on one Kafka partition |
 | `s2-stair-1000-120s-20260603T1942` | product-buffer rerun, 1 settlement worker | 70,999 | 5.34ms / 27.68ms | 0 | PASS at 122s confirmation sample; lag 286 at 119s | 120s payment buffer is defensible with poll-boundary disclosure; still not a long M4 no-leak proof |
+| `s2-capacity-accepted-ecs-20260604T150519` | 50/100/200/400/600 accepted-heavy profile before P1 drain fixes | 131,574 | 3.89ms / 7.47ms | 0 | FAIL at collection; Kafka lag about 77,888 | Synchronous Redis decision 600/s clean, async PG/Kafka/outbox capacity knee |
+| `s2-capacity-accepted-postfix-ecs-20260604T161315` | same 600/s profile after accepted-prefix batch | 131,574 | 13ms / about 181ms | 0 | FAIL at collection; Kafka lag about 64,476 | Improved foreground path still did not make 600/s end-to-end clean |
+| `s2-capacity-accepted-clean400-p1-ecs-20260604T181824` | 50/100/200/300/400 accepted-heavy clean-ceiling profile after P0/P1 | 101,374 | 37ms / 221.6ms | 0 | Final PASS after late drain; first Kafka lag about 19,521 | Judge-facing 400/s accepted-heavy ceiling with tail/drain disclosure |
+| `s2-capacity-accepted-display200-p1-ecs-20260604T192002` | 50/100/150/200 accepted-heavy display profile, 30s/stage after P0/P1 | 15,525 | 4ms / 6ms | 0 | PASS; Kafka lag 0, Redis pending 0, all P0/P1 gates PASS | Preferred judge-facing capacity artifact: >10k decisions, clean k6, full verifier coverage |
 
-The failed direct-SETTLED run is useful evidence. It proves we did not keep a
-performance tweak just because it sounded plausible.
+The failed early direct-SETTLED run is useful evidence. It proves we did not keep
+a performance tweak just because it sounded plausible. The later P1b
+single-write settlement is a different, narrower implementation: the batch path
+inserts terminal `SETTLED` rows directly with `settled_at`, keeps fallback
+`PROCESSING` semantics for retry/error paths, and is covered by
+`TestBatchSettlementInsertsSettledDirectly` plus the terminal-state verifier
+gates.
 
 ## 5. What "PG Settlement Write Amplification" Means Here
 
@@ -884,12 +895,27 @@ complete, Redis pending 0, and outbox unpublished 0. The bidder still received
 millisecond `ENGINE_*` decisions during the live auction; only order/payment
 finality waited for settlement convergence.
 
+**Q: Did the P1b direct-SETTLED change make the verifier obsolete?**
+
+A: No. The verifier does not require an intermediate `PROCESSING` row. Its
+release gates are terminal and semantic: `no_non_terminal_settlements`,
+`engine_seq_complete`, `every_bid_has_settled_ledger`,
+`redis_kafka_pg_accepted_match`, exact accepted public-event/outbox mapping,
+Kafka offset presence/order, reject-basis justification, Redis stream completion,
+Kafka lag zero, Redis pending zero, and outbox drained. After the PostgreSQL
+`/dev/shm` limit was exposed during a heavy verifier query, the script was
+hardened to disable parallel query for verification, treat long diagnostic SQL
+as best-effort, and fail if any required machine-readable gate is missing. That
+keeps P1b compatible without lowering correctness coverage.
+
 **Q: What would you do next if asked to improve it?**
 
-A: Not direct-SETTLED; that was measured and regressed. The next serious P1 is a
-rejected-decision audit schema: append-only/narrow table, partitioned by
-auction/time, retaining idempotency and verifier coverage. Then rerun S2 and S1
-to prove no M1 regression and no correctness loss.
+A: P1 has now moved the accepted-heavy clean ceiling to a defensible 400/s
+foreground pass with final late convergence. The next serious capacity lever is
+P2: a narrow rejected-decision audit schema, partitioned by auction/time,
+retaining idempotency and verifier coverage. Then rerun S2 and S1 to prove no
+M1 regression and no correctness loss. P3, the control/data-plane split, is only
+justified if the target is a judge-demanded 600/s end-to-end accepted-heavy pass.
 
 **Q: The accepted-heavy stair reached 600/s with p99 3.89ms. Can you call that a
 600/s capacity pass?**
@@ -936,6 +962,27 @@ to drain but remained far from zero for several minutes. The follow-up code
 therefore keeps the same conservative accepted-prefix rule and only improves how
 many safe prefixes can be consumed in one fetched Kafka batch; it is an
 incremental drain-efficiency change, not a license to claim 600/s clean.
+
+The lower 400/s clean-ceiling rerun,
+`s2-capacity-accepted-clean400-p1-ecs-20260604T181824`, remains higher-ceiling
+evidence. k6 was clean (`dropped_iterations=0`, `http_req_failed=0`, 101,374
+final decisions, 87,374 accepted, 14,000 rejected, p99 37ms), and final service
+evidence converged: PG settlement 101,374/101,374, Kafka lag 0, Redis stream
+length 101,374, Redis pending 0, outbox published 87,374. It still had post-run
+backlog during the first service samples and the 101k-row verifier is expensive,
+so call it "400/s foreground clean with final late convergence", not "instant
+async clean".
+
+The preferred display artifact is
+`s2-capacity-accepted-display200-p1-ecs-20260604T192002`. It keeps the same
+accepted-heavy semantics but caps the stair at 200/s for a verifier-friendly
+15,525-decision run. k6 was clean (`dropped_iterations=0`, `http_req_failed=0`,
+auth/ACL/admission/non-decision failures 0), 15,522/15,525 decisions were
+accepted, bid p99 was 4ms, p99.9 6ms, and max 20ms. Final service evidence:
+15,525 terminal settlements, 0 non-terminal, Kafka lag 0, Redis pending 0,
+Redis stream length 15,525, outbox `PUBLISHED=15,522`, auction
+`accepted_bid_count=15522`, `engine_seq=15525`, `engine_paused=false`, and all
+P0/P1 verifier gates PASS.
 
 **Q: Why not skip some audit rows for speed?**
 

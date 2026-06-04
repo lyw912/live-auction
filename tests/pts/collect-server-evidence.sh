@@ -63,22 +63,28 @@ select now() as ts;
 select extname
 from pg_extension
 where extname = 'pg_stat_statements';
-select calls,
-       round(total_exec_time::numeric, 2) as total_exec_ms,
-       round(mean_exec_time::numeric, 2) as mean_exec_ms,
-       round(max_exec_time::numeric, 2) as max_exec_ms,
-       rows,
-       left(regexp_replace(query, '\s+', ' ', 'g'), 240) as query
-from pg_stat_statements
-where dbid = (select oid from pg_database where datname = current_database())
-  and query ilike any(array[
-    '%FROM auctions a JOIN items i%',
-    '%FROM bids WHERE user_id = $1%',
-    '%FROM bids WHERE auction_id = $1 AND status = ''ACCEPTED''%',
-    '%FROM max_bid_intents WHERE auction_id = $1 AND user_id = $2%'
-  ])
-order by total_exec_time desc
-limit 20;
+select case
+  when to_regclass('pg_stat_statements') is null then
+    $$select 'pg_stat_statements is not installed; skipping query attribution' as note;$$
+  else
+    $$select calls,
+             round(total_exec_time::numeric, 2) as total_exec_ms,
+             round(mean_exec_time::numeric, 2) as mean_exec_ms,
+             round(max_exec_time::numeric, 2) as max_exec_ms,
+             rows,
+             left(regexp_replace(query, '\s+', ' ', 'g'), 240) as query
+      from pg_stat_statements
+      where dbid = (select oid from pg_database where datname = current_database())
+        and query ilike any(array[
+          '%FROM auctions a JOIN items i%',
+          '%FROM bids WHERE user_id = $1%',
+          '%FROM bids WHERE auction_id = $1 AND status = ''ACCEPTED''%',
+          '%FROM max_bid_intents WHERE auction_id = $1 AND user_id = $2%'
+        ])
+      order by total_exec_time desc
+      limit 20;$$
+  end
+\gexec
 SQL
 
 docker exec -i "$DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f - > "$OUT_DIR/postgres-s2-read-explain.txt" <<'SQL' || true

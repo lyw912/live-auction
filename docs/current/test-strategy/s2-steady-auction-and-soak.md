@@ -332,15 +332,76 @@ Root cause and fix direction:
 
 Post-fix rerun policy:
 
-1. For judge-facing clean evidence, first rerun a lower ceiling profile
-   `50/100/200/300/400`. This aims to find an end-to-end clean accepted-update
-   knee instead of re-proving the known 600/s async backlog.
-2. A pass requires both k6 clean **and** post-run convergence: Kafka lag 0,
-   Redis pending 0, PG settlements complete, outbox watermarks 0, verifier PASS.
-3. Keep `600/s` as attack/upstream ceiling evidence unless the 400/s clean run
-   passes comfortably and there is time to quantify the new optimization against
-   the earlier 600/s failing runs. Do not increase to 800/1000 until the async
-   drain gate passes at 600.
+The lower 400/s ceiling rerun was executed first:
+
+- `s2-capacity-accepted-clean400-p1-ecs-20260604T181824` used the
+  `50/s -> 100/s -> 200/s -> 300/s -> 400/s` accepted-heavy profile after the
+  P0/P1 settlement changes.
+- k6 was clean at the foreground decision boundary: exit 0,
+  `dropped_iterations=0`, `http_req_failed=0`, 101,374 final decisions,
+  87,374 accepted, 14,000 rejected, bid p99 37ms, p99.9 221.6ms, max 318ms.
+  The independent k6 host was not the bottleneck: max active VU 18/400, k6 CPU
+  about 3-21%, RSS about 197MB, and TCP established about 405.
+- The async chain was not instant-clean at the first service sample. Kafka lag
+  was about 19,521 shortly after the run, then drained through later samples
+  (16,959 -> 10,937 -> 2,075 -> 0). PostgreSQL settlement reached the final
+  101,374/101,374 rows only after late drain.
+- Final service-side verification passed: `settled=101374`,
+  `non_terminal=0`, `max_seq=101374`; `ACCEPTED|SETTLED|87374`,
+  `REJECTED|SETTLED|14000`; outbox `PUBLISHED=87374`; Kafka partition 15
+  lag 0; Redis stream length and PG settlement count both 101,374.
+- `l4b-invariant-gates.tsv` reports all P0/P1 gates PASS, including
+  `no_non_terminal_settlements`, `engine_seq_complete`,
+  `every_bid_has_settled_ledger`, `redis_kafka_pg_accepted_match`,
+  `outbox_drained`, `kafka_consumer_group_lag_zero`, and
+  `redis_pending_decisions_empty`.
+- Classification: `CURRENT_PASS` for the foreground 400/s accepted-heavy
+  decision profile and **final late convergence**. It is not evidence of
+  immediate async zero-backlog at 400/s, and it does not make 600/s an
+  end-to-end pass. The p99.9/max tail must be disclosed; do not say "no tail
+  latency."
+- Practical note: the 400/s run's 101,374 decisions also exposed verifier cost at
+  this data volume. It remains useful capacity evidence, but the smaller
+  display run below is the clean judge-facing artifact because it has a complete
+  service verifier output with all heavy gates.
+
+The display-sized clean rerun has now been executed:
+
+- `s2-capacity-accepted-display200-p1-ecs-20260604T192002` used the
+  `50/s -> 100/s -> 150/s -> 200/s` accepted-heavy profile, 30s hold per stage,
+  after the P0/P1 settlement changes.
+- k6 was clean: exit 0, `dropped_iterations=0`, `http_req_failed=0`,
+  auth/ACL/admission/non-decision failures all 0, 15,525 final decisions,
+  15,522 accepted, 3 rejected.
+- Latency stayed comfortably below the S2 decision gate: bid p99 4ms, p99.9 6ms,
+  max 20ms; HTTP p99 3.58ms, p99.9 5.70ms, max 19.63ms.
+- The independent k6 host was not the bottleneck: max VU 1/120, CPU about 5-9%,
+  RSS about 83MB, TCP established about 125.
+- Final service-side verification passed: `settlements=15525`, non-terminal 0,
+  `max_seq=15525`; `ACCEPTED|SETTLED|15522`, `REJECTED|SETTLED|3`; auction
+  `accepted_bid_count=15522`, `seq=15522`, `engine_seq=15525`,
+  `engine_paused=false`; outbox `PUBLISHED=15522`; Kafka partition 15 lag 0.
+- `l4b-invariant-gates.tsv` reports all P0/P1 gates PASS, including
+  `engine_seq_complete`, `every_bid_has_settled_ledger`,
+  `idempotency_response_matches_bid`, `accepted_public_event_exact_mapping`,
+  `bid_too_low_rejects_justified`, `outbox_drained`,
+  `kafka_consumer_group_lag_zero`, `v3_relay_stream_complete`, and
+  `redis_pending_decisions_empty`.
+- Evidence path:
+  `docs/perf/pts/evidence/incoming/s2-capacity-accepted-display200-p1-ecs-20260604T192002/`.
+- Classification: `CURRENT_PASS` and the preferred judge-facing
+  accepted-heavy S2-capacity display artifact. It proves the P1 path can sustain
+  a 200/s accepted-heavy open-arrival stair over more than 10k decisions with
+  complete end-to-end settlement and verifier coverage.
+
+Current rerun policy:
+
+1. Use the 200/s display run as the clean judge-facing S2-capacity pass.
+2. Keep `400/s` as higher-ceiling evidence with explicit late-drain and verifier
+   cost caveats.
+3. Keep `600/s` as attack/upstream ceiling evidence until it has both k6 clean
+   and post-run convergence within the chosen product buffer.
+4. Do not increase to 800/1000 until the async drain gate passes at 600.
 
 Detailed diagnosis and judge-facing answers:
 [s2-settlement-diagnosis-and-judge-defense.md](s2-settlement-diagnosis-and-judge-defense.md).
