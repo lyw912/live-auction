@@ -15,7 +15,8 @@
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://127.0.0.1:18080}"
-WS_URL="${WS_URL:-ws://127.0.0.1:18080}"
+WS_URL="${WS_URL:-}"
+INITIAL_WS_URL="${INITIAL_WS_URL:-}"
 DISCONNECT_MODE="${DISCONNECT_MODE:-clean}"
 VUS="${VUS:-20}"
 DURATION="${DURATION:-2m}"
@@ -37,8 +38,11 @@ if [[ "$DISCONNECT_MODE" == "network" ]]; then
   echo "Starting Toxiproxy WS proxy on :18081 -> host.docker.internal:18080..."
   docker compose -f infra/docker-compose.yml -f infra/docker-compose.toxiproxy.yml up -d toxiproxy
   node tests/chaos/s5-toxiproxy-ws-fault.mjs inject | tee "$EVIDENCE_DIR/toxiproxy-ws.json"
+  INITIAL_WS_URL="${INITIAL_WS_URL:-${BASE_URL/#http/ws}}"
   WS_URL="${WS_URL:-ws://127.0.0.1:18081}"
 fi
+WS_URL="${WS_URL:-${BASE_URL/#http/ws}}"
+INITIAL_WS_URL="${INITIAL_WS_URL:-$WS_URL}"
 
 curl -s "$BASE_URL/readyz" > "$EVIDENCE_DIR/readyz-before.json" || true
 if command -v docker >/dev/null 2>&1; then
@@ -52,6 +56,7 @@ cat > "$EVIDENCE_DIR/run-env.json" <<EOF
   "label": "$LABEL",
   "base_url": "$BASE_URL",
   "ws_url": "$WS_URL",
+  "initial_ws_url": "$INITIAL_WS_URL",
   "disconnect_mode": "$DISCONNECT_MODE",
   "vus": $VUS,
   "duration": "$DURATION",
@@ -67,6 +72,7 @@ K6_ARGS=(
   run
   --env "BASE_URL=$BASE_URL"
   --env "WS_URL=$WS_URL"
+  --env "INITIAL_WS_URL=$INITIAL_WS_URL"
   --env "DISCONNECT_MODE=$DISCONNECT_MODE"
   --env "VUS=$VUS"
   --env "DURATION=$DURATION"

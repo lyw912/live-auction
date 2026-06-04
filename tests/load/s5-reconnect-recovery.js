@@ -10,6 +10,7 @@
  * Env vars:
  *   BASE_URL              default http://127.0.0.1:18080
  *   WS_URL                default ws://127.0.0.1:18080
+ *   INITIAL_WS_URL        default clean BASE_URL WS in network mode, otherwise WS_URL
  *   AUCTION_ID            default auc_live
  *   ROOM_ID               default room_main
  *   SESSION_CSV           default ../../docs/perf/pts/pts-1ab-1000vu-sessions.csv
@@ -21,6 +22,9 @@
  *   BID_RATE_PER_S        accepted update source rate, default 10
  *   BID_SOURCE_VUS        update source VUs, default 5
  *   BID_BASE_AMOUNT       starting amount_cents for update source, default 5000000000
+ *   RECONNECT_ATTEMPTS    attempts for the stale-last_seq recovery leg, default 1 clean / 3 network
+ *   INITIAL_CONNECT_ATTEMPTS attempts for the initial online leg, default 1 clean / same as reconnect
+ *   RECONNECT_BACKOFF_MS  bounded backoff between reconnect attempts, default 100
  */
 
 import { check, sleep } from 'k6';
@@ -42,6 +46,11 @@ const TTCS_SLA = Number(__ENV.TTCS_P99_SLA_MS || 2000);
 const BID_RATE = Number(__ENV.BID_RATE_PER_S || 10);
 const BID_SOURCE_VUS = Number(__ENV.BID_SOURCE_VUS || 5);
 const BID_BASE_AMOUNT = Number(__ENV.BID_BASE_AMOUNT || 5000000000);
+const DISCONNECT_MODE = __ENV.DISCONNECT_MODE || 'clean';
+const INITIAL_WS_BASE = __ENV.INITIAL_WS_URL || (DISCONNECT_MODE === 'network' ? BASE_URL.replace(/^http/, 'ws') : WS_BASE);
+const RECONNECT_ATTEMPTS = Number(__ENV.RECONNECT_ATTEMPTS || (DISCONNECT_MODE === 'network' ? 8 : 1));
+const INITIAL_CONNECT_ATTEMPTS = Number(__ENV.INITIAL_CONNECT_ATTEMPTS || (DISCONNECT_MODE === 'network' ? RECONNECT_ATTEMPTS : 1));
+const RECONNECT_BACKOFF_MS = Number(__ENV.RECONNECT_BACKOFF_MS || 100);
 const RUN_ID = __ENV.RUN_ID || String(Date.now());
 
 function parseSessionCSV(path) {
@@ -53,6 +62,19 @@ function parseSessionCSV(path) {
 }
 
 const sessions = parseSessionCSV(SESSION_CSV);
+
+function validateSessions() {
+  const required = Math.max(RECONNECT_VUS, BID_SOURCE_VUS + 700);
+  if (sessions.length < required) {
+    throw new Error(`SESSION_CSV ${SESSION_CSV} has ${sessions.length} usable sessions, need at least ${required}`);
+  }
+  const invalid = sessions.find((session) => !session.userID || !session.token || !session.role);
+  if (invalid) {
+    throw new Error(`SESSION_CSV ${SESSION_CSV} contains an invalid session row`);
+  }
+}
+
+validateSessions();
 
 export const options = {
   scenarios: {
@@ -89,6 +111,10 @@ export const options = {
 const ttcsMs = new Trend('s5_ttcs_ms', true);
 const missedWaitMs = new Trend('s5_missed_wait_ms', true);
 const recoveryErrors = new Counter('s5_recovery_errors');
+const initialAttemptErrors = new Counter('s5_initial_attempt_errors_total');
+const initialRetries = new Counter('s5_initial_retries_total');
+const reconnectAttemptErrors = new Counter('s5_reconnect_attempt_errors_total');
+const reconnectRetries = new Counter('s5_reconnect_retries_total');
 const skippedNoMissedWindow = new Counter('s5_skipped_no_missed_window_total');
 const seqGaps = new Counter('s5_seq_gaps_after_reconnect');
 const duplicateSeqs = new Counter('s5_duplicate_seq_after_reconnect');
@@ -149,8 +175,9 @@ function messageWinner(msg) {
   return msg.current_winner_id ?? msg.data?.current_winner_id ?? msg.payload?.current_winner_id ?? null;
 }
 
-function wsURL(lastSeq) {
-  return `${WS_BASE}/ws?room_id=${encodeURIComponent(ROOM_ID)}&auction_id=${encodeURIComponent(AUCTION_ID)}&last_seq=${lastSeq}`;
+function wsURL(lastSeq, phase) {
+  const base = phase === 'initial-close' ? INITIAL_WS_BASE : WS_BASE;
+  return `${base}/ws?room_id=${encodeURIComponent(ROOM_ID)}&auction_id=${encodeURIComponent(AUCTION_ID)}&last_seq=${lastSeq}`;
 }
 
 function connectUntilSeq(session, lastSeq, targetSeq, timeoutMs, phase) {
@@ -166,7 +193,7 @@ function connectUntilSeq(session, lastSeq, targetSeq, timeoutMs, phase) {
   const seqs = [];
   let ok = false;
 
-  ws.connect(wsURL(lastSeq), { headers: { 'X-Auction-WS-Ticket': ticket } }, (socket) => {
+  ws.connect(wsURL(lastSeq, phase), { headers: { 'X-Auction-WS-Ticket': ticket } }, (socket) => {
     socket.on('message', (rawMsg) => {
       let msg;
       try { msg = JSON.parse(rawMsg); } catch (_) { return; }
@@ -188,7 +215,6 @@ function connectUntilSeq(session, lastSeq, targetSeq, timeoutMs, phase) {
     });
 
     socket.on('error', () => {
-      if (phase !== 'initial-close') recoveryErrors.add(1);
       socket.close();
     });
 
@@ -198,6 +224,39 @@ function connectUntilSeq(session, lastSeq, targetSeq, timeoutMs, phase) {
   });
 
   return { ok, maxSeq, source, price, winner, seqs };
+}
+
+function connectWithRetry(session, lastSeq, targetSeq, timeoutMs, attempts, phase) {
+  let best = { ok: false, maxSeq: 0, source: '', price: null, winner: null, seqs: [] };
+  const started = Date.now();
+  const maxAttempts = Math.max(1, attempts);
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const result = connectUntilSeq(session, lastSeq, targetSeq, timeoutMs, phase);
+    if (result.maxSeq > best.maxSeq || result.source) {
+      best = result;
+    }
+    if (result.ok && result.maxSeq >= targetSeq) {
+      return { ...result, attempts: attempt, ttcs: Date.now() - started };
+    }
+    if (phase === 'initial-close') {
+      initialAttemptErrors.add(1);
+    } else {
+      reconnectAttemptErrors.add(1);
+    }
+    if (attempt < maxAttempts) {
+      if (phase === 'initial-close') {
+        initialRetries.add(1);
+      } else {
+        reconnectRetries.add(1);
+      }
+      sleep(RECONNECT_BACKOFF_MS / 1000);
+    }
+  }
+  return { ...best, attempts: maxAttempts, ttcs: Date.now() - started };
+}
+
+function recoverWithRetry(session, lastSeq, targetSeq) {
+  return connectWithRetry(session, lastSeq, targetSeq, TTCS_SLA * 3, RECONNECT_ATTEMPTS, 'reconnect');
 }
 
 function waitForMissedWindow(session, baseSeq) {
@@ -241,7 +300,7 @@ export function reconnectFn() {
   }
 
   const initialSeq = Number(initialSnap.seq || initialSnap.public_seq || initialSnap.engine_seq || 0);
-  const initial = connectUntilSeq(session, initialSeq, initialSeq, 1000, 'initial-close');
+  const initial = connectWithRetry(session, initialSeq, initialSeq, 1000, INITIAL_CONNECT_ATTEMPTS, 'initial-close');
   if (!initial.ok) {
     recoveryErrors.add(1);
     sleep(1);
@@ -258,15 +317,14 @@ export function reconnectFn() {
   }
 
   reconnectTotal.add(1);
-  const reconnectStart = Date.now();
-  const recovered = connectUntilSeq(session, lastSeq, missed.targetSeq, TTCS_SLA * 3, 'reconnect');
+  const recovered = recoverWithRetry(session, lastSeq, missed.targetSeq);
   if (!recovered.ok || recovered.maxSeq < missed.targetSeq) {
     recoveryErrors.add(1);
     sleep(0.5);
     return;
   }
 
-  const ttcs = Date.now() - reconnectStart;
+  const ttcs = recovered.ttcs;
   ttcsMs.add(ttcs);
   recoveredTotal.add(1);
 

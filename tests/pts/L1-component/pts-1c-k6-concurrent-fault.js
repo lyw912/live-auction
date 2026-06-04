@@ -103,14 +103,14 @@ function placeBid(amountCents, userID, clientBidID) {
   );
 }
 
-function isInFaultWindow() {
+function isInFaultWindow(atMs = Date.now()) {
   if (FAULT_START_MS <= 0 || FAULT_END_MS <= 0) return false;
-  const now = Date.now();
-  return now >= FAULT_START_MS && now <= FAULT_END_MS;
+  return atMs >= FAULT_START_MS && atMs <= FAULT_END_MS;
 }
 
 // --- main VU loop ---
 export default function () {
+  const iterationStartedAt = Date.now();
   const userID      = `l1c_bidder_${__VU}`;
   // Each iteration gets a unique bid ID — idempotency key is per-attempt.
   const clientBidID = `l1c-${__VU}-${__ITER}-${Date.now()}`;
@@ -126,7 +126,7 @@ export default function () {
 
   // --- classify response ---
   const status = res.status;
-  const inFaultWindow = isInFaultWindow();
+  const inFaultWindow = isInFaultWindow(iterationStartedAt);
   let body;
   try { body = res.json(); } catch (_) { body = {}; }
 
