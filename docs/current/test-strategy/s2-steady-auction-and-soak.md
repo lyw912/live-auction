@@ -128,8 +128,27 @@ correctness : immediate convergence gate failed; late verifier passed after
               Kafka/settlement drain
 ```
 
-Use this as read-path ceiling evidence. Do not claim 5000/s or 10000/s read
-capacity until a later clean-ceiling run or read-path optimization proves it.
+Reduced clean-ceiling attempt:
+
+```text
+label       : s2-read-clean-ecs-15m-20260604T120823
+shape       : 100 bid/s + 2000/s -> 3000/s -> 4000/s reads
+verdict     : CURRENT_FAILING / lower-ceiling bottleneck evidence
+bid result  : ~98.4 decisions/s, p99 5.70ms, HTTP failures 0
+read result : ~2081 successes/s actual, snapshot p99 1.02s,
+              leaderboard p99 2.72s, my-bids p99 596ms
+k6 signal   : 524,423 dropped iterations; READ_MAX_VUS=2500 filled around
+              a ~2.3k/s target point
+service     : DB pool max/total 90; empty-pool acquires 2,996,066;
+              empty-pool wait total 1,315,846s
+correctness : immediate convergence gate failed; late verifier passed after
+              Kafka/settlement drain
+```
+
+Use these as read-path ceiling evidence. Do not claim 3000/s, 4000/s, 5000/s, or
+10000/s read capacity until a later clean-ceiling run or read-path optimization
+proves it. The next display candidate should be 1500/s -> 1800/s -> 2000/s
+reads, or 2000/s flat for 15 minutes.
 
 ### 3b. Optional PTS chart (10 min, judge export)
 Use this only after the k6 soak is clean and when you need a polished PTS PDF.

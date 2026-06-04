@@ -187,8 +187,23 @@ correctness : immediate verifier failed convergence; late verifier passed after
               natural Kafka/settlement drain
 ```
 
-Next clean-ceiling search should lower reads to 2000/s -> 3000/s -> 4000/s
-before claiming a judge-facing pass.
+Reduced clean-ceiling attempt:
+
+```text
+label       : s2-read-clean-ecs-15m-20260604T120823
+shape       : 100 bid/s + 2000/s -> 3000/s -> 4000/s reads
+verdict     : CURRENT_FAILING / lower-ceiling bottleneck evidence
+bid p99     : 5.70ms
+read p99    : snapshot 1.02s, leaderboard 2.72s, my-bids 596ms
+throughput  : ~2081 read successes/s actual, 524,423 dropped iterations
+attribution : DB pool saturation again, with max_conns=90 and 2,996,066
+              empty-pool acquires in the service metrics snapshot
+correctness : immediate verifier failed convergence; late verifier passed after
+              natural Kafka/settlement drain
+```
+
+Next clean display search should lower reads to 1500/s -> 1800/s -> 2000/s, or
+hold 2000/s flat for 15 minutes, before claiming a judge-facing pass.
 
 Initial pass gates:
 

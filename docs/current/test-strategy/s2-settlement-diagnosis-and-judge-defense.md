@@ -334,24 +334,75 @@ docs/perf/pts/evidence/incoming/s2-read-ecs-15m-20260604T113330/
 docs/perf/pts/evidence/incoming/s2-read-ecs-15m-20260604T113330-late/
 ```
 
+Clean-ceiling attempt after the 10k attack:
+
+```text
+label           : s2-read-clean-ecs-15m-20260604T120823
+tool/source     : independent same-VPC ECS k6
+duration        : 15 min + 30s ramp-down
+bid rate        : 100/s, 100/s, 100/s
+read rate       : 2000/s, 3000/s, 4000/s
+read mix        : 80% snapshot, 15% leaderboard, 5% my-bids
+verdict         : CURRENT_FAILING / lower-ceiling bottleneck evidence
+```
+
+k6 result:
+
+| Signal | Value | Interpretation |
+|---|---:|---|
+| k6 exit code | 99 | threshold failure; still not a clean pass |
+| dropped iterations | 524,423 | improved from 10k attack, but still far above gate |
+| HTTP failure rate | 0 | no transport/protocol failure |
+| bid final decisions | 91,499 | bid lane delivered about 98.4/s |
+| read successes | 1,935,576 | read lane delivered about 2081/s |
+| accepted / rejected | 31 / 91,468 | business distribution remained valid |
+| bid p99 | 5.70ms | bid path still held under read pressure |
+| snapshot p99 | 1.02s | better than 10k attack, still above target |
+| leaderboard p99 | 2.72s | better than 10k attack, still seconds-level |
+| my-bids p99 | 596ms | better than 10k attack, still above target |
+| first clear VU ceiling | about 6m35s | reader hit `READ_MAX_VUS=2500` while target was only about 2.3k/s |
+| k6 host | RSS about 1.3GB; CPU/memory not globally saturated | still points to service read latency, not load-generator CPU |
+
+Service-side evidence:
+
+| Signal | Value | Interpretation |
+|---|---:|---|
+| `db_pool_max_conns` / total conns | 90 / 90 | DB pool reached configured maximum again |
+| `db_pool_empty_acquire_total` | 2,996,066 | large DB-pool wait count remained |
+| `db_pool_empty_acquire_wait_seconds_total` | 1,315,846s | cumulative wait remained severe |
+| immediate Kafka lag | 5371, then 3705, then 0 | settlement backlog naturally drained after the run |
+| immediate verifier exit | 1 | convergence gates failed in the immediate collection window |
+| late verifier label | `s2-read-clean-ecs-15m-20260604T120823-late` | final convergence evidence |
+| late verifier exit | 0 | all P0/P1 gates PASS |
+| late settled decisions | 31 accepted + 91,468 rejected = 91,499 | every decision reached terminal settlement |
+| late stream / PG settlement count | 91,499 / 91,499 | Redis decision log and PG settlement matched |
+
+Evidence directories:
+
+```text
+docs/perf/pts/evidence/incoming/s2-read-clean-ecs-15m-20260604T120823/
+docs/perf/pts/evidence/incoming/s2-read-clean-ecs-15m-20260604T120823-late/
+```
+
 Interpretation:
 
 - This is a valid bottleneck-finding run, not a successful 10k-read capacity
   result.
 - The bid engine path remained healthy under read pressure: about 98.4 final
-  bid decisions/s and bid p99 5.68ms.
-- The read path became the bottleneck around the 2k/s delivered range. The 5k
-  and 10k offered read stages were not actually delivered because slow read
-  responses consumed the 4000 read VU ceiling and produced 2,057,742 dropped
-  iterations.
+  bid decisions/s and bid p99 5.68-5.70ms across both read-interference attempts.
+- The read path became the bottleneck around the 2k/s delivered range. The
+  2k/5k/10k run produced 2,057,742 dropped iterations, and the reduced
+  2k/3k/4k run still produced 524,423 dropped iterations after reader VUs filled
+  around 2.3k/s target.
 - The strongest service-side attribution is DB-pool contention: `db_pool_total`
-  reached 90 and cumulative empty-pool waits exceeded 3.25M acquires / 2.28M
-  seconds.
+  reached 90 in both runs, with multi-million empty-pool acquire counts and
+  million-second cumulative wait totals.
 - Correctness was not permanently corrupted: the immediate verifier failed
-  convergence gates, but the late verifier passed after Kafka/settlement drain.
+  convergence gates in both runs, but late verifiers passed after
+  Kafka/settlement drain.
 - The honest ceiling statement is: "under this service profile, 100 bid/s stayed
-  clean while HTTP reads delivered roughly 2.1k/s; 5k/10k offered reads are not
-  proven and expose read-path optimization work."
+  clean while HTTP reads delivered roughly 2.0-2.1k/s; 3k/4k/5k/10k offered reads
+  are not proven and expose read-path optimization work."
 
 What this run still does not prove:
 
@@ -362,9 +413,10 @@ What this run still does not prove:
 Recommended next run:
 
 ```text
-S2-read clean-ceiling search: 100 bid/s + 2000/s -> 3000/s -> 4000/s reads.
-Goal: find a judge-safe pass boundary after the 10k attack run exposed the
-read-path ceiling.
+S2-read display-ceiling search: 100 bid/s + 1500/s -> 1800/s -> 2000/s reads,
+or 100 bid/s + 2000/s flat for 15 min.
+Goal: find a judge-safe pass boundary after the 10k and 4k attack runs exposed
+the current read-path ceiling.
 ```
 
 ## 2. What This Test Actually Is
