@@ -250,6 +250,60 @@ a complete fix for one hot auction: the Kafka consumer group showed all
 `auc_live` messages on one partition, so only one consumer can process the
 auction's ordered settlement chain.
 
+Independent-ECS accepted-heavy capacity stair, 2026-06-04:
+
+- `s2-capacity-accepted-ecs-20260604T150519` used the accepted profile
+  `50/s -> 100/s -> 200/s -> 400/s -> 600/s`, `CAPACITY_PROFILE=accepted`,
+  `NOISE_PCT=0`, fast amount ladder, independent k6 ECS.
+- k6 was clean at the synchronous Redis decision boundary: exit 0,
+  `dropped_iterations=0`, `http_req_failed=0`, 131,574 final decisions,
+  125,376 accepted, 6,198 rejected, decision p99 3.89ms, p99.9 7.47ms,
+  max VUs used 4 with k6 CPU/RSS below saturation.
+- Server convergence was **not** clean at collection time: Redis engine log had
+  131,574 entries matching k6, but PostgreSQL settlement was only about 61k and
+  `settlement-workers` still had about 77,888 Kafka lag on the hot partition.
+  Verifier reported `redis_kafka_pg_accepted_match=FAIL` and non-terminal
+  settlement before a later PostgreSQL shared-memory error in a heavy verifier
+  query.
+- Classification: `CURRENT_FAILING` for full S2-capacity correctness,
+  `CURRENT_PASS` only for the foreground Redis decision layer under this
+  accepted-heavy profile. Do not cite it as "600/s accepted capacity pass".
+
+Root cause and fix direction:
+
+- The single hot auction is keyed to one Kafka partition. Official Kafka
+  consumer-group semantics allow only one consumer in a group to read a partition
+  at a time, so adding settlement workers cannot parallelize this one auction's
+  ordered stream by itself.
+- The old accepted settlement path paid one transaction per accepted message:
+  settlement attempt, `SELECT auctions FOR UPDATE`, auction update, bid insert,
+  auction event, outbox event/delivery, idempotency completion, checkpoint, and
+  commit. That is correct, but it made accepted-heavy S2 hit the async
+  settlement/outbox knee before the Redis decision knee.
+- The retained optimization is accepted contiguous-prefix batching. It batches
+  only same-auction, same-epoch, consecutive `engine_seq`, same Kafka
+  topic/partition, consecutive Kafka offset, non-terminal `ENGINE_ACCEPTED`
+  rows. `ENGINE_SOLD`, reject, gap, replay, stale epoch, or identity conflict
+  falls back to the pre-existing per-message path. The batch transaction still
+  writes `bids`, `auction_events`, `outbox_events`, `outbox_delivery`,
+  `idempotency_records`, `redis_engine_settlements`, auction seq/price/winner,
+  and the engine checkpoint.
+- New proof tests: `TestKafkaSettlementBatchesAcceptedPrefix` verifies gap-free
+  public seq, accepted bid rows, auction events, outbox delivery rows,
+  settlement rows, idempotency completion, and auction engine/public seq after
+  a pure accepted prefix. `TestKafkaSettlementBatchesAcceptedPrefixBeforeReject`
+  verifies mixed accepted+rejected Kafka batches still settle correctly.
+
+Post-fix rerun policy:
+
+1. First rerun the same accepted profile `50/100/200/400/600` to compare against
+   `s2-capacity-accepted-ecs-20260604T150519`.
+2. A pass requires both k6 clean **and** post-run convergence: Kafka lag 0,
+   Redis pending 0, PG settlements complete, outbox watermarks 0, verifier PASS.
+3. If 600/s still leaves async lag, keep it as bottleneck evidence and rerun
+   `50/100/200/300/400` or `100/200/300/400` to find the end-to-end clean knee.
+   Do not increase to 800/1000 until the async drain gate passes at 600.
+
 Detailed diagnosis and judge-facing answers:
 [s2-settlement-diagnosis-and-judge-defense.md](s2-settlement-diagnosis-and-judge-defense.md).
 

@@ -891,11 +891,56 @@ rejected-decision audit schema: append-only/narrow table, partitioned by
 auction/time, retaining idempotency and verifier coverage. Then rerun S2 and S1
 to prove no M1 regression and no correctness loss.
 
+**Q: The accepted-heavy stair reached 600/s with p99 3.89ms. Can you call that a
+600/s capacity pass?**
+
+A: No. `s2-capacity-accepted-ecs-20260604T150519` is a split verdict. The Redis
+decision layer was clean: k6 exit 0, dropped 0, HTTP failed 0, 131,574 final
+decisions, 125,376 accepted, p99 3.89ms, p99.9 7.47ms, and the independent k6
+host was not saturated. The end-to-end async chain was not clean: Redis engine
+log matched k6 at 131,574, but PostgreSQL settlement was only about 61k and the
+settlement consumer still had about 77,888 lag on the hot Kafka partition when
+evidence was collected. So the honest claim is "synchronous Redis decision
+600/s clean; async settlement/outbox was the next capacity knee."
+
+**Q: Why not simply add more settlement workers?**
+
+A: More workers help multi-auction or multi-partition load, but not this single
+hot auction if all `auc_live` decisions share one Kafka key/partition. Kafka
+consumer groups preserve partition order by assigning a partition to at most one
+consumer in the group at a time. For one hot partition, the right first fix is
+to reduce per-message work inside that ordered consumer: batch contiguous
+accepted settlements, batch PG writes, and keep commit/checkpoint semantics
+explicit. Changing partition/key design is a larger architecture decision
+because it must preserve same-auction ordering.
+
+**Q: What changed after the failing accepted-heavy run?**
+
+A: The settlement worker gained a conservative accepted-prefix batch path. It
+batches only same-auction, same-epoch, consecutive `engine_seq`, same Kafka
+topic/partition, consecutive Kafka offset, non-terminal `ENGINE_ACCEPTED`
+messages. Anything else falls back to the old per-message path. The batch still
+writes every audit and recovery surface: `redis_engine_settlements`, `bids`,
+`auction_events`, `outbox_events`, `outbox_delivery`, `idempotency_records`,
+auction price/winner/seq, and engine checkpoint. Tests now prove pure accepted
+batch settlement and mixed accepted+reject correctness.
+
+**Q: Why not skip some audit rows for speed?**
+
+A: That would be a different product/legal tradeoff. For this project, accepted
+bids are financial truth and rejected decisions are part of correctness defense.
+The current accepted batch optimizes transaction shape without dropping audit,
+idempotency replay, outbox recovery, or verifier coverage. A future narrow
+rejected-audit schema may be considered, but only with replacement verifier
+checks and before/after evidence.
+
 ## 10. Current Action Plan
 
 Keep:
 
 - set-based rejected settlement batch;
+- accepted contiguous-prefix settlement batch for same-auction ordered
+  `ENGINE_ACCEPTED` Kafka messages;
 - Kafka fetch/commit batching;
 - settlement success log suppression for `kafka-settlement`;
 - aggregated rejected settlement metric increment;
@@ -912,4 +957,7 @@ Next scenarios after S2:
 
 1. S3 fanout: measure M2 publish-to-receive p99 with real WS observers.
 2. S4 remaining faults: Kafka, Redis flush, Redis+Kafka correlated fault.
-3. Optional S2 long soak: 30-60 minutes for real M4 no-leak evidence.
+3. Post-fix S2 capacity rerun: first repeat `50/100/200/400/600` accepted
+   profile and require both k6 clean and convergence/verifier PASS; only then
+   explore 800/1000.
+4. Optional S2 long soak: 30-60 minutes for real M4 no-leak evidence.

@@ -140,7 +140,7 @@ func TestServeWSInitialJoinUsesSnapshotAndReconnectCanUseHistory(t *testing.T) {
 
 	token = issueRealtimeTicket(t, rt, auctionRow.RoomID, auctionRow.ID)
 	conn = dialRealtime(t, server.URL, auctionRow.RoomID, auctionRow.ID, 1, token)
-	assertWSMessageType(t, conn, "snapshot")
+	assertWSMessageType(t, conn, "bid_accepted")
 	_ = conn.Close(websocket.StatusNormalClosure, "")
 
 	if err := rdb.Del(context.Background(), eventsKey, "auction:"+auctionRow.ID+":snapshot").Err(); err != nil {

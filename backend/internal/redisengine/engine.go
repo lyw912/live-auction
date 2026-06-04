@@ -1449,6 +1449,19 @@ func (w *Worker) ProcessKafka(ctx context.Context, limit int) (int, error) {
 		observability.Observe("auction_bid_settlement_batch_seconds", time.Since(start).Seconds(), nil, observability.DefaultLatencyBuckets)
 		return batchSettled, nil
 	}
+	batchSettled, batchCommitted, err = w.settleAcceptedBatchPrefix(ctx, messages)
+	if err != nil {
+		return 0, err
+	}
+	if batchSettled > 0 {
+		if err := w.commitLedgerBatch(ctx, messages[:batchCommitted]); err != nil {
+			return batchSettled, err
+		}
+		observability.Inc("auction_bid_settlement_batch_total", map[string]string{"status": "fast_accepted"})
+		observability.Observe("auction_bid_settlement_batch_size", float64(batchSettled), nil, observability.DefaultLatencyBuckets)
+		observability.Observe("auction_bid_settlement_batch_seconds", time.Since(start).Seconds(), nil, observability.DefaultLatencyBuckets)
+		return batchSettled, nil
+	}
 	var commitBatch []LedgerMessage
 	commitCollected := func() error {
 		if len(commitBatch) == 0 {
@@ -1890,6 +1903,415 @@ func markRejectedSettlementsSettledBatch(ctx context.Context, tx pgx.Tx, auction
 		return settlementIdentityConflictError{err: fmt.Errorf("batch mark settlement settled mismatch auction=%s affected=%d expected=%d", auctionID, tag.RowsAffected(), expected)}
 	}
 	return nil
+}
+
+func (w *Worker) settleAcceptedBatchPrefix(ctx context.Context, messages []LedgerMessage) (settled int, committed int, err error) {
+	if len(messages) < 2 {
+		return 0, 0, nil
+	}
+	decoded := make([]decodedLedgerMessage, 0, len(messages))
+	var auctionID string
+	var epoch int64
+	var nextSeq int64
+	var topic string
+	var partition int
+	var offset int64
+	for i, message := range messages {
+		var result engineResult
+		if err := json.Unmarshal(message.Value, &result); err != nil {
+			if i == 0 {
+				return 0, 0, nil
+			}
+			break
+		}
+		if result.Result != resultAccepted {
+			if i == 0 {
+				return 0, 0, nil
+			}
+			break
+		}
+		if result.AuctionID == "" || result.EngineEpoch <= 0 || result.EngineSeq <= 0 {
+			if i == 0 {
+				return 0, 0, nil
+			}
+			break
+		}
+		if message.Topic == "" || message.Partition < 0 || message.Offset < 0 {
+			if i == 0 {
+				return 0, 0, nil
+			}
+			break
+		}
+		if i == 0 {
+			auctionID = result.AuctionID
+			epoch = result.EngineEpoch
+			nextSeq = result.EngineSeq
+			topic = message.Topic
+			partition = message.Partition
+			offset = message.Offset
+		}
+		if result.AuctionID != auctionID ||
+			result.EngineEpoch != epoch ||
+			result.EngineSeq != nextSeq ||
+			message.Topic != topic ||
+			message.Partition != partition ||
+			message.Offset != offset {
+			break
+		}
+		payload := append([]byte(nil), message.Value...)
+		decoded = append(decoded, decodedLedgerMessage{
+			message: message,
+			result:  result,
+			payload: payload,
+			hash:    sha256Hex(payload),
+		})
+		nextSeq++
+		offset++
+	}
+	if len(decoded) < 2 {
+		return 0, 0, nil
+	}
+	n, err := w.settleAcceptedBatch(ctx, auctionID, decoded)
+	if err != nil {
+		if isTransientSettlementError(err) || isSettlementIdentityConflictError(err) {
+			return 0, 0, nil
+		}
+		return 0, 0, err
+	}
+	return n, n, nil
+}
+
+func (w *Worker) settleAcceptedBatch(ctx context.Context, auctionID string, batch []decodedLedgerMessage) (int, error) {
+	tx, err := w.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var dbEpoch int64
+	var dbEngineSeq int64
+	var publicSeq int64
+	if err := tx.QueryRow(ctx, `
+		SELECT engine_epoch, engine_seq, seq
+		FROM auctions
+		WHERE id = $1
+		FOR UPDATE
+	`, auctionID).Scan(&dbEpoch, &dbEngineSeq, &publicSeq); err != nil {
+		return 0, err
+	}
+	first := batch[0].result
+	last := batch[len(batch)-1].result
+	if first.EngineEpoch != dbEpoch {
+		return 0, transientSettlementError{err: fmt.Errorf("accepted batch stale epoch auction=%s redis=%d db=%d", auctionID, first.EngineEpoch, dbEpoch)}
+	}
+	if first.EngineSeq != dbEngineSeq+1 {
+		return 0, transientSettlementError{err: fmt.Errorf("accepted batch seq waiting auction=%s redis_first=%d db_next=%d", auctionID, first.EngineSeq, dbEngineSeq+1)}
+	}
+
+	rows, err := acceptedSettlementBatchRows(batch, publicSeq)
+	if err != nil {
+		return 0, err
+	}
+	rowsJSON, err := json.Marshal(rows)
+	if err != nil {
+		return 0, err
+	}
+	if err := insertAcceptedSettlementAttemptsBatch(ctx, tx, auctionID, rowsJSON, len(batch)); err != nil {
+		return 0, err
+	}
+
+	lastEndAt := (*time.Time)(nil)
+	if last.EndAtMS > 0 {
+		t := time.UnixMilli(last.EndAtMS).UTC()
+		lastEndAt = &t
+	}
+	tag, err := tx.Exec(ctx, `
+		UPDATE auctions
+		SET status = 'ACTIVE',
+		    current_price_cents = $2,
+		    current_winner_id = $3,
+		    end_at = COALESCE($4, end_at),
+		    extend_count = GREATEST(extend_count, $5),
+		    accepted_bid_count = accepted_bid_count + $6,
+		    seq = seq + $6,
+		    engine_seq = $7,
+		    engine_epoch = $8,
+		    version = version + $6,
+		    updated_at = now()
+		WHERE id = $1 AND engine_epoch = $8 AND engine_seq = $9
+	`, auctionID, last.AmountCents, last.UserID, lastEndAt, last.ExtendCount, len(batch), last.EngineSeq, last.EngineEpoch, dbEngineSeq)
+	if err != nil {
+		return 0, err
+	}
+	if tag.RowsAffected() == 0 {
+		return 0, transientSettlementError{err: fmt.Errorf("accepted batch fenced out auction=%s epoch=%d first_seq=%d db_seq=%d", auctionID, first.EngineEpoch, first.EngineSeq, dbEngineSeq)}
+	}
+
+	if err := insertAcceptedBidsBatch(ctx, tx, auctionID, rowsJSON, len(batch)); err != nil {
+		return 0, err
+	}
+	if err := insertAcceptedAuctionEventsBatch(ctx, tx, auctionID, rowsJSON, len(batch)); err != nil {
+		return 0, err
+	}
+	if err := insertAcceptedOutboxEventsBatch(ctx, tx, auctionID, rowsJSON, len(batch)); err != nil {
+		return 0, err
+	}
+	if err := completeAcceptedIdempotencyBatch(ctx, tx, auctionID, rowsJSON, len(batch)); err != nil {
+		return 0, err
+	}
+	if err := markAcceptedSettlementsSettledBatch(ctx, tx, auctionID, rowsJSON, len(batch)); err != nil {
+		return 0, err
+	}
+	if err := upsertEngineCheckpoint(ctx, tx, auctionID, batch[len(batch)-1].message); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	observability.Add("auction_bid_redis_settlement_total", float64(len(batch)), map[string]string{"result": resultAccepted, "status": "settled"})
+	return len(batch), nil
+}
+
+type acceptedSettlementBatchRow struct {
+	StreamID        string          `json:"stream_id"`
+	EngineEpoch     int64           `json:"engine_epoch"`
+	EngineSeq       int64           `json:"engine_seq"`
+	Result          string          `json:"result"`
+	PayloadJSON     json.RawMessage `json:"payload_json"`
+	PayloadSHA256   string          `json:"payload_sha256"`
+	LedgerTopic     string          `json:"ledger_topic"`
+	LedgerPartition int             `json:"ledger_partition"`
+	LedgerOffset    int64           `json:"ledger_offset"`
+	LedgerKey       string          `json:"ledger_key"`
+	BidID           string          `json:"bid_id"`
+	UserID          string          `json:"user_id"`
+	ClientBidID     string          `json:"client_bid_id"`
+	AmountCents     int64           `json:"amount_cents"`
+	RequestHash     string          `json:"request_hash"`
+	ResponseJSON    json.RawMessage `json:"response_json"`
+	TraceID         string          `json:"trace_id"`
+	PublicSeq       int64           `json:"public_seq"`
+	EventType       string          `json:"event_type"`
+	EventPayload    json.RawMessage `json:"event_payload"`
+	ServerTimeMS    int64           `json:"server_time_ms"`
+}
+
+func acceptedSettlementBatchRows(batch []decodedLedgerMessage, publicSeq int64) ([]acceptedSettlementBatchRow, error) {
+	rows := make([]acceptedSettlementBatchRow, 0, len(batch))
+	for i, item := range batch {
+		result := item.result
+		seq := publicSeq + int64(i) + 1
+		resp := result.response(auction.DurabilityStatusKafkaAcked, auction.DecisionStatusDecided)
+		resp.Result = auction.BidResultAccepted
+		resp.SettlementStatus = auction.SettlementStatusSettled
+		resp.Seq = seq
+		respJSON, err := json.Marshal(resp)
+		if err != nil {
+			return nil, err
+		}
+		payload := map[string]any{
+			"bid_id":              result.BidID,
+			"user_id":             result.UserID,
+			"amount_cents":        result.AmountCents,
+			"result":              auction.BidResultAccepted,
+			"current_price_cents": result.AmountCents,
+			"engine_epoch":        result.EngineEpoch,
+			"engine_seq":          result.EngineSeq,
+			"settlement_status":   auction.SettlementStatusSettled,
+			"decision_status":     auction.DecisionStatusDecided,
+			"durability_status":   auction.DurabilityStatusKafkaAcked,
+			"decision_basis":      result.DecisionBasis,
+			"state_version":       seq,
+		}
+		payloadJSON, err := json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+		serverTimeMS := result.ServerTimeMS
+		if serverTimeMS <= 0 {
+			serverTimeMS = time.Now().UTC().UnixMilli()
+		}
+		rows = append(rows, acceptedSettlementBatchRow{
+			StreamID:        item.message.ID,
+			EngineEpoch:     result.EngineEpoch,
+			EngineSeq:       result.EngineSeq,
+			Result:          result.Result,
+			PayloadJSON:     json.RawMessage(item.payload),
+			PayloadSHA256:   item.hash,
+			LedgerTopic:     item.message.Topic,
+			LedgerPartition: item.message.Partition,
+			LedgerOffset:    item.message.Offset,
+			LedgerKey:       item.message.Key,
+			BidID:           result.BidID,
+			UserID:          result.UserID,
+			ClientBidID:     result.ClientBidID,
+			AmountCents:     result.AmountCents,
+			RequestHash:     result.RequestHash,
+			ResponseJSON:    json.RawMessage(respJSON),
+			TraceID:         result.TraceID,
+			PublicSeq:       seq,
+			EventType:       "bid_accepted",
+			EventPayload:    json.RawMessage(payloadJSON),
+			ServerTimeMS:    serverTimeMS,
+		})
+	}
+	return rows, nil
+}
+
+func insertAcceptedSettlementAttemptsBatch(ctx context.Context, tx pgx.Tx, auctionID string, rowsJSON []byte, expected int) error {
+	return insertRejectedSettlementAttemptsBatch(ctx, tx, auctionID, rowsJSON, expected)
+}
+
+func insertAcceptedBidsBatch(ctx context.Context, tx pgx.Tx, auctionID string, rowsJSON []byte, expected int) error {
+	tag, err := tx.Exec(ctx, `
+		WITH input AS (
+		  SELECT *
+		  FROM jsonb_to_recordset($2::jsonb) AS x(
+		    bid_id text,
+		    user_id text,
+		    client_bid_id text,
+		    amount_cents bigint,
+		    request_hash text,
+		    response_json jsonb,
+		    trace_id text,
+		    engine_epoch bigint,
+		    engine_seq bigint,
+		    public_seq bigint
+		  )
+		)
+		INSERT INTO bids (
+		  id, auction_id, user_id, client_bid_id, amount_cents, seq, status,
+		  reject_reason, request_hash, response_json, trace_id, source,
+		  engine_epoch, engine_seq, settlement_status
+		)
+		SELECT bid_id, $1, user_id, client_bid_id, amount_cents, public_seq, 'ACCEPTED',
+		       NULL, request_hash, response_json, trace_id, $3,
+		       engine_epoch, engine_seq, 'SETTLED'
+		FROM input
+		ON CONFLICT (auction_id, user_id, client_bid_id) DO UPDATE
+		SET response_json = bids.response_json
+		WHERE bids.request_hash = EXCLUDED.request_hash
+		  AND bids.amount_cents = EXCLUDED.amount_cents
+		  AND bids.status = EXCLUDED.status
+		  AND COALESCE(bids.engine_epoch, 0) = COALESCE(EXCLUDED.engine_epoch, 0)
+		  AND COALESCE(bids.engine_seq, 0) = COALESCE(EXCLUDED.engine_seq, 0)
+	`, auctionID, rowsJSON, auction.BidSourceManual)
+	if isUniqueViolation(err) {
+		return settlementIdentityConflictError{err: err}
+	}
+	if err != nil {
+		return err
+	}
+	if int(tag.RowsAffected()) != expected {
+		return settlementIdentityConflictError{err: fmt.Errorf("accepted batch bid idempotency conflict auction=%s affected=%d expected=%d", auctionID, tag.RowsAffected(), expected)}
+	}
+	return nil
+}
+
+func insertAcceptedAuctionEventsBatch(ctx context.Context, tx pgx.Tx, auctionID string, rowsJSON []byte, expected int) error {
+	tag, err := tx.Exec(ctx, `
+		WITH input AS (
+		  SELECT *
+		  FROM jsonb_to_recordset($2::jsonb) AS x(
+		    public_seq bigint,
+		    event_type text,
+		    event_payload jsonb,
+		    server_time_ms bigint,
+		    trace_id text,
+		    engine_epoch bigint,
+		    engine_seq bigint
+		  )
+		)
+		INSERT INTO auction_events (auction_id, seq, event_type, payload_json, server_time_ms, trace_id, engine_epoch, engine_seq)
+		SELECT $1, public_seq, event_type, event_payload, server_time_ms, trace_id, engine_epoch, engine_seq
+		FROM input
+		ON CONFLICT (auction_id, seq) DO NOTHING
+	`, auctionID, rowsJSON)
+	if err != nil {
+		return err
+	}
+	if int(tag.RowsAffected()) != expected {
+		return settlementIdentityConflictError{err: fmt.Errorf("accepted batch auction event conflict auction=%s affected=%d expected=%d", auctionID, tag.RowsAffected(), expected)}
+	}
+	return nil
+}
+
+func insertAcceptedOutboxEventsBatch(ctx context.Context, tx pgx.Tx, auctionID string, rowsJSON []byte, expected int) error {
+	tag, err := tx.Exec(ctx, `
+		WITH input AS (
+		  SELECT *
+		  FROM jsonb_to_recordset($2::jsonb) AS x(
+		    public_seq bigint,
+		    event_type text,
+		    event_payload jsonb
+		  )
+		),
+		inserted AS (
+		  INSERT INTO outbox_events (
+		    aggregate_type, aggregate_id, auction_id, seq, event_type,
+		    event_schema_version, event_key, payload_json, payload_sha256
+		  )
+		  SELECT 'auction', $1, $1, public_seq, event_type, 1, $1, event_payload,
+		         encode(digest(convert_to(event_payload::jsonb::text, 'UTF8'), 'sha256'), 'hex')
+		  FROM input
+		  ON CONFLICT (aggregate_type, aggregate_id, event_type, seq) WHERE seq IS NOT NULL DO NOTHING
+		  RETURNING id
+		)
+		INSERT INTO outbox_delivery (outbox_id, status)
+		SELECT id, 'PENDING'
+		FROM inserted
+		ON CONFLICT (outbox_id) DO NOTHING
+	`, auctionID, rowsJSON)
+	if err != nil {
+		return err
+	}
+	if int(tag.RowsAffected()) != expected {
+		return settlementIdentityConflictError{err: fmt.Errorf("accepted batch outbox delivery conflict auction=%s affected=%d expected=%d", auctionID, tag.RowsAffected(), expected)}
+	}
+	return nil
+}
+
+func completeAcceptedIdempotencyBatch(ctx context.Context, tx pgx.Tx, auctionID string, rowsJSON []byte, expected int) error {
+	tag, err := tx.Exec(ctx, `
+		WITH input AS (
+		  SELECT *
+		  FROM jsonb_to_recordset($2::jsonb) AS x(
+		    user_id text,
+		    client_bid_id text,
+		    request_hash text,
+		    response_json jsonb
+		  )
+		)
+		INSERT INTO idempotency_records (
+		  scope_type, scope_id, user_id, idempotency_key, request_hash, status,
+		  attempts, http_status, result_code, response_json, completed_at
+		)
+		SELECT 'bid', $1, user_id, client_bid_id, request_hash, 'COMPLETED',
+		       1, 200, $3, response_json, now()
+		FROM input
+		ON CONFLICT (scope_type, scope_id, user_id, idempotency_key) DO UPDATE
+		SET status = 'COMPLETED',
+		    http_status = EXCLUDED.http_status,
+		    result_code = EXCLUDED.result_code,
+		    response_json = EXCLUDED.response_json,
+		    completed_at = now(),
+		    locked_until = NULL
+		WHERE idempotency_records.request_hash = EXCLUDED.request_hash
+	`, auctionID, rowsJSON, auction.BidResultAccepted)
+	if isUniqueViolation(err) {
+		return settlementIdentityConflictError{err: err}
+	}
+	if err != nil {
+		return err
+	}
+	if int(tag.RowsAffected()) != expected {
+		return settlementIdentityConflictError{err: fmt.Errorf("accepted batch idempotency record conflict auction=%s affected=%d expected=%d", auctionID, tag.RowsAffected(), expected)}
+	}
+	return nil
+}
+
+func markAcceptedSettlementsSettledBatch(ctx context.Context, tx pgx.Tx, auctionID string, rowsJSON []byte, expected int) error {
+	return markRejectedSettlementsSettledBatch(ctx, tx, auctionID, rowsJSON, expected)
 }
 
 func (w *Worker) retryOrDLQ(ctx context.Context, message LedgerMessage, settleErr error) error {

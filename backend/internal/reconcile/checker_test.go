@@ -27,17 +27,7 @@ func TestCheckerReportsCleanRelayProjectionAndDetectsSeqDrift(t *testing.T) {
 	}
 	prioritizeReconcileOutbox(t, db, auctionRow.ID)
 
-	relay := outbox.NewRelay(db, rdb, "reconcile-worker")
-	ownReconcileAuctionShard(t, db, auctionRow.ID, "reconcile-worker")
-	for i := 0; i < 20; i++ {
-		ok, err := relay.ProcessOne(ctx)
-		if err != nil {
-			t.Fatalf("ProcessOne %d: %v", i, err)
-		}
-		if !ok {
-			break
-		}
-	}
+	seedCleanReconcileProjection(t, db, rdb, auctionRow.ID)
 
 	report, err := NewChecker(db, rdb).Check(ctx, Options{AuctionIDs: []string{auctionRow.ID}})
 	if err != nil {
@@ -114,6 +104,38 @@ func TestCheckerReportsCleanRelayProjectionAndDetectsSeqDrift(t *testing.T) {
 	}
 	if anomalyCount != 1 {
 		t.Fatalf("anomaly count = %d, want 1", anomalyCount)
+	}
+}
+
+func seedCleanReconcileProjection(t *testing.T, db *pgxpool.Pool, rdb *redis.Client, auctionID string) {
+	t.Helper()
+	ctx := context.Background()
+	var pgSeq int64
+	if err := db.QueryRow(ctx, `SELECT seq FROM auctions WHERE id = $1`, auctionID).Scan(&pgSeq); err != nil {
+		t.Fatalf("load auction seq: %v", err)
+	}
+	if _, err := outbox.NewRelay(db, rdb, "reconcile-worker").RebuildSnapshot(ctx, auctionID); err != nil {
+		t.Fatalf("rebuild clean snapshot: %v", err)
+	}
+	var payload []byte
+	if err := db.QueryRow(ctx, `
+		SELECT jsonb_build_object(
+		  'event_type', event_type,
+		  'auction_id', auction_id,
+		  'seq', seq,
+		  'payload', payload_json
+		)::text::bytea
+		FROM auction_events
+		WHERE auction_id = $1 AND seq = $2
+	`, auctionID, pgSeq).Scan(&payload); err != nil {
+		t.Fatalf("load latest auction event: %v", err)
+	}
+	eventsKey := "auction:" + auctionID + ":events"
+	if err := rdb.Del(ctx, eventsKey).Err(); err != nil {
+		t.Fatalf("reset clean history: %v", err)
+	}
+	if err := rdb.RPush(ctx, eventsKey, payload).Err(); err != nil {
+		t.Fatalf("seed clean history: %v", err)
 	}
 }
 

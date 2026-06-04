@@ -260,6 +260,59 @@ only if you need the exact knee, for example 800/s and 1000/s with 60s stages.
 If backlog grows or dropped iterations appear, keep that as bottleneck evidence
 instead of presenting it as pass.
 
+Known accepted-profile bottleneck and post-fix rerun note:
+
+- `s2-capacity-accepted-ecs-20260604T150519` is **not** a full pass. It proved
+  synchronous Redis decision strength at 600/s accepted-heavy load
+  (`dropped_iterations=0`, `http_req_failed=0`, 131,574 final decisions,
+  125,376 accepted, p99 3.89ms, p99.9 7.47ms), but async settlement/outbox was
+  behind at collection time: PostgreSQL settlement about 61k/131,574 and Kafka
+  lag about 77,888 on the hot partition.
+- The follow-up production-code fix is accepted contiguous-prefix batching in
+  the settlement worker. Rerun the same profile first. Do not raise to 800/1000
+  until the 600/s profile passes both the k6 gate and convergence/verifier gate.
+- If `verify-l4b-pts-correctness.sh` hits a PostgreSQL shared-memory error while
+  running a heavy diagnostic query, keep the raw verifier output and also record
+  the lightweight convergence facts from `collect-server-evidence.sh`: Kafka
+  lag, Redis pending decisions, settlement terminal counts, outbox watermarks,
+  and engine log length. Classify the run as `UNPROVEN` unless those gates can
+  be rerun cleanly.
+
+Post-fix same-profile rerun command from k6 ECS:
+
+```bash
+export LABEL=s2-capacity-accepted-postfix-ecs-$(date +%Y%m%dT%H%M%S)
+CAPACITY_PROFILE=accepted \
+STAGE_DUR=90s \
+STAGE1_RATE=50 \
+STAGE2_RATE=100 \
+STAGE3_RATE=200 \
+STAGE4_RATE=400 \
+STAGE5_RATE=600 \
+PRE_ALLOC_VUS=500 \
+MAX_VUS=1500 \
+USER_COUNT=1500 \
+bash scripts/perf/run-remote-k6.sh s2-capacity-stair
+```
+
+If the post-fix rerun still leaves async lag, run a clean-ceiling search instead
+of increasing pressure:
+
+```bash
+export LABEL=s2-capacity-accepted-ceiling-ecs-$(date +%Y%m%dT%H%M%S)
+CAPACITY_PROFILE=accepted \
+STAGE_DUR=90s \
+STAGE1_RATE=50 \
+STAGE2_RATE=100 \
+STAGE3_RATE=200 \
+STAGE4_RATE=300 \
+STAGE5_RATE=400 \
+PRE_ALLOC_VUS=400 \
+MAX_VUS=1000 \
+USER_COUNT=1000 \
+bash scripts/perf/run-remote-k6.sh s2-capacity-stair
+```
+
 ## 4c. S2 Read Interference
 
 Run this after `S2-long-soak` when you need to prove normal live-room polling

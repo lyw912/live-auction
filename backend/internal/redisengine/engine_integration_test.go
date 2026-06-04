@@ -1254,6 +1254,170 @@ func TestRelayGroupCommitBatchesAllDecisions(t *testing.T) {
 	}
 }
 
+func TestKafkaSettlementBatchesAcceptedPrefix(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+	if _, err := db.Exec(ctx, `UPDATE auction_rules SET extend_window_seconds = 10, extend_by_seconds = 10, max_extend_count = 2 WHERE auction_id = $1`, auctionID); err != nil {
+		t.Fatalf("set extension rule: %v", err)
+	}
+	originalEnd := time.Now().UTC().Add(5 * time.Second).Truncate(time.Millisecond)
+	if _, err := db.Exec(ctx, `UPDATE auctions SET end_at = $2 WHERE id = $1`, auctionID, originalEnd); err != nil {
+		t.Fatalf("set auction end_at: %v", err)
+	}
+
+	const bids = 5
+	insertEngineUsers(t, db, "accepted_batch_user_", bids)
+	for i := 0; i < bids; i++ {
+		clientBidID := "accepted-batch-" + strconv.Itoa(i)
+		resp, err := engine.PlaceBid(ctx, auctionID, "accepted_batch_user_"+strconv.Itoa(i), clientBidID, auction.BidInput{
+			ClientBidID:   clientBidID,
+			AmountCents:   15_000 + int64(i)*5_000,
+			ClientSeenSeq: 0,
+		}, "tr_accepted_batch")
+		if err != nil {
+			t.Fatalf("place bid %d: %v", i, err)
+		}
+		if resp.Result != auction.BidResultEngineAccepted || resp.EngineSeq != int64(i+1) {
+			t.Fatalf("bid %d response = %#v", i, resp)
+		}
+	}
+	if n, err := worker.ProcessPendingAppends(ctx, 100); err != nil || n != bids {
+		t.Fatalf("relay processed=%d err=%v, want %d nil", n, err, bids)
+	}
+	processed, err := worker.ProcessKafka(ctx, 10)
+	if err != nil {
+		t.Fatalf("accepted batch settlement: %v", err)
+	}
+	if processed != bids {
+		t.Fatalf("accepted batch processed = %d, want %d", processed, bids)
+	}
+	assertAuctionEngineSeq(t, db, auctionID, bids, 15_000+int64(bids-1)*5_000, "ACTIVE")
+	assertAuctionPublicSeq(t, db, auctionID, bids)
+
+	var bidRows, events, outboxDeliveries, settlements, idems, seqGaps int
+	var settledEnd time.Time
+	var extendCount int
+	if err := db.QueryRow(ctx, `SELECT end_at, extend_count FROM auctions WHERE id = $1`, auctionID).Scan(&settledEnd, &extendCount); err != nil {
+		t.Fatalf("load settled auction extension state: %v", err)
+	}
+	if !settledEnd.After(originalEnd) || extendCount != 1 {
+		t.Fatalf("settled extension end_at=%s extend_count=%d, want after %s and count 1", settledEnd, extendCount, originalEnd)
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM bids WHERE auction_id = $1 AND status = 'ACCEPTED' AND settlement_status = 'SETTLED'`, auctionID).Scan(&bidRows); err != nil {
+		t.Fatalf("count accepted bids: %v", err)
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM auction_events WHERE auction_id = $1 AND event_type = 'bid_accepted'`, auctionID).Scan(&events); err != nil {
+		t.Fatalf("count auction events: %v", err)
+	}
+	if err := db.QueryRow(ctx, `
+		SELECT count(*)
+		FROM outbox_delivery d
+		JOIN outbox_events e ON e.id = d.outbox_id
+		WHERE e.auction_id = $1
+	`, auctionID).Scan(&outboxDeliveries); err != nil {
+		t.Fatalf("count outbox deliveries: %v", err)
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM redis_engine_settlements WHERE auction_id = $1 AND status = 'SETTLED'`, auctionID).Scan(&settlements); err != nil {
+		t.Fatalf("count settlements: %v", err)
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM idempotency_records WHERE scope_type = 'bid' AND scope_id = $1 AND status = 'COMPLETED'`, auctionID).Scan(&idems); err != nil {
+		t.Fatalf("count idempotency records: %v", err)
+	}
+	if err := db.QueryRow(ctx, `
+		WITH accepted AS (
+		  SELECT seq, engine_seq, lag(seq) over (order by engine_seq) AS prev_seq
+		  FROM bids
+		  WHERE auction_id = $1 AND status = 'ACCEPTED'
+		)
+		SELECT count(*)
+		FROM accepted
+		WHERE seq <> engine_seq OR (prev_seq IS NOT NULL AND seq <> prev_seq + 1)
+	`, auctionID).Scan(&seqGaps); err != nil {
+		t.Fatalf("count sequence gaps: %v", err)
+	}
+	if bidRows != bids || events != bids || outboxDeliveries != bids || settlements != bids || idems != bids || seqGaps != 0 {
+		t.Fatalf("batch rows bids=%d events=%d outbox=%d settlements=%d idems=%d seq_gaps=%d, want all %d and gaps 0",
+			bidRows, events, outboxDeliveries, settlements, idems, seqGaps, bids)
+	}
+}
+
+func TestKafkaSettlementBatchesAcceptedPrefixBeforeReject(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+
+	const accepted = 3
+	insertEngineUsers(t, db, "accepted_prefix_user_", accepted+1)
+	for i := 0; i < accepted; i++ {
+		clientBidID := "accepted-prefix-" + strconv.Itoa(i)
+		resp, err := engine.PlaceBid(ctx, auctionID, "accepted_prefix_user_"+strconv.Itoa(i), clientBidID, auction.BidInput{
+			ClientBidID:   clientBidID,
+			AmountCents:   15_000 + int64(i)*5_000,
+			ClientSeenSeq: 0,
+		}, "tr_accepted_prefix")
+		if err != nil {
+			t.Fatalf("place accepted bid %d: %v", i, err)
+		}
+		if resp.Result != auction.BidResultEngineAccepted || resp.EngineSeq != int64(i+1) {
+			t.Fatalf("accepted bid %d response = %#v", i, resp)
+		}
+	}
+	rejectResp, err := engine.PlaceBid(ctx, auctionID, "accepted_prefix_user_3", "accepted-prefix-reject", auction.BidInput{
+		ClientBidID:   "accepted-prefix-reject",
+		AmountCents:   10_000,
+		ClientSeenSeq: 0,
+	}, "tr_accepted_prefix_reject")
+	if err != nil {
+		t.Fatalf("place rejected bid: %v", err)
+	}
+	if rejectResp.Result != auction.BidResultEngineRejected || rejectResp.EngineSeq != accepted+1 {
+		t.Fatalf("reject response = %#v", rejectResp)
+	}
+	if n, err := worker.ProcessPendingAppends(ctx, 100); err != nil || n != accepted+1 {
+		t.Fatalf("relay processed=%d err=%v, want %d nil", n, err, accepted+1)
+	}
+
+	processed, err := worker.ProcessKafka(ctx, 10)
+	if err != nil {
+		t.Fatalf("mixed settlement: %v", err)
+	}
+	if processed != accepted {
+		t.Fatalf("mixed settlement first pass processed = %d, want accepted prefix %d", processed, accepted)
+	}
+	processed, err = worker.ProcessKafka(ctx, 10)
+	if err != nil {
+		t.Fatalf("rejected suffix settlement: %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("mixed settlement second pass processed = %d, want rejected suffix 1", processed)
+	}
+	assertAuctionEngineSeq(t, db, auctionID, accepted+1, 25_000, "ACTIVE")
+	assertAuctionPublicSeq(t, db, auctionID, accepted)
+
+	var acceptedRows, rejectedRows, settlements int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM bids WHERE auction_id = $1 AND status = 'ACCEPTED' AND settlement_status = 'SETTLED'`, auctionID).Scan(&acceptedRows); err != nil {
+		t.Fatalf("count accepted bids: %v", err)
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM bids WHERE auction_id = $1 AND status = 'REJECTED' AND settlement_status = 'SETTLED'`, auctionID).Scan(&rejectedRows); err != nil {
+		t.Fatalf("count rejected bids: %v", err)
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM redis_engine_settlements WHERE auction_id = $1 AND status = 'SETTLED'`, auctionID).Scan(&settlements); err != nil {
+		t.Fatalf("count settlements: %v", err)
+	}
+	if acceptedRows != accepted || rejectedRows != 1 || settlements != accepted+1 {
+		t.Fatalf("rows accepted=%d rejected=%d settlements=%d, want %d/1/%d", acceptedRows, rejectedRows, settlements, accepted, accepted+1)
+	}
+}
+
 func TestRelayBackpressureDrainsBeyondBatchCeiling(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
