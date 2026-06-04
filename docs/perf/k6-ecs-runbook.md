@@ -177,7 +177,13 @@ This resets `auc_live`, starts the backend with `ADMISSION_ENABLED=false` and
 `BID_ENGINE_MODE=redis_ledger`, and pre-seeds mock-auth room membership / Redis
 ACL cache for `k6_bidder_1..400` and `k6_user_1..5000`.
 
-Default 15-minute shape:
+Attack / ceiling-discovery 15-minute shape:
+
+> 2026-06-04 result: `s2-read-ecs-15m-20260604T113330` did **not** cleanly pass
+> this 2k/5k/10k read profile. It found the current read-path ceiling: bid p99
+> stayed 5.68ms at ~100/s, but read p99 became seconds-level and k6 recorded
+> 2,057,742 dropped iterations. Use this shape only when intentionally attacking
+> the read path or validating a read-path optimization.
 
 ```bash
 export LABEL=s2-read-ecs-15m-$(date +%Y%m%dT%H%M%S)
@@ -193,6 +199,25 @@ BID_PRE_ALLOC_VUS=120 \
 BID_MAX_VUS=400 \
 READ_PRE_ALLOC_VUS=1500 \
 READ_MAX_VUS=4000 \
+bash scripts/perf/run-remote-k6.sh s2-read-interference
+```
+
+Clean-ceiling search shape after the 10k attack failure:
+
+```bash
+export LABEL=s2-read-clean-ecs-15m-$(date +%Y%m%dT%H%M%S)
+export BASE_URL=http://SERVICE_PRIVATE_IP:18080
+STAGE_DUR=5m \
+BID_STAGE1_RATE=100 \
+BID_STAGE2_RATE=100 \
+BID_STAGE3_RATE=100 \
+READ_STAGE1_RATE=2000 \
+READ_STAGE2_RATE=3000 \
+READ_STAGE3_RATE=4000 \
+BID_PRE_ALLOC_VUS=120 \
+BID_MAX_VUS=400 \
+READ_PRE_ALLOC_VUS=1000 \
+READ_MAX_VUS=2500 \
 bash scripts/perf/run-remote-k6.sh s2-read-interference
 ```
 

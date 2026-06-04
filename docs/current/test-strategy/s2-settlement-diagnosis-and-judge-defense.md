@@ -19,7 +19,7 @@ S2 currently proves two different things with different confidence levels:
 | Async settlement convergence <= 110s | FAIL | `s2-stair-1000-workers4-110s-20260603T1928`: timed out at 112s with Kafka lag 1275, settlement_total 69925/70999 |
 | Async settlement convergence within 120s product buffer | ACCEPTABLE WITH POLL DISCLOSURE | `s2-stair-1000-120s-20260603T1942`: 119s still had lag 286; the 122s sample confirmed lag 0, settlement_total 70999/70999, Redis pending 0, outbox unpublished 0 |
 | Direct-SETTLED fast rejected SQL | REJECTED and reverted | `s2-stair-1000-directsettled-100s-20260602T212330`: worse lag 32033 at 101s; verifier failed due to incomplete convergence |
-| HTTP read-interference under bid load | NEXT / not yet claimed | `tests/load/s2-read-interference.js`: 20/60/100 bid attempts/s plus 200/600/1000 HTTP reads/s; run pending |
+| HTTP read-interference under bid load | CURRENT_FAILING / bottleneck evidence | `s2-read-ecs-15m-20260604T113330`: 100 bid attempts/s plus 2000/5000/10000 HTTP reads/s exposed read-path/DB-pool saturation; bid path stayed p99 5.68ms, but reads reached only ~2142/s actual with 2,057,742 dropped iterations |
 
 The honest judge-facing statement:
 
@@ -43,8 +43,10 @@ Update after the independent k6 ECS run on 2026-06-04:
 > verification found all 85,499 decisions settled, Kafka lag 0, Redis pending 0,
 > DLQ empty, outbox drained, complete engine_seq, and all P0/P1 gates PASS. This
 > is a bid-decision endurance and convergence PASS. It does not claim
-> accepted-heavy WebSocket fanout or high-RPS HTTP read interference; those are
-> covered by S3 and the pending S2-read-interference run."
+> accepted-heavy WebSocket fanout. The follow-up S2-read-interference run found
+> the read-path ceiling before the bid path failed: bid decisions stayed p99
+> 5.68ms at ~100/s, while snapshot/leaderboard/my-bids reads accumulated
+> second-level tails and k6 dropped iterations under the 5k/10k read stages."
 
 ## 1a. Current 30-Minute Independent-ECS S2 Evidence
 
@@ -182,7 +184,7 @@ Do not say:
 That would overclaim, because the run did not include 1000/s readers or held
 WebSocket viewers.
 
-## 1b. S2-read-interference Design And Numbers
+## 1b. S2-read-interference Design, Result, And Boundary
 
 The next S2 run answers a different judge question:
 
@@ -199,26 +201,27 @@ Default 15-minute independent-ECS shape:
 
 | Stage | Duration | Bid attempts/s | HTTP reads/s | Total offered RPS |
 |---|---:|---:|---:|---:|
-| warm | 5 min | 20 | 200 | 220 |
-| mid | 5 min | 60 | 600 | 660 |
-| peak | 5 min | 100 | 1000 | 1100 |
+| read-2k | 5 min | 100 | 2,000 | 2,100 |
+| read-5k | 5 min | 100 | 5,000 | 5,100 |
+| read-10k | 5 min | 100 | 10,000 | 10,100 |
 | ramp-down | 30s | 0 | 0 | 0 |
 
 Read mix:
 
 | Endpoint | Share | Peak RPS | Why it matters |
 |---|---:|---:|---|
-| `GET /api/auctions/auc_live` | 60% | 600/s | main room state/snapshot polling |
-| `GET /api/auctions/auc_live/leaderboard?limit=5` | 30% | 300/s | ranking/price comparison path |
-| `GET /api/users/me/bids` | 10% | 100/s | personal history/status path |
+| `GET /api/auctions/auc_live` | 80% | 8,000/s | main room state/snapshot polling |
+| `GET /api/auctions/auc_live/leaderboard?limit=5` | 15% | 1,500/s | ranking/price comparison path |
+| `GET /api/users/me/bids` | 5% | 500/s | personal history/status path |
 
-Why 200/600/1000 reads/s:
+Why 2000/5000/10000 reads/s:
 
 - It creates a 10:1 read-to-bid ratio, matching the business intuition that most
-  live-room users watch or refresh state rather than bid.
-- It reaches 1100 total HTTP RPS at peak while keeping the bid rate identical to
-  the validated S2-long-soak peak. This isolates the question "what did reads do
-  to bid p99?".
+  live-room users watch or refresh state rather than bid. At peak the ratio is
+  100:1, which intentionally attacks the read path harder than the normal soak.
+- It reaches 10,100 offered HTTP RPS at peak while keeping the bid rate identical
+  to the validated S2-long-soak peak. This isolates the question "what did reads
+  do to bid p99?".
 - A single c9i.xlarge k6 host should comfortably generate this HTTP RPS if k6
   CPU, dropped iterations, sockets, and retransmits stay clean. If k6 host
   headroom is lost, the result is ENV_LIMIT, not a service conclusion.
@@ -250,11 +253,119 @@ reader traffic -> DB pool wait / CPU / query latency -> bid p99 drift
 reader traffic -> Redis/PG contention -> settlement/outbox convergence drift
 ```
 
+Formal run on 2026-06-04:
+
+```text
+label           : s2-read-ecs-15m-20260604T113330
+tool/source     : independent same-VPC ECS k6
+service target  : service ECS private IP on :18080
+duration        : 15 min + 30s ramp-down
+bid rate        : 100/s, 100/s, 100/s
+read rate       : 2000/s, 5000/s, 10000/s
+read mix        : 80% snapshot, 15% leaderboard, 5% my-bids
+runtime profile : BID_ENGINE_MODE=redis_ledger, ADMISSION_ENABLED=false
+auction         : auc_live, reset immediately before run
+```
+
+k6 result:
+
+| Signal | Value | Interpretation |
+|---|---:|---|
+| k6 exit code | 99 | threshold failure; this is not a clean pass |
+| total HTTP requests delivered | 2,083,756 | actual delivered throughput averaged about 2240 req/s |
+| dropped iterations | 2,057,742 | open-arrival plan was under-delivered after reads slowed |
+| HTTP failure rate | 0 | no transport/protocol failure despite latency |
+| bid final decisions | 91,499 | bid lane delivered about 98.4/s |
+| read successes | 1,992,257 | read lane delivered about 2142/s |
+| accepted / rejected | 28 / 91,471 | ascending-auction price ladder quickly made most bids valid rejects |
+| bid p99 | 5.68ms | Redis engine bid path stayed far below 100ms |
+| snapshot p99 | 1.60s | main room snapshot read path exceeded target |
+| leaderboard p99 | 4.07s | leaderboard read path was the worst tail |
+| my-bids p99 | 884.8ms | personal history read path also exceeded target |
+| k6 CPU / RSS | about 30-44% CPU / 1.6-1.9GB RSS | load generator CPU was not the first bottleneck |
+| k6 FD / VU state | about 4100 FD; `READ_MAX_VUS=4000` filled | VUs were occupied waiting for slow read responses |
+
+Service-side evidence at immediate collection time:
+
+| Signal | Value | Interpretation |
+|---|---:|---|
+| `GET /api/auctions/auc_live` count | 1,595,209 | snapshot route dominated read load |
+| `GET /leaderboard` count | 299,512 | leaderboard route was lower volume but highest p99 |
+| `GET /api/users/me/bids` count | 99,687 | my-bids route still added DB pressure |
+| `POST /bids` count | 91,713 | bid traffic stayed close to 100/s target |
+| `db_pool_max_conns` | 90 | service DB pool configured for 90 conns |
+| `db_pool_conns{total}` | 90 | pool reached configured size |
+| `db_pool_empty_acquire_total` | 3,257,372 | callers frequently waited for an available DB connection |
+| `db_pool_empty_acquire_wait_seconds_total` | 2,281,594s | cumulative DB-pool wait confirms read-path saturation |
+| service process RSS / FD | about 134MB / 208 FD | no service memory or FD explosion in post snapshot |
+| Go goroutines | 44 | no goroutine leak signal in post snapshot |
+| Redis evicted / rejected connections | 0 / 0 | Redis was not the visible failure source |
+| Redis pending decisions | 0 | Redis relay pending hash drained |
+| outbox ready/publishing/dead/retry/ack_pending | all 0 | public event outbox drained |
+| Kafka lag at immediate verifier | 7857 on partition 15 | settlement consumer had not fully caught up in the first gate |
+| immediate verifier exit | 1 | P0 `kafka_consumer_group_lag_zero`, `no_non_terminal_settlements`, `v3_relay_stream_complete` failed during collection window |
+
+Late verifier after natural drain:
+
+```text
+label    : s2-read-ecs-15m-20260604T113330-late
+time     : 2026-06-04T11:57:28+08:00
+exit     : 0
+result   : all P0/P1 gates PASS
+```
+
+Late settled state:
+
+| Signal | Value |
+|---|---:|
+| auction engine_seq | 91,713 |
+| settled accepted decisions | 31 |
+| settled rejected decisions | 91,682 |
+| non-terminal settlements | 0 |
+| Kafka consumer group lag | 0 |
+| Redis pending decisions | 0 |
+| decision stream length / PG settlements | 91,713 / 91,713 |
+| outbox rows | 800 `PUBLISHED` |
+
+Evidence directories:
+
+```text
+docs/perf/pts/evidence/incoming/s2-read-ecs-15m-20260604T113330/
+docs/perf/pts/evidence/incoming/s2-read-ecs-15m-20260604T113330-late/
+```
+
+Interpretation:
+
+- This is a valid bottleneck-finding run, not a successful 10k-read capacity
+  result.
+- The bid engine path remained healthy under read pressure: about 98.4 final
+  bid decisions/s and bid p99 5.68ms.
+- The read path became the bottleneck around the 2k/s delivered range. The 5k
+  and 10k offered read stages were not actually delivered because slow read
+  responses consumed the 4000 read VU ceiling and produced 2,057,742 dropped
+  iterations.
+- The strongest service-side attribution is DB-pool contention: `db_pool_total`
+  reached 90 and cumulative empty-pool waits exceeded 3.25M acquires / 2.28M
+  seconds.
+- Correctness was not permanently corrupted: the immediate verifier failed
+  convergence gates, but the late verifier passed after Kafka/settlement drain.
+- The honest ceiling statement is: "under this service profile, 100 bid/s stayed
+  clean while HTTP reads delivered roughly 2.1k/s; 5k/10k offered reads are not
+  proven and expose read-path optimization work."
+
 What this run still does not prove:
 
 - It does not hold 1000-10000 WebSocket connections.
 - It does not measure publish-to-receive fanout p99.
 - It does not replace S3. It is HTTP read interference only.
+
+Recommended next run:
+
+```text
+S2-read clean-ceiling search: 100 bid/s + 2000/s -> 3000/s -> 4000/s reads.
+Goal: find a judge-safe pass boundary after the 10k attack run exposed the
+read-path ceiling.
+```
 
 ## 2. What This Test Actually Is
 

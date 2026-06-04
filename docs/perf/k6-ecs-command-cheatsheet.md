@@ -51,7 +51,7 @@ READ_MAX_VUS=80 \
 bash scripts/perf/run-remote-k6.sh s2-read-interference
 ```
 
-Default 15-minute run:
+Attack / ceiling-discovery 15-minute run:
 
 ```bash
 export LABEL=s2-read-ecs-15m-$(date +%Y%m%dT%H%M%S)
@@ -66,6 +66,24 @@ BID_PRE_ALLOC_VUS=120 \
 BID_MAX_VUS=400 \
 READ_PRE_ALLOC_VUS=1500 \
 READ_MAX_VUS=4000 \
+bash scripts/perf/run-remote-k6.sh s2-read-interference
+```
+
+Clean-ceiling search after the 10k-read bottleneck run:
+
+```bash
+export LABEL=s2-read-clean-ecs-15m-$(date +%Y%m%dT%H%M%S)
+STAGE_DUR=5m \
+BID_STAGE1_RATE=100 \
+BID_STAGE2_RATE=100 \
+BID_STAGE3_RATE=100 \
+READ_STAGE1_RATE=2000 \
+READ_STAGE2_RATE=3000 \
+READ_STAGE3_RATE=4000 \
+BID_PRE_ALLOC_VUS=120 \
+BID_MAX_VUS=400 \
+READ_PRE_ALLOC_VUS=1000 \
+READ_MAX_VUS=2500 \
 bash scripts/perf/run-remote-k6.sh s2-read-interference
 ```
 

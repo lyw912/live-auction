@@ -100,10 +100,11 @@ docs/perf/pts/evidence/incoming/s2-ecs-30m-20260604T095720/
 ```
 
 Boundary: this proves 30-minute bid-decision endurance and async convergence.
-It does not prove HTTP read interference or accepted-heavy WebSocket fanout. The
-next workload is `S2-read-interference`: 20/60/100 bid attempts/s plus
-200/600/1000 HTTP reads/s across auction snapshot, leaderboard, and my-bid
-history.
+It does not prove accepted-heavy WebSocket fanout. The follow-up
+`S2-read-interference` run used 100 bid attempts/s plus 2000/5000/10000 HTTP
+reads/s across auction snapshot, leaderboard, and my-bid history. It is recorded
+as bottleneck evidence, not a pass: bid p99 stayed 5.68ms, but reads delivered
+only about 2142/s with 2,057,742 dropped iterations and DB-pool wait saturation.
 
 Debug path:
 

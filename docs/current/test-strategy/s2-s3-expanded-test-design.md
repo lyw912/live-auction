@@ -171,6 +171,25 @@ Evidence:
 - DB pool acquired/wait, slow queries, Redis command latency, CPU;
 - correctness and convergence after the run.
 
+Measured 2026-06-04 result:
+
+```text
+label       : s2-read-ecs-15m-20260604T113330
+verdict     : CURRENT_FAILING / bottleneck evidence
+why         : 100 bid/s stayed healthy, but 5k/10k read stages were not
+              delivered because read latency consumed the read VU ceiling
+bid p99     : 5.68ms
+read p99    : snapshot 1.60s, leaderboard 4.07s, my-bids 884.8ms
+throughput  : ~2142 read successes/s actual, 2,057,742 dropped iterations
+attribution : DB pool saturation, with max_conns=90 and 3,257,372 empty-pool
+              acquires in the service metrics snapshot
+correctness : immediate verifier failed convergence; late verifier passed after
+              natural Kafka/settlement drain
+```
+
+Next clean-ceiling search should lower reads to 2000/s -> 3000/s -> 4000/s
+before claiming a judge-facing pass.
+
 Initial pass gates:
 
 | Gate | Target |

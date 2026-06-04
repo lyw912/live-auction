@@ -113,6 +113,24 @@ Evidence required: bid p99 under read load, read p99 by route, dropped
 iterations, k6 host health, DB pool wait/connection counts, Redis/Kafka/PG/outbox
 convergence, and the same correctness verifier gates.
 
+Current measured status on 2026-06-04:
+
+```text
+label       : s2-read-ecs-15m-20260604T113330
+verdict     : CURRENT_FAILING / bottleneck evidence, not a clean 10k-read pass
+bid result  : ~98.4 decisions/s, p99 5.68ms, HTTP failures 0
+read result : ~2142 successes/s actual, snapshot p99 1.60s,
+              leaderboard p99 4.07s, my-bids p99 884.8ms
+k6 signal   : 2,057,742 dropped iterations; READ_MAX_VUS=4000 filled
+service     : DB pool max/total 90; empty-pool acquires 3,257,372;
+              empty-pool wait total 2,281,594s
+correctness : immediate convergence gate failed; late verifier passed after
+              Kafka/settlement drain
+```
+
+Use this as read-path ceiling evidence. Do not claim 5000/s or 10000/s read
+capacity until a later clean-ceiling run or read-path optimization proves it.
+
 ### 3b. Optional PTS chart (10 min, judge export)
 Use this only after the k6 soak is clean and when you need a polished PTS PDF.
 The current executable asset is `pts-2p4-steady-interactive-auction.jmx`; there
