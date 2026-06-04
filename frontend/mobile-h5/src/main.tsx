@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AlertTriangle, BadgeCheck, Bell, BellOff, CheckCircle2, ChevronUp, Clock3, CreditCard, Gift, Heart, History, MessageCircle, MoreHorizontal, PackageCheck, Radio, RefreshCw, Send, ShieldCheck, ShoppingCart, Truck, Trophy, Users, Wifi, WifiOff, X } from 'lucide-react';
@@ -567,7 +568,11 @@ function isDangerousActionDisabled(scenario: Scenario, connectionPhase: Connecti
 }
 
 function isTestMatrixEnabled() {
-  return new URLSearchParams(window.location.search).get('stateMatrix') === '1';
+  // import.meta.env.DEV is false in production builds, so tree-shaking removes
+  // the demo component entirely. URL param is still required as a deliberate activation
+  // signal in development mode.
+  return import.meta.env.DEV &&
+    new URLSearchParams(window.location.search).get('stateMatrix') === '1';
 }
 
 function roomIDFromPath() {
