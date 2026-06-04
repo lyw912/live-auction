@@ -5,6 +5,9 @@
 S5 proves that a user who disconnects during active bidding can reconnect with a
 stale `last_seq` and return to the authoritative auction state within
 sub-second TTCS, with zero lost/duplicate seqs and no local winner/price guess.
+Production expansion for multi-gateway reconnect, LB/NAT idle timeout, mobile
+weak networks, and cross-AZ/region failures is tracked in
+[production-ha-expansion-and-judge-defense.md](production-ha-expansion-and-judge-defense.md).
 
 ## Explain It To A ByteDance Reviewer
 
@@ -30,10 +33,13 @@ Current numbers:
 
 | Scenario | Scale | User meaning | Result |
 |---|---:|---|---|
-| clean reconnect | 20 VU | small room recovery smoke | 560 recovered, TTCS p99 17 ms, 0 gap/dup/error |
-| clean reconnect | 100 VU | reconnect storm baseline | 3700 recovered, TTCS p99 57 ms, 0 gap/dup/error |
-| clean reconnect | 200 VU | local bottleneck probe | 7393 recovered, TTCS p99 104 ms, 0 gap/dup/error |
-| Toxiproxy reset_peer | 50 VU | weak-network TCP reset proof | 1450 recovered, TTCS p99 32 ms, 0 gap/dup/error |
+| clean reconnect | 200 VU for 2m | local reconnect storm proof | `s5-20260604T221312`: 34,814 recovered, TTCS p99 87 ms, 0 gap/dup/error/truth-mismatch |
+| Toxiproxy reset_peer | 50 VU for 2m | reconnect leg through real proxy-path reset turbulence | `s5-20260604T231925`: 8,849 recovered, TTCS p99 341 ms, 0 gap/dup/error/truth-mismatch; reconnect retries=3,826, so the proxy fault was active |
+
+Server-side recovery monitor for the same network run recorded
+`ws_reconnect=21,574`, `ws_recovered(history)=16,584`,
+`ws_recovered(db)=4,913`, and `ws_recovered(snapshot_unavailable)=77`, with
+readyz still healthy after the run.
 
 ## Why This Is Not S3
 
@@ -51,9 +57,9 @@ stale price as truth.
 Q: What exactly does TTCS mean?
 
 A: `reconnect_start -> received current seq N`. The test first records the old
-`last_seq=K`, waits until the server public seq has advanced by at least 2, then
-measures how long the reconnect takes to reach `N`. In the 200 VU local run,
-TTCS p99 was 104 ms.
+`last_seq=K`, waits until the server public seq has advanced by at least 3, then
+measures how long the reconnect takes to reach `N`. In the 200 VU local clean
+run, TTCS p99 was 87 ms.
 
 Q: What does "0 gap" mean?
 
@@ -77,17 +83,21 @@ missed seqs and reconnected.
 
 Q: Does Toxiproxy prove mobile weak network?
 
-A: Partially. It proves a controlled TCP `reset_peer` on the WebSocket path does
-not break recovery correctness. It does not replace browser/device weak-network
-E2E, NAT timeout, LB idle-timeout, or carrier packet-loss testing.
+A: It is a current backend reconnect pass for a controlled TCP reset path, not a
+mobile-network certification. The accepted 2026-06-04 run used
+`ws://127.0.0.1:18081` through Toxiproxy for the reconnect recovery leg and
+recorded 3,826 reconnect attempt errors/retries, yet all 8,849 recovery
+iterations caught up with zero gaps, duplicates, truth mismatch, or final
+recovery errors. It still does not replace browser/device weak-network E2E, NAT
+timeout, LB idle-timeout, or carrier packet-loss testing.
 
 Q: Why not PTS for S5?
 
 A: PTS is useful for distributed IP charts and socket-scale optics. S5's core
 claim is correctness of `last_seq` recovery: no gap, no duplicate, no stale
 truth. The local k6 harness directly asserts those invariants. Since 200 VU local
-p99 is 104 ms against a 2 s target, PTS is optional unless the claim changes to
-public-network reconnect storms.
+clean p99 is 87 ms against a 2 s target, PTS is optional unless the claim changes
+to public-network reconnect storms.
 
 Q: What would a production reviewer still attack?
 
@@ -112,11 +122,19 @@ A:
 - Production Kafka/Redis HA handled as S4 expansion: Kafka 3 brokers RF=3
   minISR=2 `acks=all`; Redis HA with managed failover/Sentinel and explicit
   fail-closed behavior.
+- Full production HA and weak-network drilldowns are documented in
+  [production-ha-expansion-and-judge-defense.md](production-ha-expansion-and-judge-defense.md),
+  including multi-gateway, LB/NAT idle-timeout, mobile radio, and AZ/region
+  failure test gates.
 
 ## Current Verdict
 
-S5 is a strong local pass for reconnect recovery correctness and single-node
-reconnect storm behavior. It is not yet a production weak-network certification.
+S5 clean reconnect is a strong local pass for reconnect recovery correctness and
+single-node reconnect storm behavior. S5 network/reset-peer is also a current
+local pass for backend reconnect recovery through a controlled Toxiproxy reset
+path. It is not yet a production weak-network certification because browser,
+mobile carrier, LB idle-timeout, and multi-gateway landing tests remain P1
+follow-ups.
 
 ## References Used For The Defense
 

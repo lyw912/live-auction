@@ -61,7 +61,7 @@ Each reconnect VU:
 2. opens WS with current last_seq, receives the initial recovery/snapshot, then
    closes intentionally
 3. waits until a low-rate accepted-bid source has advanced public seq by at
-   least MISSED_EVENTS=2
+   least MISSED_EVENTS=3
 4. reconnects with stale last_seq=K
 5. measures TTCS = reconnect start -> reaches current seq N
 6. checks no seq gap, no duplicate seq, and no snapshot truth mismatch
@@ -77,30 +77,47 @@ Skipped iterations:
 - Skipped iterations are not counted as recovery success or failure because no
   reconnect gap was created.
 
-## Evidence: 2026-06-03 Local Runs
+## Evidence: 2026-06-04 Local Runs
 
 Environment:
 
 - Backend: local Linux server on `127.0.0.1:18080`.
 - Identity: real PTS session CSV tokens, not mock headers.
-- Runtime profile after `SESSION_COUNT=1000 bash tests/pts/reset-l4b-final-second-pressure.sh`.
+- Runtime profile after `SESSION_COUNT=1000 L4B_PROFILE=pts-1b bash tests/pts/reset-l4b-final-second-pressure.sh`.
 - Kafka/Redis/PostgreSQL are single local containers; this is a reconnect logic
   and single-node recovery stress, not multi-AZ production HA proof.
 
-| Run | Mode | Reconnect VU | Duration | Accepted update source | Recovered | TTCS p99 | Errors | Gaps | Duplicates | Evidence |
+| Run | Mode | Reconnect VU | Duration | Accepted update source | Recovered | TTCS p99 | Errors | Gaps | Duplicates | Verdict | Evidence |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| `s5-clean-20vu-pass-20260603T0302` | clean close | 20 | 20s | 8/s, 4 VU | 560 | 17 ms | 0 | 0 | 0 | `docs/perf/pts/evidence/incoming/s5-clean-20vu-pass-20260603T0302/` |
-| `s5-clean-100vu-20260603T0304` | clean close | 100 | 25s | 30/s, 12 VU | 3700 | 57 ms | 0 | 0 | 0 | `docs/perf/pts/evidence/incoming/s5-clean-100vu-20260603T0304/` |
-| `s5-clean-200vu-20260603T0306` | clean close | 200 | 25s | 60/s, 24 VU | 7393 | 104 ms | 0 | 0 | 0 | `docs/perf/pts/evidence/incoming/s5-clean-200vu-20260603T0306/` |
-| `s5-network-50vu-20260603T0308` | Toxiproxy `reset_peer` | 50 | 20s | 20/s, 8 VU | 1450 | 32 ms | 0 | 0 | 0 | `docs/perf/pts/evidence/incoming/s5-network-50vu-20260603T0308/` |
+| `s5-20260604T221312` | clean close | 200 | 2m | 10/s, 5 VU | 34,814 | 87 ms | 0 | 0 | 0 | **PASS** | `docs/perf/pts/evidence/incoming/s5-20260604T221312/` |
+| `s5-20260604T231925` | initial online WS clean, reconnect leg through Toxiproxy `reset_peer` at `ws://127.0.0.1:18081` | 50 | 2m | 10/s, 5 VU | 8,849 | 341 ms | 0 | 0 | 0 | **PASS** | `docs/perf/pts/evidence/incoming/s5-20260604T231925/` |
+| `s5-20260604T221634` | Toxiproxy `reset_peer`, real proxy path `ws://127.0.0.1:18081` | 50 | 2m | 10/s, 5 VU | 2,552 | 17 ms | 2,697 | 0 | 0 | **NOT PASS / diagnostic** | `docs/perf/pts/evidence/incoming/s5-20260604T221634/` |
 
 Best current claim:
 
-> Under local single-node S5, 200 concurrent reconnect users recovered 7393
-> stale-`last_seq` sessions with TTCS p99 104 ms, zero recovery errors, zero seq
-> gaps, zero duplicate seqs, and zero truth mismatch. Under Toxiproxy WS
-> `reset_peer` weak-network mode, 50 VU recovered 1450 sessions with TTCS p99
-> 32 ms and the same zero-error correctness gates.
+> Under local single-node S5 clean reconnect, 200 concurrent reconnect users over
+> 2 minutes recovered 34,814 stale-`last_seq` sessions with TTCS p99 87 ms, zero
+> recovery errors, zero seq gaps, zero duplicate seqs, and zero truth mismatch.
+
+> Under the current Toxiproxy reset-peer network harness, 50 reconnect VU over
+> 2 minutes recovered 8,849 stale-`last_seq` sessions through the proxy path,
+> with TTCS p99 341 ms, zero recovery errors, zero seq gaps, zero duplicate seqs,
+> and zero truth mismatch. The run still observed network turbulence:
+> `s5_reconnect_attempt_errors_total=3826` and `s5_reconnect_retries_total=3826`,
+> so the pass is not a fake clean-path bypass.
+
+Server-side recovery monitor for `s5-20260604T231925` recorded 21,574
+`ws_reconnect` events and `ws_recovered` source distribution:
+history=16,584, db=4,913, snapshot_unavailable=77. That confirms recovery used
+the real backend recovery paths instead of relying only on client-side k6 checks.
+
+Important harness semantics for the network pass: the initial online connection
+uses the clean local WS endpoint, then the reconnect recovery leg uses
+Toxiproxy. That matches the business scenario: a user was already online,
+disconnects, misses seqs, and then reconnects over a lossy/reset-prone network.
+Earlier attempts that routed the initial online handshake through the same
+30%-reset toxic failed before the test reached the recovery scenario; those are
+kept as diagnostics, not pass evidence.
 
 ## Failure And Harness Fixes
 
@@ -113,18 +130,26 @@ because they show the harness was debugged instead of papered over.
 | `s5-clean-20vu-20260603T0254` | k6 could not open session CSV | k6 `open()` path was relative to script directory | default CSV path changed to `../../docs/perf/pts/...` |
 | `s5-clean-20vu-20260603T0256` | no missed window, no recovered sessions | bid source amount became stale after first accepted bid | bid source now reads current price and bids `current + increment` |
 | `s5-clean-20vu-20260603T0300` | 560 recovered but threshold failed | iterations without enough new seq were counted as recovery errors | no-gap iterations now count as skipped, not recovery failure |
+| `s5-20260604T220852` | CSV had only header; k6 raised token undefined errors | pressure CSV was generated without seeded PTS users | reran `SESSION_COUNT=1000 L4B_PROFILE=pts-1b reset-l4b-final-second-pressure.sh`; CSV became 1001 lines |
+| `s5-20260604T221634` | Toxiproxy network run failed `s5_recovery_errors==0` with 2697 errors | real reset-peer turbulence exposed a client/harness retry gap; successful recoveries remained ordered and fast | added bounded reconnect retry metrics and separated initial online WS from the toxic reconnect leg; `s5-20260604T231925` is the fixed PASS |
+| `s5-20260604T224839` | invalid run flooded `token undefined` | reset had left `pts-1ab-1000vu-sessions.csv` with only the header | added session CSV validation so empty/undersized CSV fails immediately instead of producing noisy recovery errors |
+| `s5-20260604T225824` | network run still had 2539 recovery errors | 30% reset toxic hit both the initial online socket and the reconnect leg; many iterations failed before entering the recovery scenario | added bounded retry metrics; kept run as diagnostic |
+| `s5-20260604T230907` | recovery errors dropped to 2 but threshold still failed | 8-attempt retry absorbed most resets, but a few initial online handshakes still failed under toxic | changed network-mode semantics so initial online WS is clean and only the reconnect recovery leg uses Toxiproxy |
+| `s5-20260604T231925` | current network pass | initial online connection clean, reconnect leg through Toxiproxy reset_peer; recovery retry counters prove proxy turbulence was present | 8849 recovered, TTCS p99 341ms, recovery errors/gaps/dups/truth mismatch all 0 |
+| network mode default `WS_URL` | `DISCONNECT_MODE=network` could still use default `ws://127.0.0.1:18080` unless caller explicitly set `WS_URL` | that would bypass Toxiproxy and create a false pass | runner now defaults network mode to `ws://127.0.0.1:18081` |
 
 ## PTS Decision
 
-Do not spend PTS for S5 yet.
+Do not spend PTS for S5 unless the claim changes to public-network reconnect
+storms or external optics.
 
 Reason:
 
 - S5 correctness depends on `last_seq`, history replay/snapshot fallback, and UI
   stale-state behavior; local k6 + backend evidence is more direct than a PTS
   WebSocket hold chart.
-- The current local result has large SLO margin: 200 VU clean TTCS p99 104 ms
-  against a 2 s recovery target.
+- The current local result has large SLO margin: 200 VU clean TTCS p99 87 ms
+  and 50 VU Toxiproxy reset-peer TTCS p99 341 ms against a 2 s recovery target.
 - PTS adds value only if the claim changes to public-network reconnect storms,
   multi-source-IP socket exhaustion, or polished external charts. It does not
   replace the current no-gap/no-duplicate correctness checks.
@@ -137,7 +162,9 @@ Current local proof is intentionally not production HA:
 - No load balancer, no multi-instance sticky/session routing, no mobile carrier
   network, no cross-AZ failure.
 - Toxiproxy `reset_peer` is a controlled TCP fault, not a full browser/device
-  weak-network E2E test.
+  weak-network E2E test. Current 2026-06-04 reset-peer evidence is pass evidence
+  for backend reconnect recovery through a lossy proxy path, not for mobile
+  carrier behavior or load-balancer idle-timeout behavior.
 
 Production path for a ByteDance/TikTok Shop-level review:
 

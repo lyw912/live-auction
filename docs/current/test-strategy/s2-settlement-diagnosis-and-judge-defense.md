@@ -18,6 +18,7 @@ S2 currently proves two different things with different confidence levels:
 | Async settlement convergence <= 100s | FAIL / near miss | Same run timed out at 102s with Kafka lag 1371, settlement_total 69774/70999 |
 | Async settlement convergence <= 110s | FAIL | `s2-stair-1000-workers4-110s-20260603T1928`: timed out at 112s with Kafka lag 1275, settlement_total 69925/70999 |
 | Async settlement convergence within 120s product buffer | ACCEPTABLE WITH POLL DISCLOSURE | `s2-stair-1000-120s-20260603T1942`: 119s still had lag 286; the 122s sample confirmed lag 0, settlement_total 70999/70999, Redis pending 0, outbox unpublished 0 |
+| Decision/reject-heavy convergence-drain | PASS | `s2-convergence-drain-decision-ecs-20260604T1937`: independent same-VPC k6 100/s -> 200/s -> 400/s -> 600/s, 49,049 decisions, 6 accepted, 49,043 rejected, k6 clean, final settlement/outbox effectively caught up by test end, verifier all P0/P1 PASS |
 | Direct-SETTLED fast rejected SQL | REJECTED and reverted | `s2-stair-1000-directsettled-100s-20260602T212330`: worse lag 32033 at 101s; verifier failed due to incomplete convergence |
 | HTTP read-interference under bid load | PASS at display profile; attack profiles remain failing | `s2-read-display-postfix-ecs-15m-20260604T140509`: 100 bid/s plus 1500/1800/2000 HTTP reads/s clean pass after P0/P1 fixes, dropped 0, bid p99 3.76ms, snapshot p99 11.54ms, leaderboard p99 4.46ms, my-bids p99 0.87ms. The earlier 2000/5000/10000 and 2000/3000/4000 runs remain CURRENT_FAILING bottleneck evidence. |
 | Accepted-heavy capacity at 400/s ceiling | PASS with late-drain caveat | `s2-capacity-accepted-clean400-p1-ecs-20260604T181824`: k6 exit 0, dropped 0, HTTP failed 0, 101,374 final decisions, 87,374 accepted, 14,000 rejected, bid p99 37ms; final verifier PASS after Kafka/PG/outbox drained. Not immediate async zero-backlog evidence; first samples still had Kafka lag. |
@@ -178,6 +179,34 @@ Say:
 > are persisted and verified. We do not use this run to claim WebSocket fanout
 > capacity or high-RPS read interference. Those are separate S2-read and S3
 > workloads."
+
+Update after the independent k6 S2-convergence-drain run on 2026-06-04:
+
+> "We ran a focused decision/reject-heavy convergence-drain profile from an
+> independent same-VPC k6 host: 100/s -> 200/s -> 400/s -> 600/s, 30s hold per
+> stage, `AMOUNT_MODE=time_ladder`, `NOISE_PCT=20`. The run produced 49,049
+> final decisions with zero dropped iterations, zero HTTP failures, and no
+> auth/ACL/admission/non-decision contamination. Only 6 decisions were accepted;
+> 49,043 were normal rejected decisions, matching the purpose of this workload.
+> Decision p99 was 4ms and p99.9 18ms. Service-side verification found
+> 49,049/49,049 settlements, Kafka lag 0, Redis pending 0, Redis stream length
+> 49,049, outbox unpublished 0, DLQ PASS, and every P0/P1 invariant PASS. A
+> dedicated convergence poll was not started exactly at k6 end, so this run
+> should not claim an exact sampled k6_end-to-zero value. DB timestamps show the
+> final outbox publish at 19:53:41.981 CST and final settlement update at
+> 19:53:45.828 CST, approximately the k6 ramp-down end. This is therefore a
+> clean S2 decision/reject-heavy convergence pass, not an accepted-heavy 600/s
+> pass."
+
+Why this did not repeat the older 100-122s post-run drain:
+
+- This was not accepted-heavy. Accepted decisions were 6/49,049, so the run did
+  not create one public event/outbox fanout source per decision.
+- The pressure window was shorter and smoother than the older 70k-100k local
+  stair diagnostics, letting settlement keep up during the run.
+- The retained rejected-settlement and relay optimizations were already present.
+  The direct-SETTLED shortcut remains rejected because it worsened convergence
+  and weakened audit/payment defensibility.
 
 Do not say:
 

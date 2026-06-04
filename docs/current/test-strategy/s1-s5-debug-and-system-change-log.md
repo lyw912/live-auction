@@ -22,11 +22,18 @@ Current evidence snapshot:
 | Scenario | Current evidence | Verdict boundary |
 |---|---|---|
 | S1 final-second contention | `5D92X7QG`: 1000 unique bids, 7 accepted, 993 rejected, 0 HTTP failures, correctness PASS; PTS sampling p99 64ms, server gateway p99 about 46ms | Correctness strong; strict client-side p99 <=50ms needs rerun or explicit server-vs-client boundary |
-| S2 steady soak | `s2-ecs-30m-20260604T095720`: 85,499 decisions over independent-ECS 20/s -> 60/s -> 100/s 30-minute open-model soak, HTTP p99 3.30ms, custom decision p99 4ms, dropped 0, all verifier gates PASS | Bid-decision endurance and convergence PASS; read-interference and accepted-heavy fanout are separate, not claimed from this run |
+| S2 steady soak / convergence | `s2-ecs-30m-20260604T095720`: 85,499 decisions over independent-ECS 20/s -> 60/s -> 100/s 30-minute open-model soak, HTTP p99 3.30ms, custom decision p99 4ms, dropped 0, all verifier gates PASS. `s2-convergence-drain-decision-ecs-20260604T1937`: 49,049 decision/reject-heavy decisions over 100/s -> 200/s -> 400/s -> 600/s, decision p99 4ms, final Kafka/Redis/PG/outbox zero, verifier PASS | Bid-decision endurance and decision/reject-heavy convergence PASS; read-interference and accepted-heavy fanout are separate, accepted-heavy 600/s remains attack evidence |
 | S3 fanout | `s3-local-scale-1000-liveonly-20260602T2303`: 1000 WS, 301 accepted updates, 276,000 receive samples, fanout p99 22ms, viewer errors 0 | 1000+ single-room local PASS; 2000/10k headline unproven |
-| S4 fault resilience | Redis/backend/PG/Kafka/flush/both/Toxiproxy partial all pass local gates; bidder RTO 2/2/3/16/2/11/3s; full convergence worst 33s; RPO=0 | Strong local single-node chaos proof; not Kafka RF=3/Redis HA production benchmark |
+| S4 fault resilience | 2026-06-04 P0/P1 local pass: Redis/backend/PG/Kafka/flush/both; bidder RTO 2/14/2/12/2/12s; full convergence worst 29s; RPO=0. Independent VPC k6 Kafka run `s4-p1-kafka-independent-20260604T202510` also pass. P2 Redis partial now passes with `pts-1c-partial-20260604T224626`: 4000 decisions, 200 paused, RTO 8s, convergence 25s, verifier PASS. | Strong local single-node chaos proof including one Redis proxy-path partial-network fault; not Kafka RF=3/Redis HA production benchmark |
 | S4 07/08 | `07`: 600 decisions over 512 relay batch ceiling -> 600/600 relayed. `08`: same SOLD ledger message 3x -> one settlement/order/outbox effect | P0 depth gates now PASS; backlog-age observability remains P1 |
-| S5 reconnect | Clean 200 VU: 7393 recovered, TTCS p99 104ms, 0 gap/dup/error. Toxiproxy reset_peer 50 VU: 1450 recovered, TTCS p99 32ms, 0 gap/dup/error | Backend/local reconnect PASS; browser weak-network E2E still P1 |
+| S5 reconnect | Clean 200 VU for 2m: `s5-20260604T221312`, 34,814 recovered, TTCS p99 87ms, 0 gap/dup/error/truth mismatch. Toxiproxy reset_peer 50 VU for 2m: `s5-20260604T231925`, 8,849 recovered, TTCS p99 341ms, reconnect retries 3,826, 0 gap/dup/error/truth mismatch. | Clean reconnect and backend proxy-path reconnect PASS; browser/mobile/LB weak-network E2E still P1 |
+
+Production HA and weak-network expansion is documented separately in
+[`production-ha-expansion-and-judge-defense.md`](production-ha-expansion-and-judge-defense.md).
+That document preserves the current boundary honestly: Kafka RF=3/minISR=2,
+Redis HA failover/split-brain fencing, multi-WS-gateway reconnect, LB/NAT idle
+timeout, real mobile weak networks, and cross-AZ/cross-region failures are
+concrete next topology tests, not claims already proven by local S4/S5.
 
 ## 2. System-Code Changes Made Because Of S1-S5
 
@@ -40,7 +47,7 @@ evidence collectors are excluded from this table.
 | ACL error ordering under Redis loss | `backend/internal/redisengine/engine.go` Lua script | ACL membership check moved after state/paused/reconciling checks. | After Redis hot state loss, ACL cache may be gone too. Returning `ACL_FORBIDDEN` would mislead the user and hide that the engine is reconciling. Correct behavior is fail-closed/recovering semantics first. | Redis state-loss tests and S4 Redis FLUSHALL/reconciling evidence |
 | Relay cursor safety | `backend/internal/redisengine/engine.go` | `relayAuctionLogBatch` now fails the pass on missing payload, malformed payload, auction-id mismatch, or `AppendBatch` returning fewer/more ledger messages than input results. | S4 07 forced us to reason about Redis Stream cursor movement. Skipping bad entries while advancing the cursor can silently lose a bid decision. The safer behavior is fail/alert/retry. | `TestRelayBackpressureDrainsBeyondBatchCeiling`; adjacent relay tests; `tests/chaos/07-relay-backpressure.sh` PASS |
 | Checkpoint availability on resume | `backend/internal/redisengine/engine.go` | Resume path can upsert a checkpoint from current PostgreSQL state before writing Redis state snapshot. | Redis data-loss recovery needs a checkpoint/current-state anchor. Local one-auction FLUSHALL recovery passed, but docs now honestly limit the 2s result to local scope. | S4 Redis FLUSHALL evidence; Redis state-loss integration tests |
-| WebSocket close/read detection | `backend/internal/realtime/server.go` | `ServeWS` now derives connection context from `conn.CloseRead(connCtx)` so client close/error cancels keepalive/recovery work promptly. | S5 reconnect testing needs real disconnects, not server goroutines waiting until timeout. Prompt read-side close detection reduces stale sessions and makes reconnect TTCS meaningful. | S5 clean and Toxiproxy reset_peer runs: 0 gap/dup/error; TTCS p99 104ms at 200 VU |
+| WebSocket close/read detection | `backend/internal/realtime/server.go` | `ServeWS` now derives connection context from `conn.CloseRead(connCtx)` so client close/error cancels keepalive/recovery work promptly. | S5 reconnect testing needs real disconnects, not server goroutines waiting until timeout. Prompt read-side close detection reduces stale sessions and makes reconnect TTCS meaningful. | S5 clean 200 VU 2m: 34,814 recovered, TTCS p99 87ms, 0 gap/dup/error/truth mismatch |
 | Rejected settlement materialization | `backend/internal/redisengine/engine.go` current path | Rejected decisions remain materialized with bid row, idempotency record, settlement audit, and optional public event only when the reject should broadcast. | S2 proved rejected decision volume is the settlement bottleneck. We considered a more aggressive direct-SETTLED/skip path, measured it, and rejected it because it worsened lag and risked verifier/payment safety. | S2 direct-SETTLED failed run; current set-based/log-suppressed path retained; verifier later PASS |
 | Accepted settlement batching | `backend/internal/redisengine/engine.go` | Settlement worker batches safe same-auction, same-epoch, consecutive `ENGINE_ACCEPTED` Kafka prefixes in one transaction while still writing bids, auction events, outbox, idempotency, settlement rows, auction seq/price/winner, and checkpoint. It now continues through multiple safe prefixes in the same fetched Kafka batch instead of returning after the first prefix; mixed, gap, stale, terminal, or replay cases still create boundaries or fall back. | `s2-capacity-accepted-ecs-20260604T150519` and `s2-capacity-accepted-postfix-ecs-20260604T161315` both proved Redis decisions stayed fast at the 50/100/200/400/600 accepted-heavy stair, but async PG settlement/Kafka lag remained the end-to-end bottleneck. The current fix is incremental drain-efficiency work, not a 600/s pass claim. | `TestKafkaSettlementBatchesAcceptedPrefix`, `TestKafkaSettlementBatchesAcceptedPrefixBeforeReject`, `TestKafkaSettlementBatchesAcceptedSuffixAfterReject`; next independent-ECS rerun should first target a clean 50/100/200/300/400 ceiling |
 
@@ -118,6 +125,7 @@ Debug path:
 | Current 100s gate | `s2-stair-1000-setbased-logsuppressed-100s-20260602T211311`: 70,999 decisions, p99 5.44ms, p99.9 32.21ms, dropped 0, fail at 102s with lag 1371; verifier later PASS. | Foreground PASS; convergence near miss. Need 110s rerun before calling convergence PASS. |
 | Direct-SETTLED trial | `s2-stair-1000-directsettled-100s-20260602T212330`: p99 5.36ms but lag 32033 and verifier incomplete. | Rejected and reverted. Faster-looking SQL idea was not kept because it harmed convergence/correctness. |
 | Accepted-heavy capacity stair | `s2-capacity-accepted-ecs-20260604T150519`: k6 exit 0, dropped 0, HTTP failed 0, 131,574 final decisions, 125,376 accepted, 6,198 rejected, p99 3.89ms, p99.9 7.47ms; PG settlement only about 61k and Kafka lag about 77,888 at collection. `s2-capacity-accepted-postfix-ecs-20260604T161315`: k6 still clean, 131,574 decisions, 107,624 accepted, p99 13ms, but immediate service sample still had only about 69.7k accepted settlements and Kafka lag 64,476. | Split verdict remains. Redis synchronous decision layer is strong; async settlement/outbox is the capacity knee. Accepted-prefix batching improved code shape but 600/s is still attack evidence, not a clean pass. Next clean-ceiling target is 50/100/200/300/400. |
+| Decision/reject convergence drain | `s2-convergence-drain-decision-ecs-20260604T1937`: independent same-VPC k6 used service private IP `172.16.179.112`, not public `47.113.223.90`; 100/s -> 200/s -> 400/s -> 600/s, 30s hold per stage, 49,049 final decisions, 6 accepted, 49,043 rejected, decision p99 4ms, p99.9 18ms, dropped 0, HTTP failed 0. Service verifier: 49,049/49,049 settlements, Kafka lag 0, Redis pending 0, Redis stream 49,049, outbox unpublished 0, all P0/P1 PASS. Final outbox publish `19:53:41.981 CST`, final settlement update `19:53:45.828 CST`, approximately the k6 ramp-down end. | Clean `S2-convergence-drain` PASS for normal decision-heavy traffic. It does not contradict older 100-122s local drain evidence because this run was smaller, smoother, later-code, and only 6 accepted decisions. Do not use it to claim accepted-heavy 600/s immediate drain. |
 
 System-code impact:
 
@@ -168,12 +176,12 @@ Current live-fault evidence:
 | Fault | Result |
 |---|---|
 | Redis SIGKILL | RTO 2s, convergence 19s, fault window accepted=0 |
-| backend/settlement crash | RTO 2s, convergence 17s, 1200 failed attempts, 0 duplicate settlement |
-| PostgreSQL SIGKILL | RTO 3s, convergence 19s, 1000 decisions during PG fault, 0 unsettled accepted after recovery |
-| Kafka SIGKILL | bidder RTO 16s, full convergence 33s, Redis pending drained, Kafka lag 0 |
+| backend/settlement crash | RTO 14s, convergence 29s, 1200 failed attempts, 0 duplicate settlement |
+| PostgreSQL SIGKILL | RTO 2s, convergence 18s, 1000 decisions during PG fault, 0 unsettled accepted after recovery |
+| Kafka SIGKILL | bidder RTO 12s, full convergence 28s, Redis pending drained, Kafka lag 0 |
 | Redis FLUSHALL | RTO 2s, convergence 20s, `RECONCILING`, settlements 1000/1000 |
-| Redis+Kafka | RTO 11s, convergence 28s, accepted-in-window=0 |
-| Redis timeout via Toxiproxy | RTO 3s, convergence 19s, 3000 paused, settlements 1000/1000 |
+| Redis+Kafka | RTO 12s, convergence 28s, accepted-in-window=0 |
+| Redis partial network via Toxiproxy | PASS in current run: `pts-1c-partial-20260604T224626` had 4000 decisions, 200 paused, 0 reconciling, 0 HTTP errors, fault-window paused=200, recovery RTO 8s, restore-start-to-final convergence 25s, verifier PASS |
 
 Debug path and system changes:
 
@@ -186,10 +194,14 @@ Debug path and system changes:
 
 Boundary kept honest:
 
-- Kafka 16s / 33s is local single-broker readiness plus drain, not production
-  leader-election proof.
+- Kafka 12s / 28s is local single-broker readiness plus drain, not production
+  leader-election proof. Settlement crash is the current worst full convergence
+  at 29s.
 - Redis FLUSHALL 2s is local one-auction rebuild evidence, not a Redis cluster
   restore SLA.
+- S4 P2 partial weak Redis network is counted as pass only for the current
+  reset-peer + timeout toxic. Earlier latency-only/timeout-only attempts remain
+  diagnostic failures and are not used as pass evidence.
 - Production path is Kafka RF=3/minISR=2/acks=all/unclean election disabled,
   Redis HA/Sentinel or managed Redis, and backlog-age observability.
 
@@ -197,9 +209,11 @@ Judge answer:
 
 > "S4's strongest claim is correctness, not magic HA. Redis truth loss fails
 > closed, PG/Kafka faults do not lose accepted decisions, Kafka redelivery does
-> not duplicate settlement, and payment/finality waits for convergence. The
-> single-node local setup is functional chaos evidence; production HA is a
-> separate RF=3/Redis-HA expansion path."
+> not duplicate settlement, and payment/finality waits for convergence. P0/P1 are
+> pass locally and Kafka also passed with independent VPC k6 pressure. P2 partial
+> Redis proxy-path reset/timeout now also reaches clients as fail-closed paused
+> responses and converges. Production HA is a separate RF=3/Redis-HA expansion
+> path."
 
 ### S5 Reconnect Recovery
 
@@ -215,15 +229,18 @@ Debug path:
 | no missed window | bid source amount became stale after first accepted bid | bid source now reads snapshot and bids `current + increment` |
 | 560 recovered but threshold failed | iterations without enough missed seq were counted as recovery errors | no-gap iterations count as skipped, not failed recovery |
 | server did not always detect client close promptly enough for clean reconnect semantics | websocket read side was not tied into connection context | `conn.CloseRead(connCtx)` now cancels connection work on client close/error |
+| `s5-20260604T220852` invalid | session CSV contained only header, so k6 users had no token | reran `SESSION_COUNT=1000 L4B_PROFILE=pts-1b reset-l4b-final-second-pressure.sh`; valid CSV has 1001 lines |
+| S5 network default could bypass proxy | `DISCONNECT_MODE=network` left `WS_URL` at the normal 18080 default unless explicitly set | runner now defaults network mode to `ws://127.0.0.1:18081`; `s5-20260604T221634` explicitly used that proxy path |
+| S5 network reset-peer failed | persistent reset turbulence produced 2697 `s5_recovery_errors` while successful recoveries were fast and ordered | added bounded reconnect retry metrics and separated initial online connection from the toxic reconnect leg |
+| S5 network invalid/diagnostic reruns | `s5-20260604T224839` had empty session CSV/token errors; `s5-20260604T225824` had 2539 recovery errors; `s5-20260604T230907` had only 2 recovery errors but still failed | added session CSV validation, retry counters, and clean-initial/toxic-reconnect harness semantics |
 
 Current evidence:
 
 | Run | Result |
 |---|---|
-| Clean 20 VU | 560 recovered, TTCS p99 17ms, 0 gap/dup/error |
-| Clean 100 VU | 3700 recovered, TTCS p99 57ms, 0 gap/dup/error |
-| Clean 200 VU | 7393 recovered, TTCS p99 104ms, 0 gap/dup/error |
-| Toxiproxy reset_peer 50 VU | 1450 recovered, TTCS p99 32ms, 0 gap/dup/error |
+| `s5-20260604T221312` clean 200 VU, 2m | 34,814 recovered, TTCS p99 87ms, 0 gap/dup/error/truth mismatch, 267,750 HTTP reqs failed 0, 69,828 WS sessions |
+| `s5-20260604T231925` Toxiproxy reset_peer 50 VU, 2m | 8,849 recovered, TTCS p99 341ms, reconnect attempt errors/retries 3,826, 0 recovery errors, 0 gap/dup/truth mismatch, HTTP failed 0, k6 exit 0 |
+| `s5-20260604T221634` Toxiproxy reset_peer 50 VU, 2m | 2,552 recovered, TTCS p99 17ms, 0 gap/dup/truth mismatch, but 2,697 recovery errors; k6 exit 99, diagnostic NOT PASS |
 
 System-code impact:
 
@@ -234,9 +251,11 @@ System-code impact:
 Judge answer:
 
 > "S5 is not fanout p99. It measures time-to-current-state after a real missed
-> seq window. At 200 local reconnect VU, 7393 stale sessions recovered to current
-> seq with TTCS p99 104ms and no gaps/duplicates. Browser weak-network UI proof
-> is still a P1 follow-up."
+> seq window. At 200 local reconnect VU for 2 minutes, 34,814 stale sessions
+> recovered to current seq with TTCS p99 87ms and no gaps/duplicates/errors.
+> The reset-peer network run now also passes for backend reconnect recovery:
+> 8,849 stale sessions recovered through Toxiproxy with TTCS p99 341ms and no
+> gaps/duplicates/errors. Browser weak-network UI proof is still a P1 follow-up."
 
 ## 4. Why These Changes Show Engineering Maturity
 
@@ -244,7 +263,7 @@ Judge answer:
 |---|---|
 | Correct metric boundary | S3 59.6s was not hidden; it was classified as history/recovery contamination and separated from live fanout. |
 | Data-driven rejection of bad optimization | S2 direct-SETTLED sounded faster but produced worse lag and incomplete verifier, so it was reverted. |
-| Product safety over raw speed | S4 Kafka full convergence can be 33s, so payment/finality is gated instead of pretending bidding RTO means finance finality. |
+| Product safety over raw speed | S4 back-office convergence can lag bidder recovery, so payment/finality is gated instead of pretending bidding RTO means finance finality. |
 | Fail-closed under uncertainty | Redis state loss returns reconciling/paused semantics and requires controlled resume. |
 | At-least-once is handled at business layer | S4 08 does not claim Kafka exactly-once; it proves idempotent settlement/order/outbox effect. |
 | Test artifact honesty | S1 strict PTS p99 and S2 100s convergence are explicitly marked as rerun/near-miss boundaries. |
@@ -290,7 +309,8 @@ election disabled, and a separate broker-loss chaos profile.
 |---|---|---|
 | P0/P1 | Rerun S1 for clean strict client p99 <=50ms or write a formal server-vs-client boundary review | Current S1 correctness is strong, but PTS client p99 64ms is not a strict PASS |
 | P0/P1 | Rerun S2 with `S2_CONVERGENCE_TIMEOUT_SECONDS=110` | Current 100s gate is a near miss; 110s target needs proof |
-| P1 | Browser weak-network payment/bid CTA E2E | Backend gates exist; visible H5 disabled-state proof is still needed |
+| P1 | Browser weak-network payment/bid CTA E2E | Backend S5 network now passes; visible H5 disabled-state proof is still needed |
 | P1 | Relay backlog age / cursor-lag observability | S4 07 proves 600/600 drain; production reviewers will ask how backlog age alerts |
+| P2 | Optional latency-only S4 enhancement | Current pass uses reset-peer + timeout; latency-only remains diagnostic coverage, not the fail-closed baseline |
 | P1 | S3 PTS cost variant at 2000 WS and/or controlled local 10k hold | Current 1000+ local pass is credible; 10k headline is unproven |
 | P1 | Read-interference and multi-room gates | S1-S5 focus one hot auction; official scope includes room-level routing and full-stack traffic |

@@ -38,10 +38,10 @@ test, never cited as user-facing RTO).
 | **F-redis** | Redis SIGKILL | fail-closed: `ENGINE_PAUSED`, **zero accepted decisions** during fault | 异常兜底 | **P0** | RTO 2 s ✅ |
 | **F-settle** | backend/settlement worker SIGKILL | Kafka redelivers; **zero duplicate settlement rows** | 绝不扣两次钱 | **P0** | RTO 2 s, 0 dup ✅ |
 | **F-pg** | PostgreSQL SIGKILL | hot path keeps deciding (PG-independent); **zero unsettled** after recovery | 数据一致性 | **P0** | RTO 3 s ✅ |
-| **F-kafka** | Kafka SIGKILL | hot path continues `ENGINE_DURABLE`; Redis pending/relay lag is visible; relay drains after restart | durability | P1 | RTO 16 s ✅ |
+| **F-kafka** | Kafka SIGKILL | hot path continues `ENGINE_DURABLE`; Redis pending/relay lag is visible; relay drains after restart | durability | P1 | RTO 12 s ✅ |
 | **F-flush** | Redis `FLUSHALL` (state lost, process lives) | detect loss → `RECONCILING` → controlled rebuild → resume | 缓存状态丢失 | P1 | RTO 2 s ✅ |
-| **F-both** | Redis + Kafka SIGKILL | correlated failure: fail-closed, no accepted decisions in window | resilience | P1 | RTO 11 s ✅ |
-| **F-partial** | Toxiproxy Redis timeout | weak-network/partial outage: `ENGINE_PAUSED`, no admission contamination, recovery | depth | P2 | RTO 3 s ✅ |
+| **F-both** | Redis + Kafka SIGKILL | correlated failure: fail-closed, no accepted decisions in window | resilience | P1 | RTO 12 s ✅ |
+| **F-partial** | Toxiproxy Redis `reset_peer` + timeout | weak-network/partial outage should reach clients as `ENGINE_PAUSED`/`RECONCILING`/HTTP error | depth | P2 | current reset/timeout toxic PASS; latency-only/timeout-only attempts remain diagnostic failures |
 | **F-relay-backpressure** | Redis decision stream exceeds relay batch ceiling | relay drains backlog over multiple passes; no silent loss/duplicate cursor advance | async backlog safety | P0 depth | 600/600 relayed ✅ |
 | **F-settlement-idempotency** | same Kafka ledger message delivered 3x | at-least-once replay has exactly one settlement/order/outbox business effect | 绝不扣两次钱 | P0 depth | 3x -> 1 effect ✅ |
 
@@ -50,7 +50,7 @@ fail-closed + never double-charges + never loses an accepted bid.*
 
 ## 3.1 Current Evidence Snapshot
 
-All rows below are current local evidence from 2026-06-03, `L1F_PROFILE=rto`,
+All rows below are current local evidence from 2026-06-04, `L1F_PROFILE=rto`,
 `K6_VUS=200`, `K6_DURATION=25s`, `SLEEP_MS=1000`, `FAULT_WINDOW_SECONDS=5`.
 This means 200 concurrent active bidders in one hot auction, each loop doing:
 snapshot -> bid -> sleep about 1 second. It models a live room where 200 users
@@ -59,13 +59,13 @@ one dependency is broken for 5 seconds.
 
 | Fault | Evidence label | Client-visible during run | Fault-window assertion | Bidder RTO gate | Full convergence / RPO assertion |
 |---|---|---:|---|---:|---|
-| Redis SIGKILL | `pts-1c-redis-20260603T012756` | 3798 decided, 800 paused | window decided=0, paused=596, accepted-in-window=0 | 2s | restore-start-to-final=19s; settlements 3798/3798; verifier PASS |
-| backend/settlement crash | `pts-1c-settlement-20260603T012938` | 3800 decided, 1200 HTTP errors | window HTTP errors=1000 | 2s | restore-start-to-final=17s; 0 duplicate `(epoch,seq)`; 0 unsettled accepted |
-| PostgreSQL SIGKILL | `pts-1c-pg-20260603T013119` | 4847 decided, 0 paused/errors | window decided=1000, paused=0 | 3s | restore-start-to-final=19s; zero unsettled accepted after PG recovery |
-| Kafka SIGKILL | `pts-1c-kafka-20260603T013300` | 5000 decided, 0 paused/errors | window decided=1000; hot path Kafka-independent | 16s | restore-start-to-final=33s; Redis pending drained; Kafka lag 0 |
-| Redis FLUSHALL | `pts-1c-redis-flush-20260603T005943` | 1000 decided, 4000 reconciling | window decided=0, reconciling=1000, accepted-in-window=0 | 2s | restore-start-to-final=20s; settlements 1000/1000; verifier PASS |
-| Redis+Kafka SIGKILL | `pts-1c-both-20260603T013503` | 3799 decided, 800 paused | window decided=0, paused=600, accepted-in-window=0 | 11s | restore-start-to-final=28s; pending drained; verifier PASS |
-| Redis partial timeout via Toxiproxy | `pts-1c-partial-20260603T012603` | 1000 decided, 3000 paused | partial outage reached clients as `ENGINE_PAUSED` | 3s | restore-start-to-final=19s; settlements 1000/1000; verifier PASS |
+| Redis SIGKILL | `pts-1c-redis-20260604T203439` | 3847 decided, 600 paused | window decided=0, paused=400, accepted-in-window=0 | 2s | restore-start-to-final=19s; settlements 3847/3847; verifier PASS |
+| backend/settlement crash | `pts-1c-settlement-20260604T205252` | 3800 decided, 1200 HTTP errors | window HTTP errors=1000 | 14s | restore-start-to-final=29s; 0 duplicate `(epoch,seq)`; 0 unsettled accepted; verifier PASS |
+| PostgreSQL SIGKILL | `pts-1c-pg-20260604T205623` | 4841 decided, 0 paused/errors | window decided=1000, paused=0 | 2s | restore-start-to-final=18s; zero unsettled accepted after PG recovery; verifier PASS |
+| Kafka SIGKILL | `pts-1c-kafka-20260604T205824` | 5000 decided, 0 paused/errors | window decided=1000; hot path Kafka-independent | 12s | Kafka ready after restore 16s; restore-start-to-final=28s; Redis pending drained; Kafka lag 0; verifier PASS |
+| Redis FLUSHALL | `pts-1c-redis-flush-20260604T210256` | 1000 decided, 3974 paused, 26 reconciling | window decided=0, paused=974, reconciling=26, accepted-in-window=0 | 2s | restore-start-to-final=20s; settlements 1000/1000; Redis stream len 0 is expected under data-loss profile; verifier PASS |
+| Redis+Kafka SIGKILL | `pts-1c-both-20260604T210834` | 3800 decided, 600 paused | window decided=200 non-accepted decisions, paused=400, accepted-in-window=0 | 12s | Kafka ready after restore 16s; restore-start-to-final=28s; pending drained; verifier PASS |
+| Redis partial Redis network via Toxiproxy | `pts-1c-partial-20260604T224626` | 4000 decided, 200 paused, 0 reconciling, 0 HTTP errors | window decided=192, paused=200, reconciling/errors=0 | 8s | restore-start-to-final=25s; settlements 4000/4000; Redis stream len 4000; Redis pending 0; Kafka lag 0; verifier PASS |
 | Relay backpressure | `tests/chaos/07-relay-backpressure.sh` | focused backend gate, no k6 | 600 Redis decisions exceed 512 relay batch ceiling | n/a | 600 stream entries; first page 512 valid payloads seq 1..512; ledger 600; pending hash 0; next relay 0 |
 | Settlement idempotency | `tests/chaos/08-settlement-idempotency.sh` | focused backend gate, no k6 | same ledger message settled 3 times | n/a | 1 settlement row, 1 SETTLED row, 1 bid, 1 order, 1 outbox event/delivery; 0 duplicate deliveries |
 
@@ -109,8 +109,8 @@ Do not collapse these into one number:
 
 | Clock | Boundary | User/business meaning | Current worst case |
 |---|---|---|---:|
-| Bidder RTO gate | fault clear / post-load recovery start -> sustained user-visible recovery gate | when new bid attempts are safe again, or when Redis faults stop returning paused/reconciling | 16s (`F-kafka`) |
-| Full convergence | restore start -> Redis pending = 0, Kafka lag = 0, open settlement/outbox = 0, verifier-safe state | when finance/payment/settlement views can be treated as final | 33s (`F-kafka`) |
+| Bidder RTO gate | fault clear / post-load recovery start -> sustained user-visible recovery gate | when new bid attempts are safe again, or when Redis faults stop returning paused/reconciling | 14s (`F-settle`) across current P0/P1 pass set |
+| Full convergence | restore start -> Redis pending = 0, Kafka lag = 0, open settlement/outbox = 0, verifier-safe state | when finance/payment/settlement views can be treated as final | 29s (`F-settle`) across current P0/P1 pass set |
 
 For PostgreSQL SIGKILL, `fault_window_decided=1000` proves the foreground bid
 decision path is PG-independent. It does **not** mean settlement was final at
@@ -125,9 +125,9 @@ the relay/settlement path drained. Current timing:
 | Segment | Kafka run value | Meaning |
 |---|---:|---|
 | `first_decided_after_fault_end_seconds` | 0s | bidders continued receiving Redis decisions immediately after the fault window |
-| `kafka_ready_after_restore_start_seconds` | 17s | local single Kafka container became reachable again |
-| `restore_end_to_final_convergence_seconds` | 16s | after Kafka was reachable, Redis pending / Kafka lag / settlement drained |
-| `restore_start_to_final_convergence_seconds` | 33s | conservative payment/finance confirmation boundary |
+| `kafka_ready_after_restore_start_seconds` | 16s | local single Kafka container became reachable again |
+| `restore_end_to_final_convergence_seconds` | 12s | after Kafka was reachable, Redis pending / Kafka lag / settlement drained |
+| `restore_start_to_final_convergence_seconds` | 28s | conservative payment/finance confirmation boundary |
 
 Judge-facing implication: during Kafka and PG faults, bidding can continue, but
 payment, final winner confirmation, and finance export should remain in a
@@ -259,19 +259,35 @@ phantom accepts and zero duplicate settlement.
 
 ## 6. Toxiproxy patterns (for F-partial and network realism)
 
-Current implemented P2 partial fault:
+Current P2 partial-fault harness:
 
 ```text
 backend REDIS_ADDR=localhost:16379
 Toxiproxy proxy name=redis, listen=0.0.0.0:16379, upstream=redis:6379
-toxic: timeout, stream=downstream, toxicity=1.0, timeout=250ms
+optional toxic: upstream + downstream latency when TOXIPROXY_LATENCY_MS is set
+default toxic: upstream + downstream reset_peer, toxicity=1.0
+default toxic: downstream timeout, toxicity=1.0, timeout=250ms
 fault window: 5s
 ```
 
 This is different from Redis SIGKILL. Redis stays alive, but the backend's Redis
-network path stalls through a proxy. User-visible behavior must still be
+network path stalls through a proxy. User-visible behavior should still be
 fail-closed (`ENGINE_PAUSED`/`RECONCILING`/HTTP error), with zero admission
 contamination and full settlement convergence after the toxic is removed.
+
+Current 2026-06-04 result is counted as P2 pass for Redis partial network:
+`pts-1c-partial-20260604T224626` exercised the Redis proxy with reset-peer plus
+timeout. Clients observed `ENGINE_PAUSED=200`, admission contamination stayed
+0, recovery RTO was 8s, restore-start-to-final convergence was 25s, and all
+payment/finality, Redis/Kafka, and verifier gates passed.
+
+Two earlier diagnostic attempts are intentionally not counted as pass:
+`pts-1c-partial-20260604T220112` used a latency-heavy toxic and raised HTTP tail
+latency to about 4.95s p99 / 5.04s max, but did not create a client-visible
+fail-closed signature. A timeout-only rerun also did not reliably trip existing
+go-redis pooled connections. Those failures explain why the default P2 toxic is
+now reset-peer plus timeout; latency remains an optional enhancement, not the
+pass/fail baseline.
 
 | Toxic | Simulates | Use |
 |---|---|---|
@@ -335,8 +351,8 @@ SLEEP_MS=1000 FAULT_WINDOW_SECONDS=5 L1F_RTO_TARGET_SECONDS=45`.
   queue; it answers "can a huge backlog drain?", not "how fast does a user
   recover?".
 - **Only SIGKILL faults** — include at least one network-path fault through
-  Toxiproxy. Current F-partial is Redis downstream timeout; a future extension
-  can add probabilistic `toxicity≈30%` reset/latency.
+  Toxiproxy. Current F-partial is Redis reset-peer plus downstream timeout;
+  latency-only is optional diagnostic coverage, not the current pass gate.
 - **Parallel-running 07/08 and treating a shared-test Redis cleanup as a fault** —
   these focused integration gates share local test Redis/PG dependencies and
   should be run sequentially. Parallel pollution can produce `RECONCILING` that

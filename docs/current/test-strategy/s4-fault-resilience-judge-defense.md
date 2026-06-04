@@ -1,6 +1,6 @@
 # S4 Fault Resilience Judge Defense
 
-> Scope: current S4 local chaos evidence from 2026-06-03. This document explains
+> Scope: current S4 local chaos evidence from 2026-06-04. This document explains
 > what the workload means, what each number means to a bidder, and what can be
 > claimed to judges. It is evidence interpretation, not a new benchmark.
 
@@ -11,12 +11,20 @@ room, each looping `snapshot -> bid -> sleep about 1s` for 25s. At T+5s the
 harness injects a 5s dependency fault. This is roughly 200 bid attempts per
 second while a core component fails.
 
-Current result: Redis, backend/settlement, PostgreSQL, Kafka, Redis FLUSHALL,
-Redis+Kafka, and Redis partial timeout all pass their live-fault gates.
-Bidder-facing RTO gates are 2s / 2s / 3s / 16s / 2s / 11s / 3s respectively.
-Full restore-start-to-final convergence is 19s / 17s / 19s / 33s / 20s / 28s /
-19s. RPO=0 is proven by settlement and verifier gates, with zero admission
-contamination.
+Current result: S4 P0/P1 pass for Redis, backend/settlement, PostgreSQL, Kafka,
+Redis FLUSHALL, and Redis+Kafka. Bidder-facing RTO gates are 2s / 14s / 2s /
+12s / 2s / 12s respectively. Full restore-start-to-final convergence is 19s /
+29s / 18s / 28s / 20s / 28s. RPO=0 is proven by settlement and verifier gates,
+with zero admission contamination. Production HA expansion details for Kafka
+RF=3/minISR=2, Redis HA failover, multi-gateway reconnect, LB/NAT idle timeout,
+real mobile weak network, and cross-AZ/region failures are maintained in
+[production-ha-expansion-and-judge-defense.md](production-ha-expansion-and-judge-defense.md).
+
+The P2 Redis partial-network run now has a current pass. Earlier latency-only
+and timeout-only attempts were useful diagnostics but not pass evidence because
+they did not reliably trip a client-visible fail-closed signature. The accepted
+P2 run uses Toxiproxy `reset_peer` plus downstream timeout and records
+`ENGINE_PAUSED` responses plus full convergence.
 
 S4 also now has two focused P0 depth gates:
 
@@ -93,19 +101,19 @@ Current evidence:
 
 | Field | Value |
 |---|---|
-| Label | `pts-1c-redis-20260603T012756` |
+| Label | `pts-1c-redis-20260604T203439` |
 | Run scale | 200 active bidders, 25s, about 1 attempt/s each, 5s Redis fault |
-| Overall client results | 3798 decided, 800 paused, 0 HTTP errors |
-| Fault-window assertion | decided=0, paused=596, accepted-in-window=0 |
+| Overall client results | 3847 decided, 600 paused, 0 HTTP errors |
+| Fault-window assertion | decided=0, paused=400, accepted-in-window=0 |
 | Recovery | RTO gate 2s; restore-start-to-final convergence 19s |
-| RPO proof | settlements 3798/3798, verifier PASS |
+| RPO proof | settlements 3847/3847, verifier PASS |
 
 Judge wording:
 
 > "Redis is the authoritative hot decision engine. During the 5s Redis SIGKILL
-> window we returned zero accepted decisions and 596 paused responses, so bidders
+> window we returned zero accepted decisions and 400 paused responses, so bidders
 > saw safe retry feedback instead of fabricated winners. After Redis restored,
-> the user-visible RTO gate was 2s and all 3798 durable decisions settled exactly
+> the user-visible RTO gate was 2s and all 3847 durable decisions settled exactly
 > once."
 
 ### Backend / settlement crash
@@ -123,11 +131,11 @@ Current evidence:
 
 | Field | Value |
 |---|---|
-| Label | `pts-1c-settlement-20260603T012938` |
+| Label | `pts-1c-settlement-20260604T205252` |
 | Run scale | 200 active bidders, 25s, about 1 attempt/s each, 5s backend crash |
 | Overall client results | 3800 decided, 1200 HTTP error attempts |
 | Fault-window assertion | 1000 HTTP error attempts |
-| Recovery | RTO gate 2s; restore-start-to-final convergence 17s |
+| Recovery | RTO gate 14s; restore-start-to-final convergence 29s |
 | RPO/idempotency proof | 0 duplicate `(epoch, engine_seq)` settlement rows; 0 unsettled accepted bids |
 
 Judge wording:
@@ -153,11 +161,11 @@ Current evidence:
 
 | Field | Value |
 |---|---|
-| Label | `pts-1c-pg-20260603T013119` |
+| Label | `pts-1c-pg-20260604T205623` |
 | Run scale | 200 active bidders, 25s, about 1 attempt/s each, 5s PG fault |
-| Overall client results | 4847 decided, 0 paused/errors |
+| Overall client results | 4841 decided, 0 paused/errors |
 | Fault-window assertion | decided=1000, paused=0 |
-| Recovery | RTO gate 3s; restore-start-to-final convergence 19s |
+| Recovery | RTO gate 2s; restore-start-to-final convergence 18s |
 | RPO proof | zero unsettled accepted bids after PG recovery; verifier PASS |
 
 Judge wording:
@@ -182,14 +190,14 @@ Current evidence:
 
 | Field | Value |
 |---|---|
-| Label | `pts-1c-kafka-20260603T013300` |
+| Label | `pts-1c-kafka-20260604T205824` |
 | Run scale | 200 active bidders, 25s, about 1 attempt/s each, 5s Kafka fault |
 | Overall client results | 5000 decided, 0 paused/errors |
 | Fault-window assertion | decided=1000, paused=0 |
-| Bidder RTO gate | 16s |
-| Kafka ready after restore start | 17s |
-| Restore-end-to-final convergence | 16s |
-| Restore-start-to-final convergence | 33s |
+| Bidder RTO gate | 12s |
+| Kafka ready after restore start | 16s |
+| Restore-end-to-final convergence | 12s |
+| Restore-start-to-final convergence | 28s |
 | RPO proof | Redis pending drained, Kafka lag 0, verifier PASS |
 
 Judge wording:
@@ -197,8 +205,8 @@ Judge wording:
 > "Kafka failure did not block foreground bidding: during the 5s Kafka fault
 > window users still received 1000 Redis engine decisions and saw no pauses or
 > HTTP errors. The tradeoff is back-office finality. In the current local
-> single-broker profile, Kafka readiness took 17s from restore start and full
-> settlement convergence took 33s from restore start. Therefore payment and final
+> single-broker profile, Kafka readiness took 16s from restore start and full
+> settlement convergence took 28s from restore start. Therefore payment and final
 > finance confirmation are gated behind a settlement-confirming state until
 > pending and lag drain to zero."
 
@@ -206,12 +214,55 @@ Judge wording:
 
 | Fault | Evidence label | What it proves | RTO gate | Final convergence |
 |---|---|---|---:|---:|
-| Kafka SIGKILL | `pts-1c-kafka-20260603T013300` | Redis hot path continues; relay drains after Kafka restart | 16s | 33s |
-| Redis FLUSHALL | `pts-1c-redis-flush-20260603T005943` | Redis data loss is detected; system enters `RECONCILING`, rebuilds, and avoids seq replay | 2s | 20s |
-| Redis+Kafka SIGKILL | `pts-1c-both-20260603T013503` | correlated dependency failure still fail-closes Redis decisions and drains pending work | 11s | 28s |
-| Redis partial timeout via Toxiproxy | `pts-1c-partial-20260603T012603` | Redis network stall reaches clients as safe pause; no admission pollution | 3s | 19s |
+| Kafka SIGKILL | `pts-1c-kafka-20260604T205824` | Redis hot path continues; relay drains after Kafka restart | 12s | 28s |
+| Kafka SIGKILL, independent k6 | `s4-p1-kafka-independent-20260604T202510` | same Kafka fault while pressure comes from separate VPC k6 host; avoids self-load criticism | client p99 43.04ms | 5000/5000 settled, Kafka lag 0, Redis pending 0, verifier PASS |
+| Redis FLUSHALL | `pts-1c-redis-flush-20260604T210256` | Redis data loss is detected; system enters `RECONCILING`, rebuilds, and avoids seq replay | 2s | 20s |
+| Redis+Kafka SIGKILL | `pts-1c-both-20260604T210834` | correlated dependency failure still fail-closes accepted decisions and drains pending work | 12s | 28s |
+| Redis partial network via Toxiproxy | `pts-1c-partial-20260604T224626` | P2 proxy-path fault reached clients as fail-closed responses and then converged | 8s | 4000 decisions, 200 paused, fault-window paused=200, restore-start-to-final=25s, verifier PASS |
 | Relay backpressure | `tests/chaos/07-relay-backpressure.sh` | backlog above 512-entry relay batch ceiling drains over multiple passes without silent loss or duplicate cursor replay | n/a | 600/600 relayed |
 | Settlement idempotency | `tests/chaos/08-settlement-idempotency.sh` | same Kafka decision delivered 3x still creates one settlement/order/outbox business effect | n/a | 3x -> 1 effect |
+
+### Independent k6 vs local S4
+
+The local S4 runs and the independent-k6 Kafka run prove different things:
+
+| Run type | What it proves | What it does not prove |
+|---|---|---|
+| Local S4 runner | full server-side chaos choreography, reset/seed, fault timing, convergence gates, verifier evidence | load generator shares the service host, so a skeptical reviewer can ask about self-load effects |
+| Independent VPC k6 | client pressure is generated from a separate ECS and uses the service private IP; k6 host CPU/RSS/TCP metrics show the generator is not the bottleneck | it still uses the same single-node service-side Kafka/Redis/PG topology unless the service environment is changed |
+
+For `s4-p1-kafka-independent-20260604T202510`, k6 ran from the VPC private path,
+covered the 20:25:15-20:25:20 Kafka fault window, and recorded
+`bid_fault_window_decided_total=1000`, `http_req_failed=0`, 5000 final decisions,
+15 accepted / 4985 rejected, p99 43.04ms, and admission contamination 0. Server
+evidence then showed 5000/5000 settled, Kafka lag 0, Redis pending 0, Redis
+stream length 5000, outbox `PUBLISHED=34`, and verifier P0/P1 PASS.
+
+The earlier `s4-p1-kafka-independent-20260604T202032-invalid-prefault` run is
+explicitly invalid because k6 finished before the fault window.
+
+### Redis partial-network diagnostics
+
+The accepted P2 partial-network evidence is
+`pts-1c-partial-20260604T224626`. The backend Redis address was routed through
+Toxiproxy at `localhost:16379`. The toxic was `reset_peer` on upstream and
+downstream plus a downstream timeout. The run produced 4000 final decisions,
+200 `ENGINE_PAUSED` responses, 0 reconciling responses, 0 HTTP errors, and 0
+admission contamination. Inside the 5s fault window, clients saw 192 decisions
+and 200 paused responses. Layer-C gates passed:
+`fault_observed_by_clients`, `payment_finality_convergence_gate`, and
+`recovery_rto_within_profile_target` with `recovery_rto=8s <= 45s`. Full
+convergence was 25s from restore start, with Redis pending 0, Kafka lag 0,
+stream length 4000 matching settlements, and verifier PASS.
+
+Earlier `pts-1c-partial-20260604T220112` is not pass evidence. It used a
+latency-heavy toxic, raised HTTP tail latency, but left clients receiving only
+final decisions with no paused/reconciling/error signature. A timeout-only
+variant was also insufficient because existing Redis pooled connections were not
+reliably forced into the fail-closed path. That is not "cheating"; it is the
+difference between testing slow Redis and testing partial connection loss. The
+documented pass gate now uses the fault model that actually exercises the
+fail-closed Redis client behavior.
 
 ### Relay backpressure: why 600 over 512 matters
 
@@ -289,7 +340,7 @@ The industrial comparison must stay conservative:
 |---|---|---|
 | "RPO=0, no duplicate settlement, no dirty accepted bids" | yes | directly verified by gates |
 | "PG is not on the foreground bid path" | yes | PG fault window still had 1000 decisions and 0 pauses |
-| "Kafka 16s is production leader election/rebalance time" | no | current S4 Kafka is single broker, RF=1, no multi-broker leader failover |
+| "Kafka 12s is production leader election/rebalance time" | no | current S4 Kafka is single broker, RF=1, no multi-broker leader failover |
 | "Redis FLUSHALL 2s proves production cache rebuild is always 2s" | no | current run is local, single auction, small state; production cluster/replica recovery needs separate evidence |
 | "The design uses checkpoint rebuild" | yes | `resumeRedisEngine -> rebuildRedisFromCheckpoint -> writeRedisStateSnapshot` restores Redis hot state from checkpoint/current PG state |
 | "Relay backlog can silently skip bad stream entries" | no after hardening | malformed/missing/mismatched stream records now fail the relay pass instead of advancing cursor |
@@ -297,10 +348,11 @@ The industrial comparison must stay conservative:
 
 ## 7. Business fallback and optimization stance
 
-Kafka 16s bidder RTO / 33s full convergence does not require an immediate Redis
-engine or Kafka relay fix for the graduation S4 gate, because foreground bidding
-remains correct and RPO=0. It does require the product story to be explicit about
-payment/finality gating.
+Kafka 12s bidder RTO / 28s full convergence does not require an immediate Redis
+engine or Kafka relay fix for the graduation S4 P0/P1 gate, because foreground
+bidding remains correct and RPO=0. The current worst full convergence is the
+settlement-crash run at 29s. These numbers do require the product story to be
+explicit about payment/finality gating.
 
 Current implementation already has a basic order-existence gate: the mobile H5
 winner state shows `ENGINE_SOLD_PENDING` / "订单同步中" and disables the payment
@@ -335,7 +387,7 @@ Optimization path if this were production:
 |---|---|---|
 | P0 product gate | keep backend payment convergence gate and S4 `payment_finality_convergence_gate`; add an end-to-end H5 test that Kafka/PG fault keeps CTA disabled until convergence | prevents paying from incomplete settlement state and proves the UI/order guard under Kafka/PG faults |
 | P1 infra | run Kafka with 3 brokers, replication factor 3, `min.insync.replicas=2`, `acks=all`, unclean leader election disabled | current single broker is functional evidence, not HA |
-| P1 observability | expose "settlement_confirming_seconds", Kafka lag, Redis pending, open settlement/outbox on the host/payment UI | makes the 33s back-office delay visible and defensible |
+| P1 observability | expose "settlement_confirming_seconds", Kafka lag, Redis pending, open settlement/outbox on the host/payment UI | makes the back-office convergence delay visible and defensible |
 | P1 backlog metric | expose relay backlog age/cursor lag, not only pending count | AWS queue-backlog guidance treats backlog age/drain as the key async latency signal |
 | P2 performance | tune relay/settlement batch and consumer restart behavior only after measuring which segment dominates | current Kafka run is dominated by local broker readiness plus drain; tune with evidence |
 
@@ -343,7 +395,9 @@ Optimization path if this were production:
 
 The source assignment is a Douyin E-commerce live auction system, not a toy
 graduation demo. The correct defense is to separate what is implemented now from
-what is the production expansion path.
+what is the production expansion path. This section gives the short S4-specific
+answers; the full topology contract, boundary cases, and next-test matrix are in
+[production-ha-expansion-and-judge-defense.md](production-ha-expansion-and-judge-defense.md).
 
 ### Kafka: why single broker locally, and what production would require
 
@@ -425,7 +479,9 @@ What S4 proves:
 - Kafka outage does not block Redis decisions; relay drains after restart.
 - Redis data loss cannot silently restart engine sequence from 1 after durable
   history/checkpoint exists.
-- Toxiproxy partial Redis timeout is implemented and passing.
+- Toxiproxy partial Redis latency is implemented as a P2 harness but is not
+  current pass evidence; the latest run raised latency without tripping the
+  client-visible fail-closed signature.
 - Relay backlog above the 512-entry batch ceiling drains 600/600 decisions over
   multiple passes, and bad stream payloads no longer advance the cursor silently.
 - Kafka redelivery is handled as at-least-once input: 3 deliveries of the same

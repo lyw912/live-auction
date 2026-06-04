@@ -394,14 +394,76 @@ The display-sized clean rerun has now been executed:
   a 200/s accepted-heavy open-arrival stair over more than 10k decisions with
   complete end-to-end settlement and verifier coverage.
 
+Independent-ECS decision/reject convergence-drain, 2026-06-04:
+
+- `s2-convergence-drain-decision-ecs-20260604T1937` used same-VPC independent
+  k6 against `http://172.16.179.112:18080`. The public IP path was deliberately
+  not used; `47.113.223.90:18080` timed out from the service host, while the
+  service itself was healthy on `127.0.0.1:18080` and listening on `*:18080`.
+- Workload profile: `100/s -> 200/s -> 400/s -> 600/s`, 1s ramp plus 30s hold
+  per stage, 30s ramp-down, `AMOUNT_MODE=time_ladder`, `NOISE_PCT=20`,
+  `USER_COUNT=1500`, `MAX_VUS=1500`. This is the decision/reject-heavy S2
+  convergence profile, not the accepted-heavy capacity profile.
+- k6 was clean: exit 0, `dropped_iterations=0`, `http_req_failed=0`,
+  auth/ACL/admission/non-decision failures all 0, 49,049 final decisions,
+  6 accepted, 49,043 rejected. Decision p99 was 4ms, p99.9 18ms, max 45ms;
+  HTTP p99 was 3.63ms, p99.9 17.97ms, max 44.53ms.
+- The independent k6 host was not the bottleneck: max active VU 3/400, CPU
+  roughly 8-20%, RSS about 181-183MB, and TCP established about 405.
+- Service-side verifier passed after post-run collection:
+  `settlements=49049`, `ACCEPTED|SETTLED=6`, `REJECTED|SETTLED=49043`,
+  non-terminal settlements 0, open/failed settlements 0, Kafka consumer lag 0,
+  Redis pending 0, Redis decision stream length 49,049, outbox `PUBLISHED=98`,
+  outbox unpublished 0, DLQ gate PASS, and all `l4b-invariant-gates.tsv` P0/P1
+  gates PASS.
+- Drain timing: a dedicated `s2-convergence.tsv` poll was not started exactly at
+  k6 end, so do not claim an exact second-by-second convergence sample. However,
+  DB timestamps show the final outbox `published_at` at
+  `2026-06-04 19:53:41.981 CST` and the final settlement `updated_at` at
+  `2026-06-04 19:53:45.828 CST`. The profile duration is about 154s
+  (`4 * (1s ramp + 30s hold) + 30s ramp-down`), and the first settlement was at
+  `19:51:12.036 CST`, so the backlog was effectively caught up by the k6
+  ramp-down end. The conservative report line is: "post-run collect/verifier at
+  `19:55:57 CST` confirmed Kafka/Redis/PG/outbox zero backlog; DB timestamps
+  show the final settlement completed at approximately test end."
+- Evidence path:
+  `docs/perf/pts/evidence/incoming/s2-convergence-drain-decision-ecs-20260604T1937/`.
+- Classification: `CURRENT_PASS` for S2 decision/reject-heavy
+  convergence-drain at the 100/200/400/600 display profile. It proves payment
+  finality convergence for normal decision-heavy traffic over more than 10k
+  decisions. It must not be used to claim accepted-heavy 600/s immediate drain;
+  accepted-heavy remains governed by the accepted-capacity evidence above.
+
+Why this drained much faster than earlier 100-122s local stair runs:
+
+- Workload shape changed. This run is decision/reject-heavy: only 6 of 49,049
+  decisions were accepted. Rejected settlement still writes audit/idempotency
+  state, but it does not update winner/price, create accepted public events, or
+  create accepted-update outbox pressure on every decision.
+- Scale and pressure window are smaller and smoother than the earlier 70k-100k
+  local diagnostic stairs. The highest offered rate here was 600/s with 30s
+  holds, so the settlement worker could keep up while the test was still
+  running instead of inheriting a large post-run backlog.
+- The earlier 120s evidence intentionally measured a high-backlog drain after a
+  more aggressive local stair. It remains valid as bottleneck history, not a
+  contradiction of this run.
+- The code path is also later than the old 100-122s evidence: set-based rejected
+  settlement, success-log suppression, accepted-prefix batching, and relay loop
+  improvements had already been retained or rejected based on measured runs.
+  The key engineering lesson is still unchanged: do not skip rejected audit rows
+  or payment-finality gates for speed; keep the foreground decision fast and
+  make payment wait for verified Kafka/Redis/PG/outbox convergence.
+
 Current rerun policy:
 
 1. Use the 200/s display run as the clean judge-facing S2-capacity pass.
 2. Keep `400/s` as higher-ceiling evidence with explicit late-drain and verifier
    cost caveats.
-3. Keep `600/s` as attack/upstream ceiling evidence until it has both k6 clean
-   and post-run convergence within the chosen product buffer.
-4. Do not increase to 800/1000 until the async drain gate passes at 600.
+3. Use `s2-convergence-drain-decision-ecs-20260604T1937` as the clean
+   decision/reject-heavy convergence-drain pass.
+4. Keep accepted-heavy `600/s` as attack/upstream ceiling evidence until it has
+   both k6 clean and post-run convergence within the chosen product buffer.
+5. Do not increase to 800/1000 until the async drain gate passes at 600.
 
 Detailed diagnosis and judge-facing answers:
 [s2-settlement-diagnosis-and-judge-defense.md](s2-settlement-diagnosis-and-judge-defense.md).
