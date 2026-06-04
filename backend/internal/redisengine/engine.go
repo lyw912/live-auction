@@ -1657,6 +1657,21 @@ func (w *Worker) settleRejectedBatch(ctx context.Context, auctionID string, batc
 	first := batch[0].result
 	last := batch[len(batch)-1].result
 	if first.EngineEpoch != dbEpoch {
+		if first.EngineEpoch < dbEpoch {
+			if last.EngineSeq <= dbSeq {
+				// These decisions were captured by a checkpoint rebuild that bumped engine_epoch.
+				// They are already reflected in PG state; skip without DLQ or pause.
+				observability.Add("auction_bid_redis_settlement_total", float64(len(batch)),
+					map[string]string{"result": resultRejected, "status": "skipped_pre_rebuild"})
+				return len(batch), nil
+			}
+			// Old-epoch messages with seq > dbSeq cannot be safely applied after an epoch
+			// bump — fail closed so the operator can investigate.
+			return 0, permanentSettlementError{
+				err: fmt.Errorf("pre-rebuild epoch mismatch: cannot settle auction=%s epoch=%d db_epoch=%d last_seq=%d db_seq=%d",
+					auctionID, first.EngineEpoch, dbEpoch, last.EngineSeq, dbSeq),
+			}
+		}
 		return 0, transientSettlementError{err: fmt.Errorf("batch settlement stale epoch auction=%s redis=%d db=%d", auctionID, first.EngineEpoch, dbEpoch)}
 	}
 	if first.EngineSeq != dbSeq+1 {
@@ -2023,6 +2038,20 @@ func (w *Worker) settleAcceptedBatch(ctx context.Context, auctionID string, batc
 	first := batch[0].result
 	last := batch[len(batch)-1].result
 	if first.EngineEpoch != dbEpoch {
+		if first.EngineEpoch < dbEpoch {
+			if last.EngineSeq <= dbEngineSeq {
+				// Already captured by a checkpoint rebuild that bumped engine_epoch.
+				// Skip cleanly without touching the checkpoint.
+				observability.Add("auction_bid_redis_settlement_total", float64(len(batch)),
+					map[string]string{"result": resultAccepted, "status": "skipped_pre_rebuild"})
+				return len(batch), nil
+			}
+			// Old-epoch, seq > dbEngineSeq — unsettled pre-rebuild decision; fail closed.
+			return 0, permanentSettlementError{
+				err: fmt.Errorf("pre-rebuild epoch mismatch: cannot settle auction=%s epoch=%d db_epoch=%d last_seq=%d db_seq=%d",
+					auctionID, first.EngineEpoch, dbEpoch, last.EngineSeq, dbEngineSeq),
+			}
+		}
 		return 0, transientSettlementError{err: fmt.Errorf("accepted batch stale epoch auction=%s redis=%d db=%d", auctionID, first.EngineEpoch, dbEpoch)}
 	}
 	if first.EngineSeq != dbEngineSeq+1 {
@@ -2639,6 +2668,18 @@ func (w *Worker) rebuildRedisFromCheckpoint(ctx context.Context, auctionID strin
 	if snap.EngineEpoch != checkpointEpoch || snap.EngineSeq != checkpointSeq || snap.EngineSeq != checkpoint.EngineSeq || snap.Seq != checkpoint.PublicSeq || snap.CurrentPriceCents != checkpoint.CurrentPriceCents || snap.CurrentWinnerID != checkpoint.CurrentWinnerID || snap.Status != checkpoint.Status {
 		return fmt.Errorf("redis engine checkpoint does not match PostgreSQL settlement auction=%s", auctionID)
 	}
+	// Atomically bump engine_epoch in PG so any resurrected old Redis instance
+	// will carry a stale epoch and its settlements will fail the epoch CAS gate.
+	// The settlement worker handles old-epoch Kafka messages by skipping them if
+	// their seq is already reflected in the checkpoint, or failing closed if not.
+	var newEpoch int64
+	if err := w.db.QueryRow(ctx,
+		`UPDATE auctions SET engine_epoch = engine_epoch + 1 WHERE id = $1 RETURNING engine_epoch`,
+		auctionID).Scan(&newEpoch); err != nil {
+		return fmt.Errorf("redis engine epoch bump failed auction=%s: %w", auctionID, err)
+	}
+	snap.EngineEpoch = newEpoch
+	report.EngineEpoch = newEpoch
 	return w.writeRedisStateSnapshot(ctx, auctionID, snap, report, storedHash)
 }
 
