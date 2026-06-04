@@ -925,6 +925,18 @@ writes every audit and recovery surface: `redis_engine_settlements`, `bids`,
 auction price/winner/seq, and engine checkpoint. Tests now prove pure accepted
 batch settlement and mixed accepted+reject correctness.
 
+The first post-fix independent-ECS rerun,
+`s2-capacity-accepted-postfix-ecs-20260604T161315`, should still be described as
+a split verdict, not a pass. k6 was clean at the decision boundary
+(`dropped_iterations=0`, `http_req_failed=0`, 131,574 final decisions,
+107,624 accepted, p99 13ms), but the async chain still lagged: the immediate
+service sample had Redis engine log 131,574 while accepted settlements were only
+about 69.7k and Kafka partition 15 still had 64,476 lag. Later samples continued
+to drain but remained far from zero for several minutes. The follow-up code
+therefore keeps the same conservative accepted-prefix rule and only improves how
+many safe prefixes can be consumed in one fetched Kafka batch; it is an
+incremental drain-efficiency change, not a license to claim 600/s clean.
+
 **Q: Why not skip some audit rows for speed?**
 
 A: That would be a different product/legal tradeoff. For this project, accepted
@@ -957,7 +969,7 @@ Next scenarios after S2:
 
 1. S3 fanout: measure M2 publish-to-receive p99 with real WS observers.
 2. S4 remaining faults: Kafka, Redis flush, Redis+Kafka correlated fault.
-3. Post-fix S2 capacity rerun: first repeat `50/100/200/400/600` accepted
-   profile and require both k6 clean and convergence/verifier PASS; only then
-   explore 800/1000.
+3. S2 capacity clean-ceiling rerun: first run accepted profile
+   `50/100/200/300/400` and require both k6 clean and convergence/verifier PASS.
+   Keep `600/s` as attack/upstream evidence until 400/s is clean.
 4. Optional S2 long soak: 30-60 minutes for real M4 no-leak evidence.

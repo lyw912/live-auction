@@ -1390,15 +1390,8 @@ func TestKafkaSettlementBatchesAcceptedPrefixBeforeReject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mixed settlement: %v", err)
 	}
-	if processed != accepted {
-		t.Fatalf("mixed settlement first pass processed = %d, want accepted prefix %d", processed, accepted)
-	}
-	processed, err = worker.ProcessKafka(ctx, 10)
-	if err != nil {
-		t.Fatalf("rejected suffix settlement: %v", err)
-	}
-	if processed != 1 {
-		t.Fatalf("mixed settlement second pass processed = %d, want rejected suffix 1", processed)
+	if processed != accepted+1 {
+		t.Fatalf("mixed settlement processed = %d, want accepted prefix plus rejected suffix %d", processed, accepted+1)
 	}
 	assertAuctionEngineSeq(t, db, auctionID, accepted+1, 25_000, "ACTIVE")
 	assertAuctionPublicSeq(t, db, auctionID, accepted)
@@ -1415,6 +1408,71 @@ func TestKafkaSettlementBatchesAcceptedPrefixBeforeReject(t *testing.T) {
 	}
 	if acceptedRows != accepted || rejectedRows != 1 || settlements != accepted+1 {
 		t.Fatalf("rows accepted=%d rejected=%d settlements=%d, want %d/1/%d", acceptedRows, rejectedRows, settlements, accepted, accepted+1)
+	}
+}
+
+func TestKafkaSettlementBatchesAcceptedSuffixAfterReject(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+
+	const accepted = 4
+	insertEngineUsers(t, db, "accepted_suffix_user_", accepted+1)
+	bids := []struct {
+		user   string
+		id     string
+		amount int64
+		result string
+	}{
+		{"accepted_suffix_user_0", "accepted-suffix-0", 15_000, auction.BidResultEngineAccepted},
+		{"accepted_suffix_user_1", "accepted-suffix-reject", 10_000, auction.BidResultEngineRejected},
+		{"accepted_suffix_user_2", "accepted-suffix-1", 20_000, auction.BidResultEngineAccepted},
+		{"accepted_suffix_user_3", "accepted-suffix-2", 25_000, auction.BidResultEngineAccepted},
+		{"accepted_suffix_user_4", "accepted-suffix-3", 30_000, auction.BidResultEngineAccepted},
+	}
+	for i, bid := range bids {
+		resp, err := engine.PlaceBid(ctx, auctionID, bid.user, bid.id, auction.BidInput{
+			ClientBidID:   bid.id,
+			AmountCents:   bid.amount,
+			ClientSeenSeq: 0,
+		}, "tr_accepted_suffix")
+		if err != nil {
+			t.Fatalf("place bid %d: %v", i, err)
+		}
+		if resp.Result != bid.result || resp.EngineSeq != int64(i+1) {
+			t.Fatalf("bid %d response = %#v, want result=%s engine_seq=%d", i, resp, bid.result, i+1)
+		}
+	}
+	if n, err := worker.ProcessPendingAppends(ctx, 100); err != nil || n != len(bids) {
+		t.Fatalf("relay processed=%d err=%v, want %d nil", n, err, len(bids))
+	}
+
+	processed, err := worker.ProcessKafka(ctx, 10)
+	if err != nil {
+		t.Fatalf("suffix settlement: %v", err)
+	}
+	if processed != len(bids) {
+		t.Fatalf("suffix settlement processed = %d, want %d", processed, len(bids))
+	}
+	assertAuctionEngineSeq(t, db, auctionID, int64(len(bids)), 30_000, "ACTIVE")
+	assertAuctionPublicSeq(t, db, auctionID, accepted)
+
+	var acceptedRows, rejectedRows, settlements int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM bids WHERE auction_id = $1 AND status = 'ACCEPTED' AND settlement_status = 'SETTLED'`, auctionID).Scan(&acceptedRows); err != nil {
+		t.Fatalf("count accepted bids: %v", err)
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM bids WHERE auction_id = $1 AND status = 'REJECTED' AND settlement_status = 'SETTLED'`, auctionID).Scan(&rejectedRows); err != nil {
+		t.Fatalf("count rejected bids: %v", err)
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM redis_engine_settlements WHERE auction_id = $1 AND status = 'SETTLED'`, auctionID).Scan(&settlements); err != nil {
+		t.Fatalf("count settlements: %v", err)
+	}
+	if acceptedRows != accepted || rejectedRows != 1 || settlements != len(bids) {
+		t.Fatalf("rows accepted=%d rejected=%d settlements=%d, want %d/1/%d", acceptedRows, rejectedRows, settlements, accepted, len(bids))
 	}
 }
 
@@ -2792,6 +2850,79 @@ func TestRelayCursorAdvancesAfterBatch(t *testing.T) {
 	}
 	if ledger.Len() != 3 {
 		t.Fatalf("ledger len = %d, want 3 (no duplicates)", ledger.Len())
+	}
+}
+
+// TestBatchSettlementInsertsSettledDirectly verifies that the rejected-batch
+// and accepted-batch paths insert redis_engine_settlements with status=SETTLED
+// and settled_at set immediately — never with an intermediate PROCESSING row.
+// This documents P1b: the previous PROCESSING→SETTLED double-write is eliminated.
+func TestBatchSettlementInsertsSettledDirectly(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+	rejectReason := "BID_TOO_LOW"
+
+	// Append two contiguous rejects to trigger the batch path.
+	for i := 1; i <= 2; i++ {
+		userID := "user_" + strconv.Itoa(i)
+		clientBidID := "direct-settle-reject-" + strconv.Itoa(i)
+		result := engineResult{
+			Result:       resultRejected,
+			BidID:        "bid_direct_" + strconv.Itoa(i) + "_" + uuid.NewString(),
+			AuctionID:    auctionID,
+			UserID:       userID,
+			ClientBidID:  clientBidID,
+			AmountCents:  5_000,
+			RejectReason: &rejectReason,
+			EngineSeq:    int64(i),
+			EngineEpoch:  1,
+			TraceID:      "tr_direct_" + strconv.Itoa(i),
+			RequestHash:  requestHash(auctionID, userID, clientBidID, 5_000),
+		}
+		if _, err := ledger.Append(ctx, result); err != nil {
+			t.Fatalf("append reject %d: %v", i, err)
+		}
+	}
+
+	processed, err := worker.ProcessKafka(ctx, 10)
+	if err != nil {
+		t.Fatalf("process kafka: %v", err)
+	}
+	if processed != 2 {
+		t.Fatalf("processed=%d want 2", processed)
+	}
+
+	// No PROCESSING rows should exist — the batch inserts SETTLED directly.
+	var processingCount int
+	if err := db.QueryRow(ctx, `
+		SELECT count(*) FROM redis_engine_settlements
+		WHERE auction_id = $1 AND status = 'PROCESSING'
+	`, auctionID).Scan(&processingCount); err != nil {
+		t.Fatalf("count PROCESSING: %v", err)
+	}
+	if processingCount != 0 {
+		t.Fatalf("PROCESSING rows=%d want 0: batch path must insert SETTLED directly (P1b)", processingCount)
+	}
+
+	// All rows must be SETTLED with settled_at set.
+	var settledCount int
+	var nullSettledAt int
+	if err := db.QueryRow(ctx, `
+		SELECT count(*), count(*) FILTER (WHERE settled_at IS NULL)
+		FROM redis_engine_settlements
+		WHERE auction_id = $1
+	`, auctionID).Scan(&settledCount, &nullSettledAt); err != nil {
+		t.Fatalf("count settled: %v", err)
+	}
+	if settledCount != 2 {
+		t.Fatalf("settled=%d want 2", settledCount)
+	}
+	if nullSettledAt != 0 {
+		t.Fatalf("null settled_at=%d want 0: settled_at must be set on batch insert", nullSettledAt)
 	}
 }
 

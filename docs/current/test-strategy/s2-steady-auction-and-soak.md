@@ -269,6 +269,34 @@ Independent-ECS accepted-heavy capacity stair, 2026-06-04:
   `CURRENT_PASS` only for the foreground Redis decision layer under this
   accepted-heavy profile. Do not cite it as "600/s accepted capacity pass".
 
+Post-accepted-batch rerun, 2026-06-04:
+
+- `s2-capacity-accepted-postfix-ecs-20260604T161315` repeated the same
+  `50/s -> 100/s -> 200/s -> 400/s -> 600/s` accepted-heavy profile after
+  accepted contiguous-prefix batching.
+- k6 was again clean at the foreground decision boundary: exit 0,
+  `dropped_iterations=0`, `http_req_failed=0`, 131,574 final decisions,
+  107,624 accepted, 23,950 rejected, bid decision p99 13ms, HTTP p99 12.49ms.
+  The independent k6 host was not saturated: CPU roughly 9-30%, RSS about
+  235MB, and active VUs stayed far below the configured ceiling.
+- The end-to-end async chain still was **not** clean at the immediate evidence
+  point. Redis engine log reached 131,574, but a service-side sample at
+  16:29 showed only 69,748 accepted settlements and 2,764 rejected settlements
+  persisted; Kafka `settlement-workers` still had 64,476 lag on hot partition
+  15. Later samples continued to drain slowly: 16:31 lag 61,258, 16:32 lag
+  58,376, 16:34 lag 55,376, 16:39 lag 43,876.
+- The verifier classified the same split: most P0 invariants passed, including
+  no duplicate client bid IDs, no duplicate engine seq, Kafka offset order, and
+  accepted public-event coverage; but the first verifier sample still had
+  non-terminal settlement/outbox rows, so it failed `no_non_terminal_settlements`
+  and `outbox_drained`. A later heavy verifier query also exposed a PostgreSQL
+  container `/dev/shm` limit (`64MB`) via "could not resize shared memory
+  segment"; that is a collector/environment limitation to record, not a reason
+  to call the run clean.
+- Classification: still `CURRENT_FAILING` for full S2-capacity correctness.
+  The accepted-prefix batch improved the implementation shape but did not make
+  `600/s` a defensible end-to-end pass.
+
 Root cause and fix direction:
 
 - The single hot auction is keyed to one Kafka partition. Official Kafka
@@ -293,16 +321,26 @@ Root cause and fix direction:
   settlement rows, idempotency completion, and auction engine/public seq after
   a pure accepted prefix. `TestKafkaSettlementBatchesAcceptedPrefixBeforeReject`
   verifies mixed accepted+rejected Kafka batches still settle correctly.
+- After the 600/s postfix rerun, the worker also learned to keep consuming
+  multiple safe contiguous prefixes within the same fetched Kafka batch instead
+  of returning after the first fast prefix. This preserves the same safety rule:
+  only same-auction, same-epoch, consecutive `engine_seq` and consecutive Kafka
+  offsets are batched; reject/gap/replay/stale cases still create boundaries or
+  fall back. The benefit is expected to be incremental, mainly reducing loop and
+  commit overhead when a batch contains `accepted...reject...accepted...`; it
+  does not remove the core PostgreSQL write surfaces.
 
 Post-fix rerun policy:
 
-1. First rerun the same accepted profile `50/100/200/400/600` to compare against
-   `s2-capacity-accepted-ecs-20260604T150519`.
+1. For judge-facing clean evidence, first rerun a lower ceiling profile
+   `50/100/200/300/400`. This aims to find an end-to-end clean accepted-update
+   knee instead of re-proving the known 600/s async backlog.
 2. A pass requires both k6 clean **and** post-run convergence: Kafka lag 0,
    Redis pending 0, PG settlements complete, outbox watermarks 0, verifier PASS.
-3. If 600/s still leaves async lag, keep it as bottleneck evidence and rerun
-   `50/100/200/300/400` or `100/200/300/400` to find the end-to-end clean knee.
-   Do not increase to 800/1000 until the async drain gate passes at 600.
+3. Keep `600/s` as attack/upstream ceiling evidence unless the 400/s clean run
+   passes comfortably and there is time to quantify the new optimization against
+   the earlier 600/s failing runs. Do not increase to 800/1000 until the async
+   drain gate passes at 600.
 
 Detailed diagnosis and judge-facing answers:
 [s2-settlement-diagnosis-and-judge-defense.md](s2-settlement-diagnosis-and-judge-defense.md).

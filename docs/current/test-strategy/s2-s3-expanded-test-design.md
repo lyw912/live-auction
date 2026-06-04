@@ -117,6 +117,18 @@ decision stair : 100/s -> 200/s -> 400/s -> 600/s -> 1000/s
 stage duration : 90s accepted, 2m decision by default
 ```
 
+Current rerun strategy after the 2026-06-04 accepted-heavy evidence:
+
+- Keep `50/100/200/400/600` as the attack profile that exposed the async
+  settlement/outbox knee. Both 600/s independent-ECS runs had clean k6 decision
+  paths but non-clean Kafka/PG/outbox convergence.
+- For judge-facing clean-capacity evidence, first run a lower accepted ceiling
+  `50/s -> 100/s -> 200/s -> 300/s -> 400/s`. Call it a pass only if k6 is clean
+  **and** Kafka lag, Redis pending state, PostgreSQL settlement, outbox, and
+  verifier all converge.
+- Do not increase beyond 600/s, and do not call 600/s a pass, until the async
+  drain gate is zero at the end of the chosen settle window.
+
 Use two separate profiles because they answer different questions:
 
 - `accepted` profile: `AMOUNT_MODE=fast_ladder`, `NOISE_PCT=0`, and a large

@@ -1436,32 +1436,6 @@ func (w *Worker) ProcessKafka(ctx context.Context, limit int) (int, error) {
 		return 0, nil
 	}
 	observability.Observe("auction_bid_settlement_fetch_batch_size", float64(len(messages)), nil, observability.DefaultLatencyBuckets)
-	batchSettled, batchCommitted, err := w.settleRejectedBatchPrefix(ctx, messages)
-	if err != nil {
-		return 0, err
-	}
-	if batchSettled > 0 {
-		if err := w.commitLedgerBatch(ctx, messages[:batchCommitted]); err != nil {
-			return batchSettled, err
-		}
-		observability.Inc("auction_bid_settlement_batch_total", map[string]string{"status": "fast_rejected"})
-		observability.Observe("auction_bid_settlement_batch_size", float64(batchSettled), nil, observability.DefaultLatencyBuckets)
-		observability.Observe("auction_bid_settlement_batch_seconds", time.Since(start).Seconds(), nil, observability.DefaultLatencyBuckets)
-		return batchSettled, nil
-	}
-	batchSettled, batchCommitted, err = w.settleAcceptedBatchPrefix(ctx, messages)
-	if err != nil {
-		return 0, err
-	}
-	if batchSettled > 0 {
-		if err := w.commitLedgerBatch(ctx, messages[:batchCommitted]); err != nil {
-			return batchSettled, err
-		}
-		observability.Inc("auction_bid_settlement_batch_total", map[string]string{"status": "fast_accepted"})
-		observability.Observe("auction_bid_settlement_batch_size", float64(batchSettled), nil, observability.DefaultLatencyBuckets)
-		observability.Observe("auction_bid_settlement_batch_seconds", time.Since(start).Seconds(), nil, observability.DefaultLatencyBuckets)
-		return batchSettled, nil
-	}
 	var commitBatch []LedgerMessage
 	commitCollected := func() error {
 		if len(commitBatch) == 0 {
@@ -1474,7 +1448,46 @@ func (w *Worker) ProcessKafka(ctx context.Context, limit int) (int, error) {
 		commitBatch = commitBatch[:0]
 		return nil
 	}
-	for _, message := range messages {
+	for cursor := 0; cursor < len(messages); {
+		remaining := messages[cursor:]
+		batchSettled, batchCommitted, err := w.settleRejectedBatchPrefix(ctx, remaining)
+		if err != nil {
+			return processed, err
+		}
+		if batchSettled > 0 {
+			if err := commitCollected(); err != nil {
+				return processed, err
+			}
+			if err := w.commitLedgerBatch(ctx, remaining[:batchCommitted]); err != nil {
+				return processed + batchSettled, err
+			}
+			processed += batchSettled
+			cursor += batchCommitted
+			observability.Inc("auction_bid_settlement_batch_total", map[string]string{"status": "fast_rejected"})
+			observability.Observe("auction_bid_settlement_batch_size", float64(batchSettled), nil, observability.DefaultLatencyBuckets)
+			observability.Observe("auction_bid_settlement_batch_seconds", time.Since(start).Seconds(), nil, observability.DefaultLatencyBuckets)
+			continue
+		}
+		batchSettled, batchCommitted, err = w.settleAcceptedBatchPrefix(ctx, remaining)
+		if err != nil {
+			return processed, err
+		}
+		if batchSettled > 0 {
+			if err := commitCollected(); err != nil {
+				return processed, err
+			}
+			if err := w.commitLedgerBatch(ctx, remaining[:batchCommitted]); err != nil {
+				return processed + batchSettled, err
+			}
+			processed += batchSettled
+			cursor += batchCommitted
+			observability.Inc("auction_bid_settlement_batch_total", map[string]string{"status": "fast_accepted"})
+			observability.Observe("auction_bid_settlement_batch_size", float64(batchSettled), nil, observability.DefaultLatencyBuckets)
+			observability.Observe("auction_bid_settlement_batch_seconds", time.Since(start).Seconds(), nil, observability.DefaultLatencyBuckets)
+			continue
+		}
+
+		message := messages[cursor]
 		messageStart := time.Now()
 		if err := w.settleLedgerMessage(ctx, message); err != nil {
 			if isSettlementIdentityConflictError(err) {
@@ -1483,6 +1496,7 @@ func (w *Worker) ProcessKafka(ctx context.Context, limit int) (int, error) {
 					return processed, err
 				}
 				processed++
+				cursor++
 				continue
 			}
 			if isTransientSettlementError(err) {
@@ -1498,11 +1512,13 @@ func (w *Worker) ProcessKafka(ctx context.Context, limit int) (int, error) {
 				return processed, err
 			}
 			processed++
+			cursor++
 			continue
 		}
 		observability.Observe("auction_bid_settlement_message_seconds", time.Since(messageStart).Seconds(), nil, observability.DefaultLatencyBuckets)
 		commitBatch = append(commitBatch, message)
 		processed++
+		cursor++
 	}
 	if err := commitCollected(); err != nil {
 		return processed, err
@@ -1624,6 +1640,7 @@ func (w *Worker) settleRejectedBatch(ctx context.Context, auctionID string, batc
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	step := time.Now()
 	var dbEpoch int64
 	var dbSeq int64
 	var publicSeq int64
@@ -1635,6 +1652,8 @@ func (w *Worker) settleRejectedBatch(ctx context.Context, auctionID string, batc
 	`, auctionID).Scan(&dbEpoch, &dbSeq, &publicSeq); err != nil {
 		return 0, err
 	}
+	observability.Observe("auction_settlement_step_seconds", time.Since(step).Seconds(), map[string]string{"step": "auctions_lock", "result": resultRejected}, observability.DefaultLatencyBuckets)
+
 	first := batch[0].result
 	last := batch[len(batch)-1].result
 	if first.EngineEpoch != dbEpoch {
@@ -1652,10 +1671,14 @@ func (w *Worker) settleRejectedBatch(ctx context.Context, auctionID string, batc
 	if err != nil {
 		return 0, err
 	}
+
+	step = time.Now()
 	if err := insertRejectedSettlementAttemptsBatch(ctx, tx, auctionID, rowsJSON, len(batch)); err != nil {
 		return 0, err
 	}
+	observability.Observe("auction_settlement_step_seconds", time.Since(step).Seconds(), map[string]string{"step": "settlements_insert", "result": resultRejected}, observability.DefaultLatencyBuckets)
 
+	step = time.Now()
 	tag, err := tx.Exec(ctx, `
 		UPDATE auctions
 		SET engine_seq = $2,
@@ -1670,22 +1693,32 @@ func (w *Worker) settleRejectedBatch(ctx context.Context, auctionID string, batc
 	if tag.RowsAffected() == 0 {
 		return 0, transientSettlementError{err: fmt.Errorf("batch settlement fenced out auction=%s epoch=%d first_seq=%d db_seq=%d", auctionID, first.EngineEpoch, first.EngineSeq, dbSeq)}
 	}
+	observability.Observe("auction_settlement_step_seconds", time.Since(step).Seconds(), map[string]string{"step": "auctions_advance", "result": resultRejected}, observability.DefaultLatencyBuckets)
 
+	step = time.Now()
 	if err := insertRejectedBidsBatch(ctx, tx, auctionID, rowsJSON, len(batch)); err != nil {
 		return 0, err
 	}
+	observability.Observe("auction_settlement_step_seconds", time.Since(step).Seconds(), map[string]string{"step": "bids_insert", "result": resultRejected}, observability.DefaultLatencyBuckets)
+
+	step = time.Now()
 	if err := completeRejectedIdempotencyBatch(ctx, tx, auctionID, rowsJSON, len(batch)); err != nil {
 		return 0, err
 	}
-	if err := markRejectedSettlementsSettledBatch(ctx, tx, auctionID, rowsJSON, len(batch)); err != nil {
-		return 0, err
-	}
+	observability.Observe("auction_settlement_step_seconds", time.Since(step).Seconds(), map[string]string{"step": "idempotency_upsert", "result": resultRejected}, observability.DefaultLatencyBuckets)
+
+	step = time.Now()
 	if err := upsertEngineCheckpoint(ctx, tx, auctionID, batch[len(batch)-1].message); err != nil {
 		return 0, err
 	}
+	observability.Observe("auction_settlement_step_seconds", time.Since(step).Seconds(), map[string]string{"step": "checkpoint", "result": resultRejected}, observability.DefaultLatencyBuckets)
+
+	step = time.Now()
 	if err := tx.Commit(ctx); err != nil {
 		return 0, err
 	}
+	observability.Observe("auction_settlement_step_seconds", time.Since(step).Seconds(), map[string]string{"step": "commit", "result": resultRejected}, observability.DefaultLatencyBuckets)
+
 	observability.Add("auction_bid_redis_settlement_total", float64(len(batch)), map[string]string{"result": resultRejected, "status": "settled"})
 	return len(batch), nil
 }
@@ -1766,10 +1799,12 @@ func insertRejectedSettlementAttemptsBatch(ctx context.Context, tx pgx.Tx, aucti
 		)
 		INSERT INTO redis_engine_settlements (
 		  auction_id, stream_id, engine_epoch, engine_seq, result, status, attempts, payload_json,
-		  payload_sha256, ledger_source, ledger_topic, ledger_partition, ledger_offset, ledger_key
+		  payload_sha256, ledger_source, ledger_topic, ledger_partition, ledger_offset, ledger_key,
+		  settled_at
 		)
-		SELECT $1, stream_id, engine_epoch, engine_seq, result, 'PROCESSING', 1, payload_json,
-		       payload_sha256, 'kafka', ledger_topic, ledger_partition, ledger_offset, ledger_key
+		SELECT $1, stream_id, engine_epoch, engine_seq, result, 'SETTLED', 1, payload_json,
+		       payload_sha256, 'kafka', ledger_topic, ledger_partition, ledger_offset, ledger_key,
+		       now()
 		FROM input
 		ON CONFLICT (auction_id, stream_id) DO UPDATE
 		SET attempts = CASE
@@ -1778,7 +1813,11 @@ func insertRejectedSettlementAttemptsBatch(ctx context.Context, tx pgx.Tx, aucti
 		    END,
 		    status = CASE
 		      WHEN redis_engine_settlements.status IN ('SETTLED','SKIPPED') THEN redis_engine_settlements.status
-		      ELSE 'PROCESSING'
+		      ELSE 'SETTLED'
+		    END,
+		    settled_at = CASE
+		      WHEN redis_engine_settlements.status IN ('SETTLED','SKIPPED') THEN redis_engine_settlements.settled_at
+		      ELSE now()
 		    END,
 		    last_error = CASE
 		      WHEN redis_engine_settlements.payload_sha256 <> EXCLUDED.payload_sha256 THEN 'stream payload hash changed for existing settlement'
@@ -1884,27 +1923,6 @@ func completeRejectedIdempotencyBatch(ctx context.Context, tx pgx.Tx, auctionID 
 	return nil
 }
 
-func markRejectedSettlementsSettledBatch(ctx context.Context, tx pgx.Tx, auctionID string, rowsJSON []byte, expected int) error {
-	tag, err := tx.Exec(ctx, `
-		WITH input AS (
-		  SELECT stream_id
-		  FROM jsonb_to_recordset($2::jsonb) AS x(stream_id text)
-		)
-		UPDATE redis_engine_settlements s
-		SET status = 'SETTLED', settled_at = now(), updated_at = now()
-		FROM input
-		WHERE s.auction_id = $1
-		  AND s.stream_id = input.stream_id
-	`, auctionID, rowsJSON)
-	if err != nil {
-		return err
-	}
-	if int(tag.RowsAffected()) != expected {
-		return settlementIdentityConflictError{err: fmt.Errorf("batch mark settlement settled mismatch auction=%s affected=%d expected=%d", auctionID, tag.RowsAffected(), expected)}
-	}
-	return nil
-}
-
 func (w *Worker) settleAcceptedBatchPrefix(ctx context.Context, messages []LedgerMessage) (settled int, committed int, err error) {
 	if len(messages) < 2 {
 		return 0, 0, nil
@@ -1988,6 +2006,7 @@ func (w *Worker) settleAcceptedBatch(ctx context.Context, auctionID string, batc
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	step := time.Now()
 	var dbEpoch int64
 	var dbEngineSeq int64
 	var publicSeq int64
@@ -1999,6 +2018,8 @@ func (w *Worker) settleAcceptedBatch(ctx context.Context, auctionID string, batc
 	`, auctionID).Scan(&dbEpoch, &dbEngineSeq, &publicSeq); err != nil {
 		return 0, err
 	}
+	observability.Observe("auction_settlement_step_seconds", time.Since(step).Seconds(), map[string]string{"step": "auctions_lock", "result": resultAccepted}, observability.DefaultLatencyBuckets)
+
 	first := batch[0].result
 	last := batch[len(batch)-1].result
 	if first.EngineEpoch != dbEpoch {
@@ -2016,15 +2037,19 @@ func (w *Worker) settleAcceptedBatch(ctx context.Context, auctionID string, batc
 	if err != nil {
 		return 0, err
 	}
+
+	step = time.Now()
 	if err := insertAcceptedSettlementAttemptsBatch(ctx, tx, auctionID, rowsJSON, len(batch)); err != nil {
 		return 0, err
 	}
+	observability.Observe("auction_settlement_step_seconds", time.Since(step).Seconds(), map[string]string{"step": "settlements_insert", "result": resultAccepted}, observability.DefaultLatencyBuckets)
 
 	lastEndAt := (*time.Time)(nil)
 	if last.EndAtMS > 0 {
 		t := time.UnixMilli(last.EndAtMS).UTC()
 		lastEndAt = &t
 	}
+	step = time.Now()
 	tag, err := tx.Exec(ctx, `
 		UPDATE auctions
 		SET status = 'ACTIVE',
@@ -2046,28 +2071,44 @@ func (w *Worker) settleAcceptedBatch(ctx context.Context, auctionID string, batc
 	if tag.RowsAffected() == 0 {
 		return 0, transientSettlementError{err: fmt.Errorf("accepted batch fenced out auction=%s epoch=%d first_seq=%d db_seq=%d", auctionID, first.EngineEpoch, first.EngineSeq, dbEngineSeq)}
 	}
+	observability.Observe("auction_settlement_step_seconds", time.Since(step).Seconds(), map[string]string{"step": "auctions_advance", "result": resultAccepted}, observability.DefaultLatencyBuckets)
 
+	step = time.Now()
 	if err := insertAcceptedBidsBatch(ctx, tx, auctionID, rowsJSON, len(batch)); err != nil {
 		return 0, err
 	}
+	observability.Observe("auction_settlement_step_seconds", time.Since(step).Seconds(), map[string]string{"step": "bids_insert", "result": resultAccepted}, observability.DefaultLatencyBuckets)
+
+	step = time.Now()
 	if err := insertAcceptedAuctionEventsBatch(ctx, tx, auctionID, rowsJSON, len(batch)); err != nil {
 		return 0, err
 	}
+	observability.Observe("auction_settlement_step_seconds", time.Since(step).Seconds(), map[string]string{"step": "auction_events_insert", "result": resultAccepted}, observability.DefaultLatencyBuckets)
+
+	step = time.Now()
 	if err := insertAcceptedOutboxEventsBatch(ctx, tx, auctionID, rowsJSON, len(batch)); err != nil {
 		return 0, err
 	}
+	observability.Observe("auction_settlement_step_seconds", time.Since(step).Seconds(), map[string]string{"step": "outbox_insert", "result": resultAccepted}, observability.DefaultLatencyBuckets)
+
+	step = time.Now()
 	if err := completeAcceptedIdempotencyBatch(ctx, tx, auctionID, rowsJSON, len(batch)); err != nil {
 		return 0, err
 	}
-	if err := markAcceptedSettlementsSettledBatch(ctx, tx, auctionID, rowsJSON, len(batch)); err != nil {
-		return 0, err
-	}
+	observability.Observe("auction_settlement_step_seconds", time.Since(step).Seconds(), map[string]string{"step": "idempotency_upsert", "result": resultAccepted}, observability.DefaultLatencyBuckets)
+
+	step = time.Now()
 	if err := upsertEngineCheckpoint(ctx, tx, auctionID, batch[len(batch)-1].message); err != nil {
 		return 0, err
 	}
+	observability.Observe("auction_settlement_step_seconds", time.Since(step).Seconds(), map[string]string{"step": "checkpoint", "result": resultAccepted}, observability.DefaultLatencyBuckets)
+
+	step = time.Now()
 	if err := tx.Commit(ctx); err != nil {
 		return 0, err
 	}
+	observability.Observe("auction_settlement_step_seconds", time.Since(step).Seconds(), map[string]string{"step": "commit", "result": resultAccepted}, observability.DefaultLatencyBuckets)
+
 	observability.Add("auction_bid_redis_settlement_total", float64(len(batch)), map[string]string{"result": resultAccepted, "status": "settled"})
 	return len(batch), nil
 }
@@ -2308,10 +2349,6 @@ func completeAcceptedIdempotencyBatch(ctx context.Context, tx pgx.Tx, auctionID 
 		return settlementIdentityConflictError{err: fmt.Errorf("accepted batch idempotency record conflict auction=%s affected=%d expected=%d", auctionID, tag.RowsAffected(), expected)}
 	}
 	return nil
-}
-
-func markAcceptedSettlementsSettledBatch(ctx context.Context, tx pgx.Tx, auctionID string, rowsJSON []byte, expected int) error {
-	return markRejectedSettlementsSettledBatch(ctx, tx, auctionID, rowsJSON, expected)
 }
 
 func (w *Worker) retryOrDLQ(ctx context.Context, message LedgerMessage, settleErr error) error {
