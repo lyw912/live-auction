@@ -303,12 +303,16 @@ function formatRemaining(ms: number) {
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
-function deriveCountdown(endAt: string, serverTimeMS: number, nowMS: number, terminal: boolean, stale: boolean, extended: boolean) {
+function deriveCountdown(endAt: string, serverTimeMS: number, nowMS: number, serverTimeSyncedAt: number, terminal: boolean, stale: boolean, extended: boolean) {
   if (terminal) return '已结束';
   if (!endAt || serverTimeMS <= 0) return stale ? '剩余时间待同步' : '等待服务端时间';
   const endAtMS = Date.parse(endAt);
   if (!Number.isFinite(endAtMS)) return '等待服务端时间';
-  const elapsed = Math.max(0, nowMS - serverTimeMS);
+  // Measure elapsed using local-monotonic time since the last server-time sync.
+  // This avoids mixing client-epoch with server-epoch, making the countdown
+  // correct regardless of client/server clock skew.
+  const syncedAt = serverTimeSyncedAt > 0 ? serverTimeSyncedAt : serverTimeMS;
+  const elapsed = Math.max(0, nowMS - syncedAt);
   const remaining = endAtMS - serverTimeMS - elapsed;
   if (remaining <= 0) return stale ? '本地到零，正在同步' : '到点同步中';
   return `${extended ? '延时后' : '剩余'} ${formatRemaining(remaining)}`;
@@ -329,11 +333,12 @@ function extensionCopyFromEvent(detail: AuctionRealtimeEvent, oldEndAt: string, 
   return `延时 ${oldCopy} -> ${nextCopy}${countCopy}`;
 }
 
-function isCountdownExpired(endAt: string, serverTimeMS: number, nowMS: number) {
+function isCountdownExpired(endAt: string, serverTimeMS: number, nowMS: number, serverTimeSyncedAt: number) {
   if (!endAt || serverTimeMS <= 0) return false;
   const endAtMS = Date.parse(endAt);
   if (!Number.isFinite(endAtMS)) return false;
-  return endAtMS - serverTimeMS - Math.max(0, nowMS - serverTimeMS) <= 0;
+  const syncedAt = serverTimeSyncedAt > 0 ? serverTimeSyncedAt : serverTimeMS;
+  return endAtMS - serverTimeMS - Math.max(0, nowMS - syncedAt) <= 0;
 }
 
 function createClientBidID() {
@@ -674,6 +679,9 @@ function App() {
   const maxBidAmountCentsRef = useRef(maxBidAmountCents);
   const auctionEndAtRef = useRef(auctionEndAt);
   const serverTimeMSRef = useRef(serverTimeMS);
+  // Tracks the local Date.now() at the moment we last received a server-time anchor.
+  // Used to compute clock-skew-independent elapsed time in deriveCountdown.
+  const serverTimeSyncedAtRef = useRef(0);
   const currentUserIDRef = useRef(currentUserID);
   const soundEnabledRef = useRef(soundEnabled);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -713,6 +721,7 @@ function App() {
 
   useEffect(() => {
     serverTimeMSRef.current = serverTimeMS;
+    if (serverTimeMS > 0) serverTimeSyncedAtRef.current = Date.now();
   }, [serverTimeMS]);
 
   useEffect(() => {
@@ -736,21 +745,21 @@ function App() {
   }, [connectionPhase, recoveryPhase]);
 
   useEffect(() => {
-    const timer = window.setInterval(() => setNowMS(Date.now()), 1000);
+    const timer = window.setInterval(() => setNowMS(Date.now()), 100);
     return () => window.clearInterval(timer);
   }, []);
 
   const countdownCopy = useMemo(() => {
     const stale = connectionPhase === 'disconnected' || recoveryPhase === 'recovering' || !activeAuctionID;
     const terminal = selected === 'sold_winner' || selected === 'sold_loser' || selected === 'ended' || selected === 'cancelled';
-    return deriveCountdown(auctionEndAt, serverTimeMS, nowMS, terminal, stale, Boolean(extensionNotice));
+    return deriveCountdown(auctionEndAt, serverTimeMS, nowMS, serverTimeSyncedAtRef.current, terminal, stale, Boolean(extensionNotice));
   }, [activeAuctionID, auctionEndAt, connectionPhase, extensionNotice, nowMS, recoveryPhase, selected, serverTimeMS]);
   const bidCooldownRemainingMS = Math.max(0, bidCooldownUntilMS - nowMS);
   const countdownExpired = useMemo(() => (
     selected === 'active_bids' &&
     connectionPhase === 'connected' &&
     recoveryPhase === 'idle' &&
-    isCountdownExpired(auctionEndAt, serverTimeMS, nowMS)
+    isCountdownExpired(auctionEndAt, serverTimeMS, nowMS, serverTimeSyncedAtRef.current)
   ), [auctionEndAt, connectionPhase, nowMS, recoveryPhase, selected, serverTimeMS]);
 
   const showAtmosphere = (input: AtmosphereInput) => {
