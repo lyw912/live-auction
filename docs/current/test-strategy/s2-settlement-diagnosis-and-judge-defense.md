@@ -19,7 +19,7 @@ S2 currently proves two different things with different confidence levels:
 | Async settlement convergence <= 110s | FAIL | `s2-stair-1000-workers4-110s-20260603T1928`: timed out at 112s with Kafka lag 1275, settlement_total 69925/70999 |
 | Async settlement convergence within 120s product buffer | ACCEPTABLE WITH POLL DISCLOSURE | `s2-stair-1000-120s-20260603T1942`: 119s still had lag 286; the 122s sample confirmed lag 0, settlement_total 70999/70999, Redis pending 0, outbox unpublished 0 |
 | Direct-SETTLED fast rejected SQL | REJECTED and reverted | `s2-stair-1000-directsettled-100s-20260602T212330`: worse lag 32033 at 101s; verifier failed due to incomplete convergence |
-| HTTP read-interference under bid load | CURRENT_FAILING / bottleneck evidence | `s2-read-ecs-15m-20260604T113330`: 100 bid attempts/s plus 2000/5000/10000 HTTP reads/s exposed read-path/DB-pool saturation; bid path stayed p99 5.68ms, but reads reached only ~2142/s actual with 2,057,742 dropped iterations |
+| HTTP read-interference under bid load | PASS at display profile; attack profiles remain failing | `s2-read-display-postfix-ecs-15m-20260604T140509`: 100 bid/s plus 1500/1800/2000 HTTP reads/s clean pass after P0/P1 fixes, dropped 0, bid p99 3.76ms, snapshot p99 11.54ms, leaderboard p99 4.46ms, my-bids p99 0.87ms. The earlier 2000/5000/10000 and 2000/3000/4000 runs remain CURRENT_FAILING bottleneck evidence. |
 
 The honest judge-facing statement:
 
@@ -503,17 +503,92 @@ P1 remaining work:
   The durable industrial fix is a Redis/materialized read model for active
   auction leaderboard, with PG as source of record and verifier coverage for
   cache rebuild correctness.
-- The next rerun should show whether the short snapshot/negative caches and
-  indexes are enough for a judge-safe 1500/1800/2000 display result. If
-  leaderboard p99 remains seconds-level, do not tune VUs; implement the
-  materialized leaderboard read model.
+- The postfix rerun shows the short snapshot/negative caches and indexes are
+  enough for the judge-safe 1500/1800/2000 display profile. A materialized
+  leaderboard read model is still the right next step before attempting to turn
+  the 3000/4000/5000/10000 attack profiles into pass claims.
+
+Postfix display rerun after P0/P1 fixes:
+
+```text
+label           : s2-read-display-postfix-ecs-15m-20260604T140509
+tool/source     : independent same-VPC ECS k6
+duration        : 15 min + 30s ramp-down
+bid rate        : 100/s, 100/s, 100/s
+read rate       : 1500/s, 1800/s, 2000/s
+read mix        : 80% snapshot, 15% leaderboard, 5% my-bids
+verdict         : CURRENT_PASS for the display profile
+```
+
+k6 formal-run result:
+
+| Signal | Value | Interpretation |
+|---|---:|---|
+| k6 exit code | 0 | all k6 thresholds passed |
+| dropped iterations | 0 | k6 delivered the arrival-rate plan |
+| HTTP failure rate | 0 | no transport/protocol failure |
+| total HTTP requests | 1,636,498 | formal 15-minute run volume |
+| bid final decisions | 91,499 | about 98.39/s, matching the 100/s target after ramp behavior |
+| read successes | 1,544,999 | about 1661.28/s delivered reads |
+| accepted / rejected | 27 / 91,472 | ascending-auction business distribution |
+| auth/ACL/admission/non-decision/read failures | 0 | workload reached intended code paths |
+| bid p99 | 3.76ms | below the 100ms bid gate and faster than pre-fix |
+| snapshot p99 | 11.54ms | below the read gate; fixed from 1.26s pre-fix |
+| leaderboard p99 | 4.46ms | below the read gate; fixed from 3.41s pre-fix |
+| my-bids p99 | 0.87ms | below the read gate; fixed from 730ms pre-fix |
+| k6 host | RSS about 717MB, CPU about 16-34% late run | no load-generator saturation signal |
+
+Service-side verification:
+
+| Signal | Value | Interpretation |
+|---|---:|---|
+| verifier exit code | 0 | service-side correctness gates passed |
+| auction engine state | `engine_paused=false`, reason empty | P0 TTL/pause defect did not recur |
+| cumulative settled decisions | 91,714 | includes the preceding smoke because the service was not reset before formal |
+| formal k6 decisions | 91,499 | formal-run-only count from k6 summary |
+| settled accepted / rejected | 31 / 91,683 | cumulative smoke+formal PostgreSQL/Kafka settlement |
+| engine_seq completeness | 1..91,714, missing 0 | Redis/Kafka/PG ledger sequence complete |
+| Kafka consumer lag | 0 | settlement consumer drained |
+| Redis pending decisions | 0 | relay/settlement pending hash drained |
+| Redis decision stream | stream_len=91,714, relay cursor advanced | hot decision stream retained after run |
+| outbox | 800 `PUBLISHED`, unpublished 0 | public events delivered/drained |
+| DLQ | empty | no Kafka DLQ contamination |
+| DB pool pressure | total 20, acquired 1, empty acquire 4, empty wait 0.052s | no DB-pool saturation in postfix run |
+| ACL cache | `hit=1,469,791` | ACL was Redis-hit dominated; not the read bottleneck |
+| HTTP snapshot cache | `hit=1,218,534`, `miss=19,187` | short cache absorbed room snapshot polling |
+| max-bid absent cache | `hit=1,063,705`, `miss=174,016` | empty private intent lookups were mostly cached |
+
+Evidence directory:
+
+```text
+docs/perf/pts/evidence/incoming/s2-read-display-postfix-ecs-15m-20260604T140509/
+```
+
+Important files:
+
+```text
+k6-summary.json                         # on k6 ECS evidence directory
+k6-samples.jsonl                        # on k6 ECS evidence directory
+k6-host/*                               # on k6 ECS evidence directory
+l4b-correctness.txt                     # service-side verifier report
+l4b-invariant-gates.tsv                 # all P0/P1 PASS
+l4b-kafka-gates.tsv                     # Kafka drain gates
+l4b-redis-gates.tsv                     # Redis policy/eviction gates
+l4b-redis-pending-gates.tsv             # pending decision drain gates
+metrics.prom                            # cache/ACL/DB-pool evidence
+postgres-summary.txt                    # PG settlement/outbox/activity summary
+postgres-read-attribution.txt           # pg_stat_statements best-effort; extension absent in this environment
+postgres-s2-read-explain.txt            # EXPLAIN output for S2 read paths
+redis-info.txt                          # Redis memory/policy/eviction evidence
+```
 
 Interpretation:
 
 - This is a valid bottleneck-finding run, not a successful 10k-read capacity
   result.
 - The bid engine path remained healthy under read pressure: about 98.4 final
-  bid decisions/s and bid p99 5.68-5.70ms across both read-interference attempts.
+  bid decisions/s. The pre-fix failed attempts had bid p99 5.68-5.70ms; the
+  postfix display pass improved bid p99 to 3.76ms.
 - The read path became the bottleneck around the 2k/s delivered range. The
   2k/5k/10k run produced 2,057,742 dropped iterations, and the reduced
   2k/3k/4k run still produced 524,423 dropped iterations after reader VUs filled
@@ -526,10 +601,9 @@ Interpretation:
   passed after Kafka/settlement drain. The third display attempt exposed a real
   P0 hot-ledger TTL design defect and must be rerun after the TTL fix.
 - The honest ceiling statement is: "under this service profile, 100 bid/s stayed
-  clean while HTTP reads delivered roughly 2.0-2.1k/s; 3k/4k/5k/10k offered reads
-  are not proven and expose read-path optimization work. The 1500/1800/2000
-  attempt is invalid as a pass because it triggered Redis engine pause before the
-  TTL fix."
+  clean while the 1500/1800/2000 display read profile passed cleanly after the
+  TTL and read-path fixes; 3k/4k/5k/10k offered reads are still not proven and
+  remain optimization/attack-profile work."
 
 What this run still does not prove:
 
@@ -537,20 +611,14 @@ What this run still does not prove:
 - It does not measure publish-to-receive fanout p99.
 - It does not replace S3. It is HTTP read interference only.
 
-Recommended next run:
+Current display rerun status:
 
 ```text
-After P0/P1 fixes: rerun S2-read display-ceiling with
-100 bid/s + 1500/s -> 1800/s -> 2000/s reads.
-Required gates: dropped_iterations near zero, read p99 materially below the
-pre-fix run, `engine_paused=false`, Redis stream length/settlement counts
-consistent, Kafka lag 0, Redis pending 0, outbox drained, verifier P0/P1 PASS.
-Required ACL signal: `auction_acl_membership_cache_total{result="hit"}` should
-dominate and `db_allowed` / `miss` should remain low after the prepared Redis
-ACL warmup.
-Required attribution files: `postgres-read-attribution.txt`,
-`postgres-s2-read-explain.txt`, `metrics.prom`, `redis-info.txt`,
-`k6-summary.json`, and `k6-host/*`.
+S2-read display profile 100 bid/s + 1500/s -> 1800/s -> 2000/s reads is PASS
+as of s2-read-display-postfix-ecs-15m-20260604T140509.
+
+Do not extrapolate this to 3k/4k/5k/10k reads. Those remain unproven until the
+leaderboard/materialized read-model work is implemented and measured.
 ```
 
 ## 2. What This Test Actually Is

@@ -211,6 +211,12 @@ Reduced display-ceiling rerun after the 10k/4k/read-display failures and the
   max-bid-intent lookups get a 5s negative cache, `my-bids` is capped at 50
   rows, ACL hit/miss metrics were added, and read-path indexes plus SQL
   attribution were added.
+- 2026-06-04 result: `s2-read-display-postfix-ecs-15m-20260604T140509` is
+  CURRENT_PASS for this display profile: k6 exit 0, dropped 0, HTTP failures 0,
+  bid p99 3.76ms, snapshot p99 11.54ms, leaderboard p99 4.46ms, my-bids p99
+  0.87ms, verifier P0/P1 PASS. The service verifier shows 91,714 cumulative
+  settled decisions because the preceding smoke was not reset before the formal
+  run; k6 formal-only bid decisions were 91,499.
 
 ```bash
 export LABEL=s2-read-display-postfix-ecs-15m-$(date +%Y%m%dT%H%M%S)
@@ -237,6 +243,8 @@ The later `s2-read-display-ecs-15m-20260604T123644` attempt
 snapshot p99 1.26s, leaderboard p99 3.41s, my-bids p99 730ms, and service-side
 verification exposed the Redis hot-ledger TTL P0. Do not cite it as pass; cite
 it as bottleneck evidence before the P0/P1 fixes.
+The postfix run above supersedes it for the display profile, but not for the
+3k/4k/5k/10k attack profiles.
 
 Smoke shape:
 
