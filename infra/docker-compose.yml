@@ -103,6 +103,21 @@ services:
       - "--storage.tsdb.path=/prometheus"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      - alertmanager
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: live-auction-alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   tempo:
     image: grafana/tempo:2.6.0

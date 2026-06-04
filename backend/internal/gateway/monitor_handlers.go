@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -1200,4 +1201,71 @@ func ptrMonitorString(value string) *string {
 func internalMonitorError(err error) apierrors.APIError {
 	_ = err
 	return apierrors.New(apierrors.CodeInvalidArgument, "monitor query failed", http.StatusInternalServerError)
+}
+
+// alertmanagerPayload is the Alertmanager v4 webhook payload shape.
+type alertmanagerPayload struct {
+	Alerts []struct {
+		Status      string            `json:"status"`
+		Labels      map[string]string `json:"labels"`
+		Annotations map[string]string `json:"annotations"`
+		StartsAt    time.Time         `json:"startsAt"`
+		EndsAt      time.Time         `json:"endsAt"`
+	} `json:"alerts"`
+	GroupLabels  map[string]string `json:"groupLabels"`
+	CommonLabels map[string]string `json:"commonLabels"`
+	Status       string            `json:"status"`
+	Version      string            `json:"version"`
+}
+
+// AlertWebhook receives Alertmanager webhook notifications, persists each
+// firing alert as a system_anomaly_events row (so it appears in
+// /api/monitor/anomalies and the anomaly Prometheus gauge), and emits a
+// structured log so operators get a signal in both the database and the log
+// stream. Resolved alerts are logged but not written to the anomaly table.
+func (h MonitorHandler) AlertWebhook(w http.ResponseWriter, r *http.Request) {
+	var payload alertmanagerPayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	ctx := r.Context()
+	for _, alert := range payload.Alerts {
+		severity := alert.Labels["severity"]
+		if severity == "" {
+			severity = "MED"
+		}
+		alertName := alert.Labels["alertname"]
+		summary := alert.Annotations["summary"]
+		slog.Warn("alertmanager_alert_received",
+			slog.String("alert", alertName),
+			slog.String("status", alert.Status),
+			slog.String("severity", severity),
+			slog.String("summary", summary),
+		)
+		if alert.Status != "firing" {
+			continue
+		}
+		// Persist firing alert as an anomaly event so it surfaces in the
+		// /api/monitor/anomalies dashboard and the auction_anomaly_total metric.
+		payloadJSON, _ := json.Marshal(map[string]any{
+			"alert":       alertName,
+			"labels":      alert.Labels,
+			"annotations": alert.Annotations,
+			"starts_at":   alert.StartsAt,
+		})
+		dbSeverity := strings.ToUpper(severity)
+		switch dbSeverity {
+		case "CRITICAL", "HIGH", "MED", "LOW":
+		default:
+			dbSeverity = "MED"
+		}
+		_, _ = h.Deps.Postgres.Exec(ctx, `
+			INSERT INTO system_anomaly_events (severity, type, message, payload_json)
+			VALUES ($1, $2, $3, $4::jsonb)
+		`, dbSeverity, "ALERTMANAGER_"+strings.ToUpper(alertName), summary, string(payloadJSON))
+		observability.Inc("auction_alertmanager_received_total",
+			map[string]string{"alert": alertName, "severity": dbSeverity})
+	}
+	w.WriteHeader(http.StatusOK)
 }

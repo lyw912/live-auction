@@ -260,6 +260,24 @@ func (r *Registry) collectDatabase(ctx context.Context) {
 			r.Set("auction_anomaly_total", float64(count), map[string]string{"type": anomalyType, "severity": severity})
 		}
 	}
+
+	// Settlement lag: P99 and pending count for decisions not yet settled.
+	// Mirrors the monitor/redis-engine JSON query so operators get the same
+	// signal in both dashboard and Prometheus alerts.
+	var lagP99MS float64
+	var pendingCount int64
+	if scanErr := db.QueryRow(ctx, `
+		SELECT
+		  COALESCE(percentile_cont(0.99) WITHIN GROUP (
+		    ORDER BY EXTRACT(EPOCH FROM (COALESCE(settled_at, now()) - created_at)) * 1000
+		  ), 0),
+		  COALESCE(count(*) FILTER (WHERE status = 'PROCESSING'), 0)
+		FROM redis_engine_settlements
+		WHERE created_at > now() - interval '5 minutes'
+	`).Scan(&lagP99MS, &pendingCount); scanErr == nil {
+		r.Set("auction_settlement_lag_p99_ms", lagP99MS, nil)
+		r.Set("auction_settlement_pending_total", float64(pendingCount), nil)
+	}
 }
 
 func makeKey(name string, labels map[string]string) (sampleKey, labelSet) {

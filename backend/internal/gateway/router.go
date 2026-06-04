@@ -168,6 +168,10 @@ func NewRouterWithRealtimeAndLedger(cfg config.Config, deps *storage.Dependencie
 			r.With(requireHost).Post("/test/rooms", auctionHandler.TestSetupRoom)
 		})
 	})
+	// Internal alert-webhook: receives Alertmanager firing/resolved notifications.
+	// No user auth — callers are the local Alertmanager container on the same network.
+	r.Post("/api/internal/alert-webhook", monitorHandler.AlertWebhook)
+
 	r.Get("/ws", rt.ServeWS)
 
 	return r

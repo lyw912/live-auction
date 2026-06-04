@@ -137,3 +137,36 @@ groups:
           summary: "Redis ledger pending decisions did not drain"
           description: "Pending decisions remaining after the burst means Kafka append or settlement recovery is incomplete."
           runbook: "docs/perf/pts/l4b-kafka/pts1b-observability-runbook-2026-05-30.md#triage-matrix"
+
+      - alert: LiveAuctionSettlementLagHigh
+        expr: auction_settlement_lag_p99_ms > 5000
+        for: 2m
+        labels:
+          severity: warning
+          component: settlement
+        annotations:
+          summary: "Settlement P99 lag is high"
+          description: "P99 settlement lag exceeded 5 s for 2 minutes. Check worker count, Kafka consumer lag, and PG write load."
+          runbook: "docs/current/test-strategy/s2-settlement-diagnosis-and-judge-defense.md"
+
+      - alert: LiveAuctionSettlementPendingStuck
+        expr: auction_settlement_pending_total > 100
+        for: 3m
+        labels:
+          severity: warning
+          component: settlement
+        annotations:
+          summary: "Large number of PROCESSING settlements not draining"
+          description: "More than 100 settlements have been in PROCESSING state for over 3 minutes. Settlement worker may be stalled."
+          runbook: "docs/current/test-strategy/s2-settlement-diagnosis-and-judge-defense.md"
+
+      - alert: LiveAuctionTerminalNotFenced
+        expr: increase(auction_reconcile_terminal_unfenced_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          component: redis-engine
+        annotations:
+          summary: "Cancelled/ended auction not fenced in Redis hot engine"
+          description: "Reconciler found an auction in a terminal PG state whose Redis hot-state was not marked paused. Bids may have been accepted after cancellation. Check /api/monitor/redis-engine."
+          runbook: "docs/current/fault-injection-runbook.md"
