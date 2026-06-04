@@ -194,14 +194,99 @@ to the mixed CSV rows and verifies it through sampler counts.
 
 ## 8. Current Local Evidence Snapshot
 
-> Status: raw incoming evidence, not yet a final PTS PDF. Use for judge rehearsal
-> only with the scope below.
+> Status: current S3 evidence contains one local live-only pass and one PTS
+> mixed-final-burst integration pass. Keep the distinction explicit:
+> `S3-live-only-fanout` is the clean M2 baseline, while `S3-mixed-final-burst`
+> is a mixed integration rehearsal.
 
 | Run | Scale | Fanout p99 | Viewer errors | Interpretation |
 |---|---:|---:|---:|---|
 | `s3-local-scale-1000-liveonly-20260602T2303` | 1000 WS, 60s, 301 accepted updates | 22 ms | 0 | Current local S3/M2 evidence: live publish-to-online-viewer receive latency passes the 1s target |
+| `20L8X79G` | PTS mixed burst: 2995 WS, 998 bids, 499 readers | console avg 52.2 ms for `S3 live fanout receive`; sampled max markers mostly <200 ms | 0 API/assertion failures | Current PTS integration evidence: 2995 viewer join/ticket/handshake/first-message/live-receive/close all 100% success in the console export; service metrics show 7 accepted publishes fanned out to 2995 subscribers |
 | `s3-local-scale-1000-20260602T2300` | 1000 WS, 60s, 74 accepted updates | 59.6 s | 9 | Harness-contaminated run: history/recovery messages were counted as fanout latency |
 | `s3-local-scale-2000-20260602T2305` | attempted 2000 WS | no complete summary | unknown | Failed/incomplete run; usable only as single-node/local-generator ceiling evidence |
+
+### 8.1 PTS mixed final-burst `20L8X79G`
+
+`20L8X79G` ran the current single-branch mixed PTS asset:
+
+```text
+3000 viewer rows + 1000 bidder rows + 500 reader rows
+PTS source IPs: 9
+sampling setting: 1%
+```
+
+PTS console API-list export is the count source for this run:
+
+| Sampler | Total | Request success | Assertion success | Average RT |
+|---|---:|---:|---:|---:|
+| `S3 POST accepted-update bid` | 998 | 100% | 100% | 17.5 ms, p99 50.5 ms |
+| `S3 viewer join snapshot` | 2995 | 100% | 100% | 40.9 ms, p99 86.3 ms |
+| `S3 POST WS ticket` | 2995 | 100% | 100% | 19.1 ms, p99 55.7 ms |
+| `S3 WS handshake complete` | 2995 | 100% | 100% | 903 ms, p99 1.02 s |
+| `S3 WS first snapshot/business message` | 2995 | 100% | 100% | 151 ms, p99 310 ms |
+| `S3 live fanout receive` | 2995 | 100% | 100% | 52.2 ms, p99 124 ms |
+| `S3 WS close` | 2995 | 100% | 100% | 129 ms, p99 165 ms |
+| `S3 GET auction snapshot` | 499 | 100% | 100% | 43.1 ms, p95 122 ms |
+| `S3 GET auction leaderboard` | 499 | 100% | 100% | 53.5 ms, p99 181 ms |
+| `S3 GET my bid history` | 499 | 100% | 100% | 16.2 ms, p99 110 ms |
+
+Service-side evidence:
+
+```text
+bids=998, accepted=7, rejected=991
+Redis settlement settled=998/998
+Kafka lag=0
+outbox PUBLISHED=7, pending=0
+auction_ws_recover_total{result="snapshot_redis"}=2995
+auction_ws_publish_subscribers_sum=20965 = 7 * 2995
+auction_ws_send_queue_depth_sum=0
+auction_ws_connections after run=0
+Redis blocked_clients=0, rejected_connections=0, evicted_keys=0
+runtime_open_fds=418, runtime_goroutines=43, RSS about 181 MB
+```
+
+Evidence files:
+
+```text
+docs/perf/pts/evidence/incoming/20L8X79G/
+docs/perf/pts/evidence/incoming/20L8X79G/pts-console-api-list.md
+docs/perf/pts/evidence/incoming/s3-burst-pts-20L8X79G/
+```
+
+Important reporting nuance: local `GetJMeterReportDetails` returned
+`AllCount=499` for `S3 live fanout receive` and `S3 WS close`, while the PTS
+console API-list export reports `2995` for both. For this run, use the console
+export plus service-side publish-subscriber metrics as the authoritative count
+evidence. The 1% sampling logs are only response-marker forensics; they sampled
+45 `S3 live fanout receive` rows, all successful, each showing 7 live messages
+and `S3_V6_LIVE_FANOUT_OK...WS_ONLY`.
+
+Count semantics: `S3 live fanout receive=2995` means 2995 viewer samplers each
+completed the observe step successfully. It is not the raw WebSocket message
+count. The raw fanout surface is `accepted publishes * subscribers`, confirmed
+by service metrics as `auction_ws_publish_subscribers_sum=20965 = 7 * 2995`.
+The sampling-log markers agree with that shape: sampled receive rows report
+`LIVE_MESSAGES_7`.
+
+P99 semantics: `S3 live fanout receive p99=124 ms` is the PTS/JMeter p99 across
+the 2995 receive/observe sampler results. It is not a per-message p99 over all
+20965 WebSocket subscriber deliveries, and it is not computed by averaging the
+7 messages per viewer first. The receive sampler observes messages for 30s with
+`SampleResult.samplePause()` around the hold window, then emits diagnostic
+markers such as `MAX_LAT_MS_...`; those markers are sampled per-viewer worst
+live-message latency evidence. Therefore the honest statement is: 2995 receive
+samplers succeeded, the PTS sampler p99 was 124ms, service metrics prove
+20965 subscriber deliveries, and 1% sampled viewers each saw 7 live messages.
+
+Industrial comparison: this is a strong contest-scale / single-node result, not
+a claim of top-tier global realtime infrastructure. `S3 live fanout receive`
+p99 `124 ms` is below the 200 ms "good interaction" responsiveness bar and far
+inside the project 1 s realtime target. It is also in the same order as public
+realtime-system benchmarks that target sub-200 ms p99 delivery at much larger
+scale. The weakest metric is one-time `S3 WS handshake complete` p99 `1.02 s`;
+keep it separate from already-online fanout latency and attribute it with
+server join-stage metrics before claiming it is backend work.
 
 Judge-safe wording:
 
@@ -209,10 +294,12 @@ Judge-safe wording:
 > messages were being included in M2, producing a false 59.6s fanout p99. After
 > fixing the harness to count only live messages published after the viewer
 > connection opened, the 1000-WS rerun produced p99 22ms with zero viewer errors.
-> We cite the live-only run for S3/M2 and keep the earlier run as a harness
-> correction record."
+> We cite the live-only run for clean S3/M2 and cite `20L8X79G` as mixed
+> final-burst integration evidence: roughly 3000 viewers joined, received live
+> fanout, and closed with 100% API/assertion success while 998 bid decisions and
+> 499 reader rows completed without service-side backlog."
 
-Do not claim 2000 or 10000 WS success from the current local artifacts. The next
-judge-grade S3 artifact should be either the PTS 2000-WS cost variant or a
-completed local 10k hold with Grafana resource panels and a clear generator-limit
-statement.
+Do not claim 2000 or 10000 live-only WS success from the current local artifacts.
+The next clean S3-live-only artifact should still be the PTS 2000/5000 WS cost
+variant or a completed local 10k hold with Grafana resource panels and a clear
+generator-limit statement.

@@ -225,7 +225,103 @@ not business fanout latency. The S3 v7 JMX records `SETUP_MS` and `HANDSHAKE_MS`
 inside the handshake response marker and reuses one Java `HttpClient` per PTS
 engine to remove client construction noise from the sampler.
 
-## 7. Current Limitations And Next Evidence
+## 7. PTS Mixed Final-Burst Evidence: `20L8X79G`
+
+`20L8X79G` is the current PTS `S3-mixed-final-burst` integration evidence, not
+the clean `S3-live-only-fanout` baseline.
+
+PTS console API-list export:
+
+| Sampler | Count | Success | Assertion | Average RT |
+|---|---:|---:|---:|---:|
+| `S3 POST accepted-update bid` | 998 | 100% | 100% | 17.5 ms |
+| `S3 viewer join snapshot` | 2995 | 100% | 100% | 40.9 ms |
+| `S3 POST WS ticket` | 2995 | 100% | 100% | 19.1 ms |
+| `S3 WS handshake complete` | 2995 | 100% | 100% | 903 ms |
+| `S3 WS first snapshot/business message` | 2995 | 100% | 100% | 151 ms |
+| `S3 live fanout receive` | 2995 | 100% | 100% | 52.2 ms |
+| `S3 WS close` | 2995 | 100% | 100% | 129 ms |
+| three reader APIs | 499 each | 100% | 100% | 16.2-53.5 ms |
+
+PTS console exported tail latency:
+
+| Sampler | Tail |
+|---|---:|
+| `S3 POST accepted-update bid` | p99 50.5 ms |
+| `S3 viewer join snapshot` | p99 86.3 ms |
+| `S3 POST WS ticket` | p99 55.7 ms |
+| `S3 WS handshake complete` | p99 1.02 s |
+| `S3 WS first snapshot/business message` | p99 310 ms |
+| `S3 live fanout receive` | p99 124 ms |
+| `S3 WS close` | p99 165 ms |
+| `S3 GET auction snapshot` | p95 122 ms |
+| `S3 GET auction leaderboard` | p99 181 ms |
+| `S3 GET my bid history` | p99 110 ms |
+
+Service-side confirmation:
+
+| Signal | Value | Meaning |
+|---|---:|---|
+| Redis engine decisions | 998 | bidder rows reached the hot path |
+| Settled decisions | 998/998 | no Redis/Kafka/PG settlement gap |
+| Accepted/rejected | 7 / 991 | accepted publishes are the fanout source; rejects are normal final-burst decisions |
+| Kafka lag | 0 | settlement consumer drained |
+| Outbox pending | 0 | publication plane drained |
+| `auction_ws_recover_total{snapshot_redis}` | 2995 | viewers received Redis hot snapshot on join |
+| `auction_ws_publish_subscribers_sum` | 20965 | `7 accepted publishes * 2995 subscribers` |
+| WS send queue depth | 0 | no observed queue buildup |
+| WS connections after run | 0 | clean close after the PTS run |
+
+Sampling caveat:
+
+- The run used 1% sampling. Sampling logs are therefore diagnostic response-body
+  evidence, not full coverage. The logs sampled 45 `S3 live fanout receive`
+  rows; they all succeeded and carried `S3_V6_LIVE_FANOUT_OK...WS_ONLY`, with
+  sampled viewers seeing 7 live messages.
+- `S3 live fanout receive=2995` is a JMeter sampler count, not a raw WebSocket
+  message count. Each viewer executes one receive/observe sampler; inside that
+  sampler, the listener counts how many live events arrived. The raw fanout
+  volume is confirmed service-side as `auction_ws_publish_subscribers_sum=20965`
+  = `7 accepted publishes * 2995 subscribers`.
+- `S3 live fanout receive p99=124ms` is the PTS p99 over those 2995 sampler
+  results. It is not the full per-message p99 over 20965 WebSocket deliveries
+  and not a p99 over per-viewer averages. The sampled response markers carry the
+  per-viewer diagnostic value (`MAX_LAT_MS_xxx`) for the messages seen during
+  that viewer's 30s observe window.
+- Local `GetJMeterReportDetails` returned `AllCount=499` for long WebSocket
+  receive/close samplers, but the PTS console API-list export reports `2995`.
+  For judge-facing evidence, cite the console export and service-side
+  `publish_subscribers_sum` together; keep the CLI mismatch as a tooling note.
+
+Judge answer:
+
+> "`20L8X79G` is not a pure fanout capacity curve; it is the mixed live-room
+> integration rehearsal. It shows about 3000 same-room viewers joining through
+> Redis snapshot recovery, 998 bid decisions settling with Kafka lag zero, and
+> 7 accepted price publishes reaching 2995 subscribers. PTS console export shows
+> the live receive sampler ran 2995 times with 100% request/assertion success and
+> 52.2ms average response time. Because the run used 1% sampling, sampling logs
+> are used only to inspect response markers, not to prove exact counts."
+
+Industrial comparison answer:
+
+> "For this scale, the fanout number is good. A 2995-viewer mixed room with
+> `S3 live fanout receive` p99 124ms is below the common 200ms good
+> responsiveness bar and far below the 1s live-room synchronization SLO. The bid
+> p99 50.5ms and ticket p99 55.7ms are also strong. The only chart I would not
+> oversell is handshake p99 1.02s: it is acceptable for a one-time WebSocket
+> establishment under PTS, but it is not elite and should be explained separately
+> from live fanout."
+
+If asked exactly how the p99 was calculated:
+
+> "The PTS p99 is across JMeter sampler results, one receive sampler per viewer,
+> not across each WebSocket frame. The raw fanout count is 7 accepted publishes
+> times 2995 subscribers, proven by service metrics. The sampling logs then show
+> representative per-viewer markers, where sampled viewers received 7 live
+> messages and reported low `MAX_LAT_MS` values."
+
+## 8. Current Limitations And Next Evidence
 
 Current S3 is local raw evidence. It is credible for internal explanation, but a
 final judge pack should add:

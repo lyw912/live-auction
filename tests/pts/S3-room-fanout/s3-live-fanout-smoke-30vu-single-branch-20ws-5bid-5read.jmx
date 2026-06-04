@@ -61,10 +61,11 @@
           <stringProp name="variableNames">load_role,user_id,token,role</stringProp>
         </CSVDataSet>
         <hashTree />
-        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="S3 mixed VU start barrier" enabled="true">
+        <JSR223PreProcessor guiclass="TestBeanGUI" testclass="JSR223PreProcessor" testname="S3 mixed VU start barrier preprocessor" enabled="true">
           <stringProp name="scriptLanguage">groovy</stringProp>
           <stringProp name="cacheKey">s3-mixed-vu-start-barrier-v1</stringProp>
           <stringProp name="script"><![CDATA[
+if (vars.get('s3_start_barrier_done') == '1') return
 long wait = Long.parseLong(props.getProperty('s3_start_barrier_wait_ms', '15000'))
 long quantum = Long.parseLong(props.getProperty('s3_start_barrier_quantum_ms', '1000'))
 def target = props.get('s3_start_barrier_target_ms') as java.util.concurrent.atomic.AtomicLong
@@ -77,11 +78,9 @@ if (target == null) {
 }
 long sleep = target.get() - System.currentTimeMillis()
 if (sleep > 0L) Thread.sleep(sleep)
-SampleResult.setSuccessful(true)
-SampleResult.setResponseCode('200')
-SampleResult.setResponseMessage('S3_MIXED_START_BARRIER_OK_ROLE_' + (vars.get('load_role') ?: 'missing'))
+vars.put('s3_start_barrier_done', '1')
           ]]></stringProp>
-        </JSR223Sampler>
+        </JSR223PreProcessor>
         <hashTree />
         <IfController guiclass="IfControllerPanel" testclass="IfController" testname="S3 bidder branch" enabled="true">
           <stringProp name="IfController.condition">${__groovy(vars.get('load_role') == 'bidder')}</stringProp>
