@@ -57,16 +57,20 @@ case "$SCENARIO" in
     ;;
   s2-read-interference)
     STAGE_DUR="${STAGE_DUR:-5m}"
-    BID_STAGE1_RATE="${BID_STAGE1_RATE:-20}"
-    BID_STAGE2_RATE="${BID_STAGE2_RATE:-60}"
+    BID_STAGE1_RATE="${BID_STAGE1_RATE:-100}"
+    BID_STAGE2_RATE="${BID_STAGE2_RATE:-100}"
     BID_STAGE3_RATE="${BID_STAGE3_RATE:-100}"
-    READ_STAGE1_RATE="${READ_STAGE1_RATE:-200}"
-    READ_STAGE2_RATE="${READ_STAGE2_RATE:-600}"
-    READ_STAGE3_RATE="${READ_STAGE3_RATE:-1000}"
-    BID_PRE_ALLOC_VUS="${BID_PRE_ALLOC_VUS:-80}"
-    BID_MAX_VUS="${BID_MAX_VUS:-300}"
-    READ_PRE_ALLOC_VUS="${READ_PRE_ALLOC_VUS:-160}"
-    READ_MAX_VUS="${READ_MAX_VUS:-600}"
+    READ_STAGE1_RATE="${READ_STAGE1_RATE:-2000}"
+    READ_STAGE2_RATE="${READ_STAGE2_RATE:-5000}"
+    READ_STAGE3_RATE="${READ_STAGE3_RATE:-10000}"
+    BID_PRE_ALLOC_VUS="${BID_PRE_ALLOC_VUS:-120}"
+    BID_MAX_VUS="${BID_MAX_VUS:-400}"
+    READ_PRE_ALLOC_VUS="${READ_PRE_ALLOC_VUS:-1500}"
+    READ_MAX_VUS="${READ_MAX_VUS:-4000}"
+    K6_OUTPUT_ARGS=()
+    if [ "${K6_FULL_JSON:-0}" = "1" ]; then
+      K6_OUTPUT_ARGS+=(--out "json=${EVIDENCE_DIR}/k6-samples.jsonl")
+    fi
     k6 run \
       --env "BASE_URL=${BASE_URL}" \
       --env "STAGE_DUR=${STAGE_DUR}" \
@@ -81,7 +85,7 @@ case "$SCENARIO" in
       --env "READ_PRE_ALLOC_VUS=${READ_PRE_ALLOC_VUS}" \
       --env "READ_MAX_VUS=${READ_MAX_VUS}" \
       --summary-export "${EVIDENCE_DIR}/k6-summary.json" \
-      --out "json=${EVIDENCE_DIR}/k6-samples.jsonl" \
+      "${K6_OUTPUT_ARGS[@]}" \
       tests/load/s2-read-interference.js "$@" || K6_EXIT=$?
     ;;
   s3-ws-sanity)

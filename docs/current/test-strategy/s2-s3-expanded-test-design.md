@@ -146,10 +146,10 @@ Recommended shape:
 
 ```text
 tool           : PTS RPS or independent-ECS k6
-bid rate       : 20/s -> 60/s -> 100/s
+bid rate       : 100/s
 read endpoints : GET auction snapshot, GET leaderboard, GET my bid history
-read traffic   : 200/s -> 600/s -> 1000/s total HTTP reads
-mix            : 60% snapshot, 30% leaderboard, 10% my bid history
+read traffic   : 2000/s -> 5000/s -> 10000/s total HTTP reads
+mix            : 80% snapshot, 15% leaderboard, 5% my bid history
 duration       : 15 min default, 5 min per stage
 ```
 
@@ -157,11 +157,11 @@ Default independent-k6 command shape:
 
 ```text
 STAGE_DUR=5m
-BID_STAGE1_RATE=20    READ_STAGE1_RATE=200
-BID_STAGE2_RATE=60    READ_STAGE2_RATE=600
-BID_STAGE3_RATE=100   READ_STAGE3_RATE=1000
-BID_PRE_ALLOC_VUS=80  READ_PRE_ALLOC_VUS=160
-BID_MAX_VUS=300       READ_MAX_VUS=600
+BID_STAGE1_RATE=100    READ_STAGE1_RATE=2000
+BID_STAGE2_RATE=100    READ_STAGE2_RATE=5000
+BID_STAGE3_RATE=100    READ_STAGE3_RATE=10000
+BID_PRE_ALLOC_VUS=120  READ_PRE_ALLOC_VUS=1500
+BID_MAX_VUS=400        READ_MAX_VUS=4000
 ```
 
 Evidence:

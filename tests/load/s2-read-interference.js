@@ -12,12 +12,15 @@
  *   BID_USER_PREFIX     default k6_bidder_
  *   READ_USER_PREFIX    default k6_user_
  *   STAGE_DUR           default 5m
- *   BID_STAGE{1,2,3}_RATE  default 20,60,100 bids/s
- *   READ_STAGE{1,2,3}_RATE default 200,600,1000 reads/s
- *   BID_PRE_ALLOC_VUS   default 80
- *   BID_MAX_VUS         default 300
- *   READ_PRE_ALLOC_VUS  default 160
- *   READ_MAX_VUS        default 600
+ *   BID_STAGE{1,2,3}_RATE  default 100,100,100 bids/s
+ *   READ_STAGE{1,2,3}_RATE default 2000,5000,10000 reads/s
+ *   BID_PRE_ALLOC_VUS   default 120
+ *   BID_MAX_VUS         default 400
+ *   READ_PRE_ALLOC_VUS  default 1500
+ *   READ_MAX_VUS        default 4000
+ *   READ_USER_COUNT     default 5000
+ *   SNAPSHOT_PCT        default 80
+ *   LEADERBOARD_PCT     default 15
  */
 
 import http from 'k6/http';
@@ -28,18 +31,21 @@ const BASE_URL = __ENV.BASE_URL || 'http://127.0.0.1:18080';
 const AUCTION_ID = __ENV.AUCTION_ID || 'auc_live';
 const BID_USER_PREFIX = __ENV.BID_USER_PREFIX || 'k6_bidder_';
 const READ_USER_PREFIX = __ENV.READ_USER_PREFIX || 'k6_user_';
+const READ_USER_COUNT = Number(__ENV.READ_USER_COUNT || 5000);
 
 const STAGE_DUR = __ENV.STAGE_DUR || '5m';
-const BID_STAGE1_RATE = Number(__ENV.BID_STAGE1_RATE || 20);
-const BID_STAGE2_RATE = Number(__ENV.BID_STAGE2_RATE || 60);
+const BID_STAGE1_RATE = Number(__ENV.BID_STAGE1_RATE || 100);
+const BID_STAGE2_RATE = Number(__ENV.BID_STAGE2_RATE || 100);
 const BID_STAGE3_RATE = Number(__ENV.BID_STAGE3_RATE || 100);
-const READ_STAGE1_RATE = Number(__ENV.READ_STAGE1_RATE || 200);
-const READ_STAGE2_RATE = Number(__ENV.READ_STAGE2_RATE || 600);
-const READ_STAGE3_RATE = Number(__ENV.READ_STAGE3_RATE || 1000);
-const BID_PRE_ALLOC_VUS = Number(__ENV.BID_PRE_ALLOC_VUS || 80);
-const BID_MAX_VUS = Number(__ENV.BID_MAX_VUS || 300);
-const READ_PRE_ALLOC_VUS = Number(__ENV.READ_PRE_ALLOC_VUS || 160);
-const READ_MAX_VUS = Number(__ENV.READ_MAX_VUS || 600);
+const READ_STAGE1_RATE = Number(__ENV.READ_STAGE1_RATE || 2000);
+const READ_STAGE2_RATE = Number(__ENV.READ_STAGE2_RATE || 5000);
+const READ_STAGE3_RATE = Number(__ENV.READ_STAGE3_RATE || 10000);
+const BID_PRE_ALLOC_VUS = Number(__ENV.BID_PRE_ALLOC_VUS || 120);
+const BID_MAX_VUS = Number(__ENV.BID_MAX_VUS || 400);
+const READ_PRE_ALLOC_VUS = Number(__ENV.READ_PRE_ALLOC_VUS || 1500);
+const READ_MAX_VUS = Number(__ENV.READ_MAX_VUS || 4000);
+const SNAPSHOT_PCT = Number(__ENV.SNAPSHOT_PCT || 80);
+const LEADERBOARD_PCT = Number(__ENV.LEADERBOARD_PCT || 15);
 
 const INCREMENT_CENTS = Number(__ENV.INCREMENT_CENTS || 5000);
 const BASE_PRICE_CENTS = Number(__ENV.BASE_PRICE_CENTS || 10000);
@@ -79,12 +85,12 @@ export const options = {
   },
   summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(90)', 'p(95)', 'p(99)', 'p(99.9)'],
   thresholds: {
-    dropped_iterations: ['count<500'],
+    dropped_iterations: ['count==0'],
     http_req_failed: ['rate==0'],
     'http_req_duration{sampler:bid-decision}': ['p(99)<100'],
-    'http_req_duration{sampler:read-auction-snapshot}': ['p(99)<200'],
-    'http_req_duration{sampler:read-leaderboard}': ['p(99)<200'],
-    'http_req_duration{sampler:read-bid-history}': ['p(99)<300'],
+    'http_req_duration{sampler:read-auction-snapshot}': ['p(99)<50'],
+    'http_req_duration{sampler:read-leaderboard}': ['p(99)<100'],
+    'http_req_duration{sampler:read-bid-history}': ['p(99)<150'],
     s2ri_auth_acl_failures: ['count==0'],
     s2ri_admission_contamination: ['count==0'],
     s2ri_non_decision_failures: ['count==0'],
@@ -193,15 +199,16 @@ export function bidFn() {
 }
 
 export function readFn() {
-  const userID = `${READ_USER_PREFIX}${__VU}`;
-  const pick = (__ITER * 17 + __VU * 5) % 10;
+  const readerOrdinal = ((__VU + __ITER - 1) % READ_USER_COUNT) + 1;
+  const userID = `${READ_USER_PREFIX}${readerOrdinal}`;
+  const pick = (__ITER * 17 + __VU * 5) % 100;
   let url = `${BASE_URL}/api/auctions/${AUCTION_ID}`;
   let sampler = 'read-auction-snapshot';
 
-  if (pick >= 6 && pick < 9) {
+  if (pick >= SNAPSHOT_PCT && pick < SNAPSHOT_PCT + LEADERBOARD_PCT) {
     url = `${BASE_URL}/api/auctions/${AUCTION_ID}/leaderboard?limit=5`;
     sampler = 'read-leaderboard';
-  } else if (pick >= 9) {
+  } else if (pick >= SNAPSHOT_PCT + LEADERBOARD_PCT) {
     url = `${BASE_URL}/api/users/me/bids`;
     sampler = 'read-bid-history';
   }

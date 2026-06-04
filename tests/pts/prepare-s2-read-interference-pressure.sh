@@ -6,8 +6,8 @@ DB_CONTAINER="${DB_CONTAINER:-live-auction-postgres}"
 REDIS_CONTAINER="${REDIS_CONTAINER:-live-auction-redis}"
 DB_USER="${DB_USER:-live_auction}"
 DB_NAME="${DB_NAME:-live_auction}"
-BID_MAX_VUS="${BID_MAX_VUS:-300}"
-READ_MAX_VUS="${READ_MAX_VUS:-600}"
+BID_MAX_VUS="${BID_MAX_VUS:-400}"
+READ_MAX_VUS="${READ_MAX_VUS:-5000}"
 
 cd "$ROOT_DIR"
 

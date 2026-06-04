@@ -168,14 +168,14 @@ Service-side preparation:
 
 ```bash
 ALLOW_MOCK_AUTH=true \
-BID_MAX_VUS=300 \
-READ_MAX_VUS=600 \
+BID_MAX_VUS=400 \
+READ_MAX_VUS=5000 \
 bash tests/pts/prepare-s2-read-interference-pressure.sh
 ```
 
 This resets `auc_live`, starts the backend with `ADMISSION_ENABLED=false` and
 `BID_ENGINE_MODE=redis_ledger`, and pre-seeds mock-auth room membership / Redis
-ACL cache for `k6_bidder_1..300` and `k6_user_1..600`.
+ACL cache for `k6_bidder_1..400` and `k6_user_1..5000`.
 
 Default 15-minute shape:
 
@@ -183,16 +183,16 @@ Default 15-minute shape:
 export LABEL=s2-read-ecs-15m-$(date +%Y%m%dT%H%M%S)
 export BASE_URL=http://SERVICE_PRIVATE_IP:18080
 STAGE_DUR=5m \
-BID_STAGE1_RATE=20 \
-BID_STAGE2_RATE=60 \
+BID_STAGE1_RATE=100 \
+BID_STAGE2_RATE=100 \
 BID_STAGE3_RATE=100 \
-READ_STAGE1_RATE=200 \
-READ_STAGE2_RATE=600 \
-READ_STAGE3_RATE=1000 \
-BID_PRE_ALLOC_VUS=80 \
-BID_MAX_VUS=300 \
-READ_PRE_ALLOC_VUS=160 \
-READ_MAX_VUS=600 \
+READ_STAGE1_RATE=2000 \
+READ_STAGE2_RATE=5000 \
+READ_STAGE3_RATE=10000 \
+BID_PRE_ALLOC_VUS=120 \
+BID_MAX_VUS=400 \
+READ_PRE_ALLOC_VUS=1500 \
+READ_MAX_VUS=4000 \
 bash scripts/perf/run-remote-k6.sh s2-read-interference
 ```
 

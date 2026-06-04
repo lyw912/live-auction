@@ -103,9 +103,9 @@ The live-room polling question is separate from long bid-decision soak. Use
 `tests/load/s2-read-interference.js` from an independent k6 ECS:
 
 ```
-bid attempts: 20/s -> 60/s -> 100/s
-HTTP reads  : 200/s -> 600/s -> 1000/s
-mix         : 60% GET auction snapshot, 30% leaderboard, 10% my bid history
+bid attempts: 100/s
+HTTP reads  : 2000/s -> 5000/s -> 10000/s
+mix         : 80% GET auction snapshot, 15% leaderboard, 5% my bid history
 duration    : 15 min default (5 min per stage)
 ```
 
