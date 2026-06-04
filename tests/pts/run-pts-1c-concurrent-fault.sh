@@ -148,7 +148,7 @@ fi
 
 LABEL="pts-1c-${FAULT_TYPE}-$(date +%Y%m%dT%H%M%S)"
 OUT_DIR="$EVIDENCE_ROOT/$LABEL"
-K6_SCRIPT="$ROOT_DIR/tests/pts/L1-component/pts-1c-k6-concurrent-fault.js"
+K6_SCRIPT="$ROOT_DIR/tests/pts/scenarios/s4-fault-resilience/s4-concurrent-fault.js"
 
 mkdir -p "$OUT_DIR"
 exec > >(tee "$OUT_DIR/run.log") 2>&1
@@ -228,7 +228,7 @@ run_k6_load() {
       --env FAULT_START_MS="${FAULT_START_MS:-0}" \
       --env FAULT_END_MS="${FAULT_END_MS:-0}" \
       --out "json=/evidence/k6-results.json" \
-      "/work/tests/pts/L1-component/pts-1c-k6-concurrent-fault.js"
+      "/work/tests/pts/scenarios/s4-fault-resilience/s4-concurrent-fault.js"
   fi
 }
 

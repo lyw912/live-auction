@@ -13,7 +13,7 @@
  *   INITIAL_WS_URL        default clean BASE_URL WS in network mode, otherwise WS_URL
  *   AUCTION_ID            default auc_live
  *   ROOM_ID               default room_main
- *   SESSION_CSV           default ../../docs/perf/pts/pts-1ab-1000vu-sessions.csv
+ *   SESSION_CSV           default ../../docs/perf/pts/inputs/s1-s5/s1-s5-1000-user-sessions.csv
  *   VUS                   concurrent reconnect sessions, default 20
  *   DURATION              reconnect test duration, default 2m
  *   MISSED_EVENTS         minimum seqs to miss before reconnect, default 3
@@ -37,7 +37,7 @@ const BASE_URL = __ENV.BASE_URL || 'http://127.0.0.1:18080';
 const WS_BASE = __ENV.WS_URL || BASE_URL.replace(/^http/, 'ws');
 const AUCTION_ID = __ENV.AUCTION_ID || 'auc_live';
 const ROOM_ID = __ENV.ROOM_ID || 'room_main';
-const SESSION_CSV = __ENV.SESSION_CSV || '../../docs/perf/pts/pts-1ab-1000vu-sessions.csv';
+const SESSION_CSV = __ENV.SESSION_CSV || '../../docs/perf/pts/inputs/s1-s5/s1-s5-1000-user-sessions.csv';
 const RECONNECT_VUS = Number(__ENV.VUS || 20);
 const DURATION = __ENV.DURATION || '2m';
 const MISSED_EVENTS = Number(__ENV.MISSED_EVENTS || 3);

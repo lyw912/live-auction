@@ -5,14 +5,15 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RUNTIME_DIR="${PTS_RUNTIME_DIR:-/tmp/live-auction-pts}"
 
 export SESSION_COUNT="${SESSION_COUNT:-1000}"
-export SESSION_CSV="${SESSION_CSV:-pts-1ab-1000vu-sessions.csv}"
+export SESSION_CSV="${SESSION_CSV:-s1-s5-1000-user-sessions.csv}"
+SESSION_CSV_PATH="${SESSION_CSV_PATH:-$ROOT_DIR/docs/perf/pts/inputs/s1-s5/$SESSION_CSV}"
 export L4B_PROFILE="${L4B_PROFILE:-accepted}"
 case "$L4B_PROFILE" in
   accepted|pts-1a|pts1a)
-    default_jmx="$ROOT_DIR/tests/pts/L1-component/pts-1a-accepted-ladder-1000vu-1m.jmx"
+    default_jmx="$ROOT_DIR/tests/pts/scenarios/s1-final-second-contention/s1-accepted-ladder-control-1000vu.jmx"
     ;;
   contention|pts-1b|pts1b|reject|bidonly|bid-only)
-    default_jmx="$ROOT_DIR/tests/pts/L1-component/pts-1b-contention-burst-1000vu-1m.jmx"
+    default_jmx="$ROOT_DIR/tests/pts/scenarios/s1-final-second-contention/s1-final-second-contention-1000vu.jmx"
     ;;
   *)
     echo "unknown L4B_PROFILE=$L4B_PROFILE; expected pts-1a/accepted or pts-1b/contention" >&2
@@ -145,8 +146,7 @@ where id in ('auc_live','auc_side');
 acl_room_id="$(docker exec live-auction-postgres psql -q -A -t -U live_auction \
   -d live_auction -c "SELECT room_id FROM auctions WHERE id = 'auc_live'")"
 
-PTS_CSV_PATH="$ROOT_DIR/docs/perf/pts/${SESSION_CSV}"
-if [ "${SKIP_PTS_CACHE_PRESEED:-0}" != "1" ] && [ -n "$acl_room_id" ] && [ -f "$PTS_CSV_PATH" ]; then
+if [ "${SKIP_PTS_CACHE_PRESEED:-0}" != "1" ] && [ -n "$acl_room_id" ] && [ -f "$SESSION_CSV_PATH" ]; then
   echo "Pre-seeding auth session + ACL Redis caches for PTS users..."
   total=0
   while IFS=',' read -r user_id token role; do
@@ -161,7 +161,7 @@ if [ "${SKIP_PTS_CACHE_PRESEED:-0}" != "1" ] && [ -n "$acl_room_id" ] && [ -f "$
       SET "acl:membership:{auc_live}:${user_id}" "${acl_room_id}" \
       EX 43200 >/dev/null
     total=$((total+1))
-  done < "$PTS_CSV_PATH"
+  done < "$SESSION_CSV_PATH"
   echo "  Auth+ACL cache pre-seeded for $total PTS users (TTL=12h)"
 elif [ "${SKIP_PTS_CACHE_PRESEED:-0}" = "1" ]; then
   echo "Skipping reset-script auth+ACL Redis preseed; caller will preseed caches"
@@ -171,5 +171,5 @@ echo "L4B final-second pressure data reset complete"
 echo "- Backend: http://47.113.223.90:18080"
 echo "- Profile: ${L4B_PROFILE}"
 echo "- JMX: ${JMX_PATH#$ROOT_DIR/}"
-echo "- CSV: docs/perf/pts/${SESSION_CSV}"
+echo "- CSV: ${SESSION_CSV_PATH#$ROOT_DIR/}"
 echo "- Engine: BID_ENGINE_MODE=${BID_ENGINE_MODE}, ADMISSION_ENABLED=false, Redis=${REDIS_ADDR}, Kafka=${KAFKA_BROKERS}"

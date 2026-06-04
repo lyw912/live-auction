@@ -3,7 +3,7 @@
 > Maps to: brief 挑战二 "每个人都想在最后一秒绝杀"; rubric 性能 + 系统可用性.
 > Headline: **M1 bid decision p99 ≤ 50 ms** + winner correct + every reject justified.
 > Tool: **PTS JMeter** (signature run). Asset aliases: `L1-C1` (burst, validated) + `L1-C0` (ladder, control).
-> Source-of-truth script: `tests/pts/L1-component/pts-1b-contention-burst-1000vu-1m.jmx`.
+> Source-of-truth script: `tests/pts/scenarios/s1-final-second-contention/s1-final-second-contention-1000vu.jmx`.
 
 ## 1. The business moment
 
@@ -75,9 +75,9 @@ vars.put("bid_amount_cents", (cur + k*inc).toString())
 ```groovy
 // 4 — final-second release window.
 // Default judge-facing value: contention_release_window_ms=500, so 1000 users
-// still bid in a short final-second window, but do not depend on a zero-ms
-// load-generator scheduling wall. Diagnostic microburst: set
-// contention_release_window_ms=0. Conservative one-second fallback: set 1000.
+// bid inside a short final-second window. The actual PTS/server-observed span is
+// measured after the run; do not infer it from configuration alone.
+// Diagnostic strict-barrier comparison: set 0. Conservative fallback: set 1000.
 long fireAt = vars.get("cohort_ready_ms").toLong() + props.get("burst_wait_ms").toLong()
 long offset = Long.parseLong(vars.get("bid_release_offset_ms") ?: "0")
 long now = System.currentTimeMillis()
@@ -108,7 +108,7 @@ if (r.durability_status != "ENGINE_DURABLE" || !(r.result ==~ /ENGINE_(ACCEPTED|
 | 压测时长 | 1–2 分钟 | burst + brief hold; stop when concurrency hits 0 |
 | 是否指定循环 / 循环次数 | 是 / **1** | one-shot; console loop would override the script |
 | 指定IP数 | 2 | ⌈1000/500⌉ |
-| JMeter property | default `contention_release_window_ms=500` | 1000 bids target a 500 ms final-second window; set `0` only for diagnostic strict microburst; set `1000` for conservative one-second fallback |
+| JMeter property | default `contention_release_window_ms=500` | 1000 bids target a 500 ms final-second window; set `0` only for diagnostic strict-barrier comparison; set `1000` for conservative one-second fallback |
 
 Cost: 2×500×1×1.01 ≈ **1 000 VUM ≈ ¥3** (inside the free 5000-VUM tier).
 
@@ -130,11 +130,77 @@ response ENGINE_* fields          -> each request became a final decision
 DB/verifier                        -> unique bids, winner, rejects, seq, settlement/outbox safety
 ```
 
-Do not defend S1 with accepted-bid count. In the current `5D92X7QG` artifact,
-`7 accepted + 993 rejected = 1000 final decisions`; the 993 rejects are not
+Do not defend S1 with accepted-bid count. In the current `2MLCX7WG` artifact,
+`285 accepted + 715 rejected = 1000 final decisions`; the 715 rejects are not
 missing work. They are the expected result of many users bidding stale amounts
 after the Redis sequencer already advanced the price inside the final-second
 window.
+
+Current S1 PTS evidence:
+
+| Run | Release model | Count / correctness | Measured burst span | Latency | Verdict |
+|---|---|---|---|---|---|
+| `2MLCX7WG` | default `contention_release_window_ms=500`; each pressure agent deterministically spreads its 500 VU inside a 500 ms final-second window | 1000 sampling rows, 1000 unique `client_bid_id`, 1000 server POSTs, 1000 Redis Lua executions; 285 accepted, 715 rejected; 41 verifier gates PASS | Global PTS `startTimeTS` span 1351 ms; response `server_time_ms` span 1348 ms. Per-agent spans: instance 0 `501/503 ms`, instance 1 `525/524 ms` for `startTimeTS/server_time_ms`; server access-log IP attribution was consistent, about `499 ms` and `525 ms` for the two pressure IPs | 100% sampling-log `elapsedTime` p99 23 ms, max 28 ms; server/gateway histogram has 1000/1000 <=25 ms and <=50 ms | Current S1 windowed-burst PASS for correctness and client p99. Honest burst-window claim: 500 ms per pressure agent; global multi-agent span about 1.35 s |
+| `TGLBX7GG` | `contention_release_window_ms=0`; 1000 VU wait at the same barrier and release with no artificial spread | 1000 sampling rows, 1000 unique `client_bid_id`, 1000 server POSTs, 1000 Redis Lua executions; 10 accepted, 990 rejected; 41 verifier gates PASS | PTS `startTimeTS` span 1144 ms; response `server_time_ms` span 1147 ms | sampling-log `elapsedTime` p99 134 ms, max 140 ms; server/gateway histogram has 1000/1000 <= 50 ms | Strong pressure/correctness proof for shared-barrier release, but not an M1 <=50 ms client-side PASS |
+
+Judge-safe wording for `2MLCX7WG`:
+
+> "The formal S1 evidence uses the 500 ms release-window profile, not the
+> strict-barrier diagnostic. Each PTS pressure agent delivered its 500 users in
+> about 0.5 s, and the global multi-agent span was 1.35 s because the two agents
+> were offset. We therefore claim a 500 ms per-agent final-second window and
+> record the actual global span explicitly. Within that population, all 1000
+> bids returned final `ENGINE_DURABLE` decisions, p99 was 23 ms, and verifier
+> gates all passed."
+
+Judge-safe wording for `TGLBX7GG`:
+
+> "The JMX no longer spreads bids over a 500 ms window. All VUs release at the
+> same barrier. PTS/JMeter scheduling and network delivery turned that into a
+> measured 1144 ms send-start span, with the server response timestamps spanning
+> 1147 ms. So the honest claim is 1000 one-shot final decisions under a
+> shared-barrier burst, not '1000 requests arrived within 500 ms'."
+
+Root cause of the 1144 ms span and 134 ms client p99:
+
+- `TGLBX7GG` used 2 PTS pressure agents, 500 bid VU each.
+- The JMX shared barrier is process/JVM-local. It does not create a single
+  cross-agent global release timestamp.
+- PTS/JMeter evidence split by `instanceId` shows each agent did what we wanted
+  locally:
+
+```text
+instance 0: n=500, startTimeTS span=114 ms, server_time_ms span=117 ms, elapsed p99=112 ms
+instance 1: n=500, startTimeTS span=113 ms, server_time_ms span=120 ms, elapsed p99=135 ms
+```
+
+- Server access logs agree with the two-agent split:
+
+```text
+172.16.180.107: 500 POST /bids, 02:22:51.524341748 -> 02:22:51.641640267
+172.16.180.109: 500 POST /bids, 02:22:52.548903297 -> 02:22:52.668055696
+```
+
+So the global 1144 ms span is mostly the gap between the two PTS agents'
+barrier targets, not a Redis/HTTP service slowdown. Server-side histograms from
+the same run show 1000/1000 HTTP, gateway-total, and Redis Lua samples inside
+the <=50 ms bucket. The client-side `elapsedTime` p99=134 ms is still the honest
+PTS/JMeter user-visible number for that run, but the attribution is load-agent
+synchronization/client-side scheduling, not backend saturation.
+
+External basis: Apache JMeter documents `Synchronizing Timer` as releasing
+blocked threads together, but it is scoped within one JVM; Alibaba Cloud PTS
+documents that JMeter assembly points/synchronizing timers are only effective on
+a single pressure machine/JVM and are not recommended for multi-pressure-machine
+global synchronization.
+
+If a reviewer asks "did 1000 requests really hit the server?", answer with the
+cross-layer counts from `2MLCX7WG`: PTS sampling rows = 1000, server POST
+counter = 1000, Redis Lua executions = 1000, persisted bids = 1000, settlements
+= 1000, and verifier gates = 41 PASS. If they ask "were all 1000 inside one
+500 ms wall-clock interval?", answer no: the current evidence is 500 ms per
+pressure agent with a measured 1.35 s global span. That is the honest PTS
+multi-agent boundary.
 
 ## 6. Correctness gates (M3 — must PASS to cite M1)
 

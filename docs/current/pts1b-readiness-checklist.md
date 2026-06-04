@@ -35,7 +35,7 @@ L4B_PROFILE=pts-1b SESSION_COUNT=1000 bash tests/pts/reset-l4b-final-second-pres
 - [ ] PostgreSQL pressure auctions are clean and active.
 - [ ] Redis hot bid keys for prior runs cleared.
 - [ ] Kafka bid/DLQ topics recreated and partition count verified.
-- [ ] Session CSV generated: `docs/perf/pts/pts-1ab-1000vu-sessions.csv`.
+- [ ] Session CSV generated: `docs/perf/pts/inputs/s1-s5/s1-s5-1000-user-sessions.csv`.
 - [ ] CSV row count matches intended unique bidders.
 
 ## 4. Preflight
@@ -54,7 +54,7 @@ BASE_URL=http://127.0.0.1:18080 bash tests/pts/preflight-l4b-pts-guards.sh befor
 ## 5. PTS Upload
 
 - [ ] JMX: `tests/pts/pts-1b-contention-burst-1000vu-1m.jmx`.
-- [ ] CSV: `docs/perf/pts/pts-1ab-1000vu-sessions.csv`.
+- [ ] CSV: `docs/perf/pts/inputs/s1-s5/s1-s5-1000-user-sessions.csv`.
 - [ ] PTS mode: virtual users.
 - [ ] Intended users: 1000.
 - [ ] Loop count: one bid per user.

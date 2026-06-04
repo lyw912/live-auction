@@ -26,7 +26,7 @@
       <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="PTS real session token pool" enabled="true">
         <stringProp name="delimiter">,</stringProp>
         <stringProp name="fileEncoding">UTF-8</stringProp>
-        <stringProp name="filename">pts-1ab-1000vu-sessions.csv</stringProp>
+        <stringProp name="filename">s1-s5-1000-user-sessions.csv</stringProp>
         <boolProp name="ignoreFirstLine">true</boolProp>
         <boolProp name="quotedData">false</boolProp>
         <boolProp name="recycle">true</boolProp>

@@ -192,8 +192,8 @@ Required post-fix smoke:
 ```bash
 bash tests/pts/prepare-s3-room-fanout-pressure.sh
 # Upload:
-# - tests/pts/S3-room-fanout/s3-live-fanout-smoke-30vu-single-branch-20ws-5bid-5read.jmx
-# - docs/perf/pts/s3-mixed-smoke-30-sessions.csv
+# - tests/pts/scenarios/s3-room-fanout/s3-mixed-smoke-30vu.jmx
+# - docs/perf/pts/inputs/s1-s5/s3-mixed-smoke-30-sessions.csv
 # PTS: 30 VU, 1 IP, 1 minute, 100% sampling.
 ```
 

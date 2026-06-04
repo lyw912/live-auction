@@ -15,8 +15,8 @@
 #   - net.ipv4.ip_local_port_range widened if running >28k conns locally
 #
 # PTS Part A config:
-#   JMX: tests/pts/S3-room-fanout/s3-live-fanout-4500vu-single-branch-3000ws-1000bid-500read.jmx
-#   CSV: docs/perf/pts/s3-mixed-4500-sessions.csv
+#   JMX: tests/pts/scenarios/s3-room-fanout/s3-mixed-final-burst-4500vu.jmx
+#   CSV: docs/perf/pts/inputs/s1-s5/s3-mixed-final-burst-4500-sessions.csv
 #   压力模式=虚拟用户模式, 最大VU=4500, 指定IP数=9
 #   指定循环=是, 循环次数=1, 时长=3min, 采样率=1% (100% only for smoke/debug)
 #   Screenshots: S3 live fanout receive p99, S3 POST accepted-update bid p99,
@@ -47,12 +47,12 @@ fi
 if [ "$SOAK_ONLY" != "--soak-only" ]; then
   echo ""
   echo "=== Part A: PTS JMeter S3-mixed-final-burst ==="
-  echo "   JMX: tests/pts/S3-room-fanout/s3-live-fanout-4500vu-single-branch-3000ws-1000bid-500read.jmx"
-  echo "   CSV: docs/perf/pts/s3-mixed-4500-sessions.csv"
+  echo "   JMX: tests/pts/scenarios/s3-room-fanout/s3-mixed-final-burst-4500vu.jmx"
+  echo "   CSV: docs/perf/pts/inputs/s1-s5/s3-mixed-final-burst-4500-sessions.csv"
   echo "   PTS: 最大VU=4500, 指定IP数=9, 指定循环=是, 循环次数=1, 时长=3min, 采样率=1%"
   echo "   Smoke first if needed:"
-  echo "     JMX: tests/pts/S3-room-fanout/s3-live-fanout-smoke-30vu-single-branch-20ws-5bid-5read.jmx"
-  echo "     CSV: docs/perf/pts/s3-mixed-smoke-30-sessions.csv"
+  echo "     JMX: tests/pts/scenarios/s3-room-fanout/s3-mixed-smoke-30vu.jmx"
+  echo "     CSV: docs/perf/pts/inputs/s1-s5/s3-mixed-smoke-30-sessions.csv"
   echo "     最大VU=30, 指定IP数=1, 指定循环=是, 循环次数=1, 时长=1min, 采样率=100%"
   echo ""
   read -r -p "Press ENTER when PTS run is complete: "

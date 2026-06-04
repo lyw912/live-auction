@@ -1,23 +1,21 @@
 # PTS Performance Test Suite
 
 > Entry point: read `docs/current/test-strategy/README.md` first for the only
-> current S0-S5 test plan. Then read `tests/pts/MANIFEST.md` for script/data
+> current S1-S5 test plan. Then read `tests/pts/MANIFEST.md` for script/data
 > asset locations.
 > Read `docs/current/performance-correctness-contract.md` before interpreting any result.
 
 ## Asset Directory Structure
 
 ```
-L0-smoke/         S0 smoke assets
-L1-component/     S1 contention and S4 fault harness assets
-L2-protocol/      S2/S3 optional PTS assets plus legacy diagnostics
-L3-scenario/      legacy/future asset aliases, not current plan stages
-L4-combined/      legacy/future asset aliases, not current plan stages
-archive/          Historical JMX files (non-current)
+scenarios/        Current S1-S5 PTS/k6 scenario assets
+  s1-final-second-contention/
+  s3-room-fanout/
+  s4-fault-resilience/
 ```
 
-Old `L*` names in directory names or JMX sampler labels are asset aliases only.
-Do not create new plans or reports named L2/L3/L4.
+Do not create new plans or reports named L2/L3/L4; current work should use
+S1-S5 names.
 
 ---
 
@@ -37,19 +35,21 @@ cloudflared tunnel --url http://127.0.0.1:8080
 
 Use the generated host, for example `abc.trycloudflare.com`, as the PTS domain.
 
-## Scripts
+## Legacy Smoke Scripts
 
-- `live-auction-pts-smoke.jmx`
-- `live-auction-pts-business-smoke.jmx`
+The old `live-auction-pts-smoke.jmx` and
+`live-auction-pts-business-smoke.jmx` assets were removed from the current
+S1-S5 pressure tree. Recreate a tiny local JMeter smoke only when connectivity
+debugging needs it; do not cite it as current capacity evidence.
 
-`live-auction-pts-smoke.jmx` is the smallest connectivity check:
+The historical tiny connectivity shape was:
 
 1. `GET /readyz`
 2. `POST /api/auth/login` with `{"account":"user"}`
 3. `GET /api/rooms`
 4. `GET /api/rooms/${ROOM_ID}/auctions`
 
-`live-auction-pts-business-smoke.jmx` is the minimum deployment/business-chain smoke:
+The historical business-chain smoke shape was:
 
 1. readiness;
 2. bidder login/session;

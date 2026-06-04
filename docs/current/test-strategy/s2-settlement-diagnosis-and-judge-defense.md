@@ -137,7 +137,7 @@ Key gate meanings:
 Evidence directory:
 
 ```text
-docs/perf/pts/evidence/incoming/s2-ecs-30m-20260604T095720/
+docs/perf/pts/evidence/current/s1-s5/s2-long-soak-20260604T095720/
 ```
 
 Important files:
@@ -361,8 +361,8 @@ Late settled state:
 Evidence directories:
 
 ```text
-docs/perf/pts/evidence/incoming/s2-read-ecs-15m-20260604T113330/
-docs/perf/pts/evidence/incoming/s2-read-ecs-15m-20260604T113330-late/
+archived local raw evidence: s2-read-ecs-15m-20260604T113330
+archived local raw evidence: s2-read-ecs-15m-20260604T113330-late
 ```
 
 Clean-ceiling attempt after the 10k attack:
@@ -411,8 +411,8 @@ Service-side evidence:
 Evidence directories:
 
 ```text
-docs/perf/pts/evidence/incoming/s2-read-clean-ecs-15m-20260604T120823/
-docs/perf/pts/evidence/incoming/s2-read-clean-ecs-15m-20260604T120823-late/
+archived local raw evidence: s2-read-clean-ecs-15m-20260604T120823
+archived local raw evidence: s2-read-clean-ecs-15m-20260604T120823-late
 ```
 
 Display-ceiling attempt before fixing the Redis TTL issue:
@@ -458,7 +458,7 @@ Service-side verifier and Redis state:
 Evidence directory:
 
 ```text
-docs/perf/pts/evidence/incoming/s2-read-display-ecs-15m-20260604T123644/
+archived local raw evidence: s2-read-display-ecs-15m-20260604T123644
 ```
 
 Root cause found:
@@ -592,7 +592,7 @@ Service-side verification:
 Evidence directory:
 
 ```text
-docs/perf/pts/evidence/incoming/s2-read-display-postfix-ecs-15m-20260604T140509/
+docs/perf/pts/evidence/current/s1-s5/s2-read-display-postfix-ecs-15m-20260604T140509/
 ```
 
 Important files:

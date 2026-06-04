@@ -5,9 +5,9 @@
 > + connections held + RAM/connection.
 > Tool: **PTS** (clean per-connection p99 chart) + **local k6** (10 000 soak).
 > Current PTS assets:
-> `tests/pts/S3-room-fanout/s3-live-fanout-smoke-30vu-single-branch-20ws-5bid-5read.jmx`
+> `tests/pts/scenarios/s3-room-fanout/s3-mixed-smoke-30vu.jmx`
 > and
-> `tests/pts/S3-room-fanout/s3-live-fanout-4500vu-single-branch-3000ws-1000bid-500read.jmx`.
+> `tests/pts/scenarios/s3-room-fanout/s3-mixed-final-burst-4500vu.jmx`.
 > Do not use old L2/P3 filenames for new S3 reports.
 > Expanded split: `S3-live-only-fanout` and `S3-mixed-final-burst` are governed
 > by [s2-s3-expanded-test-design.md](s2-s3-expanded-test-design.md).
@@ -123,7 +123,7 @@ sysctl -w net.ipv4.ip_local_port_range="1024 65535"
 | M2 fanout p99 ≤ 1 s | PTS `广播接收 ws-fanout-receive` sampler p99 (note JMeter-mode 15 s aggregation) + k6 client histogram |
 | connections held | PTS concurrent VU = connections; Grafana `active_ws_connections` |
 | RAM / connection | Grafana RSS ÷ connections at each tier |
-| every viewer got every seq | scenario verifier: each sampled connection received seq 1..final, all with `published_at_ms` (`verify-l2p3/p4` style) |
+| every viewer got every seq | `tests/pts/verify-s3-pts-evidence.sh`: each sampled connection received seq 1..final, all with `published_at_ms` |
 
 For S3 PTS reports, use Alibaba Cloud `GetJMeterReportDetails` /
 `SamplerMetricsList` as the source for sampler `AllCount`, `SuccessRateReq`, and
@@ -296,9 +296,9 @@ Why `XWLAX70G` p99 is close to the earlier 7-update mixed run:
 Evidence files:
 
 ```text
-docs/perf/pts/evidence/incoming/XWLAX70G/
-docs/perf/pts/evidence/incoming/XWLAX70G/pts-console-api-list.md
-docs/perf/pts/evidence/incoming/s3-liveonly-3000x100-pts-XWLAX70G/
+docs/perf/pts/evidence/current/s1-s5/s3-pts-console-live-only-XWLAX70G/
+docs/perf/pts/evidence/current/s1-s5/s3-pts-console-live-only-XWLAX70G/pts-console-api-list.md
+docs/perf/pts/evidence/current/s1-s5/s3-live-only-fanout-XWLAX70G/
 ```
 
 ### 8.2 PTS mixed final-burst `20L8X79G`
@@ -344,9 +344,9 @@ runtime_open_fds=418, runtime_goroutines=43, RSS about 181 MB
 Evidence files:
 
 ```text
-docs/perf/pts/evidence/incoming/20L8X79G/
-docs/perf/pts/evidence/incoming/20L8X79G/pts-console-api-list.md
-docs/perf/pts/evidence/incoming/s3-burst-pts-20L8X79G/
+docs/perf/pts/evidence/current/s1-s5/s3-pts-console-mixed-20L8X79G/
+docs/perf/pts/evidence/current/s1-s5/s3-pts-console-mixed-20L8X79G/pts-console-api-list.md
+docs/perf/pts/evidence/current/s1-s5/s3-mixed-final-burst-20L8X79G/
 ```
 
 Important reporting nuance: local `GetJMeterReportDetails` returned

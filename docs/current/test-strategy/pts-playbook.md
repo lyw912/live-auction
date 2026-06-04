@@ -118,7 +118,7 @@ Two hard rules from the docs:
 |---|---|---|---|
 | S1 绝杀 (HTTP burst) | VU mode, loop=1 | **PTS JMeter current asset** | 1000 distinct one-shot clients; default release is within one final-second window; reuse the validated JMX and CSV/verifier path |
 | S2 稳态 soak | local k6 `ramping-arrival-rate` | k6 | current open-model asset; reports dropped iterations and supports long soak/Grafana |
-| S2 optional PTS chart | VU mode, duration-driven | PTS JMeter current asset | use `pts-2p4-steady-interactive-auction.jmx` only when a polished PTS PDF is worth the VUM |
+| S2 | independent k6, open-arrival | current k6 assets | use PTS only for S1/S3 charts; S2 evidence depends on dropped-iteration and convergence gates |
 | S3 围观 (WS hold) | **VU mode** | PTS JMeter + local k6 | VUs == held connections == online users; the metric is connection count and fanout receive p99 |
 
 - There is no separate native-HTTP PTS script in the current plan. Current

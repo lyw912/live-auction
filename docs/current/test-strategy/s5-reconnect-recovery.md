@@ -57,7 +57,7 @@ Each reconnect VU:
 
 ```text
 1. reads current auction snapshot using a real Bearer token from
-   docs/perf/pts/pts-1ab-1000vu-sessions.csv
+   docs/perf/pts/inputs/s1-s5/s1-s5-1000-user-sessions.csv
 2. opens WS with current last_seq, receives the initial recovery/snapshot, then
    closes intentionally
 3. waits until a low-rate accepted-bid source has advanced public seq by at
@@ -89,9 +89,9 @@ Environment:
 
 | Run | Mode | Reconnect VU | Duration | Accepted update source | Recovered | TTCS p99 | Errors | Gaps | Duplicates | Verdict | Evidence |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| `s5-20260604T221312` | clean close | 200 | 2m | 10/s, 5 VU | 34,814 | 87 ms | 0 | 0 | 0 | **PASS** | `docs/perf/pts/evidence/incoming/s5-20260604T221312/` |
-| `s5-20260604T231925` | initial online WS clean, reconnect leg through Toxiproxy `reset_peer` at `ws://127.0.0.1:18081` | 50 | 2m | 10/s, 5 VU | 8,849 | 341 ms | 0 | 0 | 0 | **PASS** | `docs/perf/pts/evidence/incoming/s5-20260604T231925/` |
-| `s5-20260604T221634` | Toxiproxy `reset_peer`, real proxy path `ws://127.0.0.1:18081` | 50 | 2m | 10/s, 5 VU | 2,552 | 17 ms | 2,697 | 0 | 0 | **NOT PASS / diagnostic** | `docs/perf/pts/evidence/incoming/s5-20260604T221634/` |
+| `s5-20260604T221312` | clean close | 200 | 2m | 10/s, 5 VU | 34,814 | 87 ms | 0 | 0 | 0 | **PASS** | `docs/perf/pts/evidence/current/s1-s5/s5-clean-reconnect-20260604T221312/` |
+| `s5-20260604T231925` | initial online WS clean, reconnect leg through Toxiproxy `reset_peer` at `ws://127.0.0.1:18081` | 50 | 2m | 10/s, 5 VU | 8,849 | 341 ms | 0 | 0 | 0 | **PASS** | `docs/perf/pts/evidence/current/s1-s5/s5-toxiproxy-reconnect-20260604T231925/` |
+| `s5-20260604T221634` | Toxiproxy `reset_peer`, real proxy path `ws://127.0.0.1:18081` | 50 | 2m | 10/s, 5 VU | 2,552 | 17 ms | 2,697 | 0 | 0 | **NOT PASS / diagnostic** | archived local raw evidence, not current |
 
 Best current claim:
 
@@ -148,7 +148,7 @@ because they show the harness was debugged instead of papered over.
 | `s5-clean-20vu-20260603T0300` | 560 recovered but threshold failed | iterations without enough new seq were counted as recovery errors | no-gap iterations now count as skipped, not recovery failure |
 | `s5-20260604T220852` | CSV had only header; k6 raised token undefined errors | pressure CSV was generated without seeded PTS users | reran `SESSION_COUNT=1000 L4B_PROFILE=pts-1b reset-l4b-final-second-pressure.sh`; CSV became 1001 lines |
 | `s5-20260604T221634` | Toxiproxy network run failed `s5_recovery_errors==0` with 2697 errors | real reset-peer turbulence exposed a client/harness retry gap; successful recoveries remained ordered and fast | added bounded reconnect retry metrics and separated initial online WS from the toxic reconnect leg; `s5-20260604T231925` is the fixed PASS |
-| `s5-20260604T224839` | invalid run flooded `token undefined` | reset had left `pts-1ab-1000vu-sessions.csv` with only the header | added session CSV validation so empty/undersized CSV fails immediately instead of producing noisy recovery errors |
+| `s5-20260604T224839` | invalid run flooded `token undefined` | reset had left `s1-s5-1000-user-sessions.csv` with only the header | added session CSV validation so empty/undersized CSV fails immediately instead of producing noisy recovery errors |
 | `s5-20260604T225824` | network run still had 2539 recovery errors | 30% reset toxic hit both the initial online socket and the reconnect leg; many iterations failed before entering the recovery scenario | added bounded retry metrics; kept run as diagnostic |
 | `s5-20260604T230907` | recovery errors dropped to 2 but threshold still failed | 8-attempt retry absorbed most resets, but a few initial online handshakes still failed under toxic | changed network-mode semantics so initial online WS is clean and only the reconnect recovery leg uses Toxiproxy |
 | `s5-20260604T231925` | current network pass | initial online connection clean, reconnect leg through Toxiproxy reset_peer; recovery retry counters prove proxy turbulence was present | 8849 recovered, TTCS p99 341ms, recovery errors/gaps/dups/truth mismatch all 0 |

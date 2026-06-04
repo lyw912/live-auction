@@ -14,17 +14,23 @@ S1 proves one narrow claim:
 > highest valid winner, justifies every reject, and drains Redis/Kafka/PG/outbox
 > state.
 
-The current JMX default is `contention_release_window_ms=500`. That is a target
-release window. The actual delivered span is not asserted from configuration; it
-is recomputed after the run from:
+The current JMX default is `contention_release_window_ms=500`. That means the
+script synchronizes bidders to a common final-second start and then spreads each
+pressure agent's local bidders across a short 500 ms target window. The actual
+delivered span is not asserted from configuration; it is recomputed after the
+run from:
 
 - PTS sampling `startTimeTS`: load-generator send-start span.
 - Response `server_time_ms`: server decision timestamp span.
 - Server Prometheus counters: independent request and Redis engine counts.
 
-If a run with a 500 ms target observes a wider span, the result may still prove
-correctness and latency, but it does not prove "arrived within 500 ms". The
-review must say that explicitly.
+Because PTS scheduling, JVM threads, TCP connection reuse, same-VPC network
+delivery, and multi-pressure-agent start alignment are not literally
+simultaneous, the observed span is expected to be a real number. If a run
+observes a wider global span, the result may still prove correctness and
+latency, but it does not prove all 1000 requests arrived inside one global
+500 ms wall-clock interval. The review must say the measured per-agent and
+global spans explicitly.
 
 ## Raw Sources
 
@@ -140,7 +146,98 @@ This is not "ignoring bad data"; it is rejecting a field that violates a
 mathematical invariant and replacing it with a reproducible calculation from
 the raw per-request data.
 
-## Current Example: 8LGBX71G
+## Current Example: 2MLCX7WG
+
+`2MLCX7WG` is the current formal S1 PTS evidence after returning to the
+controlled `contention_release_window_ms=500` profile.
+
+Evidence:
+
+```text
+docs/perf/pts/evidence/current/s1-s5/s1-final-second-contention-2MLCX7WG/
+docs/perf/pts/evidence/current/s1-s5/s1-final-second-contention-2MLCX7WG/s1-review.md
+```
+
+Key facts from the recomputation:
+
+- 1000 PTS sampling rows, 1000 unique request `client_bid_id`, 1000 unique
+  response `bid_id`.
+- Server Prometheus cross-check: 1000 POST `/api/auctions/{id}/bids`, 1000 Redis
+  Lua `bid_redis_ledger` executions.
+- Outcome: 285 `ENGINE_ACCEPTED`, 715 `ENGINE_REJECTED`, 1000 `DECIDED`, 1000
+  `ENGINE_DURABLE`.
+- Engine seq complete: count=1000, min=1, max=1000, unique=1000, no gaps or
+  duplicates.
+- Verifier: 41/41 gates PASS; Kafka lag 0, Redis pending 0, outbox drained.
+- PTS send-start span: `startTimeTS` 1780599030514..1780599031865 = 1351 ms.
+- Response server timestamp span: `server_time_ms`
+  1780599030517..1780599031865 = 1348 ms.
+- Sampling-log `elapsedTime` p99 = 23 ms, max = 28 ms.
+- Split by PTS `instanceId`: instance 0 released 500 VU in 501 ms and instance
+  1 released 500 VU in 525 ms; server response timestamp spans were 503 ms and
+  524 ms. The two pressure agents were offset, so the global span was about
+  1.35 s.
+- Server/gateway histogram: 1000/1000 HTTP and gateway total samples are within
+  the <=25 ms and <=50 ms Prometheus buckets; Redis Lua has 1000/1000 <=25 ms.
+
+Interpretation:
+
+`2MLCX7WG` is a clean S1 correctness and M1 latency pass for the current
+windowed-burst profile. It proves 1000 final bid decisions under the configured
+500 ms release window per PTS pressure agent. It does not prove all 1000 requests
+arrived at the service inside one global 500 ms wall-clock interval; the measured
+global multi-agent span is about 1.35 s, and that number must be reported.
+
+## Diagnostic Example: TGLBX7GG
+
+`TGLBX7GG` is a diagnostic strict-barrier S1 rerun with
+`contention_release_window_ms=0`.
+
+Evidence:
+
+```text
+docs/perf/pts/evidence/current/s1-s5/s1-diagnostic-strict-barrier-TGLBX7GG/
+docs/perf/pts/evidence/current/s1-s5/s1-diagnostic-strict-barrier-TGLBX7GG/s1-review.md
+```
+
+Key facts from the recomputation:
+
+- 1000 PTS sampling rows, 1000 unique request `client_bid_id`, 1000 unique
+  response `bid_id`.
+- Server Prometheus cross-check: 1000 POST `/api/auctions/{id}/bids`, 1000 Redis
+  Lua `bid_redis_ledger` executions.
+- Outcome: 10 `ENGINE_ACCEPTED`, 990 `ENGINE_REJECTED`, 1000 `DECIDED`, 1000
+  `ENGINE_DURABLE`.
+- Engine seq complete: count=1000, min=1, max=1000, unique=1000, no gaps or
+  duplicates.
+- Verifier: 41/41 gates PASS; Kafka lag 0, Redis pending 0, outbox drained.
+- PTS send-start span: `startTimeTS` 1780597371515..1780597372659 = 1144 ms.
+- Response server timestamp span: `server_time_ms`
+  1780597371517..1780597372664 = 1147 ms.
+- Sampling-log `elapsedTime` p99 = 134 ms, max = 140 ms.
+- Split by PTS `instanceId`: each pressure agent released its 500 VU in about
+  113-114 ms and server response timestamps spanned 117-120 ms per agent; the
+  two agents were offset by about 1 second.
+- Server/gateway histogram: 1000/1000 HTTP and gateway total samples are within
+  the <=50 ms Prometheus bucket.
+
+Interpretation:
+
+`TGLBX7GG` proves the JMX did not artificially spread the burst: the configured
+release window is zero. It also proves PTS did not deliver a literal 0 ms or
+500 ms burst; the actual measured send-start/response timestamp spans are about
+1.15 s. The root cause is PTS/JMeter distributed execution: the two pressure
+agents each released locally within about 120 ms, but their barrier targets were
+about 1 second apart. Therefore cite it as a strong shared-barrier pressure and
+correctness artifact, not as strict M1 client-side p99 <=50 ms and not as
+"1000 requests arrived within 500 ms."
+
+External basis: Apache JMeter's synchronizing/rendezvous behavior is scoped to
+threads in a JVM, and Alibaba Cloud PTS documents that JMeter assembly points are
+single-pressure-machine/JVM scoped rather than a global synchronization primitive
+across multiple pressure machines.
+
+## Previous Example: 8LGBX71G
 
 `8LGBX71G` is a valid latency/correctness pass for the 1000-bid S1 workload, but
 it is not proof of a 500 ms arrival window because it used the previous 1000 ms

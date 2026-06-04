@@ -13,7 +13,7 @@ weak networks, and cross-AZ/region failures is tracked in
 
 Workload:
 
-- Real PTS session tokens from `pts-1ab-1000vu-sessions.csv`.
+- Real PTS session tokens from `s1-s5-1000-user-sessions.csv`.
 - One active hot auction `auc_live`.
 - A low-rate accepted-bid source advances public seq by bidding current price +
   increment.

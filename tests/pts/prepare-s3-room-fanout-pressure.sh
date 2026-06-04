@@ -2,18 +2,21 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-OUT_DIR="$ROOT_DIR/docs/perf/pts"
+RUNTIME_DIR="${PTS_RUNTIME_DIR:-/tmp/live-auction-pts}"
+GEN_DIR="$RUNTIME_DIR/s3-room-fanout-generated"
+OUT_DIR="$ROOT_DIR/docs/perf/pts/inputs/s1-s5"
 DB_CONTAINER="${DB_CONTAINER:-live-auction-postgres}"
 REDIS_CONTAINER="${REDIS_CONTAINER:-live-auction-redis}"
 DB_USER="${DB_USER:-live_auction}"
 DB_NAME="${DB_NAME:-live_auction}"
 
 cd "$ROOT_DIR"
+mkdir -p "$GEN_DIR" "$OUT_DIR"
 
 SKIP_PTS_CACHE_PRESEED=1 \
-JMX_PATH="$ROOT_DIR/tests/pts/S3-room-fanout/s3-live-fanout-4500vu-single-branch-3000ws-1000bid-500read.jmx" \
+JMX_PATH="$ROOT_DIR/tests/pts/scenarios/s3-room-fanout/s3-mixed-final-burst-4500vu.jmx" \
 SESSION_COUNT=7000 \
-SESSION_CSV="s3-mixed-4500-sessions.csv" \
+SESSION_CSV="s3-mixed-final-burst-4500-sessions.csv" \
 L4B_PROFILE=pts-1b \
   bash tests/pts/reset-l4b-final-second-pressure.sh
 
@@ -36,14 +39,14 @@ generate_csv_with_hash() {
       -U "$DB_USER" -d "$DB_NAME" \
       -v user_prefix="$prefix" \
       -v session_count="$count" \
-      -f - < "$OUT_DIR/generate-l2-pts-sessions-with-hash.sql"
-  } > "$OUT_DIR/$file"
+      -f - < "$ROOT_DIR/docs/perf/pts/generate-l2-pts-sessions-with-hash.sql"
+  } > "$GEN_DIR/$file"
 }
 
 strip_hash_csv() {
   local hashed_file="$1"
   local public_file="$2"
-  awk -F',' 'BEGIN{OFS=","} {print $1,$2,$3}' "$OUT_DIR/$hashed_file" > "$OUT_DIR/$public_file"
+  awk -F',' 'BEGIN{OFS=","} {print $1,$2,$3}' "$GEN_DIR/$hashed_file" > "$GEN_DIR/$public_file"
 }
 
 generate_csv_with_hash "k6_bidder_" 1008 "s3-bidder-1008-sessions.with-hash.csv"
@@ -54,9 +57,9 @@ strip_hash_csv "s3-bidder-1008-sessions.with-hash.csv" "s3-bidder-1008-sessions.
 strip_hash_csv "s3-viewer-4998-sessions.with-hash.csv" "s3-viewer-4998-sessions.csv"
 strip_hash_csv "s3-reader-994-sessions.with-hash.csv" "s3-reader-994-sessions.csv"
 
-head -n 6 "$OUT_DIR/s3-bidder-1008-sessions.csv" > "$OUT_DIR/s3-smoke-bidder-5-sessions.csv"
-head -n 21 "$OUT_DIR/s3-viewer-4998-sessions.csv" > "$OUT_DIR/s3-smoke-viewer-20-sessions.csv"
-head -n 6 "$OUT_DIR/s3-reader-994-sessions.csv" > "$OUT_DIR/s3-smoke-reader-5-sessions.csv"
+head -n 6 "$GEN_DIR/s3-bidder-1008-sessions.csv" > "$GEN_DIR/s3-smoke-bidder-5-sessions.csv"
+head -n 21 "$GEN_DIR/s3-viewer-4998-sessions.csv" > "$GEN_DIR/s3-smoke-viewer-20-sessions.csv"
+head -n 6 "$GEN_DIR/s3-reader-994-sessions.csv" > "$GEN_DIR/s3-smoke-reader-5-sessions.csv"
 
 acl_room_id="$(docker exec "$DB_CONTAINER" psql -q -A -t -U "$DB_USER" \
   -d "$DB_NAME" -c "SELECT room_id FROM auctions WHERE id = 'auc_live'")"
@@ -88,7 +91,7 @@ preseed_csv() {
     append_redis_set "$pipe_file" "auth:session:${token_hash}" "{\"ID\":\"${user_id}\",\"Role\":\"${role}\"}" 43200
     append_redis_set "$pipe_file" "acl:membership:{auc_live}:${user_id}" "${acl_room_id}" 43200
     total=$((total+1))
-  done < "$OUT_DIR/$file"
+  done < "$GEN_DIR/$file"
   docker exec -i "$REDIS_CONTAINER" redis-cli --pipe < "$pipe_file" >/dev/null
   rm -f "$pipe_file"
   trap - RETURN
@@ -136,8 +139,8 @@ rm -f "$snapshot_pipe"
 echo "preseeded realtime snapshot auction:auc_live:snapshot source=redis ttl=1800s"
 
 echo "S3 room fanout pressure data ready:"
-echo "- tests/pts/S3-room-fanout/s3-live-fanout-4500vu-single-branch-3000ws-1000bid-500read.jmx"
-echo "- tests/pts/S3-room-fanout/s3-live-fanout-smoke-30vu-single-branch-20ws-5bid-5read.jmx"
+echo "- tests/pts/scenarios/s3-room-fanout/s3-mixed-final-burst-4500vu.jmx"
+echo "- tests/pts/scenarios/s3-room-fanout/s3-mixed-smoke-30vu.jmx"
 
 write_mixed_csv() {
   local out_file="$1"
@@ -148,11 +151,11 @@ write_mixed_csv() {
     local file="$2"
     local count="$3"
     shift 3
-    awk -v role="$role" -v count="$count" 'NR > 1 && seen < count { print role "," $0; seen++ }' "$OUT_DIR/$file" >> "$OUT_DIR/$out_file"
+    awk -v role="$role" -v count="$count" 'NR > 1 && seen < count { print role "," $0; seen++ }' "$GEN_DIR/$file" >> "$OUT_DIR/$out_file"
   done
 }
 
-write_mixed_csv "s3-mixed-4500-sessions.csv" \
+write_mixed_csv "s3-mixed-final-burst-4500-sessions.csv" \
   viewer "s3-viewer-4998-sessions.csv" 3000 \
   reader "s3-reader-994-sessions.csv" 500 \
   bidder "s3-bidder-1008-sessions.csv" 1000
@@ -162,5 +165,5 @@ write_mixed_csv "s3-mixed-smoke-30-sessions.csv" \
   reader "s3-smoke-reader-5-sessions.csv" 5 \
   bidder "s3-smoke-bidder-5-sessions.csv" 5
 
-echo "- docs/perf/pts/s3-mixed-4500-sessions.csv"
-echo "- docs/perf/pts/s3-mixed-smoke-30-sessions.csv"
+echo "- docs/perf/pts/inputs/s1-s5/s3-mixed-final-burst-4500-sessions.csv"
+echo "- docs/perf/pts/inputs/s1-s5/s3-mixed-smoke-30-sessions.csv"

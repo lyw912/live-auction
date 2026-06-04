@@ -161,9 +161,9 @@ structure:
 tests/load/
 tests/pts/
 tests/chaos/
-docs/perf/pts/pts-1ab-1000vu-sessions.csv
-docs/perf/pts/s3-mixed-smoke-30-sessions.csv
-docs/perf/pts/s3-mixed-4500-sessions.csv
+docs/perf/pts/inputs/s1-s5/s1-s5-1000-user-sessions.csv
+docs/perf/pts/inputs/s1-s5/s3-mixed-smoke-30-sessions.csv
+docs/perf/pts/inputs/s1-s5/s3-mixed-final-burst-4500-sessions.csv
 scripts/perf/
 docs/perf/k6-ecs-runbook.md
 docs/perf/k6-ecs-command-cheatsheet.md

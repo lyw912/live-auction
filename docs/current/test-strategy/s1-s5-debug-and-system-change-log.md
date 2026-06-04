@@ -21,7 +21,7 @@ Current evidence snapshot:
 
 | Scenario | Current evidence | Verdict boundary |
 |---|---|---|
-| S1 final-second contention | `5D92X7QG`: 1000 unique bids, 7 accepted, 993 rejected, 0 HTTP failures, correctness PASS; PTS sampling p99 64ms, server gateway p99 about 46ms | Correctness strong; strict client-side p99 <=50ms needs rerun or explicit server-vs-client boundary |
+| S1 final-second contention | `2MLCX7WG`: formal 500ms release-window profile, 1000 sampling rows, 1000 unique bids, 285 accepted, 715 rejected, 1000 server POSTs, 1000 Redis Lua executions, 41 verifier gates PASS; measured PTS `startTimeTS` span 1351ms and response `server_time_ms` span 1348ms; per-agent spans 501/525ms; sampling-log p99 23ms, max 28ms. Diagnostic `TGLBX7GG`: strict-barrier p99 134ms, global span 1144ms | S1 windowed-burst correctness and client p99 PASS. Honest burst-window boundary: 500ms per PTS pressure agent; global multi-agent span was about 1.35s and is reported explicitly |
 | S2 steady soak / convergence | `s2-ecs-30m-20260604T095720`: 85,499 decisions over independent-ECS 20/s -> 60/s -> 100/s 30-minute open-model soak, HTTP p99 3.30ms, custom decision p99 4ms, dropped 0, all verifier gates PASS. `s2-convergence-drain-decision-ecs-20260604T1937`: 49,049 decision/reject-heavy decisions over 100/s -> 200/s -> 400/s -> 600/s, decision p99 4ms, final Kafka/Redis/PG/outbox zero, verifier PASS | Bid-decision endurance and decision/reject-heavy convergence PASS; read-interference and accepted-heavy fanout are separate, accepted-heavy 600/s remains attack evidence |
 | S3 fanout | `s3-local-scale-1000-liveonly-20260602T2303`: 1000 WS, 301 accepted updates, 276,000 receive samples, fanout p99 22ms, viewer errors 0. `XWLAX70G`: PTS live-only 2994 WS receive samplers, 100 accepted updates, console live-receive p99 142ms, service `auction_ws_publish_subscribers_sum=299400`, Kafka/outbox lag 0. `20L8X79G`: PTS mixed 2995 WS, 998 bids, 499 readers, service fanout `20965=7*2995` | 3000-viewer PTS live-only and mixed integration PASS at tested scale; 10k headline still unproven. `299400` is service subscriber-delivery count, not DB rows |
 | S4 fault resilience | 2026-06-04 P0/P1 local pass: Redis/backend/PG/Kafka/flush/both; bidder RTO 2/14/2/12/2/12s; full convergence worst 29s; RPO=0. Independent VPC k6 Kafka run `s4-p1-kafka-independent-20260604T202510` also pass. P2 Redis partial now passes with `pts-1c-partial-20260604T224626`: 4000 decisions, 200 paused, RTO 8s, convergence 25s, verifier PASS. | Strong local single-node chaos proof including one Redis proxy-path partial-network fault; not Kafka RF=3/Redis HA production benchmark |
@@ -35,11 +35,16 @@ Redis HA failover/split-brain fencing, multi-WS-gateway reconnect, LB/NAT idle
 timeout, real mobile weak networks, and cross-AZ/cross-region failures are
 concrete next topology tests, not claims already proven by local S4/S5.
 
+The detailed pressure-and-correctness gate audit is documented in
+[`s1-s5-pressure-and-gate-audit.md`](s1-s5-pressure-and-gate-audit.md). Use that
+document when a reviewer asks how each PASS was checked, what each gate means,
+and what a failed gate would imply for auction safety.
+
 Pressure-reached audit across S1-S5:
 
 | Scenario | Pressure target | Evidence that pressure really arrived | Count distinction to defend |
 |---|---|---|---|
-| S1 | Redis single-writer bid decision under final-second contention | PTS `bid-decision` sampler count/timestamp span, 1000 unique bids, 0 HTTP failures, verifier PASS | accepted=7 is not capacity; 1000 accepted+rejected final decisions are the pressure population |
+| S1 | Redis single-writer bid decision under final-second contention | `2MLCX7WG`: PTS `bid-decision` sampler count=1000, unique bids=1000, server POST=1000, Redis Lua=1000, verifier PASS; configured 500ms release window measured as per-agent spans 501/525ms and global span 1351ms | accepted=285 is not capacity; 1000 accepted+rejected final decisions are the pressure population. Do not claim one global 500ms wall-clock interval; claim measured 500ms per-agent window and recorded global span |
 | S2 long soak | Redis decision log -> Kafka relay -> PostgreSQL settlement/outbox over sustained open-arrival traffic | independent same-VPC k6 delivered 85,499/85,499 final decisions with dropped=0; service Kafka lag/Redis pending/outbox all zero; verifier PASS | k6 decision count proves offered load; service/DB convergence proves finality; only 61 accepted updates means this is not accepted-heavy fanout |
 | S2 convergence drain | post-load drain of normal decision/reject-heavy traffic | independent same-VPC k6 delivered 49,049 decisions at 100/s -> 600/s, dropped=0, HTTP failed=0; service final settlement/outbox/Kafka/Redis all zero | small accepted count (6) is expected for reject-heavy drain; do not use it to claim 600/s accepted-update capacity |
 | S3 live-only fanout | WebSocket fanout to online viewers | PTS report/API list counted 2994 receive samplers; sampled rows show `LIVE_MESSAGES_100`; service `auction_ws_publish_subscribers_sum=299400` and queue/backlog zero | database has 100 accepted bids and 100 outbox rows, not 299400 rows; 299400 is backend subscriber-delivery metric |
@@ -77,6 +82,9 @@ What happened:
 |---|---|---|---|
 | Initial framing | Low accepted count looked weak if explained as accepted TPS. | Reframed S1 as decision goodput: accepted and correctly rejected bids are both successful adjudications. | `5D92X7QG`: 1000 unique bids, 7 accepted, 993 rejected, 0 HTTP failures, correctness PASS. |
 | Measurement boundary | PTS sampling p99 was 64ms while server gateway p99 was about 46ms. | Kept the evidence but did not overclaim strict client p99 <=50ms. Marked S1 as correctness strong but needing a clean rerun/review for final external PASS. | Defensible boundary: server-core path appears inside target; published PTS client-side p99 still needs rerun or explanation. |
+| Strict-barrier rerun | After changing the release window to `contention_release_window_ms=0`, `TGLBX7GG` produced 1000 final decisions and all correctness gates passed, but PTS `startTimeTS` span was 1144ms and response `server_time_ms` span was 1147ms. | Kept the stricter workload as a diagnostic pressure/correctness artifact, but did not pretend PTS delivered a 0ms or 500ms arrival burst. | Shared-barrier pressure reached the service: 1000 POSTs, 1000 Redis Lua executions, 10 accepted, 990 rejected, 41 gates PASS. Client-side p99 was 134ms, so this diagnostic run is not the formal M1 pass. |
+| Two-agent attribution | `TGLBX7GG` used 2 PTS pressure agents. Per-agent evidence: instance 0 released 500 VU in 114ms, instance 1 released 500 VU in 113ms; server logs show `172.16.180.107` handled 500 POSTs in ~117ms and `172.16.180.109` handled 500 POSTs in ~119ms, but the two agents were about 1s apart. | Classified the 1.15s global span as load-agent synchronization, not backend saturation. | Server histograms still show 1000/1000 HTTP/gateway/Redis Lua <=50ms. Apache JMeter/PTS assembly-point behavior is per JVM/pressure machine, not global across multiple agents. |
+| Formal 500ms-window rerun | Returned the judge-facing JMX default to `contention_release_window_ms=500` and reran PTS as `2MLCX7WG`. | Treated the configured 500ms as a target, then recomputed the real offered window from 100% sampling rows and response `server_time_ms`. | 1000/1000 rows reached the API and Redis Lua; 285 accepted, 715 rejected; 41 gates PASS; sampling-log p99 23ms, max 28ms. Per-agent windows were 501ms and 525ms; global multi-agent span was 1351ms, so the formal claim is 500ms per pressure agent, not one global 500ms interval. |
 
 System-code impact: no current runtime-code change is attributed to S1 in this
 log. S1 mainly forced better metric framing and correctness verification.
@@ -84,9 +92,13 @@ log. S1 mainly forced better metric framing and correctness verification.
 Judge answer:
 
 > "S1 is not saying only 7 bids were handled. It says 1000 final decisions were
-> made under final-second contention; 993 rejections were correct because the
-> price had already moved. The remaining work is a clean client-side p99 <=50ms
-> PTS artifact, not a correctness gap."
+> made under final-second contention; most rejections were correct because the
+> price had already moved. The formal run is `2MLCX7WG`: 1000 unique final
+> decisions, 1000 server POSTs, 1000 Redis Lua executions, p99 23ms, and 41
+> verifier gates PASS. Each PTS pressure agent delivered its local 500 bidders in
+> about 0.5s; because the two pressure agents were offset, the measured global
+> span was 1.35s. We report that boundary instead of claiming a single global
+> 500ms interval."
 
 ### S2 Steady Auction / Soak
 
@@ -116,7 +128,7 @@ Current independent-ECS long-soak result:
 Evidence:
 
 ```text
-docs/perf/pts/evidence/incoming/s2-ecs-30m-20260604T095720/
+docs/perf/pts/evidence/current/s1-s5/s2-long-soak-20260604T095720/
 ```
 
 Boundary: this proves 30-minute bid-decision endurance and async convergence.
@@ -278,7 +290,7 @@ Judge answer:
 | Product safety over raw speed | S4 back-office convergence can lag bidder recovery, so payment/finality is gated instead of pretending bidding RTO means finance finality. |
 | Fail-closed under uncertainty | Redis state loss returns reconciling/paused semantics and requires controlled resume. |
 | At-least-once is handled at business layer | S4 08 does not claim Kafka exactly-once; it proves idempotent settlement/order/outbox effect. |
-| Test artifact honesty | S1 strict PTS p99 and S2 100s convergence are explicitly marked as rerun/near-miss boundaries. |
+| Test artifact honesty | S1 reports both the formal 500ms per-agent window and the wider multi-agent global span; S2 100s convergence near-miss is explicitly separated from current pass evidence. |
 
 ## 5. Questions A Senior Reviewer Will Ask
 
@@ -319,7 +331,7 @@ election disabled, and a separate broker-loss chaos profile.
 
 | Priority | Follow-up | Why |
 |---|---|---|
-| P0/P1 | Rerun S1 for clean strict client p99 <=50ms or write a formal server-vs-client boundary review | Current S1 correctness is strong, but PTS client p99 64ms is not a strict PASS |
+| P1 | Optional S1 global-rendezvous improvement | Current formal S1 `2MLCX7WG` is a 500ms per-agent PASS with p99 23ms; if claiming one global 1000-user 500ms wall-clock interval, use one pressure agent, a custom open-arrival/k6 generator, or an explicit cross-agent rendezvous mechanism and preserve the same verifier gates |
 | P0/P1 | Rerun S2 with `S2_CONVERGENCE_TIMEOUT_SECONDS=110` | Current 100s gate is a near miss; 110s target needs proof |
 | P1 | Browser weak-network payment/bid CTA E2E | Backend S5 network now passes; visible H5 disabled-state proof is still needed |
 | P1 | Relay backlog age / cursor-lag observability | S4 07 proves 600/600 drain; production reviewers will ask how backlog age alerts |

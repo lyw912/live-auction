@@ -7,11 +7,10 @@
 #
 # Upload the JMX to PTS manually; this script handles server-side prep + post-run verify.
 # PTS config: 压力模式=虚拟用户模式, 最大VU=1000, 指定循环=是/1, 指定IP数=2, 时长=2min, 采样率=100% for judge-forensics runs
-# S1-burst default JMX release model: contention_release_window_ms=500,
-# i.e. 1000 one-shot bids spread deterministically inside a short final-second
-# window. The actual arrival span is validated from sampling logs/server metrics.
-# Diagnostic zero-ms microburst: set contention_release_window_ms=0 in the PTS
-# JMeter environment properties, and label the report as diagnostic only.
+# S1-burst default release model: contention_release_window_ms=500.
+# 1000 one-shot bidders are deterministically spread inside a short final-second
+# window. The actual delivered span is still validated from 100% PTS sampling
+# logs and server response timestamps after the run.
 #
 # Usage:
 #   LABEL=run-$(date +%Y%m%dT%H%M%S) bash tests/pts/run-s1-contention.sh
@@ -28,16 +27,16 @@ BASE_URL="$BASE_URL" bash tests/pts/preflight-l4b-pts-guards.sh "before-${LABEL}
 
 echo ""
 echo "=== S1 ready — upload JMX to PTS now ==="
-echo "   JMX:       tests/pts/L1-component/pts-1b-contention-burst-1000vu-1m.jmx   (S1-burst)"
-echo "   CSV:       docs/perf/pts/pts-1ab-1000vu-sessions.csv"
+echo "   JMX:       tests/pts/scenarios/s1-final-second-contention/s1-final-second-contention-1000vu.jmx   (S1-burst)"
+echo "   CSV:       docs/perf/pts/inputs/s1-s5/s1-s5-1000-user-sessions.csv"
 echo "   Sampler to screenshot: '出价决策 bid-decision'"
 echo "   JMX default: contention_release_window_ms=500 (short final-second release window)"
-echo "   Optional diagnostic property: contention_release_window_ms=0 (strict microburst, not the judge-facing default)"
+echo "   Optional diagnostic property: contention_release_window_ms=0 (strict-barrier comparison)"
 echo "   Optional conservative property: contention_release_window_ms=1000 (one-second final-window burst)"
 echo ""
 echo "   [optional S1-ladder control]"
-echo "   JMX:       tests/pts/L1-component/pts-1a-accepted-ladder-1000vu-1m.jmx"
-echo "   CSV:       docs/perf/pts/pts-1ab-1000vu-sessions.csv"
+echo "   JMX:       tests/pts/scenarios/s1-final-second-contention/s1-accepted-ladder-control-1000vu.jmx"
+echo "   CSV:       docs/perf/pts/inputs/s1-s5/s1-s5-1000-user-sessions.csv"
 echo ""
 read -r -p "Press ENTER when PTS run is complete and you have the report ID: "
 read -r -p "PTS report ID: " PTS_REPORT_ID

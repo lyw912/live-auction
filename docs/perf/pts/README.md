@@ -20,7 +20,7 @@ This folder is not the current architecture authority. Start current PTS-1B work
 | `docs/perf/pts/l4b-kafka/report-review-index.md` | report review classification |
 | `docs/perf/pts/l4b-kafka/final-burst-1000vu-runbook.md` | current-adjacent runbook; verify against `tests/pts/MANIFEST.md` before use |
 | `docs/perf/pts/l4b-kafka/pts1b-observability-runbook-2026-05-30.md` | observability helper for PTS-1B |
-| `docs/perf/pts/pts-1ab-1000vu-sessions.csv` | current PTS-1A/PTS-1B 1000-user session data source |
+| `docs/perf/pts/inputs/s1-s5/s1-s5-1000-user-sessions.csv` | current PTS-1A/PTS-1B 1000-user session data source |
 | `docs/perf/pts/generate-pts-sessions.sql` | session CSV generation helper |
 
 ## Historical Or Current-Adjacent Background

@@ -190,7 +190,7 @@ That lowers credibility by measuring backlog drain instead of user-visible RTO.
 Focused checks used during this completion:
 
 ```bash
-node --check tests/pts/L1-component/pts-1c-k6-concurrent-fault.js
+node --check tests/pts/scenarios/s4-fault-resilience/s4-concurrent-fault.js
 bash -n tests/pts/run-pts-1c-concurrent-fault.sh tests/pts/reset-l4b-final-second-pressure.sh
 
 cd backend

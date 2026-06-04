@@ -4,7 +4,7 @@ These CSV files are retained for historical JMX compatibility and old report
 reproduction. Current PTS-1A/PTS-1B uses:
 
 ```text
-docs/perf/pts/pts-1ab-1000vu-sessions.csv
+docs/perf/pts/inputs/s1-s5/s1-s5-1000-user-sessions.csv
 ```
 
 The archived JMX files may still reference the basename expected by Alibaba PTS

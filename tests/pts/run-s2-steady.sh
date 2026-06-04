@@ -1,16 +1,8 @@
 #!/usr/bin/env bash
 # run-s2-steady.sh — S2 正常竞价 full run sequence
 #
-# Two parts:
-#   Part A (local k6 soak, M4 leak gate): runs s2-steady-soak.js locally for
-#     SOAK_MINUTES; watch Grafana for heap floor / goroutines / fd slope.
-#   Part B (optional PTS JMeter chart): run pts-2p4-steady-interactive-auction.jmx
-#     only when you need a polished PTS PDF.
-#
-# Optional PTS Part B config:
-#   JMX=tests/pts/L2-protocol/pts-2p4-steady-interactive-auction.jmx
-#   压力模式=虚拟用户模式, 最大VU=3000, 指定IP数=6
-#   压测时长=10min, 是否指定循环=否, 采样率=1%
+# Current S2 is an independent-k6 open-arrival run. Old L2 PTS chart assets
+# were removed from the current S1-S5 tree; use S3 PTS for fanout charts.
 #
 # Usage:
 #   SOAK_MINUTES=30 bash tests/pts/run-s2-steady.sh
@@ -218,7 +210,10 @@ wait_s2_convergence() {
 }
 
 echo "=== S2 稳态 — prep ==="
-ALLOW_MOCK_AUTH="$ALLOW_MOCK_AUTH" bash tests/pts/prepare-l2p4-steady-pressure.sh
+ALLOW_MOCK_AUTH="$ALLOW_MOCK_AUTH" \
+L4B_PROFILE=pts-1b \
+SESSION_COUNT=1000 \
+bash tests/pts/reset-l4b-final-second-pressure.sh
 
 preseed_local_k6_bidders() {
   local db_container="${DB_CONTAINER:-live-auction-postgres}"
@@ -354,11 +349,6 @@ VERIFIER_EXIT="${VERIFIER_EXIT:-0}"
 echo ""
 echo "=== S2 done. Evidence: ${EVIDENCE_DIR}/ ==="
 echo "   M4 evidence:  Grafana screenshot (resource slope over soak)."
-echo ""
-echo "Optional Part B PTS chart:"
-echo "   JMX: tests/pts/L2-protocol/pts-2p4-steady-interactive-auction.jmx"
-echo "   CSVs: pts-l2p4-bidder/viewer/reader session files"
-echo "   PTS: 最大VU=3000, 指定IP数=6, 压测时长=10min, 是否指定循环=否"
 
 if [ "$K6_EXIT" -ne 0 ] || [ "$CONVERGENCE_EXIT" -ne 0 ] || [ "$VERIFIER_EXIT" -ne 0 ]; then
   echo ""

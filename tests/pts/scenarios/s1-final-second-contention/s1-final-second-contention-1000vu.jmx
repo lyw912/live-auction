@@ -2,7 +2,7 @@
 <jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
   <hashTree>
     <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="PTS-1B contention burst 1000VU 1m (v3 single-writer decision log)" enabled="true">
-      <stringProp name="TestPlan.comments">PTS-1B contention burst v3 single-writer decision log. Business scenario: final second of a jewellery auction, 1000 bidders submit one bid each inside a short final-second release window. Default contention_release_window_ms=500; diagnostic strict microburst can set it to 0, and conservative one-second burst can set it to 1000. Server returns synchronous DECIDED in under 50ms. Pass: HTTP 200 + decision_status=DECIDED + durability_status=ENGINE_DURABLE, p99 &lt;= 50ms, all 1000 bids classified, highest amount wins, engine_seq gap-free, no DLQ/pause. Requires ALLOW_MOCK_AUTH=false ADMISSION_ENABLED=false BID_ENGINE_MODE=redis_ledger Kafka topics ready high auction cap.</stringProp>
+      <stringProp name="TestPlan.comments">PTS-1B contention burst v5 single-writer decision log. Business scenario: final second of a jewellery auction, 1000 bidders submit one bid each inside a controlled short final-second release window. Default contention_release_window_ms=500; set 0 only for diagnostic strict-barrier comparison, or 1000 for conservative one-second fallback. Server returns synchronous DECIDED in under 50ms. Pass: HTTP 200 + decision_status=DECIDED + durability_status=ENGINE_DURABLE, p99 &lt;= 50ms, all 1000 bids classified, highest amount wins, engine_seq gap-free, no DLQ/pause. Requires ALLOW_MOCK_AUTH=false ADMISSION_ENABLED=false BID_ENGINE_MODE=redis_ledger Kafka topics ready high auction cap.</stringProp>
       <boolProp name="TestPlan.functional_mode">false</boolProp>
       <boolProp name="TestPlan.tearDown_on_shutdown">true</boolProp>
       <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
@@ -27,7 +27,7 @@
       <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="PTS real session token pool" enabled="true">
         <stringProp name="delimiter">,</stringProp>
         <stringProp name="fileEncoding">UTF-8</stringProp>
-        <stringProp name="filename">pts-1ab-1000vu-sessions.csv</stringProp>
+        <stringProp name="filename">s1-s5-1000-user-sessions.csv</stringProp>
         <boolProp name="ignoreFirstLine">true</boolProp>
         <boolProp name="quotedData">false</boolProp>
         <boolProp name="recycle">true</boolProp>

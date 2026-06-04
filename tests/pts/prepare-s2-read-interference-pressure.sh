@@ -11,7 +11,10 @@ READ_MAX_VUS="${READ_MAX_VUS:-5000}"
 
 cd "$ROOT_DIR"
 
-ALLOW_MOCK_AUTH="${ALLOW_MOCK_AUTH:-true}" bash tests/pts/prepare-l2p4-steady-pressure.sh
+ALLOW_MOCK_AUTH="${ALLOW_MOCK_AUTH:-true}" \
+L4B_PROFILE=pts-1b \
+SESSION_COUNT=1000 \
+bash tests/pts/reset-l4b-final-second-pressure.sh
 
 acl_room_id="$(docker exec "$DB_CONTAINER" psql -q -A -t -U "$DB_USER" \
   -d "$DB_NAME" -c "SELECT room_id FROM auctions WHERE id = 'auc_live'")"

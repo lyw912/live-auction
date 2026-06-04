@@ -2,8 +2,8 @@
 
 > Maps to: brief 挑战二 "毫秒级实时同步" + 规则(加价/自动延时); rubric 性能 + 稳定性.
 > Headline: **steady decision p99 ≤ 100 ms** at a sustained offered rate + **M4 no leak**.
-> Tool: **independent-ECS k6 soak** for stability + **optional PTS RPS S2 chart** when budget permits.
-> Source assets: `tests/load/s2-steady-soak.js` and `tests/pts/L2-protocol/pts-2p4-steady-interactive-auction.jmx`.
+> Tool: **independent-ECS k6 soak/read/capacity runs** for open-arrival evidence.
+> Source assets: `tests/load/s2-steady-soak.js` and `tests/load/s2-read-interference.js`.
 > Expanded split: `S2-long-soak`, `S2-convergence-drain`,
 > `S2-capacity-stair`, and `S2-read-interference` are governed by
 > [s2-s3-expanded-test-design.md](s2-s3-expanded-test-design.md).
@@ -39,9 +39,9 @@ duration                 : 10 min (PTS chart) / 30–60 min (local soak)
 The fanout pressure is driven by **accepted updates × subscribers**, not by
 rejected attempts. Report offered bids *and* accepted updates separately.
 
-## 3. Two runs, two tools (on purpose)
+## 3. Current S2 Runs
 
-### 3a. Local k6 soak (30–60 min, the leak gate — 0 VUM)
+### 3a. Independent k6 soak (30–60 min, the leak gate)
 k6 `ramping-arrival-rate` is the cleanest current open-model asset and costs
 nothing. Run it against the server; scrape server metrics via Prometheus →
 Grafana. This is the required S2 run.
@@ -88,7 +88,7 @@ Current independent-ECS result:
   settlements terminal, Kafka consumer lag 0, Redis pending decisions 0, DLQ
   empty, outbox drained, engine seq complete, and all verifier P0/P1 gates PASS.
 - Evidence path:
-  `docs/perf/pts/evidence/incoming/s2-ecs-30m-20260604T095720/`.
+  `docs/perf/pts/evidence/current/s1-s5/s2-long-soak-20260604T095720/`.
 
 Interpretation boundary: this is a bid-decision endurance and convergence pass.
 It is not accepted-heavy fanout evidence and it is not read-interference
@@ -164,23 +164,6 @@ Use these as read-path ceiling evidence. Do not claim 3000/s, 4000/s, 5000/s, or
 10000/s read capacity until a later clean-ceiling run or read-path optimization
 proves it. The next display candidate should be 1500/s -> 1800/s -> 2000/s
 reads, or 2000/s flat for 15 minutes.
-
-### 3b. Optional PTS chart (10 min, judge export)
-Use this only after the k6 soak is clean and when you need a polished PTS PDF.
-The current executable asset is `pts-2p4-steady-interactive-auction.jmx`; there
-is no separate native-HTTP PTS script in the current plan. Treat the JMX as S2's PTS chart, with the script's
-pacing and sampler exclusions preserved.
-
-```
-JMX: tests/pts/L2-protocol/pts-2p4-steady-interactive-auction.jmx
-Scale: 2400 WS + 360 active bidder + 240 reader VU
-Duration: 10 min
-Sampler: S2 steady bid decision p99, S2 fanout observe final seq
-Verifier: tests/pts/verify-l2p4-pts-evidence.sh
-```
-
-PTS config: JMeter pressure test, VU mode, max VU 3000, specified IPs 6,
-duration 10 min, loop count not specified (`是否指定循环=否`), sampling 1%.
 
 ## 4. Auto-extension correctness (a rule the steady run must exercise)
 
@@ -403,7 +386,7 @@ The display-sized clean rerun has now been executed:
   `kafka_consumer_group_lag_zero`, `v3_relay_stream_complete`, and
   `redis_pending_decisions_empty`.
 - Evidence path:
-  `docs/perf/pts/evidence/incoming/s2-capacity-accepted-display200-p1-ecs-20260604T192002/`.
+  `docs/perf/pts/evidence/current/s1-s5/s2-capacity-accepted-display200-p1-ecs-20260604T192002/`.
 - Classification: `CURRENT_PASS` and the preferred judge-facing
   accepted-heavy S2-capacity display artifact. It proves the P1 path can sustain
   a 200/s accepted-heavy open-arrival stair over more than 10k decisions with
@@ -442,7 +425,7 @@ Independent-ECS decision/reject convergence-drain, 2026-06-04:
   `19:55:57 CST` confirmed Kafka/Redis/PG/outbox zero backlog; DB timestamps
   show the final settlement completed at approximately test end."
 - Evidence path:
-  `docs/perf/pts/evidence/incoming/s2-convergence-drain-decision-ecs-20260604T1937/`.
+  `docs/perf/pts/evidence/current/s1-s5/s2-convergence-drain-20260604T1937/`.
 - Classification: `CURRENT_PASS` for S2 decision/reject-heavy
   convergence-drain at the 100/200/400/600 display profile. It proves payment
   finality convergence for normal decision-heavy traffic over more than 10k

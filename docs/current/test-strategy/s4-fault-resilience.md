@@ -3,7 +3,7 @@
 > Maps to: brief rubric 系统可用性(异常兜底) + 稳定性(数据一致性); 加分 "分布式锁解决幂等性，绝对不允许一笔出价扣两次钱".
 > Headline: **M5 RTO ≤ 30 s (local) + RPO = 0** + zero phantom accepts + zero duplicate settlement.
 > Tool: **local k6 + Toxiproxy + SIGKILL** (0 VUM — never PTS).
-> Source-of-truth: `tests/pts/run-pts-1c-concurrent-fault.sh`, `tests/pts/L1-component/pts-1c-k6-concurrent-fault.js`, `tests/chaos/*`.
+> Source-of-truth: `tests/pts/run-pts-1c-concurrent-fault.sh`, `tests/pts/scenarios/s4-fault-resilience/s4-concurrent-fault.js`, `tests/chaos/*`.
 
 ## 1. Why local, not PTS
 

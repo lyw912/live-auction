@@ -13,7 +13,7 @@ working tests:
 
 1. **Sprawl.** Many legacy asset names existed across smoke, component,
    protocol, scenario, and combined tests. They are now asset aliases only; the
-   plan names are S0-S5.
+   plan names are S1-S5.
 2. **PTS friction.** Repeated harness-invalid runs (`TZ9GX7ZG`, `GUA1X7HG`,
    `58A5X7KG`, `3W9CX76G`) burned money producing reports that proved nothing.
 3. **Cost blowout.** Single runs cost 18k–52k VUM each, far over the
@@ -60,18 +60,17 @@ Scenario-specific pressure proof:
 | S4 | k6 fault-window counters prove traffic overlapped the injected fault; service convergence/verifier gates prove fail-closed, RPO=0, no phantom accepts, and no duplicate settlement effects. |
 | S5 | k6 reconnect counters prove stale-`last_seq` clients actually reconnected after missing seqs; service `ws_reconnect`/`ws_recovered` counters and gap/dup/truth checks prove backend recovery, not just socket open success. |
 
-## 2. The spine — six business scenarios
+## 2. The spine — five business scenarios
 
 Each scenario is one user story, proves one thing, runs on one tool, and emits
-one (occasionally two) headline numbers. IDs are scenario-driven (`S0`–`S5`).
+one (occasionally two) headline numbers. IDs are scenario-driven (`S1`–`S5`).
 Old `L*` names are not plan stages; they are script/data aliases only.
 
 | ID | Scenario (业务语言) | Proves | Tool | Headline metric | Script/data asset |
 |---|---|---|---|---|---|
-| **S0** | 单人闭环 — one user completes the whole flow | engineering chain closes (login→join→bid→broadcast→settle→pay) | smoke / local | PASS/FAIL | `tests/pts/L0-smoke/live-auction-pts-business-smoke.jmx` |
-| **S1** | 绝杀时刻 — N users bid in the final second on one auction | contention correctness + tail latency | **PTS JMeter** | **bid decision p99 ≤ 50ms** + winner correct + every reject justified | `tests/pts/L1-component/pts-1b-contention-burst-1000vu-1m.jmx`; ladder control `pts-1a-*` |
-| **S2** | 正常竞价 — minority bid steadily while viewers poll state | bid-decision long soak, convergence drain, capacity knee, and HTTP read interference | **independent-ECS k6 required** + optional PTS RPS chart | steady decision p99 + read p99 + accepted-update rate + backlog/convergence + flat resources | `tests/load/s2-steady-soak.js`; `tests/load/s2-read-interference.js`; expanded split in `s2-s3-expanded-test-design.md` |
-| **S3** | 万人围观 — one room, 10 000 online, price broadcast to all | live-only fanout plus final-burst integration | **PTS VU/JMeter** + local or independent-source k6 | **fanout publish→receive p99 ≤ 1s** + connections held + RAM/conn | `tests/pts/S3-room-fanout/*`; `tests/load/s3-fanout-soak.js`; expanded split in `s2-s3-expanded-test-design.md` |
+| **S1** | 绝杀时刻 — N users bid in the final second on one auction | contention correctness + tail latency | **PTS JMeter** | **bid decision p99 ≤ 50ms** + winner correct + every reject justified | `tests/pts/scenarios/s1-final-second-contention/s1-final-second-contention-1000vu.jmx`; ladder control `pts-1a-*` |
+| **S2** | 正常竞价 — minority bid steadily while viewers poll state | bid-decision long soak, convergence drain, capacity knee, and HTTP read interference | **independent-ECS k6 required** | steady decision p99 + read p99 + accepted-update rate + backlog/convergence + flat resources | `tests/load/s2-steady-soak.js`; `tests/load/s2-read-interference.js`; expanded split in `s2-s3-expanded-test-design.md` |
+| **S3** | 万人围观 — one room, 10 000 online, price broadcast to all | live-only fanout plus final-burst integration | **PTS VU/JMeter** + local or independent-source k6 | **fanout publish→receive p99 ≤ 1s** + connections held + RAM/conn | `tests/pts/scenarios/s3-room-fanout/*`; `tests/load/s3-fanout-soak.js`; expanded split in `s2-s3-expanded-test-design.md` |
 | **S4** | 故障韧性 — Redis/Kafka/PG/worker fault under live bidding | fail-closed, relay/replay convergence, RTO, RPO=0, no double-charge | **local k6 + Toxiproxy/SIGKILL** | **RTO** + **RPO=0** + zero phantom accepts + zero duplicate settlement | `tests/pts/run-pts-1c-concurrent-fault.sh`; `tests/chaos/*` |
 | **S5** | 断连重连 — weak network drops WS, client recovers to current state | WebSocket stability / auto-reconnect / heartbeat | **local k6** | time-to-current-state + no lost/dup notifications | `tests/load/s5-reconnect-recovery.js` |
 
@@ -84,7 +83,7 @@ The brief's rubric, mapped cell-by-cell to the scenario that earns it:
 
 | Rubric cell (考察要点) | Weight | Earned by |
 |---|---|---|
-| 完整工程链路闭环（采集→后端校验/状态机→网关→前端交互） | 50% | **S0** (chain) + **S1** (server-authoritative decision) |
+| 完整工程链路闭环（采集→后端校验/状态机→网关→前端交互） | 50% | **S1** (server-authoritative decision) + **S3** (gateway/fanout) + product smoke/manual demo |
 | 系统可用性（断连重连、异常兜底） | 50% | **S4** (fail-closed / recovery) + **S5** (reconnect) |
 | 性能 | 50% | **S1** (decision p99) + **S3** (fanout p99) |
 | 稳定性（缓存防击穿、数据一致性） | 50% | **S2** (soak/no-leak) + **S4** (RPO=0 / no double-charge) + correctness verifier on every run |
@@ -104,22 +103,23 @@ public cloud ¥0.003/VUM, 1 pressure IP ≈ 500 VU. Keep sampling at the free 1%
 |---|---|---|---|---|---|
 | S1 绝杀 | **PTS JMeter** | 1000 bid VU, one bid each, 1-2 min | 1k-2k | 3-6 | signature contention chart + distributed source IPs |
 | S2 稳态 soak | **independent ECS k6** | 20/s → 60/s → 100/s bid attempts, 30-60 min | 0 | 0 | open-model bid-decision stability, dropped-iteration visibility, Grafana resource slope |
-| S2 optional PTS chart | **PTS JMeter** | 2400 WS + 360 bidders + 240 readers, 10 min | ~30k | ~90 | polished realtime-steady PDF if budget permits |
 | S3 cost variant | **PTS JMeter** + local | 2000 WS PTS ×5 min + 10000 WS local soak | ~10k | ~30 | PTS p99 chart plus free 10k hold/leak evidence |
 | S3 headline | **PTS JMeter** | 10000 WS ×5 min, 20 IP | ~50k | ~150 | single PTS report for 10k online + fanout p99 |
 | S4 / S5 | **local k6 + chaos** | S4: 200 paced bid VU; S5: 20-200 reconnect VU | 0 | 0 | correctness/recovery needs system evidence, not paid distributed IPs |
 
 Cost note: use the S3 cost variant unless you specifically need one PDF showing
 10 000 PTS WebSocket users. The minimum credible PTS spend is S1 plus S3 cost
-variant; S2 can be local k6 unless a polished PTS steady chart is worth the cost.
+variant; S2 stays on independent k6 because it needs open-arrival accounting,
+dropped-iteration visibility, and service-side convergence gates more than a
+PTS PDF.
 
 ## 5. Staging — what to finish first, what is minimum
 
 | Tier | Contents | Story it tells | State |
 |---|---|---|---|
-| **P0** (minimum credible) | S0 + S1 (PTS) + S4 {Redis fail-closed, settlement no-double-charge, PG-down no-loss} | "Correct under peak contention, resilient, never double-charges." Covers the 50% core. | S1 ✅, S4 P0 ✅ |
+| **P0** (minimum credible) | S1 (PTS) + S4 {Redis fail-closed, settlement no-double-charge, PG-down no-loss} + product smoke/manual demo | "Correct under peak contention, resilient, never double-charges." Covers the 50% core. | S1 ✅, S4 P0 ✅ |
 | **P1** (completes realtime story) | S2 steady soak (local) + S3 fanout cost variant + S4 {Kafka, redis-flush, both} | "Stable under sustained realtime load; the bonus 1000+ room works." | S4 P1 ✅, S2/S3 evidence tracked separately |
-| **P2** (stretch / capacity) | S2 optional PTS chart + S3 10 000-WS PTS headline + S5 reconnect + multi-room | "We know the single-node ceiling and the horizontal path." | optional |
+| **P2** (stretch / capacity) | S3 10 000-WS PTS headline + S5 reconnect + multi-room | "We know the single-node ceiling and the horizontal path." | optional |
 
 Do not start a tier before the one below it passes. A higher-layer regression is
 isolated by re-running the lower layer (the layering that already exists in the
@@ -150,7 +150,7 @@ MANIFEST is preserved — only the *names and headline framing* change).
 
 ## 7. Naming rule
 
-Use only S0-S5 in plans, reports, and judge material. Old `L*` names may appear
+Use only S1-S5 in plans, reports, and judge material. Old `L*` names may appear
 only as asset aliases in `tests/pts/MANIFEST.md`, old PTS report reviews, or file
 names that are already committed. Do not create new plans named L2/L3/L4.
 

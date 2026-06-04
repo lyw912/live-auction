@@ -1,8 +1,8 @@
 <?xml version='1.0' encoding='UTF-8'?>
 <jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
   <hashTree>
-    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="S3 live room fanout 4500VU single-branch" enabled="true">
-      <stringProp name="TestPlan.comments">S3 single-main-thread-group live room fanout pressure. A single 4500-row mixed CSV drives 1000 bidders, 3000 WebSocket viewers, and 500 readers via JMeter IfController branches. This avoids Alibaba Cloud PTS proportional redistribution of multiple main Thread Groups and makes exact role counts verifiable from sampler counts.</stringProp>
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="S3 live-only fanout 3100VU single-branch" enabled="true">
+      <stringProp name="TestPlan.comments">S3-live-only-fanout pressure. A single 3100-row CSV drives 3000 WebSocket viewers and 100 one-shot accepted-update bidders via JMeter IfController branches. No reader traffic and no 1000-bid final burst; this isolates live fanout latency and connection stability. PTS loop count must remain 1 so viewers do not reconnect in a loop.</stringProp>
       <boolProp name="TestPlan.functional_mode">false</boolProp>
       <boolProp name="TestPlan.tearDown_on_shutdown">true</boolProp>
       <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
@@ -36,12 +36,12 @@
         </collectionProp>
       </HeaderManager>
       <hashTree />
-      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="S3 mixed role dispatcher 4500VU" enabled="true">
-        <stringProp name="ThreadGroup.num_threads">${__P(total_threads,4500)}</stringProp>
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="S3 live-only dispatcher 3100VU" enabled="true">
+        <stringProp name="ThreadGroup.num_threads">${__P(total_threads,3100)}</stringProp>
         <stringProp name="ThreadGroup.ramp_time">${__P(total_ramp_sec,20)}</stringProp>
         <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
         <boolProp name="ThreadGroup.scheduler">true</boolProp>
-        <stringProp name="ThreadGroup.duration">${__P(run_duration_sec,120)}</stringProp>
+        <stringProp name="ThreadGroup.duration">${__P(run_duration_sec,180)}</stringProp>
         <stringProp name="ThreadGroup.delay">0</stringProp>
         <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" enabled="true">
           <boolProp name="LoopController.continue_forever">false</boolProp>
@@ -49,10 +49,10 @@
         </elementProp>
       </ThreadGroup>
       <hashTree>
-        <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="S3 mixed role sessions" enabled="true">
+        <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="S3 live-only sessions" enabled="true">
           <stringProp name="delimiter">,</stringProp>
           <stringProp name="fileEncoding">UTF-8</stringProp>
-          <stringProp name="filename">${__P(mixed_csv,s3-mixed-4500-sessions.csv)}</stringProp>
+          <stringProp name="filename">${__P(mixed_csv,s3-live-only-fanout-3100-sessions.csv)}</stringProp>
           <boolProp name="ignoreFirstLine">true</boolProp>
           <boolProp name="quotedData">false</boolProp>
           <boolProp name="recycle">false</boolProp>
@@ -61,7 +61,7 @@
           <stringProp name="variableNames">load_role,user_id,token,role</stringProp>
         </CSVDataSet>
         <hashTree />
-        <JSR223PreProcessor guiclass="TestBeanGUI" testclass="JSR223PreProcessor" testname="S3 mixed VU start barrier preprocessor" enabled="true">
+        <JSR223PreProcessor guiclass="TestBeanGUI" testclass="JSR223PreProcessor" testname="S3 live-only VU start barrier preprocessor" enabled="true">
           <stringProp name="scriptLanguage">groovy</stringProp>
           <stringProp name="cacheKey">s3-mixed-vu-start-barrier-v1</stringProp>
           <stringProp name="script"><![CDATA[
@@ -109,7 +109,7 @@ vars.put('s3_start_barrier_done', '1')
               <stringProp name="scriptLanguage">groovy</stringProp>
               <stringProp name="cacheKey">s3-compute-contention-bid</stringProp>
               <stringProp name="script">
-long wait = Long.parseLong(props.getProperty('burst_wait_ms', '5000'))
+long wait = Long.parseLong(props.getProperty('burst_wait_ms', '10000'))
 long quantum = Long.parseLong(props.getProperty('contention_barrier_quantum_ms', '1000'))
 def target = props.get('s3_bid_target_ms') as java.util.concurrent.atomic.AtomicLong
 if (target == null) {
@@ -122,23 +122,18 @@ if (target == null) {
 long sleep = target.get() - System.currentTimeMillis()
 if (sleep &gt; 0L) Thread.sleep(sleep)
 String userID = vars.get('user_id') ?: 'unknown'
-def matcher = userID =~ /k6_bidder_(\d+)_(\d+)/
 def simpleMatcher = userID =~ /k6_bidder_(\d+)/
-long bucket = 1L
-long lane = 0L
-if (matcher.matches()) {
-  bucket = Long.parseLong(matcher.group(1))
-  lane = Long.parseLong(matcher.group(2))
-} else if (simpleMatcher.matches()) {
-  bucket = Long.parseLong(simpleMatcher.group(1))
-  lane = 0L
+long rank = 1L
+if (simpleMatcher.matches()) {
+  rank = Long.parseLong(simpleMatcher.group(1))
 }
-long rank = Math.max(1L, (bucket - 1L) * 7L + lane + 1L)
-long amount = Long.parseLong(props.getProperty('contention_amount_base_cents', '10000')) + Long.parseLong(props.getProperty('contention_amount_increment_cents', '5000')) * Long.parseLong(props.getProperty('contention_amount_stride', '1000')) * rank
-String id = 's3-live-fanout-' + userID + '-' + rank
+long staggerMs = Long.parseLong(props.getProperty('s3_live_only_bid_stagger_ms', '100'))
+if (staggerMs &gt; 0L) Thread.sleep(Math.max(0L, rank - 1L) * staggerMs)
+long amount = Long.parseLong(props.getProperty('contention_amount_base_cents', '1000000000')) + Long.parseLong(props.getProperty('contention_amount_increment_cents', '5000')) * rank
+String id = 's3-live-only-fanout-' + userID + '-' + rank
 vars.put('amount_cents', Long.toString(amount))
 vars.put('client_bid_id', id)
-vars.put('client_seen_seq', Long.toString(Math.max(0L, rank - 1L)))
+vars.put('client_seen_seq', '0')
             </stringProp>
             </JSR223PreProcessor>
             <hashTree />

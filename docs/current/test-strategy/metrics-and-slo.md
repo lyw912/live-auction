@@ -146,8 +146,9 @@ A boolean that must be PASS on **every** run, perf or fault. The verifier assert
 | Settlement coverage | every durable decision settled, bounded-pending, or DLQ/paused |
 
 Existing verifiers: `tests/pts/verify-l4b-pts-correctness.sh` (distribution, seq
-gaps, DLQ), plus scenario verifiers (`verify-l2p3/p4`). M3 PASS is a precondition
-for citing M1/M2 from the same run.
+gaps, DLQ), plus scenario-specific review scripts such as
+`tests/pts/verify-s3-pts-evidence.sh` and `tests/pts/review-s1-pts-run.sh`.
+M3 PASS is a precondition for citing M1/M2 from the same run.
 
 ## M4 — resource stability (the leak gate)
 

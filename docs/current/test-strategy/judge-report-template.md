@@ -26,7 +26,6 @@ Lead with the verdict and the pass/fail matrix. Example wording:
 
 | Scenario | 正确性 (M3) | 性能 | 韧性 | Verdict |
 |---|---|---|---|---|
-| S0 单人闭环 | PASS | — | — | ✅ |
 | S1 绝杀 (PTS) | PASS | decision p99 = __ ms | — | ✅ |
 | S2 稳态 + soak | PASS | p99 = __ ms | no leak | ✅ |
 | S3 围观 (PTS) | PASS | fanout p99 = __ ms @ __ WS | — | ✅ / ⚠ ceiling@__ |

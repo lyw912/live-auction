@@ -48,7 +48,7 @@ assert_not_contains() {
 
 bid() {
   local user="$1" amount="$2" bid_id="${3:-bid-chaos-$(date +%s%N)}"
-  local tok="${TOKEN:-$(head -2 "$(dirname "$0")/../pts/pts-1ab-1000vu-sessions.csv" 2>/dev/null | tail -1 | cut -d, -f2 || echo testtoken)}"
+  local tok="${TOKEN:-$(head -2 "$(dirname "$0")/../pts/s1-s5-1000-user-sessions.csv" 2>/dev/null | tail -1 | cut -d, -f2 || echo testtoken)}"
   curl -s -w '\n%{http_code}' -X POST "http://${PTS_HOST}/api/auctions/${AUCTION_ID}/bids" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer ${tok}" \
