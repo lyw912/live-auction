@@ -5,7 +5,7 @@ set -euo pipefail
 
 SCENARIO="${1:-}"
 if [ -z "$SCENARIO" ]; then
-  echo "usage: $0 <s2-long-soak|s3-ws-sanity|s5-clean|custom> [k6 args...]" >&2
+  echo "usage: $0 <s2-long-soak|s2-read-interference|s3-ws-sanity|s5-clean|custom> [k6 args...]" >&2
   exit 2
 fi
 shift || true
@@ -54,6 +54,35 @@ case "$SCENARIO" in
       --summary-export "${EVIDENCE_DIR}/k6-summary.json" \
       --out "json=${EVIDENCE_DIR}/k6-samples.jsonl" \
       tests/load/s2-steady-soak.js "$@" || K6_EXIT=$?
+    ;;
+  s2-read-interference)
+    STAGE_DUR="${STAGE_DUR:-5m}"
+    BID_STAGE1_RATE="${BID_STAGE1_RATE:-20}"
+    BID_STAGE2_RATE="${BID_STAGE2_RATE:-60}"
+    BID_STAGE3_RATE="${BID_STAGE3_RATE:-100}"
+    READ_STAGE1_RATE="${READ_STAGE1_RATE:-200}"
+    READ_STAGE2_RATE="${READ_STAGE2_RATE:-600}"
+    READ_STAGE3_RATE="${READ_STAGE3_RATE:-1000}"
+    BID_PRE_ALLOC_VUS="${BID_PRE_ALLOC_VUS:-80}"
+    BID_MAX_VUS="${BID_MAX_VUS:-300}"
+    READ_PRE_ALLOC_VUS="${READ_PRE_ALLOC_VUS:-160}"
+    READ_MAX_VUS="${READ_MAX_VUS:-600}"
+    k6 run \
+      --env "BASE_URL=${BASE_URL}" \
+      --env "STAGE_DUR=${STAGE_DUR}" \
+      --env "BID_STAGE1_RATE=${BID_STAGE1_RATE}" \
+      --env "BID_STAGE2_RATE=${BID_STAGE2_RATE}" \
+      --env "BID_STAGE3_RATE=${BID_STAGE3_RATE}" \
+      --env "READ_STAGE1_RATE=${READ_STAGE1_RATE}" \
+      --env "READ_STAGE2_RATE=${READ_STAGE2_RATE}" \
+      --env "READ_STAGE3_RATE=${READ_STAGE3_RATE}" \
+      --env "BID_PRE_ALLOC_VUS=${BID_PRE_ALLOC_VUS}" \
+      --env "BID_MAX_VUS=${BID_MAX_VUS}" \
+      --env "READ_PRE_ALLOC_VUS=${READ_PRE_ALLOC_VUS}" \
+      --env "READ_MAX_VUS=${READ_MAX_VUS}" \
+      --summary-export "${EVIDENCE_DIR}/k6-summary.json" \
+      --out "json=${EVIDENCE_DIR}/k6-samples.jsonl" \
+      tests/load/s2-read-interference.js "$@" || K6_EXIT=$?
     ;;
   s3-ws-sanity)
     VIEWER_VUS="${VIEWER_VUS:-1000}"

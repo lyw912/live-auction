@@ -76,6 +76,43 @@ export default function () {
 > signal that closed-loop tests hide. Zero (or near-zero) dropped iterations means
 > the offered rate was actually delivered.
 
+Current independent-ECS result:
+
+- `s2-ecs-30m-20260604T095720`: 85,499 bid attempts and 85,499 final
+  `ENGINE_*` decisions over the 20/s -> 60/s -> 100/s 30-minute shape;
+  k6 exit 0, dropped iterations 0, HTTP failures 0, auth/ACL failures 0,
+  admission contamination 0, non-decision failures 0; HTTP p99 3.30ms and
+  custom S2 decision p99 4ms.
+- Server convergence and correctness passed after service-side evidence
+  collection: 61 `ENGINE_ACCEPTED`, 85,438 `ENGINE_REJECTED`, all 85,499
+  settlements terminal, Kafka consumer lag 0, Redis pending decisions 0, DLQ
+  empty, outbox drained, engine seq complete, and all verifier P0/P1 gates PASS.
+- Evidence path:
+  `docs/perf/pts/evidence/incoming/s2-ecs-30m-20260604T095720/`.
+
+Interpretation boundary: this is a bid-decision endurance and convergence pass.
+It is not accepted-heavy fanout evidence and it is not read-interference
+evidence. The rejected decisions still exercise Redis decision logging, Kafka
+ledger relay, PostgreSQL settlement, and verifier gates, but only 61 accepted
+updates drove outbox/WebSocket fanout. Use `S2-read-interference` for HTTP read
+pressure and S3 for WebSocket fanout.
+
+### 3a-bis. S2 read interference (HTTP polling under bid load)
+
+The live-room polling question is separate from long bid-decision soak. Use
+`tests/load/s2-read-interference.js` from an independent k6 ECS:
+
+```
+bid attempts: 20/s -> 60/s -> 100/s
+HTTP reads  : 200/s -> 600/s -> 1000/s
+mix         : 60% GET auction snapshot, 30% leaderboard, 10% my bid history
+duration    : 15 min default (5 min per stage)
+```
+
+Evidence required: bid p99 under read load, read p99 by route, dropped
+iterations, k6 host health, DB pool wait/connection counts, Redis/Kafka/PG/outbox
+convergence, and the same correctness verifier gates.
+
 ### 3b. Optional PTS chart (10 min, judge export)
 Use this only after the k6 soak is clean and when you need a polished PTS PDF.
 The current executable asset is `pts-2p4-steady-interactive-auction.jmx`; there

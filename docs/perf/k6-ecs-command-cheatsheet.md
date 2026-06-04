@@ -31,6 +31,44 @@ MAX_VUS=300 \
 bash scripts/perf/run-remote-k6.sh s2-long-soak
 ```
 
+## S2 Read Interference
+
+Smoke:
+
+```bash
+export LABEL=s2-read-smoke-ecs-$(date +%Y%m%dT%H%M%S)
+STAGE_DUR=20s \
+BID_STAGE1_RATE=1 \
+BID_STAGE2_RATE=3 \
+BID_STAGE3_RATE=5 \
+READ_STAGE1_RATE=10 \
+READ_STAGE2_RATE=30 \
+READ_STAGE3_RATE=50 \
+BID_PRE_ALLOC_VUS=10 \
+BID_MAX_VUS=30 \
+READ_PRE_ALLOC_VUS=20 \
+READ_MAX_VUS=80 \
+bash scripts/perf/run-remote-k6.sh s2-read-interference
+```
+
+Default 15-minute run:
+
+```bash
+export LABEL=s2-read-ecs-15m-$(date +%Y%m%dT%H%M%S)
+STAGE_DUR=5m \
+BID_STAGE1_RATE=20 \
+BID_STAGE2_RATE=60 \
+BID_STAGE3_RATE=100 \
+READ_STAGE1_RATE=200 \
+READ_STAGE2_RATE=600 \
+READ_STAGE3_RATE=1000 \
+BID_PRE_ALLOC_VUS=80 \
+BID_MAX_VUS=300 \
+READ_PRE_ALLOC_VUS=160 \
+READ_MAX_VUS=600 \
+bash scripts/perf/run-remote-k6.sh s2-read-interference
+```
+
 ## S5 Clean Reconnect
 
 ```bash

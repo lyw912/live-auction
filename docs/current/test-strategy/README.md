@@ -46,7 +46,7 @@ Old `L*` names are not plan stages; they are script/data aliases only.
 |---|---|---|---|---|---|
 | **S0** | 单人闭环 — one user completes the whole flow | engineering chain closes (login→join→bid→broadcast→settle→pay) | smoke / local | PASS/FAIL | `tests/pts/L0-smoke/live-auction-pts-business-smoke.jmx` |
 | **S1** | 绝杀时刻 — N users bid in the final second on one auction | contention correctness + tail latency | **PTS JMeter** | **bid decision p99 ≤ 50ms** + winner correct + every reject justified | `tests/pts/L1-component/pts-1b-contention-burst-1000vu-1m.jmx`; ladder control `pts-1a-*` |
-| **S2** | 正常竞价 — minority bid steadily, price climbs the ladder, auto-extend | long soak, convergence drain, capacity knee, and read interference | **independent-ECS k6 required** + optional PTS RPS chart | steady decision p99 + accepted-update rate + backlog/convergence + flat resources | `tests/load/s2-steady-soak.js`; expanded split in `s2-s3-expanded-test-design.md` |
+| **S2** | 正常竞价 — minority bid steadily while viewers poll state | bid-decision long soak, convergence drain, capacity knee, and HTTP read interference | **independent-ECS k6 required** + optional PTS RPS chart | steady decision p99 + read p99 + accepted-update rate + backlog/convergence + flat resources | `tests/load/s2-steady-soak.js`; `tests/load/s2-read-interference.js`; expanded split in `s2-s3-expanded-test-design.md` |
 | **S3** | 万人围观 — one room, 10 000 online, price broadcast to all | live-only fanout plus final-burst integration | **PTS VU/JMeter** + local or independent-source k6 | **fanout publish→receive p99 ≤ 1s** + connections held + RAM/conn | `tests/pts/S3-room-fanout/*`; `tests/load/s3-fanout-soak.js`; expanded split in `s2-s3-expanded-test-design.md` |
 | **S4** | 故障韧性 — Redis/Kafka/PG/worker fault under live bidding | fail-closed, relay/replay convergence, RTO, RPO=0, no double-charge | **local k6 + Toxiproxy/SIGKILL** | **RTO** + **RPO=0** + zero phantom accepts + zero duplicate settlement | `tests/pts/run-pts-1c-concurrent-fault.sh`; `tests/chaos/*` |
 | **S5** | 断连重连 — weak network drops WS, client recovers to current state | WebSocket stability / auto-reconnect / heartbeat | **local k6** | time-to-current-state + no lost/dup notifications | `tests/load/s5-reconnect-recovery.js` |
@@ -79,7 +79,7 @@ public cloud ¥0.003/VUM, 1 pressure IP ≈ 500 VU. Keep sampling at the free 1%
 | Test | Where | Scale | VUM | ≈ ¥ | Why there |
 |---|---|---|---|---|---|
 | S1 绝杀 | **PTS JMeter** | 1000 bid VU, one bid each, 1-2 min | 1k-2k | 3-6 | signature contention chart + distributed source IPs |
-| S2 稳态 soak | **local k6** | 20/s → 60/s → 100/s, 30-60 min | 0 | 0 | open-model stability, dropped-iteration visibility, Grafana resource slope |
+| S2 稳态 soak | **independent ECS k6** | 20/s → 60/s → 100/s bid attempts, 30-60 min | 0 | 0 | open-model bid-decision stability, dropped-iteration visibility, Grafana resource slope |
 | S2 optional PTS chart | **PTS JMeter** | 2400 WS + 360 bidders + 240 readers, 10 min | ~30k | ~90 | polished realtime-steady PDF if budget permits |
 | S3 cost variant | **PTS JMeter** + local | 2000 WS PTS ×5 min + 10000 WS local soak | ~10k | ~30 | PTS p99 chart plus free 10k hold/leak evidence |
 | S3 headline | **PTS JMeter** | 10000 WS ×5 min, 20 IP | ~50k | ~150 | single PTS report for 10k online + fanout p99 |

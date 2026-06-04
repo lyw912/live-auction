@@ -21,13 +21,20 @@ target, and the one place the chart comes from.
 
 Everything else is **supporting context**, reported but never headlined:
 offered bid rate, decisions-serialized/sec, accepted-update rate, connections
-held, RAM/connection, join-latency components (snapshot/ticket/upgrade),
-outbox lag, Kafka consumer lag.
+held, HTTP read p99 by route, DB pool wait under read interference,
+RAM/connection, join-latency components (snapshot/ticket/upgrade), outbox lag,
+Kafka consumer lag.
 
 S2/S3 expanded workloads are named by business question:
 `S2-long-soak`, `S2-convergence-drain`, `S2-capacity-stair`,
 `S2-read-interference`, `S3-live-only-fanout`, and
 `S3-mixed-final-burst`.
+
+`S2-long-soak` is bid-decision endurance evidence. It may be PASS even when most
+decisions are `ENGINE_REJECTED`, because rejects still exercise the Redis
+decision log, Kafka relay, PostgreSQL settlement, idempotency, and verifier
+chain. Do not use it as accepted-heavy fanout or reader-interference evidence;
+that requires `S2-read-interference` and S3.
 
 S2 also reports a supporting **settlement convergence** safety signal:
 `k6_end -> Kafka lag 0 + Redis pending 0 + PG settlements complete + outbox

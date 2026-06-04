@@ -146,10 +146,22 @@ Recommended shape:
 
 ```text
 tool           : PTS RPS or independent-ECS k6
-bid rate       : 20-100/s
+bid rate       : 20/s -> 60/s -> 100/s
 read endpoints : GET auction snapshot, GET leaderboard, GET my bid history
-read traffic   : staged RPS per endpoint
-duration       : 10-20 min
+read traffic   : 200/s -> 600/s -> 1000/s total HTTP reads
+mix            : 60% snapshot, 30% leaderboard, 10% my bid history
+duration       : 15 min default, 5 min per stage
+```
+
+Default independent-k6 command shape:
+
+```text
+STAGE_DUR=5m
+BID_STAGE1_RATE=20    READ_STAGE1_RATE=200
+BID_STAGE2_RATE=60    READ_STAGE2_RATE=600
+BID_STAGE3_RATE=100   READ_STAGE3_RATE=1000
+BID_PRE_ALLOC_VUS=80  READ_PRE_ALLOC_VUS=160
+BID_MAX_VUS=300       READ_MAX_VUS=600
 ```
 
 Evidence:
@@ -158,6 +170,19 @@ Evidence:
 - read p99 per endpoint;
 - DB pool acquired/wait, slow queries, Redis command latency, CPU;
 - correctness and convergence after the run.
+
+Initial pass gates:
+
+| Gate | Target |
+|---|---:|
+| bid decision p99 | < 100ms |
+| snapshot read p99 | < 200ms |
+| leaderboard read p99 | < 200ms |
+| my bid history read p99 | < 300ms |
+| dropped iterations | < 500, ideally 0 |
+| HTTP/auth/admission/non-decision/read failures | 0 |
+| Kafka lag / Redis pending / non-terminal settlement / outbox backlog after drain | 0 |
+| correctness verifier | PASS |
 
 Red lines:
 

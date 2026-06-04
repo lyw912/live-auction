@@ -1,9 +1,9 @@
 # S2 Settlement Diagnosis And Judge Defense
 
-> Status: current diagnostic note, 2026-06-03.
-> Scope: local S2 steady-auction stair runs, PostgreSQL settlement convergence,
-> and judge-facing answers. This document is evidence interpretation, not a new
-> workload definition.
+> Status: current diagnostic note, 2026-06-04.
+> Scope: S2 steady-auction bid-decision soak, PostgreSQL settlement convergence,
+> read-interference follow-up, and judge-facing answers. This document is
+> evidence interpretation, not a new workload definition.
 
 ## 1. Executive Verdict
 
@@ -11,6 +11,7 @@ S2 currently proves two different things with different confidence levels:
 
 | Claim | Current verdict | Evidence |
 |---|---|---|
+| 30-minute independent-ECS bid-decision soak | PASS | `s2-ecs-30m-20260604T095720`: 85,499/85,499 final decisions, HTTP p99 3.30ms, custom decision p99 4ms, dropped 0, all verifier gates PASS |
 | M1 steady bid decision p99 <= 100ms | PASS | `s2-stair-1000-setbased-logsuppressed-100s-20260602T211311`: HTTP p99 5.44ms, p99.9 32.21ms, 0 dropped iterations |
 | Redis/Lua not the source of tail regression | PASS | Redis SLOWLOG LEN = 0; Redis LATENCY LATEST empty during diagnostic runs |
 | Correct eventual settlement after verifier wait | PASS | Same run: `l4b-invariant-gates.tsv` all P0/P1 PASS after verifier wait |
@@ -18,6 +19,7 @@ S2 currently proves two different things with different confidence levels:
 | Async settlement convergence <= 110s | FAIL | `s2-stair-1000-workers4-110s-20260603T1928`: timed out at 112s with Kafka lag 1275, settlement_total 69925/70999 |
 | Async settlement convergence within 120s product buffer | ACCEPTABLE WITH POLL DISCLOSURE | `s2-stair-1000-120s-20260603T1942`: 119s still had lag 286; the 122s sample confirmed lag 0, settlement_total 70999/70999, Redis pending 0, outbox unpublished 0 |
 | Direct-SETTLED fast rejected SQL | REJECTED and reverted | `s2-stair-1000-directsettled-100s-20260602T212330`: worse lag 32033 at 101s; verifier failed due to incomplete convergence |
+| HTTP read-interference under bid load | NEXT / not yet claimed | `tests/load/s2-read-interference.js`: 20/60/100 bid attempts/s plus 200/600/1000 HTTP reads/s; run pending |
 
 The honest judge-facing statement:
 
@@ -31,6 +33,228 @@ The honest judge-facing statement:
 > correctness-after-drain-pass. Payment/finality can be defended as a 120s
 > business buffer with explicit polling tolerance, but not as a strict hard
 > real-time 120.000s bound."
+
+Update after the independent k6 ECS run on 2026-06-04:
+
+> "We also ran a 30-minute independent-ECS S2-long-soak at 20/s -> 60/s ->
+> 100/s offered bid attempts. It delivered 85,499 final bid decisions with zero
+> dropped iterations, zero HTTP failures, zero auth/ACL failures, zero admission
+> contamination, HTTP p99 3.30ms, and S2 custom decision p99 4ms. Service-side
+> verification found all 85,499 decisions settled, Kafka lag 0, Redis pending 0,
+> DLQ empty, outbox drained, complete engine_seq, and all P0/P1 gates PASS. This
+> is a bid-decision endurance and convergence PASS. It does not claim
+> accepted-heavy WebSocket fanout or high-RPS HTTP read interference; those are
+> covered by S3 and the pending S2-read-interference run."
+
+## 1a. Current 30-Minute Independent-ECS S2 Evidence
+
+Run label:
+
+```text
+s2-ecs-30m-20260604T095720
+```
+
+Workload shape:
+
+```text
+tool/source      : independent same-VPC ECS k6
+service target   : service ECS private IP on :18080
+model            : open-model ramping-arrival-rate
+stage 1          : 20 offered bid attempts/s for 10 min
+stage 2          : 60 offered bid attempts/s for 10 min
+stage 3          : 100 offered bid attempts/s for 10 min
+ramp-down        : 30s
+runtime profile  : BID_ENGINE_MODE=redis_ledger, ADMISSION_ENABLED=false
+auction          : auc_live, reset immediately before run
+auth path        : mock user headers for seeded k6_bidder_* users
+```
+
+k6 result:
+
+| Signal | Value | Interpretation |
+|---|---:|---|
+| k6 exit code | 0 | thresholds passed |
+| total HTTP bid requests | 85,499 | offered load was delivered |
+| final `ENGINE_*` decisions | 85,499 | every request reached a final business decision |
+| `ENGINE_ACCEPTED` | 61 | accepted update count; bounded by price ladder and amount model |
+| `ENGINE_REJECTED` | 85,438 | correct low-price/stale decisions; still persisted and verified |
+| dropped iterations | 0 | k6 did not under-deliver the arrival-rate plan |
+| HTTP failures | 0 | no transport/protocol failure |
+| auth/ACL failures | 0 | seeded users and room ACL were valid |
+| admission contamination | 0 | pressure reached the engine; no `429`/`RATE_LIMITED` pollution |
+| non-decision failures | 0 | no vague 409/other user-visible interruption |
+| HTTP p99 | 3.30ms | below S2 steady 100ms target |
+| S2 custom decision p99 | 4ms | request-to-final-decision custom trend |
+| max active VUs used | 1 | responses were fast enough that arrival-rate did not need many concurrent VUs |
+| k6 host CPU | mostly 3-7% | pressure host had headroom |
+| k6 RSS / FD | about 83MB / 86 FD | no load-generator resource pressure |
+| TCP retransmits | essentially 0 | no obvious network pollution |
+
+Service-side post-run state:
+
+| Signal | Value |
+|---|---:|
+| auction engine mode | `redis_ledger` |
+| auction engine_seq | 85,499 |
+| settled accepted decisions | 61 |
+| settled rejected decisions | 85,438 |
+| pending settlements | 0 |
+| failed settlements | 0 |
+| Redis pending decisions | 0 |
+| Kafka consumer lag | 0 |
+| Kafka DLQ | empty / PASS |
+| outbox ready/publishing/dead/retrying/ack_pending | 0 / 0 / 0 / 0 / 0 |
+| outbox recent delivery state | `PUBLISHED` / `ACKED` |
+| final auction state | `ACTIVE`, current price 315000, winner `k6_bidder_77`, accepted count 61, engine not paused |
+
+Verifier output:
+
+```text
+l4b-correctness.txt        PASS
+l4b-invariant-gates.tsv    all P0/P1 PASS
+l4b-kafka-gates.tsv        PASS
+l4b-redis-gates.tsv        PASS
+l4b-redis-pending-gates.tsv PASS
+l4b-reject-reason-gates.tsv PASS
+```
+
+Key gate meanings:
+
+- `engine_seq_complete`: settled engine_seq is complete from 1 through 85,499.
+- `every_bid_has_settled_ledger`: every durable decision has terminal
+  Redis/Kafka/PG settlement coverage.
+- `bid_too_low_rejects_justified`: rejected bids carry decision-time basis.
+- `auction_winner_matches_highest_accepted`: final current winner and price
+  match the highest accepted bid.
+- `outbox_drained`: no unpublished outbox delivery remains.
+- `kafka_consumer_group_lag_zero`: settlement consumer drained fully.
+
+Evidence directory:
+
+```text
+docs/perf/pts/evidence/incoming/s2-ecs-30m-20260604T095720/
+```
+
+Important files:
+
+```text
+k6-summary.json                         # on k6 ECS
+k6-samples.jsonl                        # on k6 ECS
+k6-host/*                               # k6 CPU/RSS/fd/network evidence
+l4b-correctness.txt                     # service-side verifier report
+l4b-invariant-gates.tsv                 # P0/P1 invariant gate table
+metrics.prom                            # service metrics snapshot
+postgres-summary.txt                    # PostgreSQL summary
+redis-info.txt                          # Redis health/memory/policy
+```
+
+### Why 61 Accepted Bids Is Not A Capacity Failure
+
+In an ascending auction, accepted updates are a business-rule output, not the
+capacity denominator. Once the price ladder rises, most later attempts are
+correctly rejected. A reject is still a final adjudication that must be:
+
+```text
+idempotent -> Redis decision logged -> Kafka ledgered -> PostgreSQL settled
+-> reject basis auditable -> verifier checked
+```
+
+This run therefore proves bid-decision goodput and settlement coverage for 85,499
+decisions. It does not prove accepted-heavy fanout. Only 61 accepted updates
+created public price-change fanout, so M2/fanout claims must come from S3.
+
+### Boundary To State To Judges
+
+Say:
+
+> "S2-long-soak proves the engine can sustain normal bid-decision traffic for 30
+> minutes with no dropped iterations, no admission pollution, and full async
+> convergence. Because this script intentionally models an ascending auction,
+> most decisions are low-price rejections; those are still real decisions and
+> are persisted and verified. We do not use this run to claim WebSocket fanout
+> capacity or high-RPS read interference. Those are separate S2-read and S3
+> workloads."
+
+Do not say:
+
+> "This proves the entire live room under 1000/s mixed user traffic."
+
+That would overclaim, because the run did not include 1000/s readers or held
+WebSocket viewers.
+
+## 1b. S2-read-interference Design And Numbers
+
+The next S2 run answers a different judge question:
+
+> "If hundreds or thousands of viewers poll room state, leaderboard, and their
+> own bid history, does bid p99 or settlement safety degrade?"
+
+Workload asset:
+
+```text
+tests/load/s2-read-interference.js
+```
+
+Default 15-minute independent-ECS shape:
+
+| Stage | Duration | Bid attempts/s | HTTP reads/s | Total offered RPS |
+|---|---:|---:|---:|---:|
+| warm | 5 min | 20 | 200 | 220 |
+| mid | 5 min | 60 | 600 | 660 |
+| peak | 5 min | 100 | 1000 | 1100 |
+| ramp-down | 30s | 0 | 0 | 0 |
+
+Read mix:
+
+| Endpoint | Share | Peak RPS | Why it matters |
+|---|---:|---:|---|
+| `GET /api/auctions/auc_live` | 60% | 600/s | main room state/snapshot polling |
+| `GET /api/auctions/auc_live/leaderboard?limit=5` | 30% | 300/s | ranking/price comparison path |
+| `GET /api/users/me/bids` | 10% | 100/s | personal history/status path |
+
+Why 200/600/1000 reads/s:
+
+- It creates a 10:1 read-to-bid ratio, matching the business intuition that most
+  live-room users watch or refresh state rather than bid.
+- It reaches 1100 total HTTP RPS at peak while keeping the bid rate identical to
+  the validated S2-long-soak peak. This isolates the question "what did reads do
+  to bid p99?".
+- A single c9i.xlarge k6 host should comfortably generate this HTTP RPS if k6
+  CPU, dropped iterations, sockets, and retransmits stay clean. If k6 host
+  headroom is lost, the result is ENV_LIMIT, not a service conclusion.
+
+Pass/fail gates:
+
+| Gate | Target |
+|---|---:|
+| bid decision p99 under read load | < 100ms |
+| auction snapshot read p99 | < 200ms |
+| leaderboard read p99 | < 200ms |
+| bid-history read p99 | < 300ms |
+| dropped iterations | < 500, ideally 0 |
+| HTTP failure rate | 0 |
+| auth/ACL failures | 0 |
+| admission contamination | 0 |
+| non-decision bid failures | 0 |
+| read failures | 0 |
+| Kafka consumer lag after drain | 0 |
+| Redis pending decisions after drain | 0 |
+| PG non-terminal settlements after drain | 0 |
+| outbox unpublished after drain | 0 |
+| verifier P0/P1 gates | PASS |
+
+Primary risk being tested:
+
+```text
+reader traffic -> DB pool wait / CPU / query latency -> bid p99 drift
+reader traffic -> Redis/PG contention -> settlement/outbox convergence drift
+```
+
+What this run still does not prove:
+
+- It does not hold 1000-10000 WebSocket connections.
+- It does not measure publish-to-receive fanout p99.
+- It does not replace S3. It is HTTP read interference only.
 
 ## 2. What This Test Actually Is
 

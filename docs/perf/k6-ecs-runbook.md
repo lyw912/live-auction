@@ -153,6 +153,77 @@ bash tests/pts/collect-server-evidence.sh "$LABEL"
 If the collector is not running on the service node, run it from the service
 node and use the same label.
 
+Interpretation note: this run proves long-running bid-decision stability
+(`ENGINE_ACCEPTED` + `ENGINE_REJECTED`) and async convergence. It does not prove
+accepted-heavy WebSocket fanout or reader interference. Use `S2-read-interference`
+below for HTTP read pressure and S3 for WebSocket/fanout pressure.
+
+## 4b. S2 Read Interference
+
+Run this after `S2-long-soak` when you need to prove normal live-room polling
+does not hurt bid decisions. It intentionally stays HTTP-only; WebSocket fanout
+belongs to S3.
+
+Service-side preparation:
+
+```bash
+ALLOW_MOCK_AUTH=true \
+BID_MAX_VUS=300 \
+READ_MAX_VUS=600 \
+bash tests/pts/prepare-s2-read-interference-pressure.sh
+```
+
+This resets `auc_live`, starts the backend with `ADMISSION_ENABLED=false` and
+`BID_ENGINE_MODE=redis_ledger`, and pre-seeds mock-auth room membership / Redis
+ACL cache for `k6_bidder_1..300` and `k6_user_1..600`.
+
+Default 15-minute shape:
+
+```bash
+export LABEL=s2-read-ecs-15m-$(date +%Y%m%dT%H%M%S)
+export BASE_URL=http://SERVICE_PRIVATE_IP:18080
+STAGE_DUR=5m \
+BID_STAGE1_RATE=20 \
+BID_STAGE2_RATE=60 \
+BID_STAGE3_RATE=100 \
+READ_STAGE1_RATE=200 \
+READ_STAGE2_RATE=600 \
+READ_STAGE3_RATE=1000 \
+BID_PRE_ALLOC_VUS=80 \
+BID_MAX_VUS=300 \
+READ_PRE_ALLOC_VUS=160 \
+READ_MAX_VUS=600 \
+bash scripts/perf/run-remote-k6.sh s2-read-interference
+```
+
+Smoke shape:
+
+```bash
+export LABEL=s2-read-smoke-ecs-$(date +%Y%m%dT%H%M%S)
+export BASE_URL=http://SERVICE_PRIVATE_IP:18080
+STAGE_DUR=20s \
+BID_STAGE1_RATE=1 \
+BID_STAGE2_RATE=3 \
+BID_STAGE3_RATE=5 \
+READ_STAGE1_RATE=10 \
+READ_STAGE2_RATE=30 \
+READ_STAGE3_RATE=50 \
+BID_PRE_ALLOC_VUS=10 \
+BID_MAX_VUS=30 \
+READ_PRE_ALLOC_VUS=20 \
+READ_MAX_VUS=80 \
+bash scripts/perf/run-remote-k6.sh s2-read-interference
+```
+
+Required service-side follow-up:
+
+```bash
+BASE_URL=http://SERVICE_PRIVATE_IP:18080 \
+bash tests/pts/collect-server-evidence.sh "$LABEL"
+EXPECTED_UNIQUE_BIDS="" FINAL_WAIT_SECONDS=0 \
+bash tests/pts/verify-l4b-pts-correctness.sh "$LABEL"
+```
+
 ## 5. S4 Fault Resilience
 
 S4 fault injection still happens on the service side. The independent ECS is

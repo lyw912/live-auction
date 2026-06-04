@@ -1,6 +1,6 @@
 # S1-S5 Debug And System Change Log
 
-> Status: judge-defense engineering log, 2026-06-03.
+> Status: judge-defense engineering log, 2026-06-04.
 > Scope: S1-S5 runs, failures, fixes, and **system-code** changes discovered
 > while validating the current Redis/Kafka/PostgreSQL live-auction architecture.
 > Test harness/script changes are mentioned only when they explain evidence; they
@@ -22,7 +22,7 @@ Current evidence snapshot:
 | Scenario | Current evidence | Verdict boundary |
 |---|---|---|
 | S1 final-second contention | `5D92X7QG`: 1000 unique bids, 7 accepted, 993 rejected, 0 HTTP failures, correctness PASS; PTS sampling p99 64ms, server gateway p99 about 46ms | Correctness strong; strict client-side p99 <=50ms needs rerun or explicit server-vs-client boundary |
-| S2 steady soak | `s2-stair-1000-setbased-logsuppressed-100s-20260602T211311`: 70,999 decisions, HTTP p99 5.44ms, p99.9 32.21ms, dropped 0; 100s convergence near miss at Kafka lag 1371, verifier later PASS | Foreground decision PASS; settlement convergence is the bottleneck and needs <=110s rerun before final PASS |
+| S2 steady soak | `s2-ecs-30m-20260604T095720`: 85,499 decisions over independent-ECS 20/s -> 60/s -> 100/s 30-minute open-model soak, HTTP p99 3.30ms, custom decision p99 4ms, dropped 0, all verifier gates PASS | Bid-decision endurance and convergence PASS; read-interference and accepted-heavy fanout are separate, not claimed from this run |
 | S3 fanout | `s3-local-scale-1000-liveonly-20260602T2303`: 1000 WS, 301 accepted updates, 276,000 receive samples, fanout p99 22ms, viewer errors 0 | 1000+ single-room local PASS; 2000/10k headline unproven |
 | S4 fault resilience | Redis/backend/PG/Kafka/flush/both/Toxiproxy partial all pass local gates; bidder RTO 2/2/3/16/2/11/3s; full convergence worst 33s; RPO=0 | Strong local single-node chaos proof; not Kafka RF=3/Redis HA production benchmark |
 | S4 07/08 | `07`: 600 decisions over 512 relay batch ceiling -> 600/600 relayed. `08`: same SOLD ledger message 3x -> one settlement/order/outbox effect | P0 depth gates now PASS; backlog-age observability remains P1 |
@@ -74,6 +74,36 @@ Business scene: normal auction minutes, with sustained offered bid traffic,
 mostly rejected because the price ladder moves. Users care that bid decisions
 stay fast during the auction; finance/payment care that settlement converges
 after close.
+
+Current independent-ECS long-soak result:
+
+| Signal | Value |
+|---|---:|
+| Run label | `s2-ecs-30m-20260604T095720` |
+| Load model | open-model k6, independent same-VPC ECS |
+| Stages | 20/s -> 60/s -> 100/s bid attempts, 10 min each |
+| Total bid attempts | 85,499 |
+| Final `ENGINE_*` decisions | 85,499 |
+| Accepted / rejected | 61 / 85,438 |
+| HTTP p99 / custom decision p99 | 3.30ms / 4ms |
+| dropped_iterations | 0 |
+| HTTP failures / auth-ACL / admission / non-decision failures | 0 / 0 / 0 / 0 |
+| k6 host health | CPU mostly 3-7%, RSS about 83MB, FD about 86, TCP retransmits essentially 0 |
+| Settlement state | 61 accepted + 85,438 rejected all `SETTLED` |
+| Kafka / Redis / outbox drain | lag 0, pending 0, outbox watermarks all 0 |
+| Verifier | all P0/P1 gates PASS |
+
+Evidence:
+
+```text
+docs/perf/pts/evidence/incoming/s2-ecs-30m-20260604T095720/
+```
+
+Boundary: this proves 30-minute bid-decision endurance and async convergence.
+It does not prove HTTP read interference or accepted-heavy WebSocket fanout. The
+next workload is `S2-read-interference`: 20/60/100 bid attempts/s plus
+200/600/1000 HTTP reads/s across auction snapshot, leaderboard, and my-bid
+history.
 
 Debug path:
 
@@ -261,4 +291,3 @@ election disabled, and a separate broker-loss chaos profile.
 | P1 | Relay backlog age / cursor-lag observability | S4 07 proves 600/600 drain; production reviewers will ask how backlog age alerts |
 | P1 | S3 PTS cost variant at 2000 WS and/or controlled local 10k hold | Current 1000+ local pass is credible; 10k headline is unproven |
 | P1 | Read-interference and multi-room gates | S1-S5 focus one hot auction; official scope includes room-level routing and full-stack traffic |
-
