@@ -22,6 +22,14 @@
  *   INCREMENT_CENTS bid increment in cents, default 5000
  *   BASE_PRICE_CENTS starting price in cents, default 10000
  *   CLIMB_PERIOD_S  seconds per increment step (price climbs slowly), default 30
+ *   RUN_ID          unique suffix for idempotency/client bid ids, default Date.now()
+ *   AMOUNT_MODE     time_ladder or fast_ladder, default time_ladder
+ *   NOISE_PCT       stale/noise bid percentage, default 20
+ *   AMOUNT_JITTER_STEPS fast_ladder amount spread per time bucket, default 1
+ *   USER_COUNT      bidder identities to rotate through, default MAX_VUS
+ *   DROPPED_ITERATIONS_MAX threshold upper bound, default 200
+ *   STAIR_HOLD      set 1 to add ramp+hold pairs per target, default 0
+ *   RAMP_DUR        ramp duration used when STAIR_HOLD=1, default 1s
  *
  * Run (short smoke):
  *   k6 run --env STAGE1_RATE=5 --env STAGE2_RATE=15 --env STAGE3_RATE=30 \
@@ -45,11 +53,43 @@ const STAGE_DUR      = __ENV.STAGE_DUR      || '10m';
 const INCREMENT_CENTS= Number(__ENV.INCREMENT_CENTS|| 5000);
 const BASE_PRICE_CENTS=Number(__ENV.BASE_PRICE_CENTS||10000);
 const CLIMB_PERIOD_S = Number(__ENV.CLIMB_PERIOD_S || 30);
+const RUN_ID         = __ENV.RUN_ID || String(Date.now());
+const AMOUNT_MODE    = __ENV.AMOUNT_MODE || 'time_ladder';
+const NOISE_PCT      = Number(__ENV.NOISE_PCT || 20);
+const AMOUNT_JITTER_STEPS = Math.max(1, Number(__ENV.AMOUNT_JITTER_STEPS || 1));
+const STAIR_HOLD     = __ENV.STAIR_HOLD === '1';
+const RAMP_DUR       = __ENV.RAMP_DUR || '1s';
 
 // Pre-allocate VUs: Little's Law = rate × expected_duration + 30% headroom.
 // At 100 rps and ~80ms average duration: 100 × 0.08 × 1.3 ≈ 11; use 50 for safety.
 const PRE_ALLOC_VUS  = Number(__ENV.PRE_ALLOC_VUS || 50);
 const MAX_VUS        = Number(__ENV.MAX_VUS        || 200);
+const USER_COUNT     = Math.max(1, Number(__ENV.USER_COUNT || MAX_VUS));
+const DROPPED_ITERATIONS_MAX = Number(__ENV.DROPPED_ITERATIONS_MAX || 200);
+
+function rateTargets() {
+  const targets = [STAGE1_RATE, STAGE2_RATE, STAGE3_RATE];
+  if (__ENV.STAGE4_RATE) targets.push(Number(__ENV.STAGE4_RATE));
+  if (__ENV.STAGE5_RATE) targets.push(Number(__ENV.STAGE5_RATE));
+  return targets;
+}
+
+function buildStages() {
+  if (!STAIR_HOLD) {
+    return [
+      ...rateTargets().map((target) => ({ target, duration: STAGE_DUR })),
+      { target: 0, duration: '30s' },
+    ];
+  }
+
+  const stages = [];
+  for (const target of rateTargets()) {
+    stages.push({ target, duration: RAMP_DUR });
+    stages.push({ target, duration: STAGE_DUR });
+  }
+  stages.push({ target: 0, duration: '30s' });
+  return stages;
+}
 
 export const options = {
   scenarios: {
@@ -59,12 +99,7 @@ export const options = {
       timeUnit:        '1s',
       preAllocatedVUs: PRE_ALLOC_VUS,
       maxVUs:          MAX_VUS,
-      stages: [
-        { target: STAGE1_RATE, duration: STAGE_DUR },   // warm-up steady
-        { target: STAGE2_RATE, duration: STAGE_DUR },   // mid pressure
-        { target: STAGE3_RATE, duration: STAGE_DUR },   // peak pressure
-        { target: 0,           duration: '30s'      },  // ramp-down
-      ],
+      stages: buildStages(),
     },
   },
   summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(90)', 'p(95)', 'p(99)', 'p(99.9)'],
@@ -72,7 +107,7 @@ export const options = {
     // M1 SLO for steady scenario: ≤100ms
     'http_req_duration{sampler:bid-decision}': ['p(99)<100'],
     // Overload signal: dropped iterations must be low
-    dropped_iterations: ['count<200'],
+    dropped_iterations: [`count<${DROPPED_ITERATIONS_MAX}`],
     // No admission contamination
     s2_admission_contamination: ['count==0'],
     // Auth/ACL failures mean the harness did not reach the bid engine.
@@ -97,14 +132,29 @@ const decisionLatency  = new Trend('s2_decision_latency_ms', true);  // M1 custo
 // --- helpers ---
 const t0 = Date.now();
 
-function currentBidAmount() {
-  // Escalate price slowly so a healthy fraction of bids are accepted and
-  // drive real fanout. Stale bids (below current) are realistic noise.
-  const elapsedS   = (Date.now() - t0) / 1000;
-  const steps       = Math.floor(elapsedS / CLIMB_PERIOD_S);
-  const baseAmount  = BASE_PRICE_CENTS + steps * INCREMENT_CENTS;
-  // 80% bid one increment above assumed current; 20% bid stale (below)
-  const isNoiseBid  = (__VU * 7 + __ITER * 3) % 10 < 2;
+function currentUserOrdinal() {
+  return ((__VU + __ITER - 1) % USER_COUNT) + 1;
+}
+
+function currentBidAmount(userOrdinal) {
+  const elapsedMs = Date.now() - t0;
+  const periodMs = Math.max(1, Math.floor(CLIMB_PERIOD_S * 1000));
+  let steps;
+
+  if (AMOUNT_MODE === 'fast_ladder') {
+    // Capacity-stair mode: make bid amounts advance much faster than the old
+    // 30s ladder so high-RPS stages do not degrade into mostly same-price
+    // Redis rejects. This is an adversarial accepted-update profile, not a
+    // realistic price curve.
+    const bucket = Math.floor(elapsedMs / periodMs);
+    steps = bucket * AMOUNT_JITTER_STEPS + ((userOrdinal + __ITER) % AMOUNT_JITTER_STEPS);
+  } else {
+    // Long-soak mode: slow business-like price movement with some stale bids.
+    steps = Math.floor((elapsedMs / 1000) / CLIMB_PERIOD_S);
+  }
+
+  const baseAmount = BASE_PRICE_CENTS + steps * INCREMENT_CENTS;
+  const isNoiseBid = ((userOrdinal * 7 + __ITER * 3) % 100) < NOISE_PCT;
   return isNoiseBid ? Math.max(0, baseAmount - INCREMENT_CENTS) : baseAmount + INCREMENT_CENTS;
 }
 
@@ -117,9 +167,10 @@ function authHeaders(userID) {
 }
 
 export default function () {
-  const userID      = `${USER_PREFIX}${__VU}`;
-  const clientBidID = `s2-${__VU}-${__ITER}`;
-  const amount      = currentBidAmount();
+  const userOrdinal = currentUserOrdinal();
+  const userID      = `${USER_PREFIX}${userOrdinal}`;
+  const clientBidID = `s2-${RUN_ID}-${userOrdinal}-${__VU}-${__ITER}`;
+  const amount      = currentBidAmount(userOrdinal);
 
   const startMs = Date.now();
   const res = http.post(

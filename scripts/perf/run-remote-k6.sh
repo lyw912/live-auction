@@ -5,7 +5,7 @@ set -euo pipefail
 
 SCENARIO="${1:-}"
 if [ -z "$SCENARIO" ]; then
-  echo "usage: $0 <s2-long-soak|s2-read-interference|s3-ws-sanity|s5-clean|custom> [k6 args...]" >&2
+  echo "usage: $0 <s2-long-soak|s2-capacity-stair|s2-read-interference|s3-ws-sanity|s5-clean|custom> [k6 args...]" >&2
   exit 2
 fi
 shift || true
@@ -41,16 +41,103 @@ case "$SCENARIO" in
     STAGE1_RATE="${STAGE1_RATE:-20}"
     STAGE2_RATE="${STAGE2_RATE:-60}"
     STAGE3_RATE="${STAGE3_RATE:-100}"
+    RUN_ID="${RUN_ID:-${LABEL}}"
+    AMOUNT_MODE="${AMOUNT_MODE:-time_ladder}"
+    NOISE_PCT="${NOISE_PCT:-20}"
+    CLIMB_PERIOD_S="${CLIMB_PERIOD_S:-30}"
+    AMOUNT_JITTER_STEPS="${AMOUNT_JITTER_STEPS:-1}"
     PRE_ALLOC_VUS="${PRE_ALLOC_VUS:-80}"
     MAX_VUS="${MAX_VUS:-300}"
+    USER_COUNT="${USER_COUNT:-${MAX_VUS}}"
+    DROPPED_ITERATIONS_MAX="${DROPPED_ITERATIONS_MAX:-200}"
+    STAIR_HOLD="${STAIR_HOLD:-0}"
+    RAMP_DUR="${RAMP_DUR:-1s}"
     k6 run \
       --env "BASE_URL=${BASE_URL}" \
       --env "STAGE_DUR=${STAGE_DUR}" \
       --env "STAGE1_RATE=${STAGE1_RATE}" \
       --env "STAGE2_RATE=${STAGE2_RATE}" \
       --env "STAGE3_RATE=${STAGE3_RATE}" \
+      --env "STAGE4_RATE=${STAGE4_RATE:-}" \
+      --env "STAGE5_RATE=${STAGE5_RATE:-}" \
+      --env "RUN_ID=${RUN_ID}" \
+      --env "AMOUNT_MODE=${AMOUNT_MODE}" \
+      --env "NOISE_PCT=${NOISE_PCT}" \
+      --env "CLIMB_PERIOD_S=${CLIMB_PERIOD_S}" \
+      --env "AMOUNT_JITTER_STEPS=${AMOUNT_JITTER_STEPS}" \
       --env "PRE_ALLOC_VUS=${PRE_ALLOC_VUS}" \
       --env "MAX_VUS=${MAX_VUS}" \
+      --env "USER_COUNT=${USER_COUNT}" \
+      --env "DROPPED_ITERATIONS_MAX=${DROPPED_ITERATIONS_MAX}" \
+      --env "STAIR_HOLD=${STAIR_HOLD}" \
+      --env "RAMP_DUR=${RAMP_DUR}" \
+      --summary-export "${EVIDENCE_DIR}/k6-summary.json" \
+      --out "json=${EVIDENCE_DIR}/k6-samples.jsonl" \
+      tests/load/s2-steady-soak.js "$@" || K6_EXIT=$?
+    ;;
+  s2-capacity-stair)
+    CAPACITY_PROFILE="${CAPACITY_PROFILE:-accepted}"
+    case "$CAPACITY_PROFILE" in
+      accepted)
+        STAGE_DUR="${STAGE_DUR:-90s}"
+        STAGE1_RATE="${STAGE1_RATE:-50}"
+        STAGE2_RATE="${STAGE2_RATE:-100}"
+        STAGE3_RATE="${STAGE3_RATE:-200}"
+        STAGE4_RATE="${STAGE4_RATE:-400}"
+        STAGE5_RATE="${STAGE5_RATE:-600}"
+        AMOUNT_MODE="${AMOUNT_MODE:-fast_ladder}"
+        NOISE_PCT="${NOISE_PCT:-0}"
+        CLIMB_PERIOD_S="${CLIMB_PERIOD_S:-0.001}"
+        AMOUNT_JITTER_STEPS="${AMOUNT_JITTER_STEPS:-4}"
+        PRE_ALLOC_VUS="${PRE_ALLOC_VUS:-500}"
+        MAX_VUS="${MAX_VUS:-1500}"
+        DROPPED_ITERATIONS_MAX="${DROPPED_ITERATIONS_MAX:-1}"
+        STAIR_HOLD="${STAIR_HOLD:-1}"
+        RAMP_DUR="${RAMP_DUR:-1s}"
+        ;;
+      decision)
+        STAGE_DUR="${STAGE_DUR:-2m}"
+        STAGE1_RATE="${STAGE1_RATE:-100}"
+        STAGE2_RATE="${STAGE2_RATE:-200}"
+        STAGE3_RATE="${STAGE3_RATE:-400}"
+        STAGE4_RATE="${STAGE4_RATE:-600}"
+        STAGE5_RATE="${STAGE5_RATE:-1000}"
+        AMOUNT_MODE="${AMOUNT_MODE:-time_ladder}"
+        NOISE_PCT="${NOISE_PCT:-20}"
+        CLIMB_PERIOD_S="${CLIMB_PERIOD_S:-30}"
+        AMOUNT_JITTER_STEPS="${AMOUNT_JITTER_STEPS:-1}"
+        PRE_ALLOC_VUS="${PRE_ALLOC_VUS:-400}"
+        MAX_VUS="${MAX_VUS:-1200}"
+        DROPPED_ITERATIONS_MAX="${DROPPED_ITERATIONS_MAX:-1}"
+        STAIR_HOLD="${STAIR_HOLD:-1}"
+        RAMP_DUR="${RAMP_DUR:-1s}"
+        ;;
+      *)
+        echo "unknown CAPACITY_PROFILE=${CAPACITY_PROFILE}; expected accepted or decision" >&2
+        exit 2
+        ;;
+    esac
+    RUN_ID="${RUN_ID:-${LABEL}}"
+    USER_COUNT="${USER_COUNT:-${MAX_VUS}}"
+    k6 run \
+      --env "BASE_URL=${BASE_URL}" \
+      --env "STAGE_DUR=${STAGE_DUR}" \
+      --env "STAGE1_RATE=${STAGE1_RATE}" \
+      --env "STAGE2_RATE=${STAGE2_RATE}" \
+      --env "STAGE3_RATE=${STAGE3_RATE}" \
+      --env "STAGE4_RATE=${STAGE4_RATE}" \
+      --env "STAGE5_RATE=${STAGE5_RATE}" \
+      --env "RUN_ID=${RUN_ID}" \
+      --env "AMOUNT_MODE=${AMOUNT_MODE}" \
+      --env "NOISE_PCT=${NOISE_PCT}" \
+      --env "CLIMB_PERIOD_S=${CLIMB_PERIOD_S}" \
+      --env "AMOUNT_JITTER_STEPS=${AMOUNT_JITTER_STEPS}" \
+      --env "PRE_ALLOC_VUS=${PRE_ALLOC_VUS}" \
+      --env "MAX_VUS=${MAX_VUS}" \
+      --env "USER_COUNT=${USER_COUNT}" \
+      --env "DROPPED_ITERATIONS_MAX=${DROPPED_ITERATIONS_MAX}" \
+      --env "STAIR_HOLD=${STAIR_HOLD}" \
+      --env "RAMP_DUR=${RAMP_DUR}" \
       --summary-export "${EVIDENCE_DIR}/k6-summary.json" \
       --out "json=${EVIDENCE_DIR}/k6-samples.jsonl" \
       tests/load/s2-steady-soak.js "$@" || K6_EXIT=$?

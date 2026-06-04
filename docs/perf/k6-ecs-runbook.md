@@ -158,7 +158,109 @@ Interpretation note: this run proves long-running bid-decision stability
 accepted-heavy WebSocket fanout or reader interference. Use `S2-read-interference`
 below for HTTP read pressure and S3 for WebSocket/fanout pressure.
 
-## 4b. S2 Read Interference
+## 4b. S2 Capacity Stair
+
+Run this after the S2 long-soak and S2 read-interference display profile when
+you need to find the single-auction bid capacity knee. This is not another
+long-soak. It is a short staged attack whose evidence must name the stage where
+latency, dropped iterations, or async backlog starts bending.
+
+There are two profiles. Keep their claims separate:
+
+- `CAPACITY_PROFILE=accepted`: accepted-heavy capacity search. The amount ladder
+  advances very quickly and `NOISE_PCT=0` so the run does not degrade into cheap
+  low-price Redis rejects after the price climbs. This profile stresses accepted
+  Redis updates, Kafka append, settlement, outbox, and the source side of fanout.
+  Default scale is `50/s -> 100/s -> 200/s -> 400/s -> 600/s`, with 1s ramp
+  transitions plus 90s hold windows, for about 122,850 offered bid attempts
+  before ramp-down.
+- `CAPACITY_PROFILE=decision`: decision-throughput search. The slow business
+  ladder and normal stale noise remain enabled, so rejects are expected. This
+  can find a higher Redis decision rate, but it is not accepted-update or
+  settlement capacity evidence.
+
+Service-side preparation:
+
+```bash
+cd /root/workspace/live-auction
+
+ALLOW_MOCK_AUTH=true \
+MAX_VUS=1500 \
+bash tests/pts/prepare-s2-capacity-stair-pressure.sh
+
+curl -fsS http://127.0.0.1:18080/readyz
+curl -fsS http://127.0.0.1:18080/metrics -o /tmp/live-auction-metrics.txt
+rg 'auction_admission_enabled|auction_bid_lane_config|db_pool_max_conns|auction_engine_mode|auction_acl_membership_cache_total' /tmp/live-auction-metrics.txt
+```
+
+Accepted-profile smoke from the independent k6 ECS:
+
+```bash
+cd /root/workspace/live-auction
+export BASE_URL=http://SERVICE_PRIVATE_IP:18080
+curl -fsS "$BASE_URL/readyz"
+
+export LABEL=s2-capacity-accepted-smoke-ecs-$(date +%Y%m%dT%H%M%S)
+CAPACITY_PROFILE=accepted \
+STAGE_DUR=20s \
+STAGE1_RATE=5 \
+STAGE2_RATE=10 \
+STAGE3_RATE=20 \
+STAGE4_RATE=30 \
+STAGE5_RATE=50 \
+PRE_ALLOC_VUS=80 \
+MAX_VUS=200 \
+USER_COUNT=200 \
+bash scripts/perf/run-remote-k6.sh s2-capacity-stair
+```
+
+Reset with the service-side preparation command again before the formal run, so
+smoke decisions do not contaminate the formal accepted count.
+
+Accepted-profile formal stair from the independent k6 ECS:
+
+```bash
+export LABEL=s2-capacity-accepted-ecs-$(date +%Y%m%dT%H%M%S)
+CAPACITY_PROFILE=accepted \
+STAGE_DUR=90s \
+STAGE1_RATE=50 \
+STAGE2_RATE=100 \
+STAGE3_RATE=200 \
+STAGE4_RATE=400 \
+STAGE5_RATE=600 \
+PRE_ALLOC_VUS=500 \
+MAX_VUS=1500 \
+USER_COUNT=1500 \
+bash scripts/perf/run-remote-k6.sh s2-capacity-stair
+```
+
+Required service-side follow-up before any reset:
+
+```bash
+BASE_URL=http://127.0.0.1:18080 \
+bash tests/pts/collect-server-evidence.sh "$LABEL"
+
+EXPECTED_UNIQUE_BIDS="" FINAL_WAIT_SECONDS=0 \
+bash tests/pts/verify-l4b-pts-correctness.sh "$LABEL"
+```
+
+Clean gate:
+
+- k6 exit code 0;
+- `dropped_iterations=0`;
+- `http_req_failed=0`;
+- bid decision p99 remains under the configured S2 gate;
+- accepted/rejected distribution matches the selected profile;
+- Kafka lag, Redis pending decisions, settlement pending/failed, and outbox
+  ready/publishing/retry/dead/ack-pending all drain after the run;
+- k6 host CPU/RSS/FD/network do not show generator saturation.
+
+If the accepted profile is clean through 600/s, run a separate short extension
+only if you need the exact knee, for example 800/s and 1000/s with 60s stages.
+If backlog grows or dropped iterations appear, keep that as bottleneck evidence
+instead of presenting it as pass.
+
+## 4c. S2 Read Interference
 
 Run this after `S2-long-soak` when you need to prove normal live-room polling
 does not hurt bid decisions. It intentionally stays HTTP-only; WebSocket fanout

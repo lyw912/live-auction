@@ -112,15 +112,33 @@ Recommended shape:
 
 ```text
 tool           : k6 first; PTS RPS for formal evidence if needed
-stages         : 100/s -> 200/s -> 400/s -> 600/s -> 1000/s
-stage duration : 2-5 min each
+accepted stair : 50/s -> 100/s -> 200/s -> 400/s -> 600/s
+decision stair : 100/s -> 200/s -> 400/s -> 600/s -> 1000/s
+stage duration : 90s accepted, 2m decision by default
 ```
+
+Use two separate profiles because they answer different questions:
+
+- `accepted` profile: `AMOUNT_MODE=fast_ladder`, `NOISE_PCT=0`, and a large
+  `USER_COUNT`. This is the first profile to run after the independent-ECS S2
+  read pass because it avoids the "price stopped climbing, Redis rejected
+  everything cheaply" trap. It is an adversarial accepted-update capacity
+  search: if the system accepts most bids, it drives Redis state updates, Kafka
+  append, settlement, outbox, and the source side of public fanout. The default
+  50/100/200/400/600 per-second targets use 1s ramp transitions plus 90s hold
+  windows, producing about 122,850 offered bid attempts before ramp-down. A
+  clean result means "the accepted-update path stayed clean through the highest
+  passed stage", not "normal users bid like this".
+- `decision` profile: `AMOUNT_MODE=time_ladder`, `NOISE_PCT=20`. This is a
+  Redis decision throughput stair with normal stale/low/self-leading rejects.
+  It can find a higher decision rate, but it must not be cited as accepted
+  update, settlement, or fanout capacity.
 
 Evidence:
 
 - p99/p99.9 by stage;
 - delivered vs target rate;
-- dropped iterations;
+- dropped iterations, with clean stair requiring zero drops;
 - accepted/rejected distribution;
 - Kafka/settlement/outbox backlog slope by stage;
 - CPU, DB pool wait, Redis latency, Kafka lag, IO.
@@ -130,11 +148,16 @@ Red lines:
 - Do not describe this as normal user traffic; it is a capacity search.
 - Do not compare open-model k6 and closed-loop VU p99 without stating the model.
 - Do not stop at "p99 is fine" if backlog grows without bound.
+- Do not collapse `accepted` and `decision` profiles. A rejected-heavy 1000/s
+  run is useful, but it is not proof that the accepted update pipeline can drain
+  1000 accepted bids/s.
 
 Judge defense:
 
 > "S2-capacity-stair is intentionally adversarial. It finds the knee and names
-> the bottleneck; it does not replace the lower-rate long soak."
+> the bottleneck; it does not replace the lower-rate long soak. We run an
+> accepted-heavy stair separately from a rejected-heavy decision stair so the
+> report cannot hide behind cheap Redis rejects."
 
 ## 5. `S2-read-interference`
 
