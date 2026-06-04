@@ -122,6 +122,20 @@ Cost: 2×500×1×1.01 ≈ **1 000 VUM ≈ ¥3** (inside the free 5000-VUM tier).
 | winner correct / rejects justified | `verify-l4b-pts-correctness.sh` output | M3 gate |
 | arrival span | `review-s1-pts-run.sh` sampling-log `startTimeTS` and response `server_time_ms` spans | proves whether PTS actually delivered the target window |
 
+Pressure-reached evidence:
+
+```text
+PTS sampler count / timestamp span -> 1000 one-shot bid arrivals reached the API
+response ENGINE_* fields          -> each request became a final decision
+DB/verifier                        -> unique bids, winner, rejects, seq, settlement/outbox safety
+```
+
+Do not defend S1 with accepted-bid count. In the current `5D92X7QG` artifact,
+`7 accepted + 993 rejected = 1000 final decisions`; the 993 rejects are not
+missing work. They are the expected result of many users bidding stale amounts
+after the Redis sequencer already advanced the price inside the final-second
+window.
+
 ## 6. Correctness gates (M3 — must PASS to cite M1)
 
 ```bash

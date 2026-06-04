@@ -42,6 +42,37 @@ drained`. This is measured in seconds, not milliseconds. The current local S2
 internal target is <=110s for the 2-minute 200/s -> 600/s -> 1000/s stair, and it
 must be proven by a run with that timeout before being marked PASS.
 
+## Count sources and pressure semantics
+
+Use the following rule in every judge-facing report:
+
+```text
+load-generator count  -> did the intended client actions run?
+service metric count  -> did the intended backend subsystem receive work?
+database truth count  -> did the intended business effect/finality materialize?
+```
+
+These counts are deliberately different:
+
+| Example | Correct interpretation |
+|---|---|
+| PTS `AllCount=2994` for `S3 live fanout receive` | 2994 viewer receive samplers completed successfully. This is not 2994 WebSocket messages and not a DB count. |
+| `auction_ws_publish_subscribers_sum=299400` | the service attempted 100 accepted-publish fanouts to 2994 subscribers. This is a backend fanout metric, not 299400 persisted rows. |
+| PostgreSQL `bids=100`, outbox `PUBLISHED=100` in `XWLAX70G` | 100 accepted bids created 100 business/outbox effects. The per-subscriber deliveries are not stored as one row per viewer. |
+| k6 `dropped_iterations=0` in S2 | the open-arrival offered rate was actually delivered by the generator. It still needs service convergence/verifier evidence before being a pass. |
+| S4 `bid_fault_window_decided_total=1000` | client decision traffic overlapped the injected fault window. It still needs RPO/convergence/no-duplicate gates to prove safety. |
+
+PTS 1% sampling logs are response-body forensics only. They help answer "what
+did sampled clients see?", such as `LIVE_MESSAGES_100` or a sampled
+`MAX_LAT_MS_169`, but they are not the exact run-count ledger. Use the PTS
+report/API-list count, k6 summary, service metrics, and verifier together.
+
+For JMeter/PTS p99 wording, say "p99 over sampler results." A sampler result is
+the timed operation emitted by the JMX, which may represent one bid decision,
+one WebSocket handshake, or one viewer's receive-observe step. It is not
+automatically the p99 of every internal server operation or every WebSocket
+frame unless the sampler is explicitly one operation per frame.
+
 ## M1 — bid decision p99 (the signature number)
 
 **Boundary.** Stopwatch starts when the HTTP bid request is sent; stops when the

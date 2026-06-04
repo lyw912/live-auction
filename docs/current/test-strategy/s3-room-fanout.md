@@ -202,11 +202,106 @@ to the mixed CSV rows and verifies it through sampler counts.
 | Run | Scale | Fanout p99 | Viewer errors | Interpretation |
 |---|---:|---:|---:|---|
 | `s3-local-scale-1000-liveonly-20260602T2303` | 1000 WS, 60s, 301 accepted updates | 22 ms | 0 | Current local S3/M2 evidence: live publish-to-online-viewer receive latency passes the 1s target |
+| `XWLAX70G` | PTS live-only: 2994 WS, 100 accepted updates | console `S3 live fanout receive` p99 142 ms; sampled `MAX_LAT_MS` 25-169 ms | 0 API/assertion failures | Current PTS live-only evidence: 2994 viewers received 100 live updates; service metrics show 299400 subscriber-deliveries and zero queue/outbox/Kafka backlog |
 | `20L8X79G` | PTS mixed burst: 2995 WS, 998 bids, 499 readers | console avg 52.2 ms for `S3 live fanout receive`; sampled max markers mostly <200 ms | 0 API/assertion failures | Current PTS integration evidence: 2995 viewer join/ticket/handshake/first-message/live-receive/close all 100% success in the console export; service metrics show 7 accepted publishes fanned out to 2995 subscribers |
 | `s3-local-scale-1000-20260602T2300` | 1000 WS, 60s, 74 accepted updates | 59.6 s | 9 | Harness-contaminated run: history/recovery messages were counted as fanout latency |
 | `s3-local-scale-2000-20260602T2305` | attempted 2000 WS | no complete summary | unknown | Failed/incomplete run; usable only as single-node/local-generator ceiling evidence |
 
-### 8.1 PTS mixed final-burst `20L8X79G`
+### 8.1 PTS live-only fanout `XWLAX70G`
+
+`XWLAX70G` is the current PTS `S3-live-only-fanout` evidence:
+
+```text
+3000 viewer rows + 100 accepted-update bidder rows
+no reader rows
+PTS sampling setting: 1%
+PTS total sampler requests: 18064
+```
+
+PTS request count is sampler count:
+
+```text
+100 bid samplers
++ 2994 viewers * 6 viewer samplers
+= 18064
+```
+
+It is not WebSocket frame count. The raw fanout surface is service-side:
+
+```text
+accepted publishes=100
+subscribers=2994
+auction_ws_publish_subscribers_sum=299400
+```
+
+Service-side evidence:
+
+```text
+bids=100, accepted=100, rejected=0
+auc_live accepted_bid_count=100, seq=100
+Redis settlement settled=100/100
+Kafka lag=0
+outbox PUBLISHED=100, pending=0
+auction_ws_recover_total{result="snapshot_redis"}=2994
+auction_ws_publish_subscribers_sum=299400
+auction_ws_send_queue_depth_sum=0
+auction_ws_connections after run=0
+Redis blocked_clients=0, rejected_connections=0, evicted_keys=0
+runtime_open_fds=418, runtime_goroutines=43, RSS about 232 MB
+```
+
+Business truth vs fanout metric:
+
+```text
+PostgreSQL bid rows          = 100 accepted bid business records
+PostgreSQL/outbox rows       = 100 publishable business events
+service subscriber-delivery  = 299400 = 100 publishes * 2994 subscribers
+```
+
+The service subscriber-delivery count is intentionally not persisted as 299400
+database rows. Persisting every viewer delivery would turn fanout into a DB
+write-amplification problem and is not the architecture. The DB proves business
+truth and outbox effects; `auction_ws_publish_subscribers_sum` proves that the
+online-viewer fanout surface was exercised.
+
+Sampling-log evidence:
+
+```text
+sampling rate=1%
+sampled S3 live fanout receive rows=38
+all sampled receive rows: LIVE_MESSAGES_100, LIVE_SEQS_100, FINAL_SEQ_100
+sampled MAX_LAT_MS values: roughly 25-169 ms
+```
+
+P99 semantics:
+
+`S3 live fanout receive p99=142 ms` is the PTS/JMeter p99 over the 2994 receive
+sampler results. It is not a per-message p99 over all 299400 WebSocket
+subscriber deliveries, and it is not computed by averaging each viewer's 100
+messages first. The sampled response marker `MAX_LAT_MS_xxx` is the sampled
+per-viewer worst live-message latency.
+
+Why `XWLAX70G` p99 is close to the earlier 7-update mixed run:
+
+- It is not because the run failed to apply pressure. Service metrics show the
+  fanout surface increased from `20965` subscriber-deliveries in `20L8X79G` to
+  `299400` in `XWLAX70G`.
+- It indicates the current 3000-viewer / 100-update point did not saturate the
+  fanout path: send queue depth stayed zero, Kafka/outbox drained, and sampled
+  viewers received all 100 messages.
+- It also reflects a measurement limitation: PTS sampler p99 is not the full
+  per-frame latency histogram. Use PTS sampler p99, sampled `MAX_LAT_MS`, and
+  service queue/backlog metrics together.
+
+Evidence files:
+
+```text
+docs/perf/pts/evidence/incoming/XWLAX70G/
+docs/perf/pts/evidence/incoming/XWLAX70G/pts-console-api-list.md
+docs/perf/pts/evidence/incoming/s3-liveonly-3000x100-pts-XWLAX70G/
+```
+
+### 8.2 PTS mixed final-burst `20L8X79G`
 
 `20L8X79G` ran the current single-branch mixed PTS asset:
 

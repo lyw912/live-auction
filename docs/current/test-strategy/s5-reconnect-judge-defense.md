@@ -41,6 +41,14 @@ Server-side recovery monitor for the same network run recorded
 `ws_recovered(db)=4,913`, and `ws_recovered(snapshot_unavailable)=77`, with
 readyz still healthy after the run.
 
+Pressure reached the target because the evidence lines up at three layers:
+k6 created stale-`last_seq` recovery iterations, the reconnect leg recorded
+3,826 retry/attempt errors through Toxiproxy, and the server recorded
+`ws_reconnect`/`ws_recovered` events across history and DB/snapshot paths. The
+database is not expected to contain one row per reconnect; the business truth is
+the current public seq/state, and S5 verifies recovered clients match it without
+gaps, duplicates, or stale winner/price.
+
 ## Why This Is Not S3
 
 S3 asks: can stable viewers receive broadcasts fast?

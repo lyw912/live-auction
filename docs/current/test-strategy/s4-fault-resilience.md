@@ -80,6 +80,21 @@ User-facing interpretation:
 | `fault_window_decided=1000` for PG/Kafka faults | Redis hot path can still decide while PG/Kafka are temporarily unavailable |
 | `settlements=N/N` and verifier PASS | every durable engine decision converged to PostgreSQL settlement exactly once |
 
+Pressure-reached evidence:
+
+| Proof | Meaning |
+|---|---|
+| k6 total decisions/paused/errors | clients were actively submitting bids during the run, not just after recovery |
+| fault-window counters | the injected 5s fault overlapped real bid attempts; for example the independent Kafka run `s4-p1-kafka-independent-20260604T202510` recorded `bid_fault_window_decided_total=1000` |
+| service convergence gates | Redis pending, Kafka lag, open settlement rows, and open outbox rows returned to zero |
+| verifier gates | RPO=0, no phantom accepts, no duplicate `(epoch, engine_seq)` settlement effect |
+
+Do not treat a clean k6 exit as the S4 proof by itself. The load-generator proves
+overlap and user-visible symptoms; the server evidence proves safety. A
+Kafka/PG fault may have `fault_window_decided=1000` and still be unsafe if
+settlement/outbox never converges. Conversely, a Redis fault is expected to show
+paused/reconciling/fail-closed responses rather than continued accepts.
+
 ### 3.1.1 S4 07/08 focused gates
 
 These two gates are intentionally not 25s k6 chaos runs. They attack two

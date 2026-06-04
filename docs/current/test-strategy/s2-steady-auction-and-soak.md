@@ -97,6 +97,21 @@ ledger relay, PostgreSQL settlement, and verifier gates, but only 61 accepted
 updates drove outbox/WebSocket fanout. Use `S2-read-interference` for HTTP read
 pressure and S3 for WebSocket fanout.
 
+Count semantics for S2:
+
+| Count | Meaning |
+|---|---|
+| k6 iterations / final decisions | offered bid pressure delivered by the independent same-VPC generator |
+| `dropped_iterations=0` | the generator did not silently undersupply the open-arrival rate |
+| Redis pending / Kafka lag / settlement rows / outbox pending | the async durability and finality chain drained after the bid pressure |
+| accepted count | real price-changing updates; this drives fanout, but it is not the decision-capacity headline |
+
+For example, `s2-convergence-drain-decision-ecs-20260604T1937` had 49,049 final
+decisions but only 6 accepted updates. That is a valid decision/reject-heavy
+convergence proof because the target was Kafka/Redis/PG/outbox drain for normal
+decision traffic. It must not be reworded as "600/s accepted-update capacity";
+accepted-heavy S2 capacity is tracked separately as bottleneck evidence.
+
 ### 3a-bis. S2 read interference (HTTP polling under bid load)
 
 The live-room polling question is separate from long bid-decision soak. Use

@@ -37,6 +37,29 @@ What was already strong — final-second contention and concurrent fault evidenc
 | **PTS for charts, local k6 for everything cheap.** PTS earns its cost only where distributed source IPs + clean per-sampler p99 export add judge value. | PTS bills `⌈maxVU/500⌉×500×min×(1+sample%)`; soak/fault/reconnect need neither. | [pts-playbook.md](pts-playbook.md) |
 | **Keep PTS sampling cheap.** PTS report percentiles are the chart source; sampling logs are for body forensics. Keep sampling at 1% unless debugging. | Higher sampling multiplies VUM cost and does not replace verifier evidence. | Alibaba PTS billing/report docs |
 
+## 1a. Evidence layers: proving pressure reached the target
+
+Every S1-S5 claim must name the evidence layer it comes from. This prevents a
+common review mistake: treating a load-generator sampler count, a backend metric,
+and a database row count as the same thing.
+
+| Layer | What it proves | What it does not prove |
+|---|---|---|
+| PTS/k6 load-generator counts | the offered workload was executed: iterations, sampler `AllCount`, dropped iterations, HTTP failures, assertion failures, fault-window counters | not raw WebSocket frame count; not PostgreSQL row count; not financial finality |
+| sampled logs / response markers | forensic detail for a subset of requests: response body, live-message markers, max observed fanout latency, final decision fields | not the authoritative count source when sampling is 1%; not a substitute for service metrics |
+| service metrics | pressure reached the intended subsystem: Redis decisions, Kafka lag, settlement/outbox drain, WS publish subscriber fanout, reconnect/recovery counters, queue depth | not necessarily user-visible p99 unless paired with client sampler timing |
+| database truth | business effects and finality: accepted/rejected bid rows, settlement rows, orders, outbox rows, duplicate-effect checks | not every WebSocket delivery; fanout to 3000 viewers is not stored as 3000 DB rows |
+
+Scenario-specific pressure proof:
+
+| Scenario | "Pressure reached target" proof |
+|---|---|
+| S1 | PTS `bid-decision` sampler count and timestamp span prove the final-second arrival; verifier/DB prove all unique bids became final accepted/rejected decisions with winner/reject correctness. |
+| S2 | k6 open-arrival decisions, `dropped_iterations=0`, HTTP failures=0, and service-side Kafka/Redis/PG/outbox convergence prove sustained decision pressure actually reached the Redis/Kafka/settlement chain. |
+| S3 | PTS viewer/bid sampler counts prove the room workload ran; service `auction_ws_publish_subscribers_sum = accepted publishes * subscribers` proves fanout pressure. For example, `299400` means 100 accepted publishes to 2994 subscribers, not 299400 database rows. |
+| S4 | k6 fault-window counters prove traffic overlapped the injected fault; service convergence/verifier gates prove fail-closed, RPO=0, no phantom accepts, and no duplicate settlement effects. |
+| S5 | k6 reconnect counters prove stale-`last_seq` clients actually reconnected after missing seqs; service `ws_reconnect`/`ws_recovered` counters and gap/dup/truth checks prove backend recovery, not just socket open success. |
+
 ## 2. The spine — six business scenarios
 
 Each scenario is one user story, proves one thing, runs on one tool, and emits

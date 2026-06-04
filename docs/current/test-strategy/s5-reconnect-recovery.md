@@ -111,6 +111,22 @@ Server-side recovery monitor for `s5-20260604T231925` recorded 21,574
 history=16,584, db=4,913, snapshot_unavailable=77. That confirms recovery used
 the real backend recovery paths instead of relying only on client-side k6 checks.
 
+Pressure-reached evidence:
+
+| Proof | Meaning |
+|---|---|
+| `recovered` count | stale-`last_seq` clients completed recovery to current server seq |
+| TTCS p99 | user-visible recovery latency for the recovery population, not raw fanout p99 |
+| gap/duplicate/truth-mismatch counters | the recovered stream/snapshot state was correct, not just connected |
+| `s5_reconnect_attempt_errors_total` / retries in network mode | Toxiproxy reset turbulence was active during the reconnect leg |
+| service `ws_reconnect` / `ws_recovered(source=...)` | backend recovery paths were exercised: history, DB, snapshot fallback, not only client-side assertions |
+
+Count semantics: S5 recovered sessions are not S3 fanout messages and not DB
+rows. They are recovery attempts where a client first missed real public seqs
+and then returned to the authoritative state. A high recovered count plus zero
+gap/dup/truth mismatch is the evidence that pressure reached reconnect recovery;
+it does not replace S3's stable-viewer fanout proof.
+
 Important harness semantics for the network pass: the initial online connection
 uses the clean local WS endpoint, then the reconnect recovery leg uses
 Toxiproxy. That matches the business scenario: a user was already online,

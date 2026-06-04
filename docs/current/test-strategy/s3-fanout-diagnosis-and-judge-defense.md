@@ -225,7 +225,74 @@ not business fanout latency. The S3 v7 JMX records `SETUP_MS` and `HANDSHAKE_MS`
 inside the handshake response marker and reuses one Java `HttpClient` per PTS
 engine to remove client construction noise from the sampler.
 
-## 7. PTS Mixed Final-Burst Evidence: `20L8X79G`
+## 7. PTS Live-Only Fanout Evidence: `XWLAX70G`
+
+`XWLAX70G` is the current PTS `S3-live-only-fanout` evidence.
+
+PTS console API-list summary:
+
+| Sampler | Count | Success | Assertion | Average RT |
+|---|---:|---:|---:|---:|
+| `S3 POST accepted-update bid` | 100 | 100% | 100% | 5.48 ms |
+| `S3 viewer join snapshot` | 2994 | 100% | 100% | 123 ms |
+| `S3 POST WS ticket` | 2994 | 100% | 100% | 40.1 ms |
+| `S3 WS handshake complete` | 2994 | 100% | 100% | 912 ms |
+| `S3 WS first snapshot/business message` | 2994 | 100% | 100% | 112 ms |
+| `S3 live fanout receive` | 2994 | 100% | 100% | 59.8 ms |
+| `S3 WS close` | 2994 | 100% | 100% | 112 ms |
+
+PTS total sampler requests:
+
+```text
+100 + 2994 * 6 = 18064
+```
+
+This is expected. JMeter counts sampler executions; it does not count each
+WebSocket message as a separate request.
+
+Service-side confirmation:
+
+| Signal | Value | Meaning |
+|---|---:|---|
+| accepted bids | 100/100 | all update-source bids became price updates |
+| `auc_live.seq` | 100 | auction sequence advanced for each accepted update |
+| Kafka lag | 0 | settlement consumer drained |
+| Outbox pending | 0 | publication plane drained |
+| `auction_ws_recover_total{snapshot_redis}` | 2994 | viewers joined via Redis hot snapshot |
+| `auction_ws_publish_subscribers_sum` | 299400 | `100 accepted publishes * 2994 subscribers` |
+| WS send queue depth | 0 | no observed queue buildup |
+| WS connections after run | 0 | clean close after PTS run |
+| Redis rejected/evicted/blocked | 0 | no Redis connection or memory failure |
+
+Important count wording:
+
+- Do not say "the database has 299400 rows." It does not. PostgreSQL contains
+  100 accepted bids and 100 outbox records.
+- `299400` is the service metric for subscriber-delivery surface:
+  every accepted publish was sent to each online subscriber.
+- PTS `S3 live fanout receive=2994` is one receive sampler per viewer, not the
+  WebSocket message count.
+
+Sampling caveat:
+
+- The run used 1% sampling. Sampling logs are therefore response-marker
+  forensics, not exact-count proof.
+- Retrieved logs sampled 38 `S3 live fanout receive` rows. Every sampled row
+  reported `LIVE_MESSAGES_100`, `LIVE_SEQS_100`, and `FINAL_SEQ_100`.
+- Sampled `MAX_LAT_MS` values were roughly `25-169 ms`.
+
+Why p99 stayed close to the 7-update mixed run:
+
+> "This is not evidence that the pressure leaked away. The backend metrics show
+> the fanout surface was 299400 subscriber-deliveries, versus 20965 in the
+> 7-update mixed run. The similar PTS p99 means this 3000-viewer / 100-update
+> point did not saturate the current fanout path; queue depth stayed zero and
+> every sampled viewer received 100 live messages. It also means we should not
+> present PTS sampler p99 as a full per-frame latency histogram. The correct
+> evidence chain is PTS sampler success + sampled `MAX_LAT_MS` markers + service
+> publish-subscriber and queue/backlog metrics."
+
+## 8. PTS Mixed Final-Burst Evidence: `20L8X79G`
 
 `20L8X79G` is the current PTS `S3-mixed-final-burst` integration evidence, not
 the clean `S3-live-only-fanout` baseline.
