@@ -60,6 +60,8 @@ const (
 	DepositStatusHeld     = "HELD"
 	DepositStatusRefunded = "REFUNDED"
 	DepositStatusForfeit  = "FORFEITED"
+
+	defaultBidHistoryLimit = 50
 )
 
 type BidInput struct {
@@ -1413,7 +1415,8 @@ func (r *Repository) ListBidHistory(ctx context.Context, userID string) ([]BidHi
 		FROM bids
 		WHERE user_id = $1
 		ORDER BY created_at DESC
-	`, userID)
+		LIMIT $2
+	`, userID, defaultBidHistoryLimit)
 	if err != nil {
 		return nil, err
 	}

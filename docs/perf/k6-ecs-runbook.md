@@ -202,10 +202,18 @@ READ_MAX_VUS=4000 \
 bash scripts/perf/run-remote-k6.sh s2-read-interference
 ```
 
-Reduced clean-ceiling search shape after the 10k and 4k attack failures:
+Reduced display-ceiling rerun after the 10k/4k/read-display failures and the
+2026-06-04 P0/P1 fixes:
+
+- P0: Redis hot-engine state/log TTL raised from 30m to 24h; pause mirroring no
+  longer recreates partial Redis hot state.
+- P1: HTTP auction snapshot gets a 250ms Redis cache + singleflight, empty
+  max-bid-intent lookups get a 5s negative cache, `my-bids` is capped at 50
+  rows, ACL hit/miss metrics were added, and read-path indexes plus SQL
+  attribution were added.
 
 ```bash
-export LABEL=s2-read-display-ecs-15m-$(date +%Y%m%dT%H%M%S)
+export LABEL=s2-read-display-postfix-ecs-15m-$(date +%Y%m%dT%H%M%S)
 export BASE_URL=http://SERVICE_PRIVATE_IP:18080
 STAGE_DUR=5m \
 BID_STAGE1_RATE=100 \
@@ -224,6 +232,11 @@ bash scripts/perf/run-remote-k6.sh s2-read-interference
 The previous reduced attempt `s2-read-clean-ecs-15m-20260604T120823`
 (`2000/3000/4000` reads/s) was still CURRENT_FAILING: 524,423 dropped
 iterations, snapshot p99 1.02s, leaderboard p99 2.72s, my-bids p99 596ms.
+The later `s2-read-display-ecs-15m-20260604T123644` attempt
+(`1500/1800/2000` reads/s) was also CURRENT_FAILING: 63,531 dropped iterations,
+snapshot p99 1.26s, leaderboard p99 3.41s, my-bids p99 730ms, and service-side
+verification exposed the Redis hot-ledger TTL P0. Do not cite it as pass; cite
+it as bottleneck evidence before the P0/P1 fixes.
 
 Smoke shape:
 

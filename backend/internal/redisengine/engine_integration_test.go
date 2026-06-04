@@ -151,6 +151,61 @@ func TestRedisLedgerMissingHotStateWithUnsettledLedgerFailsClosed(t *testing.T) 
 	assertEnginePaused(t, db, auctionID, "REDIS_ENGINE_STATE_MISSING_REQUIRES_RECONCILE")
 }
 
+func TestRedisLedgerHotStateAndLogTTLExceedsLongSoakWindow(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	auctionID := createEngineAuction(t, db, 0)
+
+	if _, err := engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-long-soak-ttl", auction.BidInput{
+		ClientBidID:   "redis-ledger-long-soak-ttl",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_long_soak_ttl"); err != nil {
+		t.Fatalf("seed redis state: %v", err)
+	}
+
+	stateTTL, err := rdb.TTL(ctx, redisx.BidEngineStateKey(auctionID)).Result()
+	if err != nil {
+		t.Fatalf("state ttl: %v", err)
+	}
+	logTTL, err := rdb.TTL(ctx, redisx.BidEngineLogStreamKey(auctionID)).Result()
+	if err != nil {
+		t.Fatalf("log ttl: %v", err)
+	}
+	minTTL := 2 * time.Hour
+	if stateTTL < minTTL || logTTL < minTTL {
+		t.Fatalf("hot ledger ttl too short: state=%s log=%s want both >= %s", stateTTL, logTTL, minTTL)
+	}
+}
+
+func TestRedisLedgerPauseDoesNotCreatePartialHotState(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	auctionID := createEngineAuction(t, db, 0)
+
+	if err := rdb.Del(ctx, redisx.BidEngineStateKey(auctionID)).Err(); err != nil {
+		t.Fatalf("delete redis state: %v", err)
+	}
+	if err := engine.pause(ctx, auctionID, "TEST_PAUSE_WITHOUT_STATE", "test pause", "tr_partial_state"); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+	exists, err := rdb.Exists(ctx, redisx.BidEngineStateKey(auctionID)).Result()
+	if err != nil {
+		t.Fatalf("state exists: %v", err)
+	}
+	if exists != 0 {
+		fields, _ := rdb.HGetAll(ctx, redisx.BidEngineStateKey(auctionID)).Result()
+		t.Fatalf("pause created partial redis state: %#v", fields)
+	}
+	assertEnginePaused(t, db, auctionID, "TEST_PAUSE_WITHOUT_STATE")
+}
+
 func TestRedisLedgerMissingHotStateAfterSettledLedgerFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)

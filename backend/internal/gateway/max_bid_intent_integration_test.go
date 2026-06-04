@@ -297,6 +297,44 @@ func TestAuctionSnapshotCarriesOnlyCurrentUserMaxBidIntent(t *testing.T) {
 	}
 }
 
+func TestAuctionSnapshotHTTPReadCacheDoesNotLeakMaxBidIntentAndInvalidatesAbsentIntent(t *testing.T) {
+	db := openMonitorDB(t)
+	rdb := openMonitorRedis(t)
+	router := NewRouter(testConfig(), &storage.Dependencies{Postgres: db, Redis: rdb}, slog.Default())
+	repo := auction.NewRepository(db)
+	row := createACLAuction(t, repo, db, "room_max_bid_snapshot_cache_"+uuid.NewString(), "host_1", "user_1", "ACTIVE")
+
+	first := performAuctionGet(router, row.ID, "user_1")
+	if first.Code != http.StatusOK {
+		t.Fatalf("first snapshot status = %d body=%s", first.Code, first.Body.String())
+	}
+	if bytes.Contains(first.Body.Bytes(), []byte("max_bid_intent")) {
+		t.Fatalf("empty user snapshot unexpectedly had max_bid_intent: %s", first.Body.String())
+	}
+	if exists, err := rdb.Exists(context.Background(), auctionHTTPSnapshotCacheKey(row.ID)).Result(); err != nil || exists != 1 {
+		t.Fatalf("http snapshot cache exists=%d err=%v", exists, err)
+	}
+	if cached, err := rdb.Get(context.Background(), maxBidIntentAbsentCacheKey(row.ID, "user_1")).Result(); err != nil || cached != maxBidIntentAbsentCacheSentinel {
+		t.Fatalf("absent max intent cache = %q err=%v", cached, err)
+	}
+
+	put := performMaxBidIntent(router, http.MethodPut, row.ID, `{"max_amount_cents":25000,"client_seen_seq":0,"source":"MAX_BID"}`, "max-intent-cache-put", "user_1")
+	if put.Code != http.StatusOK {
+		t.Fatalf("put max intent status = %d body=%s", put.Code, put.Body.String())
+	}
+	if exists, err := rdb.Exists(context.Background(), maxBidIntentAbsentCacheKey(row.ID, "user_1")).Result(); err != nil || exists != 0 {
+		t.Fatalf("absent max intent cache after put exists=%d err=%v", exists, err)
+	}
+
+	second := performAuctionGet(router, row.ID, "user_1")
+	if second.Code != http.StatusOK {
+		t.Fatalf("second snapshot status = %d body=%s", second.Code, second.Body.String())
+	}
+	if !bytes.Contains(second.Body.Bytes(), []byte(`"max_bid_intent"`)) || !bytes.Contains(second.Body.Bytes(), []byte(`"max_amount_cents":25000`)) {
+		t.Fatalf("snapshot did not include current user's intent after invalidation: %s", second.Body.String())
+	}
+}
+
 func performMaxBidIntent(router http.Handler, method string, auctionID string, body string, key string, userID string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, "/api/auctions/"+auctionID+"/max-bid-intent", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")

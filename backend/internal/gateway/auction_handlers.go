@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/minio/minio-go/v7"
 	"go.opentelemetry.io/otel/attribute"
+	"golang.org/x/sync/singleflight"
 
 	"live-auction/backend/internal/auction"
 	"live-auction/backend/internal/config"
@@ -23,6 +25,8 @@ import (
 	"live-auction/backend/internal/storage"
 	apptracing "live-auction/backend/internal/tracing"
 )
+
+var auctionHTTPSnapshotLoadGroup singleflight.Group
 
 type AuctionHandler struct {
 	Config config.Config
@@ -45,6 +49,15 @@ type currentUserAuctionSnapshot struct {
 	auction.Auction
 	MaxBidIntent *auction.MaxBidIntent `json:"max_bid_intent,omitempty"`
 }
+
+const (
+	// HTTP polling is a follower/read path. A short public cache absorbs
+	// live-room refresh storms without making bid decisions depend on cached
+	// state or hiding updates for long.
+	auctionHTTPSnapshotCacheTTL     = 250 * time.Millisecond
+	maxBidIntentAbsentCacheTTL      = 5 * time.Second
+	maxBidIntentAbsentCacheSentinel = "1"
+)
 
 type demoCompetingBidRequest struct {
 	BidderID      string `json:"bidder_id"`
@@ -332,22 +345,85 @@ func (h AuctionHandler) GetAuction(w http.ResponseWriter, r *http.Request) {
 		writeResult(w, r, http.StatusOK, nil, err)
 		return
 	}
-	result, err := h.Repo.GetAuction(r.Context(), auctionID)
+	result, err := h.getAuctionForHTTPSnapshot(r.Context(), auctionID)
 	if err != nil {
 		writeResult(w, r, http.StatusOK, nil, err)
 		return
 	}
 	snapshot := currentUserAuctionSnapshot{Auction: result}
-	intent, err := h.Repo.GetMaxBidIntent(r.Context(), auctionID, user.ID)
+	intent, ok, err := h.getMaxBidIntentForHTTPSnapshot(r.Context(), auctionID, user.ID)
 	if err != nil {
-		if !hasAPIErrorCode(err, apierrors.CodeAuctionNotFound) {
-			writeResult(w, r, http.StatusOK, nil, err)
-			return
-		}
-	} else {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	if ok {
 		snapshot.MaxBidIntent = &intent
 	}
 	writeResult(w, r, http.StatusOK, snapshot, nil)
+}
+
+func (h AuctionHandler) getAuctionForHTTPSnapshot(ctx context.Context, auctionID string) (auction.Auction, error) {
+	if h.Deps != nil && h.Deps.Redis != nil {
+		if payload, err := h.Deps.Redis.Get(ctx, auctionHTTPSnapshotCacheKey(auctionID)).Bytes(); err == nil {
+			var cached auction.Auction
+			if err := json.Unmarshal(payload, &cached); err == nil && cached.ID == auctionID {
+				cached.ServerTimeMS = currentUnixMillis()
+				observability.Inc("auction_http_snapshot_cache_total", map[string]string{"result": "hit"})
+				return cached, nil
+			}
+			observability.Inc("auction_http_snapshot_cache_total", map[string]string{"result": "invalid"})
+		}
+	}
+	observability.Inc("auction_http_snapshot_cache_total", map[string]string{"result": "miss"})
+	loadKey := fmt.Sprintf("%p:%s", h.Repo, auctionID)
+	value, err, _ := auctionHTTPSnapshotLoadGroup.Do(loadKey, func() (any, error) {
+		result, err := h.Repo.GetAuction(ctx, auctionID)
+		if err != nil {
+			return auction.Auction{}, err
+		}
+		if h.Deps != nil && h.Deps.Redis != nil {
+			if payload, err := json.Marshal(result); err == nil {
+				_ = h.Deps.Redis.Set(ctx, auctionHTTPSnapshotCacheKey(auctionID), payload, auctionHTTPSnapshotCacheTTL).Err()
+			}
+		}
+		return result, nil
+	})
+	if err != nil {
+		return auction.Auction{}, err
+	}
+	result, ok := value.(auction.Auction)
+	if !ok {
+		return auction.Auction{}, errors.New("auction http snapshot singleflight returned unexpected type")
+	}
+	return result, nil
+}
+
+func (h AuctionHandler) getMaxBidIntentForHTTPSnapshot(ctx context.Context, auctionID string, userID string) (auction.MaxBidIntent, bool, error) {
+	if h.Deps != nil && h.Deps.Redis != nil {
+		if cached, err := h.Deps.Redis.Get(ctx, maxBidIntentAbsentCacheKey(auctionID, userID)).Result(); err == nil && cached == maxBidIntentAbsentCacheSentinel {
+			observability.Inc("auction_max_bid_intent_absent_cache_total", map[string]string{"result": "hit"})
+			return auction.MaxBidIntent{}, false, nil
+		}
+	}
+	observability.Inc("auction_max_bid_intent_absent_cache_total", map[string]string{"result": "miss"})
+	intent, err := h.Repo.GetMaxBidIntent(ctx, auctionID, userID)
+	if err != nil {
+		if hasAPIErrorCode(err, apierrors.CodeAuctionNotFound) {
+			if h.Deps != nil && h.Deps.Redis != nil {
+				_ = h.Deps.Redis.Set(ctx, maxBidIntentAbsentCacheKey(auctionID, userID), maxBidIntentAbsentCacheSentinel, maxBidIntentAbsentCacheTTL).Err()
+			}
+			return auction.MaxBidIntent{}, false, nil
+		}
+		return auction.MaxBidIntent{}, false, err
+	}
+	return intent, true, nil
+}
+
+func (h AuctionHandler) invalidateMaxBidIntentSnapshotCache(ctx context.Context, auctionID string, userID string) {
+	if h.Deps == nil || h.Deps.Redis == nil {
+		return
+	}
+	_ = h.Deps.Redis.Del(ctx, maxBidIntentAbsentCacheKey(auctionID, userID)).Err()
 }
 
 func (h AuctionHandler) PlaceBid(w http.ResponseWriter, r *http.Request) {
@@ -659,6 +735,7 @@ func (h AuctionHandler) PutMaxBidIntent(w http.ResponseWriter, r *http.Request) 
 	}
 	result, err := h.Repo.PutMaxBidIntent(r.Context(), auctionID, user.ID, r.Header.Get("Idempotency-Key"), req)
 	if err == nil {
+		h.invalidateMaxBidIntentSnapshotCache(r.Context(), auctionID, user.ID)
 		h.markRedisLedgerRequiresPostgres(r.Context(), auctionID, "active_max_bid_intent")
 	}
 	writeResult(w, r, http.StatusOK, result, err)
@@ -676,11 +753,19 @@ func (h AuctionHandler) DeleteMaxBidIntent(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	result, err := h.Repo.DeleteMaxBidIntent(r.Context(), auctionID, user.ID, r.Header.Get("Idempotency-Key"))
+	if err == nil {
+		h.invalidateMaxBidIntentSnapshotCache(r.Context(), auctionID, user.ID)
+	}
 	writeResult(w, r, http.StatusOK, result, err)
 }
 
 func (h AuctionHandler) markRedisLedgerRequiresPostgres(ctx context.Context, auctionID string, reason string) {
 	if h.Config.BidEngineMode == bidEngineModePostgresLane || h.Config.BidEngineMode == bidEngineModeRedisGuard || h.Deps == nil || h.Deps.Redis == nil {
+		return
+	}
+	stateKey := redisx.BidEngineStateKey(auctionID)
+	exists, err := h.Deps.Redis.HExists(ctx, stateKey, "engine_seq").Result()
+	if err != nil || !exists {
 		return
 	}
 	_ = h.Deps.Redis.HSet(ctx, redisx.BidEngineStateKey(auctionID),
@@ -852,6 +937,18 @@ func decodeJSON(r *http.Request, target any) error {
 func hasAPIErrorCode(err error, code apierrors.Code) bool {
 	var apiErr apierrors.APIError
 	return errors.As(err, &apiErr) && apiErr.Code == code
+}
+
+func auctionHTTPSnapshotCacheKey(auctionID string) string {
+	return "auction:http-snapshot:{" + auctionID + "}"
+}
+
+func maxBidIntentAbsentCacheKey(auctionID string, userID string) string {
+	return "auction:max-bid-intent:absent:{" + auctionID + "}:" + userID
+}
+
+func currentUnixMillis() int64 {
+	return time.Now().UnixNano() / int64(time.Millisecond)
 }
 
 func writeResult(w http.ResponseWriter, r *http.Request, status int, payload any, err error) {

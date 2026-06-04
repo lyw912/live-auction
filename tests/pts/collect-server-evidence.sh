@@ -57,6 +57,86 @@ group by locktype, mode, granted
 order by count(*) desc;
 SQL
 
+docker exec -i "$DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f - > "$OUT_DIR/postgres-read-attribution.txt" <<'SQL' || true
+\timing on
+select now() as ts;
+select extname
+from pg_extension
+where extname = 'pg_stat_statements';
+select calls,
+       round(total_exec_time::numeric, 2) as total_exec_ms,
+       round(mean_exec_time::numeric, 2) as mean_exec_ms,
+       round(max_exec_time::numeric, 2) as max_exec_ms,
+       rows,
+       left(regexp_replace(query, '\s+', ' ', 'g'), 240) as query
+from pg_stat_statements
+where dbid = (select oid from pg_database where datname = current_database())
+  and query ilike any(array[
+    '%FROM auctions a JOIN items i%',
+    '%FROM bids WHERE user_id = $1%',
+    '%FROM bids WHERE auction_id = $1 AND status = ''ACCEPTED''%',
+    '%FROM max_bid_intents WHERE auction_id = $1 AND user_id = $2%'
+  ])
+order by total_exec_time desc
+limit 20;
+SQL
+
+docker exec -i "$DB_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -f - > "$OUT_DIR/postgres-s2-read-explain.txt" <<'SQL' || true
+\timing on
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT a.id, a.room_id, a.item_id, a.status, a.is_narrating,
+       a.current_price_cents, a.current_winner_id,
+       a.start_price_cents, a.increment_cents, a.cap_price_cents,
+       a.start_at, a.end_at, floor(extract(epoch from clock_timestamp()) * 1000)::bigint,
+       a.version, a.seq, a.accepted_bid_count,
+       a.extend_count, a.rule_version, a.created_at, a.updated_at,
+       i.id, i.title, i.image_url, i.description, i.status, i.created_at,
+       ar.duration_seconds, ar.extend_window_seconds, ar.extend_by_seconds,
+       ar.max_extend_count, ar.fat_finger_threshold_cents,
+       COALESCE(ar.deposit_bps, 1000),
+       COALESCE(ar.deposit_floor_cents, 10000),
+       COALESCE(ar.deposit_cap_cents, 100000000),
+       ar.frozen_at
+FROM auctions a
+JOIN items i ON i.id = a.item_id
+JOIN auction_rules ar ON ar.auction_id = a.id AND ar.rule_version = a.rule_version
+WHERE a.id = 'auc_live';
+
+EXPLAIN (ANALYZE, BUFFERS)
+WITH best AS (
+  SELECT user_id, max(amount_cents) AS amount_cents, count(*) AS bid_count, max(created_at) AS last_bid_at
+  FROM bids
+  WHERE auction_id = 'auc_live' AND status = 'ACCEPTED'
+  GROUP BY user_id
+),
+ranked AS (
+  SELECT user_id, amount_cents, bid_count, last_bid_at,
+         row_number() OVER (ORDER BY amount_cents DESC, last_bid_at ASC, user_id ASC) AS rank
+  FROM best
+),
+selected AS (
+  SELECT * FROM ranked WHERE rank <= 5
+  UNION
+  SELECT * FROM ranked WHERE user_id = 'k6_user_1'
+)
+SELECT rank, user_id, amount_cents, bid_count, last_bid_at
+FROM selected
+ORDER BY rank;
+
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT id, auction_id, amount_cents, COALESCE(response_json->>'result', status), created_at
+FROM bids
+WHERE user_id = 'k6_user_1'
+ORDER BY created_at DESC
+LIMIT 50;
+
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT id, auction_id, user_id, max_amount_cents, status, source,
+       created_at, updated_at, cancelled_at, exhausted_at, last_applied_seq, version
+FROM max_bid_intents
+WHERE auction_id = 'auc_live' AND user_id = 'k6_user_1';
+SQL
+
 docker exec "$REDIS_CONTAINER" redis-cli INFO all > "$OUT_DIR/redis-info.txt"
 
 if command -v iostat >/dev/null 2>&1; then

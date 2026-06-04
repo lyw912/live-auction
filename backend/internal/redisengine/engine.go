@@ -31,7 +31,11 @@ import (
 )
 
 const (
-	engineStateTTL             = 30 * time.Minute
+	// The hot Redis engine state and decision log must outlive long soaks plus
+	// evidence collection. A 30m TTL can expire after a 15-30m run before
+	// verifier collection, making Redis look behind PostgreSQL and triggering a
+	// protective pause even though Kafka/PG already settled correctly.
+	engineStateTTL             = 24 * time.Hour
 	idempotencyTTL             = 24 * time.Hour
 	maxSettleAttempts          = 3
 	kafkaFetchTimeout          = 2 * time.Second
@@ -940,9 +944,7 @@ func (e *Engine) pause(ctx context.Context, auctionID string, reason string, mes
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
-	if e.redis != nil {
-		_ = e.redis.HSet(ctx, redisx.BidEngineStateKey(auctionID), "paused", 1, "pause_reason", reason).Err()
-	}
+	setRedisPauseFieldsIfComplete(ctx, e.redis, auctionID, true, reason)
 	observability.Inc("auction_bid_engine_pause_total", map[string]string{"reason": reason})
 	return nil
 }
@@ -2120,9 +2122,7 @@ func (w *Worker) resumeRedisEngine(ctx context.Context, auctionID string) (redis
 	`, auctionID); err != nil {
 		return report, err
 	}
-	if w.redis != nil {
-		_ = w.redis.HSet(ctx, redisx.BidEngineStateKey(auctionID), "paused", 0, "pause_reason", "").Err()
-	}
+	setRedisPauseFieldsIfComplete(ctx, w.redis, auctionID, false, "")
 	report.RTOms = time.Since(started).Milliseconds()
 	report.Resumed = true
 	observability.Observe("auction_bid_engine_resume_rto_seconds", time.Since(started).Seconds(), map[string]string{"status": "ok"}, observability.DefaultLatencyBuckets)
@@ -2560,9 +2560,7 @@ func (w *Worker) markSettlementIdentityConflict(ctx context.Context, auctionID s
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
-	if w.redis != nil {
-		_ = w.redis.HSet(ctx, redisx.BidEngineStateKey(auctionID), "paused", 1, "pause_reason", "KAFKA_LEDGER_SETTLEMENT_IDENTITY_CONFLICT").Err()
-	}
+	setRedisPauseFieldsIfComplete(ctx, w.redis, auctionID, true, "KAFKA_LEDGER_SETTLEMENT_IDENTITY_CONFLICT")
 	observability.Inc("auction_bid_engine_pause_total", map[string]string{"reason": "KAFKA_LEDGER_SETTLEMENT_IDENTITY_CONFLICT"})
 	return settlementIdentityConflictError{err: fmt.Errorf("%s auction=%s epoch=%d seq=%d existing_stream=%s new_stream=%s", reason, auctionID, result.EngineEpoch, result.EngineSeq, existingStreamID, streamID)}
 }
@@ -3090,9 +3088,7 @@ func (w *Worker) pause(ctx context.Context, auctionID string, reason string, mes
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
-	if w.redis != nil {
-		_ = w.redis.HSet(ctx, redisx.BidEngineStateKey(auctionID), "paused", 1, "pause_reason", reason).Err()
-	}
+	setRedisPauseFieldsIfComplete(ctx, w.redis, auctionID, true, reason)
 	observability.Inc("auction_bid_engine_pause_total", map[string]string{"reason": reason})
 	return nil
 }
@@ -3629,11 +3625,22 @@ func (w *Worker) clearRecoverablePause(ctx context.Context, auctionID string) (b
 	if err := tx.Commit(ctx); err != nil {
 		return false, err
 	}
-	if w.redis != nil {
-		_ = w.redis.HSet(ctx, redisx.BidEngineStateKey(auctionID), "paused", 0, "pause_reason", "").Err()
-	}
+	setRedisPauseFieldsIfComplete(ctx, w.redis, auctionID, false, "")
 	observability.Inc("auction_bid_engine_auto_resume_total", map[string]string{"reason": reason})
 	return true, nil
+}
+
+func setRedisPauseFieldsIfComplete(ctx context.Context, rdb *redis.Client, auctionID string, paused bool, reason string) {
+	if rdb == nil {
+		return
+	}
+	key := redisx.BidEngineStateKey(auctionID)
+	exists, err := rdb.HExists(ctx, key, "engine_seq").Result()
+	if err != nil || !exists {
+		return
+	}
+	_ = rdb.HSet(ctx, key, "paused", boolInt(paused), "pause_reason", reason).Err()
+	_ = rdb.PExpire(ctx, key, engineStateTTL).Err()
 }
 
 func isRecoverableRedisEnginePause(reason string) bool {

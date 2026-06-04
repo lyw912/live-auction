@@ -384,6 +384,130 @@ docs/perf/pts/evidence/incoming/s2-read-clean-ecs-15m-20260604T120823/
 docs/perf/pts/evidence/incoming/s2-read-clean-ecs-15m-20260604T120823-late/
 ```
 
+Display-ceiling attempt before fixing the Redis TTL issue:
+
+```text
+label           : s2-read-display-ecs-15m-20260604T123644
+tool/source     : independent same-VPC ECS k6
+duration        : 15 min + 30s ramp-down
+bid rate        : 100/s, 100/s, 100/s
+read rate       : 1500/s, 1800/s, 2000/s
+read mix        : 80% snapshot, 15% leaderboard, 5% my-bids
+verdict         : CURRENT_FAILING / P0 hot-ledger TTL defect + P1 read bottleneck
+```
+
+k6 result:
+
+| Signal | Value | Interpretation |
+|---|---:|---|
+| k6 exit code | 99 | threshold failure; not a clean pass |
+| dropped iterations | 63,531 | much lower than prior attempts, still above gate |
+| HTTP failure rate | 0 | no transport/protocol failure |
+| bid final decisions | 91,499 | bid lane delivered about 98.4/s |
+| read successes | 1,481,468 | read lane delivered about 1593/s |
+| bid p99 | about 5.7ms | bid engine still stayed healthy |
+| snapshot p99 | 1.26s | still too slow for room-state polling |
+| leaderboard p99 | 3.41s | leaderboard remained the worst read path |
+| my-bids p99 | 730ms | still above the read target |
+| auth/ACL/admission/non-decision/read failures | 0 | workload reached intended code paths |
+
+Service-side verifier and Redis state:
+
+| Signal | Value | Interpretation |
+|---|---:|---|
+| PostgreSQL settlements | 31 accepted + 91,468 rejected = 91,499 | PG settlement itself completed |
+| Kafka consumer lag | 0 | Kafka was not stuck |
+| outbox / Redis pending | drained / 0 | outbox and pending hashes were clean |
+| verifier exit | 1 | P0 invariant failure |
+| `engine_paused` / reason | `true` / `REDIS_ENGINE_REDIS_BEHIND_DB` | engine entered protective pause |
+| Redis state hash | only `paused=1`, `pause_reason=REDIS_ENGINE_REDIS_BEHIND_DB` | state hash existed but was incomplete |
+| Redis decision stream length | 0 | `bid:{auc_live}:engine:log` had expired/disappeared |
+| anomaly events | repeated `REDIS_ENGINE_REDIS_BEHIND_DB` with `redis_seq=0`, `db_seq=91499` | reconcile repeatedly saw Redis behind PostgreSQL |
+
+Evidence directory:
+
+```text
+docs/perf/pts/evidence/incoming/s2-read-display-ecs-15m-20260604T123644/
+```
+
+Root cause found:
+
+- The Redis hot-engine state, decision stream, pending hash, and relay cursor
+  used `engineStateTTL = 30m`.
+- The S2-read workflow can exceed 30 minutes wall-clock when it includes service
+  preparation, a 15-minute run, ramp-down, evidence collection, verifier, and
+  human handoff.
+- Redis key expiry deletes keys at timeout. After the hot state and stream
+  expired, reconcile read Redis `engine_seq` as 0 while PostgreSQL had settled
+  `engine_seq=91499`, so it correctly failed closed with
+  `REDIS_ENGINE_REDIS_BEHIND_DB`.
+- A second bug made the state look worse: pause/resume code used bare
+  `HSET(state, paused, reason)`. If the full state hash had expired, that HSET
+  recreated a partial hash with only pause fields and no `engine_seq`.
+
+P0 fix applied:
+
+- Raised Redis hot-engine TTL from 30 minutes to 24 hours so long soaks and
+  evidence collection cannot expire live/recent auction state.
+- Changed Redis pause/resume mirroring to update Redis only when the state hash
+  still has `engine_seq`. The database remains the source of truth for pause
+  state; Redis no longer creates a partial hot state after expiry.
+- Added regression tests:
+  - `TestRedisLedgerHotStateAndLogTTLExceedsLongSoakWindow`
+  - `TestRedisLedgerPauseDoesNotCreatePartialHotState`
+- Verified with:
+
+```text
+go test ./internal/redisengine
+```
+
+P1 read-path mitigation applied:
+
+- Added `bids(user_id, created_at DESC)` for `GET /api/users/me/bids`.
+- Added a partial accepted-bid index for leaderboard reads:
+  `bids(auction_id, amount_cents DESC, created_at ASC, user_id) WHERE status='ACCEPTED'`.
+- Added accepted-bid indexes that match the actual leaderboard query shapes:
+  `bids(auction_id, user_id, amount_cents DESC, created_at DESC) WHERE status='ACCEPTED'`
+  for per-user best-bid grouping, and
+  `bids(auction_id, created_at DESC) WHERE status='ACCEPTED'` for the 30-second
+  activity/velocity window.
+- Capped `ListBidHistory` at 50 latest rows to avoid full per-user history scans
+  under high-frequency polling.
+- Added a 250ms Redis-backed HTTP auction snapshot cache plus per-auction
+  `singleflight` for `GET /api/auctions/{id}`. This endpoint is 80% of the
+  S2-read mix; the short TTL absorbs polling storms without moving bid decisions
+  or settlement truth out of Redis ledger / PostgreSQL.
+- Added a 5s Redis negative cache for "current user has no max-bid intent" and
+  invalidates it on PUT/DELETE. In the S2-read workload most readers have no
+  private max-bid intent, so this avoids one empty PostgreSQL lookup per room
+  snapshot request while preserving current-user private intent visibility.
+- Added `auction_acl_membership_cache_total{result=...}` metrics on the auction
+  membership ACL path. The S2-read prepare script already warms Redis ACL keys
+  for `k6_bidder_*` and `k6_user_*` with a 12-hour TTL, so ACL should not be the
+  bottleneck in this workload. We intentionally did not lengthen the production
+  positive-cache TTL because membership revocation freshness matters; the next
+  run must prove cache hits dominate before treating ACL as closed.
+- Extended `collect-server-evidence.sh` with best-effort
+  `pg_stat_statements` and `EXPLAIN (ANALYZE, BUFFERS)` output:
+  `postgres-read-attribution.txt` and `postgres-s2-read-explain.txt`.
+- Verified with:
+
+```text
+go test ./internal/auction
+go test ./internal/gateway
+```
+
+P1 remaining work:
+
+- The leaderboard endpoint still computes rank from PostgreSQL on each request.
+  The durable industrial fix is a Redis/materialized read model for active
+  auction leaderboard, with PG as source of record and verifier coverage for
+  cache rebuild correctness.
+- The next rerun should show whether the short snapshot/negative caches and
+  indexes are enough for a judge-safe 1500/1800/2000 display result. If
+  leaderboard p99 remains seconds-level, do not tune VUs; implement the
+  materialized leaderboard read model.
+
 Interpretation:
 
 - This is a valid bottleneck-finding run, not a successful 10k-read capacity
@@ -397,12 +521,15 @@ Interpretation:
 - The strongest service-side attribution is DB-pool contention: `db_pool_total`
   reached 90 in both runs, with multi-million empty-pool acquire counts and
   million-second cumulative wait totals.
-- Correctness was not permanently corrupted: the immediate verifier failed
-  convergence gates in both runs, but late verifiers passed after
-  Kafka/settlement drain.
+- Correctness was not permanently corrupted in the first two read-interference
+  attempts: immediate verifiers failed convergence gates, but late verifiers
+  passed after Kafka/settlement drain. The third display attempt exposed a real
+  P0 hot-ledger TTL design defect and must be rerun after the TTL fix.
 - The honest ceiling statement is: "under this service profile, 100 bid/s stayed
   clean while HTTP reads delivered roughly 2.0-2.1k/s; 3k/4k/5k/10k offered reads
-  are not proven and expose read-path optimization work."
+  are not proven and expose read-path optimization work. The 1500/1800/2000
+  attempt is invalid as a pass because it triggered Redis engine pause before the
+  TTL fix."
 
 What this run still does not prove:
 
@@ -413,10 +540,17 @@ What this run still does not prove:
 Recommended next run:
 
 ```text
-S2-read display-ceiling search: 100 bid/s + 1500/s -> 1800/s -> 2000/s reads,
-or 100 bid/s + 2000/s flat for 15 min.
-Goal: find a judge-safe pass boundary after the 10k and 4k attack runs exposed
-the current read-path ceiling.
+After P0/P1 fixes: rerun S2-read display-ceiling with
+100 bid/s + 1500/s -> 1800/s -> 2000/s reads.
+Required gates: dropped_iterations near zero, read p99 materially below the
+pre-fix run, `engine_paused=false`, Redis stream length/settlement counts
+consistent, Kafka lag 0, Redis pending 0, outbox drained, verifier P0/P1 PASS.
+Required ACL signal: `auction_acl_membership_cache_total{result="hit"}` should
+dominate and `db_allowed` / `miss` should remain low after the prepared Redis
+ACL warmup.
+Required attribution files: `postgres-read-attribution.txt`,
+`postgres-s2-read-explain.txt`, `metrics.prom`, `redis-info.txt`,
+`k6-summary.json`, and `k6-host/*`.
 ```
 
 ## 2. What This Test Actually Is

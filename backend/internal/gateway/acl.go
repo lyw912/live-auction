@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
+	"live-auction/backend/internal/observability"
 	apierrors "live-auction/backend/internal/platform/errors"
 	"live-auction/backend/internal/redisx"
 )
@@ -87,7 +88,12 @@ func (a roomACL) requireActiveMembershipForAuction(ctx context.Context, user Aut
 
 	if a.rdb != nil {
 		if roomID, err := a.rdb.Get(ctx, cacheKey).Result(); err == nil {
+			observability.Inc("auction_acl_membership_cache_total", map[string]string{"result": "hit"})
 			return roomID, nil
+		} else if err == redis.Nil {
+			observability.Inc("auction_acl_membership_cache_total", map[string]string{"result": "miss"})
+		} else {
+			observability.Inc("auction_acl_membership_cache_total", map[string]string{"result": "error"})
 		}
 	}
 
@@ -126,13 +132,17 @@ func (a roomACL) requireActiveMembershipForAuction(ctx context.Context, user Aut
 	}
 	if err != nil {
 		if err == pgx.ErrNoRows {
+			observability.Inc("auction_acl_membership_cache_total", map[string]string{"result": "db_not_found"})
 			return "", apierrors.New(apierrors.CodeAuctionNotFound, "auction not found", http.StatusNotFound)
 		}
+		observability.Inc("auction_acl_membership_cache_total", map[string]string{"result": "db_error"})
 		return "", err
 	}
 	if !allowed {
+		observability.Inc("auction_acl_membership_cache_total", map[string]string{"result": "db_denied"})
 		return roomID, a.forbidden(ctx, user, roomID, auctionID, traceID, "active room membership required")
 	}
+	observability.Inc("auction_acl_membership_cache_total", map[string]string{"result": "db_allowed"})
 
 	// Cache positive results only; denials are rare and we still want fresh checks.
 	// TTL = 5min, matching auth session cache cap, so warmup cache survives the
