@@ -261,6 +261,13 @@ func (h AuctionHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := h.Repo.Cancel(r.Context(), auctionID, req, traceID(r.Context()))
+	if err == nil && h.Engine != nil {
+		// Best-effort fence: PG is the authoritative cancellation; this call
+		// prevents the Redis hot engine from accepting bids after the PG cancel.
+		// The reconciler's checkTerminalFenced check will detect and repair any
+		// race between this fence and the PG write (e.g. Redis unreachable here).
+		h.Engine.FenceAuction(r.Context(), auctionID, "HOST_CANCELLED")
+	}
 	writeResult(w, r, http.StatusOK, result, err)
 }
 

@@ -732,6 +732,22 @@ gates.
 The simplified explanation "one rejected decision writes many PG tables" is
 directionally correct, but it needs precision.
 
+### Current Review Position
+
+This is a real capacity ceiling, not an unfixed correctness bug. The current
+implementation has already kept the low-risk optimizations that measured well:
+Redis Stream relay batching, Kafka batch append, set-based rejected settlement,
+accepted contiguous-prefix settlement batching, settlement success-log
+suppression, and aggregated rejected-settlement metrics.
+
+The latest decision/reject-heavy S2 pass proves the current shape is adequate
+for the scoped workload: 49,049 final decisions, 49,043 rejected decisions,
+decision p99 4ms, final Kafka lag 0, Redis pending 0, PostgreSQL settlements
+complete, outbox drained, and verifier PASS. That is not a claim of unlimited
+settlement capacity. It means the remaining rejected-decision write amplification
+belongs to the next scale tier, where the safe work is schema/ingest redesign
+rather than dropping audit.
+
 Current fast rejected settlement still writes multiple logical records:
 
 ```text

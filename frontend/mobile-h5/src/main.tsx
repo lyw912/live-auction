@@ -721,8 +721,14 @@ function App() {
 
   useEffect(() => {
     serverTimeMSRef.current = serverTimeMS;
-    if (serverTimeMS > 0) serverTimeSyncedAtRef.current = Date.now();
   }, [serverTimeMS]);
+
+  const syncServerTimeMS = (value: number) => {
+    if (value > 0) {
+      serverTimeSyncedAtRef.current = Date.now();
+    }
+    setServerTimeMS(value);
+  };
 
   useEffect(() => {
     currentUserIDRef.current = currentUserID;
@@ -1210,7 +1216,7 @@ function App() {
       setLastSeq(payload.seq ?? lastSeq);
     }
     if (payload.end_at) setAuctionEndAt(payload.end_at);
-    if (payload.server_time_ms) setServerTimeMS(payload.server_time_ms);
+    if (payload.server_time_ms) syncServerTimeMS(payload.server_time_ms);
     if (isEnginePending || isEngineSoldPending) {
       setBidFeedback(isEngineSoldPending
         ? `热引擎已落锤，等待订单结算 seq ${payload.engine_seq ?? payload.seq ?? lastSeq}`
@@ -1313,7 +1319,7 @@ function App() {
     setBidderRequirement(snapshot.payload?.bidder_requirement ?? snapshot.bidder_requirement ?? null);
     if (snapshot.increment_cents != null) setActiveIncrementCents(increment);
     if (nextEndAt) setAuctionEndAt(nextEndAt);
-    if (nextServerTimeMS) setServerTimeMS(nextServerTimeMS);
+    if (nextServerTimeMS) syncServerTimeMS(nextServerTimeMS);
     setCurrentPriceCents(price);
     setMinimumNextBidCents(price + increment);
     setNextBidCents(price + increment);
@@ -1412,7 +1418,7 @@ function App() {
     setMaxBidAmountCents((amount) => Math.max(amount || 0, price + increment));
     setLastSeq(detail.seq);
     if (nextEndAt) setAuctionEndAt(nextEndAt);
-    if (nextServerTimeMS) setServerTimeMS(nextServerTimeMS);
+    if (nextServerTimeMS) syncServerTimeMS(nextServerTimeMS);
     setLeaderMasked(detail.payload?.leader_user_masked ?? leaderMaskedRef.current);
     const wasExtended = Boolean(nextEndAt && previousEndAt && Date.parse(nextEndAt) > Date.parse(previousEndAt));
     if (wasExtended && nextEndAt) {
@@ -1532,7 +1538,7 @@ function App() {
         setNextBidCents(price + increment);
         setLastSeq(selectedAuction.seq ?? lastSeqRef.current);
         setAuctionEndAt(selectedAuction.end_at ?? '');
-        setServerTimeMS(selectedAuction.server_time_ms ?? 0);
+        syncServerTimeMS(selectedAuction.server_time_ms ?? 0);
         setBidFeedback(`auction ${selectedAuction.id}`);
         void loadLeaderboard(selectedAuction.id);
         try {

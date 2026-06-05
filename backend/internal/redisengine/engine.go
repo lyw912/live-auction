@@ -949,6 +949,39 @@ func (e *Engine) pause(ctx context.Context, auctionID string, reason string, mes
 	return nil
 }
 
+// FenceAuction marks the auction as paused in the Redis hot-state so the Lua
+// engine returns ENGINE_PAUSED for any further bid attempts. Safe to call when
+// no Redis hot-state exists (no-op); idempotent on repeated calls.
+//
+// Call this whenever an auction reaches a terminal state through a path that
+// bypasses the hot engine (e.g. host cancel via the repository). The reconciler's
+// checkTerminalFenced check detects and repairs any race between the PG write
+// and this fence call.
+func (e *Engine) FenceAuction(ctx context.Context, auctionID string, reason string) {
+	if e == nil || e.redis == nil {
+		return
+	}
+	key := redisx.BidEngineStateKey(auctionID)
+	exists, err := e.redis.HExists(ctx, key, "engine_seq").Result()
+	if err != nil {
+		slog.Warn("redis_engine_fence_read_failed", slog.String("auction_id", auctionID), slog.String("reason", reason), slog.String("error", err.Error()))
+		return
+	}
+	if !exists {
+		return
+	}
+	// Pipeline is non-atomic but idempotent: reconciler's checkTerminalFenced
+	// will detect and repair any partial write.
+	pipe := e.redis.Pipeline()
+	pipe.HSet(ctx, key, "paused", "1", "pause_reason", reason, "status", "CANCELLED")
+	pipe.PExpire(ctx, key, engineStateTTL)
+	if _, err := pipe.Exec(ctx); err != nil {
+		slog.Warn("redis_engine_fence_write_failed", slog.String("auction_id", auctionID), slog.String("reason", reason), slog.String("error", err.Error()))
+		return
+	}
+	observability.Inc("auction_bid_engine_pause_total", map[string]string{"reason": reason})
+}
+
 func (r engineResult) response(durabilityStatus string, decisionStatus string) auction.BidResponse {
 	result := r.Result
 	if result == resultAccepted {
@@ -3645,6 +3678,55 @@ func (w *Worker) checkSettlementTerminal(ctx context.Context, auctionID string) 
 	}, nil
 }
 
+func (w *Worker) checkTerminalFenced(ctx context.Context, auctionID string) (*reconcileViolation, error) {
+	if w == nil || w.redis == nil {
+		return nil, nil
+	}
+	var pgStatus string
+	err := w.db.QueryRow(ctx, `
+		SELECT status
+		FROM auctions
+		WHERE id = $1
+	`, auctionID).Scan(&pgStatus)
+	if err != nil {
+		return nil, err
+	}
+	switch pgStatus {
+	case "CANCELLED", "ENDED":
+	default:
+		return nil, nil
+	}
+
+	key := redisx.BidEngineStateKey(auctionID)
+	values, err := w.redis.HGetAll(ctx, key).Result()
+	if err != nil {
+		return nil, err
+	}
+	if len(values) == 0 {
+		return nil, nil
+	}
+	redisStatus := values["status"]
+	paused := values["paused"] == "1"
+	if paused || redisStatus != "ACTIVE" {
+		return nil, nil
+	}
+
+	reason := "PG_TERMINAL_REDIS_UNFENCED"
+	pipe := w.redis.Pipeline()
+	pipe.HSet(ctx, key, "paused", "1", "pause_reason", reason, "status", pgStatus)
+	pipe.PExpire(ctx, key, engineStateTTL)
+	if _, err := pipe.Exec(ctx); err != nil {
+		return nil, err
+	}
+	observability.Inc("auction_reconcile_terminal_unfenced_total", map[string]string{"status": pgStatus})
+	return &reconcileViolation{
+		status:  "REDIS_TERMINAL_UNFENCED",
+		reason:  reason,
+		message: "PostgreSQL terminal auction still had an active Redis hot-engine state; Redis was fenced by reconcile",
+		details: map[string]any{"pg_status": pgStatus, "redis_status": redisStatus, "redis_paused": values["paused"]},
+	}, nil
+}
+
 func (w *Worker) checkSettlementGapless(ctx context.Context, auctionID string) (*reconcileViolation, error) {
 	var prev int64
 	var current int64
@@ -3976,6 +4058,17 @@ func (w *Worker) Reconcile(ctx context.Context, auctionID string) (Report, error
 		return report, nil
 	}
 	report.RedisSeq = redisSeq
+	terminalViolation, err := w.checkTerminalFenced(ctx, auctionID)
+	if err != nil {
+		return report, err
+	}
+	if terminalViolation != nil {
+		report.Status = terminalViolation.status
+		report.Message = terminalViolation.message
+		report.DriftCount = 1
+		_ = w.pause(ctx, auctionID, terminalViolation.reason, terminalViolation.message, "", terminalViolation.details)
+		return report, nil
+	}
 	recovered, err := w.recoverPendingDecisions(ctx, auctionID)
 	if err != nil {
 		report.Status = "REDIS_PENDING_KAFKA_RECOVERY_FAILED"

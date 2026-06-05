@@ -995,6 +995,113 @@ func TestRedisLedgerPausesUnsupportedRuleAuctions(t *testing.T) {
 	}
 }
 
+func TestCancelFencesHotEngine(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	auctionID := createEngineAuction(t, db, 0)
+
+	first, err := engine.PlaceBid(ctx, auctionID, "user_1", "cancel-fence-first", auction.BidInput{
+		ClientBidID:   "cancel-fence-first",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_cancel_fence_first")
+	if err != nil {
+		t.Fatalf("first bid: %v", err)
+	}
+	if first.Result != auction.BidResultEngineAccepted {
+		t.Fatalf("first result = %s, want ENGINE_ACCEPTED", first.Result)
+	}
+	if _, err := db.Exec(ctx, `
+		UPDATE auctions
+		SET status = 'CANCELLED', updated_at = now()
+		WHERE id = $1
+	`, auctionID); err != nil {
+		t.Fatalf("cancel pg auction: %v", err)
+	}
+
+	engine.FenceAuction(ctx, auctionID, "HOST_CANCELLED")
+	_, err = engine.PlaceBid(ctx, auctionID, "user_2", "cancel-fence-after", auction.BidInput{
+		ClientBidID:   "cancel-fence-after",
+		AmountCents:   20_000,
+		ClientSeenSeq: first.EngineSeq,
+	}, "tr_cancel_fence_after")
+	var apiErr apierrors.APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != apierrors.CodeEnginePaused {
+		t.Fatalf("post-cancel bid error = %v, want ENGINE_PAUSED", err)
+	}
+	values, err := rdb.HGetAll(ctx, redisx.BidEngineStateKey(auctionID)).Result()
+	if err != nil {
+		t.Fatalf("read redis state: %v", err)
+	}
+	if values["paused"] != "1" || values["pause_reason"] != "HOST_CANCELLED" || values["status"] != "CANCELLED" {
+		t.Fatalf("redis fence fields = %#v", values)
+	}
+}
+
+func TestReconcileFencesTerminalHotEngine(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+
+	first, err := engine.PlaceBid(ctx, auctionID, "user_1", "terminal-fence-first", auction.BidInput{
+		ClientBidID:   "terminal-fence-first",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_terminal_fence_first")
+	if err != nil {
+		t.Fatalf("first bid: %v", err)
+	}
+	if _, err := worker.ProcessPendingAppends(ctx, 100); err != nil {
+		t.Fatalf("relay: %v", err)
+	}
+	if _, err := worker.ProcessKafka(ctx, 1); err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+	if _, err := db.Exec(ctx, `
+		UPDATE auctions
+		SET status = 'CANCELLED', updated_at = now()
+		WHERE id = $1
+	`, auctionID); err != nil {
+		t.Fatalf("cancel pg auction: %v", err)
+	}
+	setRedisHashFields(t, rdb, redisx.BidEngineStateKey(auctionID), map[string]any{
+		"status":       "ACTIVE",
+		"paused":       0,
+		"pause_reason": "",
+	})
+
+	report, err := worker.Reconcile(ctx, auctionID)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if report.Status != "REDIS_TERMINAL_UNFENCED" || report.DriftCount == 0 {
+		t.Fatalf("report = %#v", report)
+	}
+	values, err := rdb.HGetAll(ctx, redisx.BidEngineStateKey(auctionID)).Result()
+	if err != nil {
+		t.Fatalf("read redis state: %v", err)
+	}
+	if values["paused"] != "1" || values["pause_reason"] != "PG_TERMINAL_REDIS_UNFENCED" || values["status"] != "CANCELLED" {
+		t.Fatalf("redis reconcile fence fields = %#v", values)
+	}
+	_, err = engine.PlaceBid(ctx, auctionID, "user_2", "terminal-fence-after", auction.BidInput{
+		ClientBidID:   "terminal-fence-after",
+		AmountCents:   20_000,
+		ClientSeenSeq: first.EngineSeq,
+	}, "tr_terminal_fence_after")
+	var apiErr apierrors.APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != apierrors.CodeEnginePaused {
+		t.Fatalf("post-reconcile bid error = %v, want ENGINE_PAUSED", err)
+	}
+}
+
 // TestRelayFailsGracefullyWhenKafkaUnavailable verifies that when the relay's Kafka
 // batch produce fails, the stream entries remain intact (cursor not advanced) and
 // the hot PlaceBid path is unaffected — decisions are still DECIDED+ENGINE_DURABLE.

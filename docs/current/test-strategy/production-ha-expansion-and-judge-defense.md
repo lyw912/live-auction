@@ -143,7 +143,7 @@ order, which recreates the same single-writer problem with more failure modes.
 ### Production Topology
 
 Redis is the hot decision truth. In production it needs either managed Redis HA
-or a Sentinel/Cluster design:
+or a Sentinel design:
 
 - at least three Sentinel processes or provider-managed equivalent;
 - Redis primary plus replicas across independent failure domains;
@@ -151,6 +151,22 @@ or a Sentinel/Cluster design:
 - engine fencing/epoch to prevent old primary writes from being accepted after
   a failover;
 - persistence and checkpoint policy aligned with acceptable RPO.
+
+The current code has a real Sentinel client entry point:
+
+- `REDIS_MODE=single` uses a direct `redis.NewClient`;
+- `REDIS_MODE=sentinel` uses `redis.NewFailoverClient` with
+  `REDIS_SENTINEL_MASTER_NAME` and `REDIS_SENTINEL_ADDRS`;
+- `REDIS_MODE=cluster` is deliberately rejected at startup.
+
+That rejection is intentional, not an omission. The hot-engine Lua script must
+touch several keys atomically. The auction-scoped keys use `{auctionID}` hash
+tags and are Cluster-compatible for one auction, but the script still also
+touches the global `bid:engine:pending:auctions` discovery set. Redis Cluster
+requires all keys used by a multi-key command or Lua script to be in the same
+hash slot. Until the global discovery set is moved out of the script or replaced
+with a same-slot/per-auction discovery mechanism, Redis Cluster is not a
+supported production mode.
 
 Redis replication is asynchronous by default. Sentinel can promote a replica and
 tell clients the new primary address, but it does not magically turn Redis into
@@ -192,9 +208,13 @@ resyncing it as a replica of the new primary.
 
 Q: What if Redis Cluster moves a key during an auction?
 
-A: One auction's engine keys must stay in one hash slot via a hash tag, for
-example `{auction:auc_live}:state`, `{auction:auc_live}:stream`, and related
-keys. Cross-slot Lua would break the single-writer engine contract.
+A: Redis Cluster is not claimed as supported in the current implementation. One
+auction's engine keys already use hash tags and stay in one hash slot, but the
+Lua script still includes a global pending-auctions set. The startup config
+rejects `REDIS_MODE=cluster`, and `redisx` has a key-slot audit test documenting
+the boundary. The low-risk future fix is to remove the global discovery set from
+Lua and let the worker discover pending auctions through per-auction streams or a
+best-effort out-of-script index.
 
 ### Required Next Tests
 
@@ -389,6 +409,7 @@ auction in two regions simultaneously.
 | "What is the most important invariant?" | No wrong winner, no phantom accepted bid, no duplicate order/payment, no stale client truth, and no payment before convergence. |
 | "If Kafka ISR is below minISR, do you still return success?" | Not as durable finality. Either foreground fails closed, or Redis decision remains pending and payment/finality is blocked until durable append succeeds. |
 | "If Redis HA loses an acknowledged write, what happens?" | Redis alone is not the final finance proof. The system reconciles from durable ledger/checkpoint and blocks finality; unknown or stale Redis epoch fails closed. |
+| "Why not just use Redis Cluster?" | Cluster is for sharding many key slots, not for making one hot auction multi-writer. One auction still needs one hash slot and one sequencer. The current Lua topology deliberately rejects Cluster because it still touches a global pending-auctions set; Sentinel/managed failover is the honest short-term HA path. |
 | "Can multi-gateway reconnect depend on stickiness?" | No. Stickiness is an optimization only. `last_seq` recovery must work from shared history/snapshot on any gateway. |
 | "What if a client bids while its socket is stale?" | The UI should disable dangerous actions. If a malicious client still posts, server-side engine remains authoritative and validates against current state. |
 | "What if 100k reconnects overload snapshot rebuild?" | Backoff+jitter, shared history, snapshot singleflight, recovery semaphore, retry-after, and stale UI. The product degrades to recovering, not stale truth. |

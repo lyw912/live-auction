@@ -953,6 +953,20 @@ func validateMonitorSignalRequest(req createSignalRequest) error {
 		if strings.TrimSpace(req.TargetID) == "" {
 			return fmt.Errorf("auction target_id is required")
 		}
+	case "ack_alert", "mute_alert_10m":
+		if req.TargetType != "alert" {
+			return fmt.Errorf("%s requires alert target", req.SignalType)
+		}
+		if strings.TrimSpace(req.TargetID) == "" {
+			return fmt.Errorf("alert target_id is required")
+		}
+	case "merchant_incident_note":
+		if req.TargetType != "auction" && req.TargetType != "room" && req.TargetType != "alert" {
+			return fmt.Errorf("merchant_incident_note requires auction, room, or alert target")
+		}
+		if strings.TrimSpace(req.TargetID) == "" {
+			return fmt.Errorf("incident note target_id is required")
+		}
 	default:
 		return fmt.Errorf("unsupported signal_type %s", req.SignalType)
 	}

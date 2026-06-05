@@ -101,6 +101,14 @@ deliberately runs one broker (the cold-start time is why F-kafka RTO is ~26 s; a
 > rows, bid rows, idempotency rows, and checkpoint state with fewer PostgreSQL
 > round trips while preserving the same `engine_seq` order.
 
+> **"Why not stop persisting rejected decisions?"**
+> Because a rejected bid is still a final user-visible decision. It must be
+> idempotently replayable and auditable with the exact reject reason and
+> decision-time basis. The current implementation already uses batch/set-based
+> settlement where safe, and S2 decision/reject-heavy evidence proves convergence
+> for the scoped workload. The next optimization is a narrower partitioned
+> rejected-decision audit schema or COPY ingest, not deleting reject evidence.
+
 > **"This is all one machine — isn't it just a toy?"**
 > The single-node run is the per-shard capacity proof. We report where the node
 > ceiling is (S2/S3), classify each ceiling as resource vs architecture (this

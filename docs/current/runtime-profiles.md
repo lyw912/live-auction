@@ -10,6 +10,7 @@ This project intentionally has different runtime profiles. Do not infer architec
 |---|---|---|---|---|
 | Local demo | `.env.example` | `postgres_lane` | enabled | conservative manual demo and everyday development |
 | PTS-1B hot path | `.env.pts1b.example` or `tests/pts/reset-l4b-final-second-pressure.sh` | `redis_ledger` | disabled | final-second 1000-user contention pressure |
+| Redis Sentinel HA-ready config | deployment env | `redis_ledger` | deployment-specific | client-side failover discovery; not a completed HA evidence run |
 | Historical PG/guard experiments | old docs/scripts | `postgres_lane` or `redis_guard` | varies | historical diagnosis only |
 
 ## Local Demo Profile
@@ -55,6 +56,33 @@ If Kafka relay is unavailable or lagging, the system must expose lag/pending/DLQ
 state and either drain after recovery or pause/reconcile. It must not claim
 settled/fault-ready correctness while Redis pending decisions, Kafka lag, DLQ,
 or settlement gaps remain.
+
+## Redis HA Runtime Boundary
+
+The application supports these Redis connection modes:
+
+```text
+REDIS_MODE=single
+REDIS_ADDR=localhost:6380
+```
+
+```text
+REDIS_MODE=sentinel
+REDIS_SENTINEL_MASTER_NAME=mymaster
+REDIS_SENTINEL_ADDRS=redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379
+REDIS_PASSWORD=...
+REDIS_SENTINEL_PASSWORD=...
+```
+
+`REDIS_MODE=sentinel` uses go-redis failover discovery so the client asks
+Sentinel for the current master. This is HA-ready configuration, not proof that
+a Sentinel failover run has been executed in the current evidence set.
+
+`REDIS_MODE=cluster` is deliberately rejected. The hot-engine Lua script still
+touches a global pending-auctions discovery key in addition to auction-scoped
+`{auctionID}` keys. Redis Cluster requires all keys in one Lua script to hash to
+the same slot, so Cluster support must wait until that global key is moved out of
+the script or redesigned.
 
 ## Do Not Mix Profiles
 

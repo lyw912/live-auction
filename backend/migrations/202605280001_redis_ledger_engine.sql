@@ -6,6 +6,9 @@ ALTER TABLE auctions
   ADD COLUMN engine_pause_reason text,
   ADD COLUMN engine_paused_at timestamptz;
 
+COMMENT ON COLUMN auctions.engine_epoch IS
+  'Redis hot-engine lifecycle fence. Starts at 1 and is incremented before checkpoint rebuild writes a new Redis snapshot so resurrected old Redis/Kafka decisions fail epoch CAS.';
+
 UPDATE auctions
 SET engine_seq = seq
 WHERE seq > 0;

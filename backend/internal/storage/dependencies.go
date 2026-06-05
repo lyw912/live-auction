@@ -2,7 +2,9 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/minio/minio-go/v7"
@@ -50,13 +52,11 @@ func Open(ctx context.Context, cfg config.Config, log *slog.Logger) (*Dependenci
 		return nil, err
 	}
 
-	rdb := redis.NewClient(&redis.Options{
-		Addr:         cfg.RedisAddr,
-		Password:     cfg.RedisPassword,
-		DB:           cfg.RedisDB,
-		PoolSize:     cfg.RedisPoolSize,     // 0 = go-redis default (10×GOMAXPROCS)
-		MinIdleConns: cfg.RedisMinIdleConns, // pre-warm so burst requests never wait for new dials
-	})
+	rdb, err := openRedis(cfg)
+	if err != nil {
+		pg.Close()
+		return nil, err
+	}
 
 	minioClient, err := minio.New(cfg.MinIOEndpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(cfg.MinIORootUser, cfg.MinIORootPass, ""),
@@ -69,6 +69,50 @@ func Open(ctx context.Context, cfg config.Config, log *slog.Logger) (*Dependenci
 	}
 
 	return &Dependencies{Postgres: pg, Redis: rdb, MinIO: minioClient, Bucket: cfg.S3Bucket, log: log}, nil
+}
+
+func openRedis(cfg config.Config) (*redis.Client, error) {
+	switch strings.ToLower(strings.TrimSpace(cfg.RedisMode)) {
+	case "", "single":
+		return redis.NewClient(&redis.Options{
+			Addr:         cfg.RedisAddr,
+			Password:     cfg.RedisPassword,
+			DB:           cfg.RedisDB,
+			PoolSize:     cfg.RedisPoolSize,     // 0 = go-redis default (10×GOMAXPROCS)
+			MinIdleConns: cfg.RedisMinIdleConns, // pre-warm so burst requests never wait for new dials
+		}), nil
+	case "sentinel":
+		addrs := splitCSV(cfg.RedisSentinelAddrs)
+		if cfg.RedisSentinelMasterName == "" || len(addrs) == 0 {
+			return nil, fmt.Errorf("REDIS_MODE=sentinel requires REDIS_SENTINEL_MASTER_NAME and REDIS_SENTINEL_ADDRS")
+		}
+		return redis.NewFailoverClient(&redis.FailoverOptions{
+			MasterName:       cfg.RedisSentinelMasterName,
+			SentinelAddrs:    addrs,
+			SentinelUsername: cfg.RedisSentinelUsername,
+			SentinelPassword: cfg.RedisSentinelPassword,
+			Password:         cfg.RedisPassword,
+			DB:               cfg.RedisDB,
+			PoolSize:         cfg.RedisPoolSize,
+			MinIdleConns:     cfg.RedisMinIdleConns,
+		}), nil
+	case "cluster":
+		return nil, fmt.Errorf("REDIS_MODE=cluster is not supported by the current hot-engine Lua key topology; use sentinel/managed failover or remove cross-slot global keys first")
+	default:
+		return nil, fmt.Errorf("unsupported REDIS_MODE %q; expected single or sentinel", cfg.RedisMode)
+	}
+}
+
+func splitCSV(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func (d *Dependencies) Close() {

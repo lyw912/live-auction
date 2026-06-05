@@ -11,14 +11,19 @@ type Config struct {
 	HTTPAddr    string
 	DatabaseURL string
 
-	RedisAddr         string
-	RedisPassword     string
-	RedisDB           int
-	RedisPoolSize     int
-	RedisMinIdleConns int
-	KafkaBrokers      string
-	KafkaBidTopic     string
-	KafkaDLQTopic     string
+	RedisAddr               string
+	RedisMode               string
+	RedisPassword           string
+	RedisDB                 int
+	RedisPoolSize           int
+	RedisMinIdleConns       int
+	RedisSentinelMasterName string
+	RedisSentinelAddrs      string
+	RedisSentinelUsername   string
+	RedisSentinelPassword   string
+	KafkaBrokers            string
+	KafkaBidTopic           string
+	KafkaDLQTopic           string
 
 	MinIOEndpoint  string
 	MinIORootUser  string
@@ -74,14 +79,19 @@ func Load() Config {
 		HTTPAddr:    getEnv("HTTP_ADDR", ":8080"),
 		DatabaseURL: getEnv("DATABASE_URL", "postgres://live_auction:live_auction@localhost:5432/live_auction?sslmode=disable"),
 
-		RedisAddr:         getEnv("REDIS_ADDR", "localhost:6380"),
-		RedisPassword:     getEnv("REDIS_PASSWORD", ""),
-		RedisDB:           getEnvInt("REDIS_DB", 0),
-		RedisPoolSize:     getEnvInt("REDIS_POOL_SIZE", 0),       // 0 = go-redis default (10×GOMAXPROCS)
-		RedisMinIdleConns: getEnvInt("REDIS_MIN_IDLE_CONNS", 50), // pre-warmed connections
-		KafkaBrokers:      getEnv("KAFKA_BROKERS", "localhost:9092"),
-		KafkaBidTopic:     getEnv("KAFKA_BID_TOPIC", "auction.bid-events"),
-		KafkaDLQTopic:     getEnv("KAFKA_DLQ_TOPIC", "auction.dlq"),
+		RedisAddr:               getEnv("REDIS_ADDR", "localhost:6380"),
+		RedisMode:               getEnv("REDIS_MODE", "single"),
+		RedisPassword:           getEnv("REDIS_PASSWORD", ""),
+		RedisDB:                 getEnvInt("REDIS_DB", 0),
+		RedisPoolSize:           getEnvInt("REDIS_POOL_SIZE", 0),       // 0 = go-redis default (10×GOMAXPROCS)
+		RedisMinIdleConns:       getEnvInt("REDIS_MIN_IDLE_CONNS", 50), // pre-warmed connections
+		RedisSentinelMasterName: getEnv("REDIS_SENTINEL_MASTER_NAME", ""),
+		RedisSentinelAddrs:      getEnv("REDIS_SENTINEL_ADDRS", ""),
+		RedisSentinelUsername:   getEnv("REDIS_SENTINEL_USERNAME", ""),
+		RedisSentinelPassword:   getEnv("REDIS_SENTINEL_PASSWORD", ""),
+		KafkaBrokers:            getEnv("KAFKA_BROKERS", "localhost:9092"),
+		KafkaBidTopic:           getEnv("KAFKA_BID_TOPIC", "auction.bid-events"),
+		KafkaDLQTopic:           getEnv("KAFKA_DLQ_TOPIC", "auction.dlq"),
 
 		MinIOEndpoint:  getEnv("MINIO_ENDPOINT", "localhost:9000"),
 		MinIORootUser:  getEnv("MINIO_ROOT_USER", "liveauction"),
