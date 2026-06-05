@@ -34,8 +34,8 @@ Kafka's official configuration documents define producer `acks=all` as waiting f
 - Prometheus: `http://localhost:9090`
 - Grafana: `http://localhost:3000` (`admin` / `admin`)
 
-Prometheus scrapes the backend at `host.docker.internal:8080/metrics`.
-Start the backend on the default `:8080` address before expecting Grafana panels to show live data.
+Prometheus scrapes the backend at `host.docker.internal:18080/metrics`.
+Start the backend on the default `:18080` address before expecting Grafana panels to show live data.
 The dashboard is provisioned from `infra/grafana/dashboards/live-auction-overview.json` and only references metric families emitted by the backend `/metrics` endpoint.
 Prometheus alert rules are loaded from `infra/prometheus/rules/live-auction-alerts.yml`.
 Runbooks for those local P1 alerts are in `docs/runbooks/alerts.md`; no Alertmanager receiver is configured in this local stack.

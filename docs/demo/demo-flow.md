@@ -14,9 +14,9 @@ Commit: pending
 - `.env` exists and is based on `.env.example`.
 - Database migrations have been applied.
 - Demo smoke data has been seeded with `go run ./cmd/p0smokeseed` from `backend`.
-- Backend runs on `http://localhost:8080`.
-- H5 runs on `http://127.0.0.1:5173`.
-- PC console runs on `http://127.0.0.1:5174`.
+- Backend runs on `http://localhost:18080`.
+- H5 runs on `http://0.0.0.0:5276` for remote-browser development.
+- PC console runs on `http://0.0.0.0:5277` for remote-browser development.
 
 ## Repro Commands
 

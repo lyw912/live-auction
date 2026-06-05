@@ -77,7 +77,7 @@ type Config struct {
 func Load() Config {
 	cfg := Config{
 		AppEnv:      getEnv("APP_ENV", "local"),
-		HTTPAddr:    getEnv("HTTP_ADDR", ":8080"),
+		HTTPAddr:    getEnv("HTTP_ADDR", ":18080"),
 		DatabaseURL: getEnv("DATABASE_URL", "postgres://live_auction:live_auction@localhost:5432/live_auction?sslmode=disable"),
 
 		RedisAddr:               getEnv("REDIS_ADDR", "localhost:6380"),

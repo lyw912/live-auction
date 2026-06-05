@@ -49,6 +49,22 @@ button {
   display: none;
 }
 
+.app-shell:has(.state-tabs) {
+  padding-bottom: calc(760px + var(--safe-area-bottom));
+}
+
+.app-shell:has(.state-tabs) .bid-dock {
+  position: relative;
+  left: auto;
+  bottom: auto;
+  width: 100%;
+  transform: none;
+  z-index: 4;
+  max-height: none;
+  margin-top: 14px;
+  border-radius: var(--radius-md);
+}
+
 .video-stage {
   min-height: 100vh;
   min-height: 100dvh;
@@ -196,6 +212,11 @@ button {
   background: #ff0f55;
   color: #fff;
   font-weight: 900;
+}
+
+.host-profile button.is-followed {
+  background: rgba(255, 255, 255, .92);
+  color: #2d3440;
 }
 
 .avatar-stack {
@@ -621,6 +642,60 @@ button {
   font-size: 13px;
 }
 
+.heat-meter {
+  position: absolute;
+  left: 14px;
+  right: 86px;
+  bottom: 104px;
+  z-index: 2;
+  min-height: 42px;
+  border: 1px solid rgba(255, 255, 255, .16);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  background: rgba(12, 18, 24, .58);
+  color: #fff;
+  backdrop-filter: blur(12px);
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+  gap: 2px 8px;
+  align-items: center;
+}
+
+.heat-meter span,
+.heat-meter strong,
+.heat-meter em {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.heat-meter span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #ffd166;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.heat-meter strong {
+  font-size: 12px;
+  text-align: right;
+}
+
+.heat-meter em {
+  grid-column: 1 / -1;
+  color: rgba(255, 255, 255, .76);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.heat-meter[data-countdown-phase="hot"],
+.heat-meter[data-countdown-phase="critical"],
+.heat-meter[data-countdown-phase="hammer"] {
+  border-color: rgba(255, 209, 102, .52);
+  box-shadow: 0 10px 22px rgba(0, 0, 0, .24), 0 0 0 1px rgba(255, 209, 102, .12);
+}
+
 .auction-panel {
   margin-top: -28px;
   border-radius: var(--radius-md) var(--radius-md) 0 0;
@@ -736,6 +811,11 @@ button {
 
 .bid-dock[data-dock-state="SOLD_WINNER"] {
   border-top-color: var(--color-bid-red);
+}
+
+.bid-dock[data-countdown-phase="critical"],
+.bid-dock[data-countdown-phase="hammer"] {
+  border-top-color: var(--color-risk-orange);
 }
 
 .dock-price-row,
@@ -934,6 +1014,22 @@ button {
   min-width: 168px;
 }
 
+.countdown-row[data-countdown-phase="hot"] {
+  border-color: rgba(245, 158, 11, .38);
+  background: #fff8eb;
+}
+
+.countdown-row[data-countdown-phase="critical"],
+.countdown-row[data-countdown-phase="hammer"] {
+  border-color: rgba(239, 68, 68, .42);
+  background: #fff1f2;
+  color: #8f1d2c;
+}
+
+.countdown-row[data-countdown-phase="hammer"] span {
+  animation: countdown-pulse 760ms ease-out infinite;
+}
+
 .bid-dock[data-atmosphere-kind="leading"] .dock-price-row h2 {
   animation: price-tick 720ms ease-out both;
 }
@@ -972,6 +1068,15 @@ button {
   }
 }
 
+@keyframes countdown-pulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.035);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .atmosphere-cue,
   .effect-leading-ring,
@@ -981,7 +1086,8 @@ button {
   .video-stage[data-atmosphere-kind="outbid"] .effect-outbid-edge,
   .video-stage[data-atmosphere-kind="sold"] .effect-hammer-mark,
   .bid-dock[data-atmosphere-kind="leading"] .dock-price-row h2,
-  .countdown-row[data-effect="extension-stretch"] {
+  .countdown-row[data-effect="extension-stretch"],
+  .countdown-row[data-countdown-phase="hammer"] span {
     animation: none;
   }
 
@@ -1010,6 +1116,41 @@ button {
   color: var(--color-risk-orange);
   font-size: 11px;
   overflow-wrap: anywhere;
+}
+
+.leaderboard-row small {
+  color: var(--color-muted);
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.more-sheet {
+  display: grid;
+  gap: 10px;
+}
+
+.more-sheet > button {
+  min-height: 42px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: #fff;
+  color: var(--color-ink-900);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  font-weight: 900;
+}
+
+.more-sheet p {
+  margin: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-1);
+  color: var(--color-muted-strong);
+  padding: 10px;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .bid-stepper {
@@ -1367,7 +1508,7 @@ button {
   left: 50%;
   width: min(100%, var(--h5-shell-width));
   transform: translateX(-50%);
-  z-index: calc(var(--z-sheet) + 1);
+  z-index: calc(var(--z-sheet) + 3);
   background: rgba(5, 8, 14, .42);
   display: flex;
   align-items: flex-end;
@@ -1392,7 +1533,7 @@ button {
   width: calc(min(100%, var(--h5-shell-width)) - 24px);
   transform: translateX(-50%);
   bottom: calc(112px + var(--safe-area-bottom));
-  z-index: calc(var(--z-sheet) + 1);
+  z-index: calc(var(--z-sheet) + 4);
   border: 1px solid var(--color-line);
   border-radius: var(--radius-lg);
   background: var(--color-surface-0);
@@ -1415,12 +1556,20 @@ button {
   background: var(--color-surface-1);
 }
 
-.result-sheet.is-compact .next-auction-card {
-  display: none;
-}
-
 .result-sheet.is-compact .result-actions {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.result-sheet.is-compact .next-auction-card {
+  grid-template-columns: minmax(0, .75fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 4px 8px;
+  padding: 8px;
+}
+
+.result-sheet.is-compact .next-auction-card p,
+.result-sheet.is-compact .next-auction-card small {
+  grid-column: 1 / -1;
 }
 
 .result-sheet-icon {

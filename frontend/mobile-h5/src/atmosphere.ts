@@ -23,6 +23,13 @@ export type AtmosphereInput = {
   user_scope: AtmosphereUserScope;
 };
 
+let cueSequence = 0;
+
+export function nextAtmosphereCueID() {
+  cueSequence += 1;
+  return cueSequence;
+}
+
 export const atmospherePriority: Record<AtmosphereKind, number> = {
   sold: 100,
   recovering: 90,
@@ -35,12 +42,12 @@ export const atmospherePriority: Record<AtmosphereKind, number> = {
 export function normalizeAtmosphere(
   input: AtmosphereInput,
   lastSeqValue: number,
-  now: () => number = Date.now
+  nextID: () => number = nextAtmosphereCueID
 ): AtmosphereCue | null {
   const causeSeq = input.cause_seq ?? lastSeqValue;
   if (!input.auction_id || !input.event_type || !Number.isFinite(causeSeq) || causeSeq <= 0) return null;
   return {
-    id: now(),
+    id: nextID(),
     kind: input.kind,
     title: input.title,
     detail: input.detail,

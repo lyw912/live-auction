@@ -283,7 +283,7 @@ go run ./cmd/server
 健康检查：
 
 ```text
-http://localhost:8080/readyz
+http://localhost:18080/readyz
 ```
 
 普通本地 demo 可使用 `.env.example` 的保守默认配置。当前 PTS-1B 压测不要手工猜环境变量，按 `docs/current/runtime-profiles.md` 和 `tests/pts/MANIFEST.md` 的 reset/preflight/verify sequence 执行。

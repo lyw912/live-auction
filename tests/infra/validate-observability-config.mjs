@@ -52,7 +52,7 @@ const prometheusConfig = readFileSync(join(root, 'infra/prometheus/prometheus.ym
 for (const expected of [
   'job_name: live-auction-backend',
   'metrics_path: /metrics',
-  'host.docker.internal:8080',
+  'host.docker.internal:18080',
   'job_name: live-auction-otel-collector',
   'otel-collector:8889',
 ]) {

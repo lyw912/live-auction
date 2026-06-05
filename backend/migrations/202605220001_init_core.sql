@@ -226,11 +226,16 @@ CREATE TABLE system_anomaly_events (
 INSERT INTO users (id, role, display_name, city)
 VALUES
   ('host_1', 'host', 'Demo Host', 'Hangzhou'),
-  ('user_1', 'user', 'Demo User', 'Shanghai')
+  ('user_1', 'user', 'Demo User', 'Shanghai'),
+  ('user_2', 'user', 'Prior Leader', 'Beijing'),
+  ('user_3', 'user', 'Smoke Bidder', 'Shenzhen')
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO rooms (id, host_id, status)
-VALUES ('room_1', 'host_1', 'OPEN')
+VALUES
+  ('room_1', 'host_1', 'OPEN'),
+  ('room_main', 'host_1', 'OPEN'),
+  ('room_side', 'host_1', 'OPEN')
 ON CONFLICT (id) DO NOTHING;
 
 -- +goose Down

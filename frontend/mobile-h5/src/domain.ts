@@ -45,11 +45,12 @@ export type BidPhase = 'idle' | 'pending' | 'engine_pending' | 'engine_sold_pend
 export type PaymentPhase = 'idle' | 'pending' | 'paid' | 'failed' | 'expired';
 export type RecoveryPhase = 'idle' | 'recovering';
 export type ConnectionPhase = 'connecting' | 'connected' | 'recovering' | 'disconnected';
-export type BottomSheetKey = 'products' | 'details' | 'maxBid' | 'leaderboard' | 'history' | 'orders';
+export type BottomSheetKey = 'products' | 'details' | 'maxBid' | 'leaderboard' | 'history' | 'orders' | 'more';
 export type AuctionOverlayMode = 'feed' | 'bid';
 export type ResultSheetKind = 'winner' | 'loser' | 'unsold';
 export type SoundCapability = 'ready' | 'unavailable' | 'blocked';
 export type MaxBidPhase = 'idle' | 'pending' | 'canceling' | 'error';
+export type CountdownPhase = 'normal' | 'hot' | 'critical' | 'hammer' | 'syncing' | 'stale' | 'terminal';
 
 export type MaxBidIntent = {
   id: string;
@@ -252,6 +253,14 @@ export type LeaderboardPayload = {
   price_velocity_cents_per_min?: number;
   entries?: LeaderboardEntry[];
 };
+export type HeatSnapshot = {
+  activeBidders30s: number;
+  acceptedBids30s: number;
+  priceVelocityCentsPerMin: number;
+  acceptedBidderCount: number;
+  totalAcceptedBids?: number;
+  source: 'leaderboard' | 'auction' | 'fallback';
+};
 export type WSTicketResponse = {
   ticket?: string;
   expires_in_ms?: number;
@@ -309,6 +318,37 @@ export function deriveCountdown(endAt: string, serverTimeMS: number, nowMS: numb
   const remaining = endAtMS - serverTimeMS - elapsed;
   if (remaining <= 0) return stale ? '本地到零，正在同步' : '到点同步中';
   return `${extended ? '延时后' : '剩余'} ${formatRemaining(remaining)}`;
+}
+
+export function remainingCountdownMS(endAt: string, serverTimeMS: number, nowMS: number, serverTimeSyncedAt: number) {
+  if (!endAt || serverTimeMS <= 0) return null;
+  const endAtMS = Date.parse(endAt);
+  if (!Number.isFinite(endAtMS)) return null;
+  const syncedAt = serverTimeSyncedAt > 0 ? serverTimeSyncedAt : serverTimeMS;
+  return endAtMS - serverTimeMS - Math.max(0, nowMS - syncedAt);
+}
+
+export function deriveCountdownPhase(input: {
+  endAt: string;
+  serverTimeMS: number;
+  nowMS: number;
+  serverTimeSyncedAt: number;
+  terminal: boolean;
+  stale: boolean;
+  active: boolean;
+}): { phase: CountdownPhase; remainingMS: number | null; beat: string } {
+  if (input.terminal) return { phase: 'terminal', remainingMS: null, beat: '' };
+  if (input.stale || !input.active) return { phase: 'stale', remainingMS: null, beat: '' };
+  const remainingMS = remainingCountdownMS(input.endAt, input.serverTimeMS, input.nowMS, input.serverTimeSyncedAt);
+  if (remainingMS == null) return { phase: 'stale', remainingMS: null, beat: '' };
+  if (remainingMS <= 0) return { phase: 'syncing', remainingMS, beat: '' };
+  if (remainingMS <= 3_000) {
+    const second = Math.max(1, Math.ceil(remainingMS / 1000));
+    return { phase: 'hammer', remainingMS, beat: second === 3 ? '第一次' : second === 2 ? '第二次' : '最后一次' };
+  }
+  if (remainingMS <= 5_000) return { phase: 'critical', remainingMS, beat: '' };
+  if (remainingMS <= 10_000) return { phase: 'hot', remainingMS, beat: '' };
+  return { phase: 'normal', remainingMS, beat: '' };
 }
 
 export function formatClockTime(value: string) {
@@ -392,6 +432,36 @@ export function leaderboardActionCopy(payload: LeaderboardPayload | null, fallba
     headline: `${payload.accepted_bidder_count} 人已有效出价`,
     action: `一步入局 ${formatCents(nextBid)}`,
     freshness: `seq ${payload.seq ?? '-'} · 榜单已同步`
+  };
+}
+
+export function heatSnapshot(payload: LeaderboardPayload | null, activeAuction?: AuctionSummary): HeatSnapshot {
+  if (payload) {
+    return {
+      activeBidders30s: Math.max(0, payload.active_bidders_30s ?? 0),
+      acceptedBids30s: Math.max(0, payload.accepted_bids_30s ?? 0),
+      priceVelocityCentsPerMin: Math.max(0, payload.price_velocity_cents_per_min ?? 0),
+      acceptedBidderCount: Math.max(0, payload.accepted_bidder_count ?? 0),
+      totalAcceptedBids: activeAuction?.accepted_bid_count,
+      source: 'leaderboard'
+    };
+  }
+  if (activeAuction) {
+    return {
+      activeBidders30s: 0,
+      acceptedBids30s: 0,
+      priceVelocityCentsPerMin: 0,
+      acceptedBidderCount: 0,
+      totalAcceptedBids: activeAuction.accepted_bid_count,
+      source: 'auction'
+    };
+  }
+  return {
+    activeBidders30s: 0,
+    acceptedBids30s: 0,
+    priceVelocityCentsPerMin: 0,
+    acceptedBidderCount: 0,
+    source: 'fallback'
   };
 }
 

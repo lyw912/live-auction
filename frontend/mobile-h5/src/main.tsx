@@ -3,9 +3,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { CheckCircle2, ChevronUp, Radio, RefreshCw } from 'lucide-react';
 import type { AtmosphereCue, AtmosphereInput } from './atmosphere';
-import { AuctionStatePanel, BottomSheet, ChatComposer, ChatPanel, HistoryPanel, LeaderboardPanel, LiveStage, StateMatrixTabs } from './components';
+import { AuctionStatePanel, BottomSheet, ChatComposer, ChatPanel, HistoryPanel, LeaderboardPanel, LiveStage, MoreSheet, StateMatrixTabs } from './components';
 import type { AuctionItem, AuctionOverlayMode, AuctionRealtimeEvent, AuctionState, AuctionSummary, AuthUser, BidderRequirement, BidPhase, BidResponse, BottomSheetKey, ChatMessage, ConnectionPhase, HistoryRow, LeaderboardPayload, MaxBidIntent, MaxBidPhase, OrderRow, PaymentPhase, PendingBidRequest, RecoveryPhase, ResultSheetKind, Scenario, SnapshotResponse, SoundCapability, WSTicketResponse } from './domain';
-import { createAudioContext, createClientBidID, demoProductImageURL, demoUserID, deriveCountdown, ensureDemoSession, extensionCopyFromEvent, formatCents, formatRemaining, isBidConfirmationPending, isCountdownExpired, isDangerousActionDisabled, isEngineRejected, isTestMatrixEnabled, leaderboardCopy, maxBidErrorCopy, maxBidStatusCopy, readJSON, rejectCopy, responseServerTimeMS, retryAfterMS, retryAfterMSFromHeaders, roomIDFromPath, scenarios, selectEntryAuction, visibleRoomAuctions, vibratePattern, playCueTone } from './domain';
+import { createAudioContext, createClientBidID, demoProductImageURL, demoUserID, deriveCountdown, deriveCountdownPhase, ensureDemoSession, extensionCopyFromEvent, formatCents, formatRemaining, heatSnapshot, isBidConfirmationPending, isCountdownExpired, isDangerousActionDisabled, isEngineRejected, isTestMatrixEnabled, leaderboardCopy, maxBidErrorCopy, maxBidStatusCopy, readJSON, rejectCopy, responseServerTimeMS, retryAfterMS, retryAfterMSFromHeaders, roomIDFromPath, scenarios, selectEntryAuction, visibleRoomAuctions, vibratePattern, playCueTone } from './domain';
 import { normalizeAtmosphere } from './atmosphere';
 import { reconnectDelayMS } from './realtime';
 import './styles.css';
@@ -60,6 +60,8 @@ function App() {
   const [roomAuctions, setRoomAuctions] = useState<AuctionSummary[]>([]);
   const [activeSheet, setActiveSheet] = useState<BottomSheetKey | null>(null);
   const [overlayMode, setOverlayMode] = useState<AuctionOverlayMode>(() => showStateMatrix ? 'bid' : 'feed');
+  const [followed, setFollowed] = useState(false);
+  const [likeCount, setLikeCount] = useState(0);
   const [stageItem, setStageItem] = useState<AuctionItem>({
     title: '青瓷手作茶盏',
     image_url: demoProductImageURL,
@@ -165,6 +167,21 @@ function App() {
     const terminal = selected === 'sold_winner' || selected === 'sold_loser' || selected === 'ended' || selected === 'cancelled';
     return deriveCountdown(auctionEndAt, serverTimeMS, nowMS, serverTimeSyncedAtRef.current, terminal, stale, Boolean(extensionNotice));
   }, [activeAuctionID, auctionEndAt, connectionPhase, extensionNotice, nowMS, recoveryPhase, selected, serverTimeMS]);
+  const countdownPhase = useMemo(() => {
+    const stale = connectionPhase === 'disconnected' || recoveryPhase === 'recovering' || !activeAuctionID;
+    const terminal = selected === 'sold_winner' || selected === 'sold_loser' || selected === 'ended' || selected === 'cancelled';
+    return deriveCountdownPhase({
+      endAt: auctionEndAt,
+      serverTimeMS,
+      nowMS,
+      serverTimeSyncedAt: serverTimeSyncedAtRef.current,
+      terminal,
+      stale,
+      active: selected === 'active_bids'
+    });
+  }, [activeAuctionID, auctionEndAt, connectionPhase, nowMS, recoveryPhase, selected, serverTimeMS]);
+  const activeAuction = useMemo(() => roomAuctions.find((auction) => auction.id === activeAuctionID), [activeAuctionID, roomAuctions]);
+  const heat = useMemo(() => heatSnapshot(leaderboard, activeAuction), [activeAuction, leaderboard]);
   const bidCooldownRemainingMS = Math.max(0, bidCooldownUntilMS - nowMS);
   const countdownExpired = useMemo(() => (
     selected === 'active_bids' &&
@@ -586,7 +603,7 @@ function App() {
       showAtmosphere({
         kind: 'leading',
         title: '出价确认中',
-        detail: '等待 Kafka 账本确认',
+        detail: '等待竞拍账本确认',
         auction_id: payload.auction_id ?? activeAuctionIDRef.current,
         cause_seq: payload.engine_seq ?? payload.seq ?? lastSeqRef.current,
         event_type: payload.result ?? 'BID_CONFIRMATION_PENDING',
@@ -630,7 +647,7 @@ function App() {
       showAtmosphere({
         kind: 'leading',
         title: isEngineSoldPending ? '落锤结算中' : '出价已接收',
-        detail: isEngineSoldPending ? '等待 PostgreSQL 订单结算' : '等待 Kafka 账本结算',
+        detail: isEngineSoldPending ? '等待订单结算' : '等待竞拍账本结算',
         auction_id: payload.auction_id ?? activeAuctionIDRef.current,
         cause_seq: payload.engine_seq ?? payload.seq ?? lastSeqRef.current,
         event_type: payload.result ?? 'ENGINE_ACCEPTED',
@@ -815,7 +832,7 @@ function App() {
     const nextEndAt = detail.payload?.end_at ?? detail.end_at;
     const nextServerTimeMS = detail.payload?.server_time_ms ?? detail.server_time_ms;
     const previousEndAt = auctionEndAtRef.current;
-    const previousLeading = leaderboardRef.current?.my_rank === 1;
+    const previousWinnerID = leaderboardRef.current?.current_winner_id;
     const winnerID = detail.payload?.current_winner_id ?? detail.payload?.user_id ?? '';
     setCurrentPriceCents(price);
     setMinimumNextBidCents(price + increment);
@@ -883,22 +900,6 @@ function App() {
         if (detail.payload?.order_id) setPayableOrderID(detail.payload.order_id);
       }
       setBidFeedback('订单已超时');
-    } else if (detail.payload?.user_id && detail.payload.user_id !== currentUserID) {
-      if (previousLeading) {
-        showAtmosphere({
-          kind: 'outbid',
-          title: '被超越！',
-          detail: `${detail.payload.leader_user_masked ?? '其他用户'} 已领先`,
-          auction_id: detail.auction_id,
-          cause_seq: detail.seq,
-          event_type: detail.event_type,
-          user_scope: 'self'
-        });
-      }
-      setBidPhase('idle');
-      setConfirmToken('');
-      setConfirmIdempotencyKey('');
-      setConfirmAmountCents(0);
     } else if (winnerID === currentUserIDRef.current || detail.payload?.current_winner_id === currentUserIDRef.current) {
       setBidPhase('accepted');
       setBidFeedback(`已结算 seq ${detail.seq}`);
@@ -911,6 +912,22 @@ function App() {
         event_type: detail.event_type,
         user_scope: 'self'
       });
+    } else if (winnerID && winnerID !== currentUserIDRef.current) {
+      if (previousWinnerID === currentUserIDRef.current || bidPhase === 'accepted') {
+        showAtmosphere({
+          kind: 'outbid',
+          title: '被超越！',
+          detail: `${detail.payload?.leader_user_masked ?? '其他用户'} 已领先`,
+          auction_id: detail.auction_id,
+          cause_seq: detail.seq,
+          event_type: detail.event_type,
+          user_scope: 'self'
+        });
+      }
+      setBidPhase('idle');
+      setConfirmToken('');
+      setConfirmIdempotencyKey('');
+      setConfirmAmountCents(0);
     }
     void loadLeaderboard(detail.auction_id);
     setConnectionPhase('connected');
@@ -1426,9 +1443,13 @@ function App() {
         atmosphereCue={atmosphereCue}
         chatMessages={chatMessages}
         connectionPhase={connectionPhase}
+        countdownPhase={countdownPhase.phase}
         countdownCopy={countdownCopy}
         currentUserID={currentUserID}
+        followed={followed}
+        heat={heat}
         item={stageItem}
+        likeCount={likeCount}
         lotTitle={lotTitle}
         roomID={roomID}
         scenario={scenario}
@@ -1438,14 +1459,18 @@ function App() {
         activeAuctionID={activeAuctionID}
         currentPriceCents={currentPriceCents}
         nextBidCents={nextBidCents}
+        onLike={() => setLikeCount((count) => count + 1)}
+        onOpenMore={() => setActiveSheet('more')}
         onOpenProducts={() => setActiveSheet('products')}
         onOpenBid={openBidOverlay}
+        onToggleFollow={() => setFollowed((value) => !value)}
         onToggleSound={() => void toggleSound()}
       />
       {overlayMode === 'bid' && (
         <AuctionStatePanel
           atmosphereCue={atmosphereCue}
           connectionPhase={connectionPhase}
+          countdownPhase={countdownPhase.phase}
           countdownCopy={countdownCopy}
           currentPriceCents={currentPriceCents}
           extensionNotice={extensionNotice}
@@ -1500,6 +1525,8 @@ function App() {
           orderHistory={orderHistory}
           scenario={scenario}
           connectionPhase={connectionPhase}
+          followed={followed}
+          soundEnabled={soundEnabled}
           onClose={() => setActiveSheet(null)}
           onCancelMaxBid={cancelMaxBidIntent}
           onDecreaseMaxBid={decreaseMaxBidAmount}
@@ -1509,6 +1536,8 @@ function App() {
           onRefreshLeaderboard={() => void loadLeaderboard()}
           onRefreshMaxBid={() => void loadMaxBidIntent()}
           onSubmitMaxBid={submitMaxBidIntent}
+          onToggleFollow={() => setFollowed((value) => !value)}
+          onToggleSound={() => void toggleSound()}
         />
       )}
       {showStateMatrix && (

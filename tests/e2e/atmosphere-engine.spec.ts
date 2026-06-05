@@ -42,6 +42,28 @@ test('H5 atmosphere normalizer requires event truth metadata and fills determini
   }, 41)).toBeNull();
 });
 
+test('H5 atmosphere cue ids are monotonic by default', () => {
+  const first = normalizeAtmosphere({
+    kind: 'leading',
+    title: '领先！',
+    detail: '¥400.00 服务端确认',
+    auction_id: 'auc_live',
+    cause_seq: 43,
+    event_type: 'bid_accepted',
+    user_scope: 'self'
+  }, 42);
+  const second = normalizeAtmosphere({
+    kind: 'outbid',
+    title: '被超越！',
+    detail: '张** 已领先',
+    auction_id: 'auc_live',
+    cause_seq: 44,
+    event_type: 'bid_accepted',
+    user_scope: 'self'
+  }, 43);
+  expect(second?.id).toBeGreaterThan(first?.id ?? 0);
+});
+
 test('H5 reconnect backoff honors Retry-After and stays bounded', () => {
   expect(reconnectDelayMS(1, 4000)).toBe(4000);
   expect(reconnectDelayMS(1, 100)).toBe(1000);

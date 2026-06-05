@@ -1,0 +1,109 @@
+{
+  "generated_at": "2026-06-05T20:28:19.689Z",
+  "base_url": "https://api.gptgod.online/v1",
+  "model": "gemini-3.1-flash-image-preview",
+  "timeout_ms": 60000,
+  "checks": [
+    {
+      "name": "models_endpoint_optional",
+      "status": "PASS",
+      "duration_ms": 701,
+      "summary": "configured model appears in /models",
+      "sample_model_count": 1,
+      "configured_model_listed": true
+    },
+    {
+      "name": "responses_text_required",
+      "status": "FAIL",
+      "duration_ms": 1076,
+      "error": "HTTP 500: not implemented (request id: 202606052028212448629498268d9d6NHjP2Ibf)"
+    },
+    {
+      "name": "responses_json_schema_required",
+      "status": "FAIL",
+      "duration_ms": 732,
+      "error": "HTTP 500: not implemented (request id: 202606052028219715955018268d9d6yxK7OjA1)"
+    },
+    {
+      "name": "responses_multimodal_data_url_optional",
+      "status": "WARN",
+      "duration_ms": 797,
+      "error": "HTTP 500: not implemented (request id: 202606052028227715290808268d9d6knQxb5LJ)"
+    },
+    {
+      "name": "responses_multimodal_https_optional",
+      "status": "WARN",
+      "duration_ms": 954,
+      "error": "HTTP 500: not implemented (request id: 202606052028237238020838268d9d68l6wiJ38)"
+    },
+    {
+      "name": "files_upload_optional",
+      "status": "WARN",
+      "duration_ms": 300,
+      "error": "HTTP 404 non-JSON response: 404 page not found"
+    },
+    {
+      "name": "responses_file_input_optional",
+      "status": "WARN",
+      "duration_ms": 301,
+      "error": "HTTP 404 non-JSON response: 404 page not found"
+    },
+    {
+      "name": "chat_plain_text_optional",
+      "status": "PASS",
+      "duration_ms": 1974,
+      "summary": "text chat completion returned expected marker",
+      "finish_reason": "stop",
+      "response_chars": 25
+    },
+    {
+      "name": "chat_structured_text_optional",
+      "status": "PASS",
+      "duration_ms": 3908,
+      "summary": "structured text can be generated through json_schema",
+      "body_chars": 16,
+      "facts_used_count": 3
+    },
+    {
+      "name": "chat_json_schema_optional",
+      "status": "PASS",
+      "duration_ms": 2270,
+      "summary": "strict json_schema response_format is supported",
+      "keys": [
+        "title",
+        "start_price_cents",
+        "risk_flags"
+      ]
+    },
+    {
+      "name": "chat_multimodal_https_optional",
+      "status": "PASS",
+      "duration_ms": 2387,
+      "summary": "HTTPS image_url input produced parseable visual answer",
+      "dominant_color": "yellow",
+      "subject": "JavaScript logo",
+      "can_see_image": true
+    },
+    {
+      "name": "chat_json_object_optional",
+      "status": "WARN",
+      "duration_ms": 2773,
+      "error": "response is not JSON: "
+    }
+  ],
+  "verdict": "PASS",
+  "development_gate": {
+    "can_start_p0_ai": true,
+    "wire_api": "chat_completions_adapter",
+    "structured_output_mode": "json_schema",
+    "multimodal_input_mode": "chat_completions_https_image_url",
+    "notes": [
+      "Responses endpoint is not available on this relay from backend HTTP; use Chat Completions json_schema adapter for P0 implementation.",
+      "Use json_schema for all provider-backed outputs; do not depend on plain text or json_object if the relay pollutes empty responses.",
+      "For the product UI, users upload images to our backend. For the current relay, pass a provider-fetchable short-lived HTTPS object URL to Chat Completions; provider Files API is not a P0 dependency unless a future probe passes.",
+      "AI calls must stay outside the bid hot path.",
+      "Persist provider/model/request metadata and validated JSON output.",
+      "Use deterministic fallback when provider times out or returns invalid JSON."
+    ]
+  }
+}

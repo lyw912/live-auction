@@ -30,7 +30,7 @@ S1-S5 names.
 For temporary local smoke, start:
 
 ```powershell
-cloudflared tunnel --url http://127.0.0.1:8080
+cloudflared tunnel --url http://127.0.0.1:18080
 ```
 
 Use the generated host, for example `abc.trycloudflare.com`, as the PTS domain.
@@ -88,7 +88,7 @@ Do not use the LAN IP `192.168.1.104` as `HOST`.
 Make sure the app is ready before starting the tunnel:
 
 ```powershell
-curl http://127.0.0.1:8080/readyz
+curl http://127.0.0.1:18080/readyz
 ```
 
 Expected:
@@ -153,12 +153,12 @@ The workflow is:
 Run these on the machine hosting the system while PTS is running. Replace the host when testing ECS instead of the local tunnel.
 
 ```powershell
-curl http://127.0.0.1:8080/readyz
-curl http://127.0.0.1:8080/metrics
-curl http://127.0.0.1:8080/api/monitor/auctions -H "X-Mock-Role: host" -H "X-Mock-User-Id: host_1"
-curl http://127.0.0.1:8080/api/monitor/rejects -H "X-Mock-Role: host" -H "X-Mock-User-Id: host_1"
-curl http://127.0.0.1:8080/api/monitor/outbox -H "X-Mock-Role: host" -H "X-Mock-User-Id: host_1"
-curl http://127.0.0.1:8080/api/monitor/outbox/watermarks -H "X-Mock-Role: host" -H "X-Mock-User-Id: host_1"
+curl http://127.0.0.1:18080/readyz
+curl http://127.0.0.1:18080/metrics
+curl http://127.0.0.1:18080/api/monitor/auctions -H "X-Mock-Role: host" -H "X-Mock-User-Id: host_1"
+curl http://127.0.0.1:18080/api/monitor/rejects -H "X-Mock-Role: host" -H "X-Mock-User-Id: host_1"
+curl http://127.0.0.1:18080/api/monitor/outbox -H "X-Mock-Role: host" -H "X-Mock-User-Id: host_1"
+curl http://127.0.0.1:18080/api/monitor/outbox/watermarks -H "X-Mock-Role: host" -H "X-Mock-User-Id: host_1"
 docker stats
 docker compose -f infra/docker-compose.yml logs --tail=200 backend
 ```

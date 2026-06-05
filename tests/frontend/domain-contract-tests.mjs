@@ -35,6 +35,14 @@ const pc = await bundle('frontend/pc-console/src/domain.ts', 'pc-domain');
 assert.equal(h5.formatCents(12345), '¥123.45');
 assert.equal(h5.deriveCountdown('2026-06-05T10:00:10.000Z', Date.parse('2026-06-05T10:00:00.000Z'), Date.parse('2026-06-05T10:00:05.000Z'), Date.parse('2026-06-05T10:00:00.000Z'), false, false, false), '剩余 00:05.0');
 assert.equal(h5.deriveCountdown('', 0, Date.now(), 0, false, true, false), '剩余时间待同步');
+{
+  const endAt = '2099-05-22T14:00:00Z';
+  const base = Date.parse('2099-05-22T13:59:50Z');
+  assert.equal(h5.deriveCountdownPhase({ endAt, serverTimeMS: base, nowMS: base, serverTimeSyncedAt: base, terminal: false, stale: false, active: true }).phase, 'hot');
+  assert.equal(h5.deriveCountdownPhase({ endAt, serverTimeMS: base + 5_100, nowMS: base + 5_100, serverTimeSyncedAt: base + 5_100, terminal: false, stale: false, active: true }).phase, 'critical');
+  assert.equal(h5.deriveCountdownPhase({ endAt, serverTimeMS: base + 7_500, nowMS: base + 7_500, serverTimeSyncedAt: base + 7_500, terminal: false, stale: false, active: true }).phase, 'hammer');
+  assert.equal(h5.deriveCountdownPhase({ endAt, serverTimeMS: base + 7_500, nowMS: base + 7_500, serverTimeSyncedAt: base + 7_500, terminal: false, stale: true, active: true }).phase, 'stale');
+}
 assert.equal(h5.isDangerousActionDisabled({ ctaDisabled: false, stale: false, sold: false }, 'connected'), false);
 assert.equal(h5.isDangerousActionDisabled({ ctaDisabled: false, stale: true, sold: false }, 'connected'), true);
 assert.equal(h5.isEngineRejected({ result: 'ENGINE_REJECTED' }), true);

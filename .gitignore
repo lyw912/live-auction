@@ -27,6 +27,8 @@ build/
 coverage/
 playwright-report/
 test-results/
+.playwright-mcp/
+.playwrigmcp/
 
 # Local infra data
 infra/.data/
