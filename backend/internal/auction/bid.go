@@ -33,9 +33,10 @@ const (
 	DecisionStatusDecided           = "DECIDED"
 	DecisionStatusPendingDurability = "PENDING_DURABILITY"
 	DecisionStatusReconciling       = "RECONCILING"
-	// ENGINE_DURABLE is returned immediately when the decision has been committed
-	// to the Redis decision log (Stream). Kafka durability follows asynchronously.
-	// This is the user-visible final business decision — p99 is measured to this.
+	// ENGINE_DURABLE: decision written to Redis Stream WAL (Redis-AOF-local; appendfsync always).
+	// Not Kafka quorum durable (KAFKA_ACKED) or PostgreSQL settled (SETTLED). The default
+	// response mode waits for relay batch confirmation and returns KAFKA_ACKED when healthy,
+	// with graceful fallback to ENGINE_DURABLE on timeout/fail-fast/circuit-open.
 	DurabilityStatusEngineDurable = "ENGINE_DURABLE"
 
 	DurabilityStatusKafkaAcked   = "KAFKA_ACKED"

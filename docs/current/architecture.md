@@ -1,6 +1,6 @@
 # Current Architecture Contract
 
-> Status: governing architecture contract for hot bidding, 2026-05-31.
+> Status: governing architecture contract for hot bidding, 2026-06-05.
 
 ## Why PG Lane Is Not The Hot Path
 
@@ -14,8 +14,8 @@ Therefore PostgreSQL is no longer the synchronous decision point for the optimiz
 |---|---|---|
 | Gateway | auth, room/ACL, admission, request decoding, fast idempotency, response contract | perform repeated PG reads on every hot bid if Redis/cache can safely answer |
 | Redis Lua engine | atomic live decision, current price/winner/end, engine_seq, engine idempotency | depend on stale PG snapshots during the hot decision |
-| Redis Stream | synchronous `ENGINE_DURABLE` decision log/idempotency replay boundary | be treated as safe if AOF/no-eviction/retention is not proven |
-| Kafka | asynchronous ordered relay/WAL for engine decisions and replay/settlement fence | be optional for post-run correctness, replay, and fault evidence |
+| Redis Stream | synchronous `ENGINE_DURABLE` decision log/idempotency replay boundary; all Lua KEYS use `{auctionID}` hash tag (Cluster-ready) | be treated as safe if AOF/no-eviction/retention is not proven |
+| Kafka | ordered relay/WAL; default `KAFKA_ACKED` response boundary via group-commit latch | be optional for post-run correctness, relay, and fault evidence |
 | PostgreSQL | settlement truth, audit truth, order truth, long-term query truth | be the contended synchronous row-lock decision point for PTS-1B |
 | Settlement worker | replay Kafka decisions to PG and outbox | invent decisions not present in the engine/WAL |
 | Reconciler | compare Redis/Kafka/PG/outbox and repair or pause | hide uncertainty from users/operators |
@@ -43,20 +43,50 @@ For high-value auctions, rebuild is a recovery mechanism, not a user-facing excu
 
 During rebuild, users must not see fake success. They should see a bounded recovering/paused state and be prevented from placing dangerous bids until the auction can prove safety.
 
+## Durability Layers
+
+The system explicitly separates four durability layers, each with its own response
+field and evidence requirement:
+
+| Layer | Field value | Meaning | Recovery path |
+|---|---|---|---|
+| Redis-AOF-local | `ENGINE_DURABLE` | Decision in Redis Stream + idem key, AOF `appendfsync always` | AOF replay on restart; `rebuildRedisFromCheckpoint` on disk loss |
+| Kafka append acknowledged | `KAFKA_ACKED` | AppendBatch `acks=all` confirmed by broker | Kafka RF=3 / minISR=2 for production quorum; rebuild from ledger on Redis disk loss |
+| PG settled | `settlement_status=SETTLED` | PostgreSQL has applied the decision | Idempotent settlement replay from Kafka |
+| PG order truth | order exists | Payment/order lifecycle closed | Idempotent order/payment flow |
+
+`KAFKA_ACKED` is the **default synchronous response boundary**
+(`BID_ENGINE_RESPONSE_DURABILITY=kafka_ack`). The handler waits for the relay's
+group-commit batch confirmation via an in-process latch. Kafka fault behavior is
+protected by two layers: fail-fast wakeup (relay signals `false` immediately on
+AppendBatch failure) and circuit breaker (`kafkaRelayUnhealthy atomic.Bool`,
+zero-cost skip when open). Neither degrades decision correctness — both degrade
+only to the Redis-AOF-local `ENGINE_DURABLE` boundary.
+
+`ENGINE_DURABLE` remains an explicit low-latency diagnostic boundary
+(`BID_ENGINE_RESPONSE_DURABILITY=redis_aof`). It is sufficient to return a final
+business decision when Redis is configured with AOF `appendfsync always`, but the
+run still cannot be called correct until Kafka relay, PG settlement, and outbox
+delivery converge.
+
+See `docs/current/runtime-profiles.md#kafka-ack-response-durability-boundary` for
+the full architecture.
+
 ## Kafka/Settlement Boundary
 
 The system must distinguish:
 
 - live decision: what the Redis engine decided;
 - engine durability: whether the decision is recorded in Redis hot state, Redis Stream, and idempotency replay state as `ENGINE_DURABLE`;
-- relay durability: whether the decision has been appended/fenced in Kafka;
+- relay durability: whether the decision has been appended/fenced in Kafka (`KAFKA_ACKED`);
 - settlement: whether PostgreSQL has applied the decision;
 - delivery: whether outbox/WebSocket/snapshots have exposed it.
 
-The current fast-ack contract returns final user-visible `ENGINE_*` decisions at
-the `ENGINE_DURABLE` boundary. It must still expose settlement state, and the
-run cannot be called correct until Redis pending decisions, Kafka relay, PG
-settlement, and outbox delivery have converged or the auction has failed closed.
+The default contract returns final user-visible `ENGINE_*` decisions at the
+`KAFKA_ACKED` boundary when Kafka is healthy, with bounded fallback to
+`ENGINE_DURABLE` on timeout/fail-fast/circuit-open. Either way, the run cannot be
+called correct until Redis pending decisions, Kafka relay, PG settlement, and
+outbox delivery have converged or the auction has failed closed.
 
 ## Unsupported Or Paused Paths
 

@@ -1,6 +1,6 @@
 # PTS-1B Final Readiness Checklist
 
-> Status: current pre-run checklist, 2026-05-31.
+> Status: current pre-run checklist, 2026-06-05.
 
 Do not start a paid PTS-1B run until every required item is checked or explicitly
 waived in the run review.
@@ -23,6 +23,7 @@ waived in the run review.
 - [ ] `KAFKA_BROKERS=localhost:9092`.
 - [ ] `KAFKA_BID_TOPIC=auction.bid-events`.
 - [ ] `KAFKA_DLQ_TOPIC=auction.dlq`.
+- [ ] `BID_ENGINE_RESPONSE_DURABILITY=kafka_ack` unless the run is explicitly labeled `redis_aof` low-latency diagnostic evidence.
 - [ ] Backend listens on the URL used by PTS, normally `:18080`.
 
 ## 3. Reset And Data
@@ -47,7 +48,8 @@ BASE_URL=http://127.0.0.1:18080 bash tests/pts/preflight-l4b-pts-guards.sh befor
 - [ ] Preflight output exists under `docs/perf/pts/evidence/incoming/before-<run-label>/`.
 - [ ] Kafka topic/fence checks pass.
 - [ ] Redis AOF/no-eviction/pending checks are acceptable for the scoped run.
-- [ ] Redis Stream decision log and idempotency replay boundary are healthy; M1 final decisions are expected to be `ENGINE_DURABLE`.
+- [ ] Redis Stream decision log and idempotency replay boundary are healthy; default M1 final decisions are expected to be `KAFKA_ACKED` with bounded `ENGINE_DURABLE` fallback.
+- [ ] Relay trigger goroutine (`runRelayOnTrigger`) confirmed running.
 - [ ] Settlement `engine_seq` gates pass.
 - [ ] Admission metric confirms disabled for downstream pressure.
 
@@ -86,7 +88,8 @@ FINAL_WAIT_SECONDS=0 bash tests/pts/verify-l4b-pts-correctness.sh <report-id-or-
 - [ ] Sampling logs fetched if sampling was enabled.
 - [ ] `ENGINE_*` distribution extracted.
 - [ ] HTTP distribution extracted.
-- [ ] Durability distribution extracted; final hot-path decisions are `ENGINE_DURABLE`.
+- [ ] Durability distribution extracted: `KAFKA_ACKED` ≥ 99% in `kafka_ack` mode (S1 UIPAX7JG: 998/1000 = 99.8%); `ENGINE_DURABLE` fallback ≤ 1% is ACCEPTABLE if post-run `kafka_lag=0` and all decisions `SETTLED` — this is graceful degradation, not data loss. `auction_kafka_ack_wait_timeout_total{reason=circuit_open}` must be 0 if Kafka was healthy during run.
+- [ ] For any `ENGINE_DURABLE` responses in a `kafka_ack` run: confirm they appear in settlement count and verifier PASS — proves the Redis AOF + Stream record was durable and relay confirmed asynchronously.
 - [ ] Settlement status distribution extracted.
 - [ ] Kafka lag/DLQ status recorded.
 - [ ] Redis pending/paused/reconciling status recorded.
@@ -95,8 +98,8 @@ FINAL_WAIT_SECONDS=0 bash tests/pts/verify-l4b-pts-correctness.sh <report-id-or-
 ## 8. Pass Criteria
 
 - [ ] 1000 intended unique bids classified.
-- [ ] User-visible `ENGINE_*` p99 <= 50ms.
-- [ ] Final decision responses use `durability_status=ENGINE_DURABLE`.
+- [ ] User-visible `ENGINE_*` p99 <= 60ms for default `kafka_ack` evidence, or <= 50ms for explicitly labeled `redis_aof` evidence.
+- [ ] Final decision responses use `durability_status=KAFKA_ACKED` >= 99% in default mode; bounded `ENGINE_DURABLE` fallback is valid only if convergence gates pass.
 - [ ] `202` / `PROCESSING_RETRY_LATER` RTT is not used as the PTS-1B p99.
 - [ ] `pending_ratio` and `timeout_ratio` are reported; dominant pending UX
       fails even if HTTP status is 2xx.

@@ -1,6 +1,6 @@
 # Live-Auction Test Strategy — Governing Spine
 
-> Status: governing test-strategy entry point, 2026-06-02.
+> Status: governing test-strategy entry point, 2026-06-05.
 > Scope: performance (PTS) + fault/resilience (local k6) for the hot bid path,
 > realtime fanout, and recovery. This folder is the single authority for the
 > test plan, names, run order, and judge-facing evidence. `tests/pts/MANIFEST.md`
@@ -68,7 +68,7 @@ Old `L*` names are not plan stages; they are script/data aliases only.
 
 | ID | Scenario (业务语言) | Proves | Tool | Headline metric | Script/data asset |
 |---|---|---|---|---|---|
-| **S1** | 绝杀时刻 — N users bid in the final second on one auction | contention correctness + tail latency | **PTS JMeter** | **bid decision p99 ≤ 50ms** + winner correct + every reject justified | `tests/pts/scenarios/s1-final-second-contention/s1-final-second-contention-1000vu.jmx`; ladder control `pts-1a-*` |
+| **S1** | 绝杀时刻 — N users bid in the final second on one auction | contention correctness + tail latency | **PTS JMeter** | default `kafka_ack` **bid decision p99 ≤ 60ms** + `KAFKA_ACKED` ≥ 99% + winner correct + every reject justified | `tests/pts/scenarios/s1-final-second-contention/s1-final-second-contention-1000vu.jmx`; ladder control `pts-1a-*` |
 | **S2** | 正常竞价 — minority bid steadily while viewers poll state | bid-decision long soak, convergence drain, capacity knee, and HTTP read interference | **independent-ECS k6 required** | steady decision p99 + read p99 + accepted-update rate + backlog/convergence + flat resources | `tests/load/s2-steady-soak.js`; `tests/load/s2-read-interference.js`; expanded split in `s2-s3-expanded-test-design.md` |
 | **S3** | 万人围观 — one room, 10 000 online, price broadcast to all | live-only fanout plus final-burst integration | **PTS VU/JMeter** + local or independent-source k6 | **fanout publish→receive p99 ≤ 1s** + connections held + RAM/conn | `tests/pts/scenarios/s3-room-fanout/*`; `tests/load/s3-fanout-soak.js`; expanded split in `s2-s3-expanded-test-design.md` |
 | **S4** | 故障韧性 — Redis/Kafka/PG/worker fault under live bidding | fail-closed, relay/replay convergence, RTO, RPO=0, no double-charge | **local k6 + Toxiproxy/SIGKILL** | **RTO** + **RPO=0** + zero phantom accepts + zero duplicate settlement | `tests/pts/run-pts-1c-concurrent-fault.sh`; `tests/chaos/*` |

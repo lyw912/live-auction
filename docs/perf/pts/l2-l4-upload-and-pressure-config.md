@@ -25,9 +25,11 @@ CSV pools, and PTS reports to the current scenarios.
 - Use PTS JMeter only where the current strategy says it adds value: S1 and S3.
 - Use local k6 for S2 soak, S4 fault, and S5 reconnect.
 - Keep PTS sampling at 1% unless doing forensic body checks.
-- M1 final bid-decision evidence requires `durability_status=ENGINE_DURABLE`.
-  Kafka relay, PostgreSQL settlement, and outbox are convergence/fault evidence,
-  not the synchronous HTTP response boundary.
+- M1 final bid-decision evidence now defaults to
+  `BID_ENGINE_RESPONSE_DURABILITY=kafka_ack`: expect `KAFKA_ACKED` >= 99% with
+  bounded `ENGINE_DURABLE` fallback and full Kafka/PostgreSQL/outbox convergence.
+  Explicit `redis_aof` diagnostic runs may require `ENGINE_DURABLE` and the old
+  low-latency boundary, but must be labeled as such.
 
 ## Source-Of-Truth Configuration
 

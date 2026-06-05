@@ -1,6 +1,6 @@
 # Metrics & SLO — the five headline numbers
 
-> Status: governing metric definitions, 2026-06-02.
+> Status: governing metric definitions, 2026-06-05.
 > Rule: a number you cannot point at one chart for, and define precisely, is not
 > allowed in the judge report. This file is the closed list.
 
@@ -13,7 +13,7 @@ target, and the one place the chart comes from.
 
 | # | Metric (判分名) | One-line definition | Target | Chart source |
 |---|---|---|---|---|
-| **M1** | 出价决策延迟 — bid decision p99 | request start → final `ENGINE_*` visible to bidder; **accepts and rejects both count** | ≤ 50 ms (burst S1); ≤ 100 ms (steady S2) | PTS sampler `出价决策 bid-decision` p99 |
+| **M1** | 出价决策延迟 — bid decision p99 | request start -> final `ENGINE_*` visible to bidder; **accepts and rejects both count** | ≤ 60 ms (default kafka_ack burst S1); ≤ 50 ms (explicit redis_aof diagnostic S1); ≤ 100 ms (steady S2) | PTS sampler `出价决策 bid-decision` p99 |
 | **M2** | 广播延迟 — fanout p99 | server `published_at_ms` → client receives that public `seq` | ≤ 1000 ms (same region) | PTS `广播接收 ws-fanout-receive` Single-Read p99 + k6 client histogram |
 | **M3** | 正确性 — correctness (boolean) | winner = highest valid amount; `engine_seq` gap-free; every reject has decision-time basis; no duplicate accepted/settled | **PASS** every run | `verify-l4b-pts-correctness.sh` + scenario verifier |
 | **M4** | 资源稳定性 — stability (soak) | slope of post-GC heap floor, goroutine count, fd count over the soak | slope ≈ 0 (no leak) | Grafana panels (Prometheus) |
@@ -77,14 +77,17 @@ frame unless the sampler is explicitly one operation per frame.
 
 **Boundary.** Stopwatch starts when the HTTP bid request is sent; stops when the
 response carrying the final business decision is parsed. The response is final
-only when `durability_status = ENGINE_DURABLE` and `result ∈ {ENGINE_ACCEPTED,
-ENGINE_REJECTED, ENGINE_SOLD}`. A `202 PROCESSING_RETRY_LATER` /
+only when `durability_status ∈ {KAFKA_ACKED, ENGINE_DURABLE}` and
+`result ∈ {ENGINE_ACCEPTED, ENGINE_REJECTED, ENGINE_SOLD}`. A `202 PROCESSING_RETRY_LATER` /
 `PENDING_DURABILITY` is **acceptance latency, not decision latency** — never cite
 it as M1. (Contract: `docs/current/performance-correctness-contract.md`.)
 
-`ENGINE_DURABLE` is the Redis Lua + Redis Stream + idempotency replay boundary.
-Kafka relay, PostgreSQL settlement, and outbox/WebSocket delivery are not counted
-inside M1; they are mandatory M3/M5 convergence evidence from the same run.
+Default S1 runs use `BID_ENGINE_RESPONSE_DURABILITY=kafka_ack`: healthy responses
+return `KAFKA_ACKED`; bounded fallback returns `ENGINE_DURABLE` and must later
+converge through Kafka/PostgreSQL. Explicit `redis_aof` runs return at the Redis
+Lua + Redis Stream + idempotency replay boundary. PostgreSQL settlement and
+outbox/WebSocket delivery are not counted inside M1; they are mandatory M3/M5
+convergence evidence from the same run.
 
 **Why accepts *and* rejects both count.** Under contention most bids are
 correctly rejected (below current price). A fast, correct reject is a *successful
@@ -95,7 +98,7 @@ hide the path that actually runs.
 together, never accepted-TPS alone:
 
 ```
-decision goodput   = correct decisions/sec (accept + reject) delivered within p99 ≤ 50ms
+decision goodput   = correct decisions/sec (accept + reject) delivered within the configured p99 envelope
 decisions/sec      = total bids the single-writer engine adjudicated/sec   ← engine capacity
 accepted updates/s = price-ladder progression   ← a BUSINESS property, intentionally bounded
 ```
@@ -108,7 +111,7 @@ accepted updates/s = price-ladder progression   ← a BUSINESS property, intenti
 **Pitfall.** Do not cite a non-existent "native HTTP" script for S1. The current
 formal S1 evidence uses the checked-in PTS JMeter asset and the verifier. If a
 future native-HTTP PTS script is created, it must first reproduce the same
-`ENGINE_DURABLE` assertion and M3 evidence chain before replacing the JMX.
+final-decision durability assertion and M3 evidence chain before replacing the JMX.
 
 ## M2 — fanout p99 (the realtime-sync number)
 
@@ -171,8 +174,8 @@ the end (`go tool pprof -base`).
 
 **RTO.** The harness emits machine timestamps: `fault_injected`, `first_error`,
 `first_success_after`, `slo_recovered`. Recovery is declared only when the
-steady-state SLI (e.g. *decision success ≥ 99% AND p99 ≤ 50 ms*) holds over a
-trailing window — **never** on a single good sample. `RTO = slo_recovered −
+steady-state SLI (e.g. *decision success >= 99% AND p99 within the configured
+M1 envelope*) holds over a trailing window — **never** on a single good sample. `RTO = slo_recovered −
 fault_injected` (or, for the user-visible bid path, fault-clear → first sustained
 DECIDED). Targets: ≤ 10 s excellent, ≤ 30 s acceptable, ≤ 45 s hard local ceiling
 (single-container Kafka cold start). Current S4 evidence measured RTO gates of

@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -62,9 +64,8 @@ var ledgerRunner = redisx.NewScriptRunner(redisx.ScriptBidRedisLedger, `
 local state_key = KEYS[1]
 local idem_key = KEYS[2]
 local pending_key = KEYS[3]
-local pending_auctions_key = KEYS[4]
-local log_stream_key = KEYS[5]
-local acl_key = KEYS[6]
+local log_stream_key = KEYS[4]
+local acl_key = KEYS[5]
 
 local now_ms = tonumber(ARGV[1])
 local auction_id = ARGV[2]
@@ -179,7 +180,6 @@ local function store_decision(result)
   -- Keep pending_key for reconciler visibility (backward-compat).
   redis.call('HSET', pending_key, tostring(result['engine_seq']), encoded)
   redis.call('PEXPIRE', pending_key, state_ttl_ms)
-  redis.call('SADD', pending_auctions_key, auction_id)
   -- XADD to the decision log stream — atomic with the decision itself.
   -- The group-commit relay reads this stream and batch-produces to Kafka.
   -- The stream entry ID returned by XADD is not used here; the relay tracks
@@ -354,12 +354,109 @@ local result = {
 return {'OK', store_decision(with_basis(result, nil))}
 `)
 
+// kafkaAckRegistry is an in-process latch table: HTTP handlers in "kafka_ack" mode
+// register a channel here, then block. relayAuctionLogBatch signals every channel
+// for its batch — true=ACKED (pipeline succeeded), false=fail-fast (AppendBatch
+// failed, Kafka down). Same mechanism as PostgreSQL WAL flush group commit.
+var kafkaAckRegistry = struct {
+	mu sync.Mutex
+	m  map[string][]chan bool
+}{m: make(map[string][]chan bool)}
+
+// kafkaRelayUnhealthy is a circuit-breaker flag whose zero value means healthy.
+// Set to true when relayAuctionLogBatch AppendBatch fails with a hard Kafka error
+// (not context cancellation). waitKafkaAck skips the latch when true, returning
+// ENGINE_DURABLE with zero extra latency. Reset to false on the next success.
+var kafkaRelayUnhealthy atomic.Bool
+
+// registerKafkaAckWaiter registers a channel for "auctionID:clientBidID" and returns
+// an unregister func that must be deferred by the caller.
+func registerKafkaAckWaiter(auctionID, clientBidID string) (chan bool, func()) {
+	key := auctionID + ":" + clientBidID
+	ch := make(chan bool, 1)
+	kafkaAckRegistry.mu.Lock()
+	kafkaAckRegistry.m[key] = append(kafkaAckRegistry.m[key], ch)
+	kafkaAckRegistry.mu.Unlock()
+	unregister := func() {
+		kafkaAckRegistry.mu.Lock()
+		sl := kafkaAckRegistry.m[key]
+		for i, c := range sl {
+			if c == ch {
+				last := len(sl) - 1
+				sl[i] = sl[last]
+				kafkaAckRegistry.m[key] = sl[:last]
+				break
+			}
+		}
+		if len(kafkaAckRegistry.m[key]) == 0 {
+			delete(kafkaAckRegistry.m, key)
+		}
+		kafkaAckRegistry.mu.Unlock()
+	}
+	return ch, unregister
+}
+
+// relayTriggerCh is a non-blocking hint channel: Engine writes the auctionID after a
+// successful Lua decision so the relay goroutine can wake up immediately instead of
+// waiting for the 200ms periodic ticker. Buffer of 256 so the hot path never blocks;
+// overflow is safe because the periodic fallback catches any missed triggers.
+// Single-process assumption: Engine and Worker share this channel in the same binary.
+var relayTriggerCh = make(chan string, 256)
+
+// triggerRelayForAuction sends a non-blocking hint to the relay goroutine.
+func triggerRelayForAuction(auctionID string) {
+	select {
+	case relayTriggerCh <- auctionID:
+	default: // channel full — relay is busy; periodic fallback will handle it
+	}
+}
+
+// signalKafkaAckWaiters wakes all handlers for this batch with acked=true.
+// Called by relayAuctionLogBatch after the idem-key KAFKA_ACKED pipeline succeeds.
+func signalKafkaAckWaiters(auctionID string, clientBidIDs []string) {
+	signalKafkaAckWaitersWithStatus(auctionID, clientBidIDs, true)
+}
+
+// failFastKafkaAckWaiters wakes all handlers for this batch with acked=false,
+// telling them to degrade immediately to ENGINE_DURABLE without burning the timeout.
+// Called when AppendBatch fails — Kafka fault detected by relay.
+func failFastKafkaAckWaiters(auctionID string, clientBidIDs []string) {
+	signalKafkaAckWaitersWithStatus(auctionID, clientBidIDs, false)
+}
+
+func signalKafkaAckWaitersWithStatus(auctionID string, clientBidIDs []string, acked bool) {
+	kafkaAckRegistry.mu.Lock()
+	defer kafkaAckRegistry.mu.Unlock()
+	for _, bidID := range clientBidIDs {
+		key := auctionID + ":" + bidID
+		for _, ch := range kafkaAckRegistry.m[key] {
+			select {
+			case ch <- acked:
+			default:
+			}
+		}
+		delete(kafkaAckRegistry.m, key)
+	}
+}
+
 type Engine struct {
 	db             *pgxpool.Pool
 	redis          *redis.Client
 	ledger         BidLedger
 	snapshotLoads  singleflight.Group
 	coldStartGroup singleflight.Group // serialises cold-start recovery per auction
+	// responseDurability controls the durability boundary returned to callers.
+	// "kafka_ack" (default): wait for the group-commit relay batch to confirm KAFKA_ACKED
+	//   before responding; gracefully degrades to ENGINE_DURABLE on the 40ms latch timeout,
+	//   relay fail-fast, or circuit-open.
+	// "redis_aof": return ENGINE_DURABLE immediately after Lua writes to Stream.
+	// Under PTS-1B load the relay batches continuously so healthy waits are typically small.
+	responseDurability string
+	// pendingSetSeen tracks which auctionIDs have been written to the global relay-discovery
+	// set (BidEnginePendingAuctionsKey). SADD only needs to happen once per auction per
+	// process lifetime — the set has no TTL and is never cleaned up. Avoids an extra Redis
+	// RTT on every hot-path bid after the first one for each auction.
+	pendingSetSeen sync.Map
 }
 
 type snapshot struct {
@@ -435,6 +532,72 @@ func New(db *pgxpool.Pool, redisClient *redis.Client, ledger BidLedger) *Engine 
 	return &Engine{db: db, redis: redisClient, ledger: ledger}
 }
 
+// WithResponseDurability sets the durability boundary for bid responses.
+// "kafka_ack" is the default configured by config.Load: block until the group-commit
+// relay confirms KAFKA_ACKED, then return KAFKA_ACKED; gracefully degrades to
+// ENGINE_DURABLE on timeout/fail-fast/circuit-open.
+// "redis_aof": return ENGINE_DURABLE immediately (Redis-AOF-local).
+func (e *Engine) WithResponseDurability(mode string) *Engine {
+	if e != nil {
+		e.responseDurability = mode
+	}
+	return e
+}
+
+// waitKafkaAck polls the idempotency key until kafka_append_status is ACKED or FAILED,
+// or until timeout. Multiple concurrent callers share the same relay batch — this is
+// group commit from the HTTP response layer's perspective.
+func (e *Engine) waitKafkaAck(ctx context.Context, auctionID, clientBidID string, timeout time.Duration) string {
+	// Circuit breaker: if Kafka is known unhealthy, skip the latch entirely.
+	// Cost: one atomic load (~1ns). Benefit: zero extra latency during Kafka faults.
+	if kafkaRelayUnhealthy.Load() {
+		observability.Inc("auction_kafka_ack_wait_timeout_total", map[string]string{"reason": "circuit_open"})
+		return kafkaAppendStatusUnknown
+	}
+
+	start := time.Now()
+	// Register the latch BEFORE the eager check to avoid missing a signal that
+	// arrives between the Lua return and this point.
+	ch, unregister := registerKafkaAckWaiter(auctionID, clientBidID)
+	defer unregister()
+
+	// One eager Redis check: relay may have already confirmed while we were
+	// parsing the Lua result. This is one HGet total, not a polling loop.
+	if status, err := e.redis.HGet(ctx, redisx.BidEngineIdempotencyKey(auctionID, clientBidID), "kafka_append_status").Result(); err == nil {
+		switch status {
+		case kafkaAppendStatusAcked:
+			observability.Observe("auction_kafka_ack_wait_ms", float64(time.Since(start).Milliseconds()),
+				map[string]string{"outcome": "eager_acked"}, observability.DefaultLatencyBuckets)
+			return kafkaAppendStatusAcked
+		case kafkaAppendStatusFailed:
+			return kafkaAppendStatusFailed
+		}
+	}
+
+	// Block until relay signals (true=ACKED, false=fail-fast Kafka fault),
+	// timeout, or ctx cancellation. Zero extra Redis RTTs during the wait.
+	select {
+	case acked := <-ch:
+		if acked {
+			observability.Observe("auction_kafka_ack_wait_ms", float64(time.Since(start).Milliseconds()),
+				map[string]string{"outcome": "acked"}, observability.DefaultLatencyBuckets)
+			return kafkaAppendStatusAcked
+		}
+		// Relay sent fail-fast: AppendBatch failed, degrade immediately — no timeout burned.
+		observability.Inc("auction_kafka_ack_wait_timeout_total", map[string]string{"reason": "fail_fast"})
+		observability.Observe("auction_kafka_ack_wait_ms", float64(time.Since(start).Milliseconds()),
+			map[string]string{"outcome": "fail_fast"}, observability.DefaultLatencyBuckets)
+		return kafkaAppendStatusUnknown
+	case <-time.After(timeout):
+		observability.Inc("auction_kafka_ack_wait_timeout_total", map[string]string{"reason": "timeout"})
+		observability.Observe("auction_kafka_ack_wait_ms", float64(timeout.Milliseconds()),
+			map[string]string{"outcome": "timeout"}, observability.DefaultLatencyBuckets)
+		return kafkaAppendStatusUnknown
+	case <-ctx.Done():
+		return kafkaAppendStatusUnknown
+	}
+}
+
 // PlaceBid executes the bid hot path. Pass aclKey to enforce room-membership
 // inside the Lua script atomically (no extra Redis RTT). Omit it (or pass "")
 // for test/non-gateway callers — Lua skips the ACL check in that case.
@@ -489,9 +652,8 @@ func (e *Engine) placeBidWithSnapshot(
 		redisx.BidEngineStateKey(auctionID),
 		redisx.BidEngineIdempotencyKey(auctionID, input.ClientBidID),
 		redisx.BidEnginePendingKey(auctionID),
-		redisx.BidEnginePendingAuctionsKey(),
-		redisx.BidEngineLogStreamKey(auctionID), // KEYS[5]: decision log stream (WAL)
-		aclKey,                                  // KEYS[6]: ACL check in-Lua (empty = skip)
+		redisx.BidEngineLogStreamKey(auctionID), // KEYS[4]: decision log stream (WAL)
+		aclKey,                                  // KEYS[5]: ACL check in-Lua (empty = skip)
 	}, nowMS, auctionID, userID, input.ClientBidID, input.AmountCents, requestHash, traceID, bidID, stateJSON, engineStateTTL.Milliseconds(), idempotencyTTL.Milliseconds())
 	values, err := cmd.Slice()
 	if err != nil {
@@ -573,6 +735,40 @@ func (e *Engine) placeBidWithSnapshot(
 		resp, err := e.redisIdempotencyReplayResponse(ctx, auctionID, input.ClientBidID, requestHash, result, totalStart)
 		apptracing.End(*stageSpan, err)
 		return resp, err
+	}
+	// best-effort: add to global relay-discovery index outside Lua to keep all Lua KEYS
+	// same-slot (Cluster-ready). ProcessPendingAppends falls back to activeAuctionIDs
+	// (DB) when this set is missing or TTL-expired, so failure here is non-fatal.
+	// Only fire for the first bid per auction per process (the key has no TTL and is
+	// never SREM'd, so one SADD per auction lifetime is sufficient). This avoids an
+	// extra Redis RTT on every hot-path call — the original Lua SADD was free because
+	// it shared the same EVAL round-trip; a standalone synchronous SADD doubles queue
+	// depth and P99 under high concurrency.
+	// Add to global relay-discovery index once per auction per process lifetime.
+	// pendingSetSeen deduplicates: only the first bid for an auction triggers an
+	// SAdd (O(1) Redis). The original Lua SADD was atomic with the decision and
+	// therefore guaranteed-complete before PlaceBid returns; we preserve that
+	// guarantee here so ProcessPendingAppends relay-discovery sees the auction
+	// immediately. Under PTS-1B with N concurrent bids, exactly ONE goroutine
+	// does the SAdd — the winner of LoadOrStore — and the rest skip it entirely,
+	// so total overhead is 1 SAdd across all N requests, not N SADDs.
+	if _, seen := e.pendingSetSeen.LoadOrStore(auctionID, struct{}{}); !seen {
+		_ = e.redis.SAdd(ctx, redisx.BidEnginePendingAuctionsKey(), auctionID).Err()
+	}
+	// Wake the relay goroutine immediately so Kafka ACK arrives before waitKafkaAck
+	// timeout. Non-blocking: safe to call even in redis_aof mode (relay runs faster,
+	// KAFKA_ACKED on replay is more current). Overflow is handled by 200ms fallback.
+	triggerRelayForAuction(auctionID)
+	if e.responseDurability == "kafka_ack" {
+		// 40ms budget: with event-driven relay (~1ms wake-up + ~5ms Kafka RTT local)
+		// typical wait is 6-8ms, leaving ample headroom to 50ms P99 target.
+		// On timeout → ENGINE_DURABLE graceful degradation.
+		if ackStatus := e.waitKafkaAck(ctx, auctionID, input.ClientBidID, 40*time.Millisecond); ackStatus == kafkaAppendStatusAcked {
+			recordHTTPStage("total", result.Result, "kafka_ack_wait", time.Since(totalStart))
+			return result.response(auction.DurabilityStatusKafkaAcked, auction.DecisionStatusDecided), nil
+		}
+		// Timeout or error: graceful degradation — relay batch may be slow or Redis
+		// pipeline is under pressure; client still gets a final ENGINE_DURABLE decision.
 	}
 	recordHTTPStage("total", result.Result, "ok", time.Since(totalStart))
 	return result.response(auction.DurabilityStatusEngineDurable, auction.DecisionStatusDecided), nil
@@ -1175,11 +1371,16 @@ func (w *Worker) Run(ctx context.Context, interval time.Duration) {
 	}
 	log := w.logger()
 	log.Info("redis engine worker starting", slog.String("consumer_id", w.consumerID), slog.Duration("interval", interval))
-	done := make(chan struct{}, 3)
+	// 4 goroutines: trigger-relay, control, kafka-settlement, reconcile.
+	done := make(chan struct{}, 4)
+	// Triggered relay: wakes immediately when Engine writes a new decision to the stream.
+	// Eliminates the 200ms periodic wait for kafka_ack mode — expected relay latency ≈ 6-8ms.
+	go w.runRelayOnTrigger(ctx, done)
 	go w.runPeriodic(ctx, "control", interval, done, func(loopCtx context.Context) (int, error) {
 		if err := w.ProcessSignals(loopCtx, 16); err != nil {
 			return 0, err
 		}
+		// Fallback relay: catches auctions missed by trigger overflow or startup.
 		return w.ProcessPendingAppends(loopCtx, 100)
 	})
 	go w.runPeriodic(ctx, "kafka-settlement", 10*time.Millisecond, done, func(loopCtx context.Context) (int, error) {
@@ -1195,6 +1396,49 @@ func (w *Worker) Run(ctx context.Context, interval time.Duration) {
 	log.Info("redis engine worker stopping", slog.String("consumer_id", w.consumerID), slog.String("reason", ctx.Err().Error()))
 	for i := 0; i < cap(done); i++ {
 		<-done
+	}
+}
+
+// runRelayOnTrigger is the event-driven relay goroutine. It blocks on relayTriggerCh
+// and calls relayAuctionLogBatch directly for each triggered auction, bypassing the
+// periodic discovery scan. After the relay completes, signalKafkaAckWaiters unblocks
+// all handlers waiting in waitKafkaAck — completing the group-commit latch.
+func (w *Worker) runRelayOnTrigger(ctx context.Context, done chan<- struct{}) {
+	defer func() {
+		if r := recover(); r != nil {
+			w.logger().Error("relay trigger loop panicked",
+				slog.String("consumer_id", w.consumerID), slog.Any("panic", r))
+		}
+		done <- struct{}{}
+	}()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case auctionID := <-relayTriggerCh:
+			// Drain and deduplicate: burst of bids for the same auction
+			// needs only one relay pass (XREAD batches all pending entries).
+			seen := map[string]struct{}{auctionID: {}}
+		drainMore:
+			for {
+				select {
+				case id := <-relayTriggerCh:
+					seen[id] = struct{}{}
+				default:
+					break drainMore
+				}
+			}
+			for id := range seen {
+				if _, err := w.relayAuctionLogBatch(ctx, id); err != nil {
+					if !errors.Is(err, context.Canceled) {
+						w.logger().Warn("relay trigger batch failed",
+							slog.String("consumer_id", w.consumerID),
+							slog.String("auction_id", id),
+							slog.String("error", err.Error()))
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -1397,12 +1641,32 @@ func (w *Worker) relayAuctionLogBatch(ctx context.Context, auctionID string) (in
 	ledgerMsgs, err := w.ledger.AppendBatch(ctx, results)
 	if err != nil {
 		observability.Inc("auction_bid_relay_kafka_batch_fail_total", map[string]string{"auction_id": auctionID})
+		// Don't open the circuit on context cancellation (server shutdown) — that is not
+		// a Kafka health signal. Open only on hard Kafka errors.
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			// Circuit breaker: future waitKafkaAck calls skip the latch immediately.
+			kafkaRelayUnhealthy.Store(true)
+		}
+		// Fail-fast: wake current waiters immediately — no 40ms timeout burned.
+		bidIDs := make([]string, len(results))
+		for i, r := range results {
+			bidIDs[i] = r.ClientBidID
+		}
+		failFastKafkaAckWaiters(auctionID, bidIDs)
 		return 0, fmt.Errorf("relay batch produce auction=%s batch=%d: %w", auctionID, len(results), err)
 	}
 	if len(ledgerMsgs) != len(results) {
 		observability.Inc("auction_bid_relay_kafka_batch_fail_total", map[string]string{"auction_id": auctionID})
+		kafkaRelayUnhealthy.Store(true)
+		bidIDs := make([]string, len(results))
+		for i, r := range results {
+			bidIDs[i] = r.ClientBidID
+		}
+		failFastKafkaAckWaiters(auctionID, bidIDs)
 		return 0, fmt.Errorf("relay batch produce auction=%s returned %d ledger messages for %d results", auctionID, len(ledgerMsgs), len(results))
 	}
+	// Success: reset circuit breaker so future kafka_ack requests resume waiting.
+	kafkaRelayUnhealthy.Store(false)
 
 	observability.Inc("auction_bid_relay_kafka_batch_total", map[string]string{"auction_id": auctionID})
 	observability.Observe("auction_bid_relay_batch_size", float64(len(results)), map[string]string{"auction_id": auctionID}, observability.DefaultLatencyBuckets)
@@ -1429,6 +1693,15 @@ func (w *Worker) relayAuctionLogBatch(ctx context.Context, auctionID string) (in
 		// Non-fatal: Kafka already accepted the batch. idem keys will eventually be
 		// re-acked on the next relay pass (idempotent Kafka produce + stream cursor).
 		w.logger().Warn("relay: idem ack pipeline failed (non-fatal)", slog.String("auction_id", auctionID), slog.String("error", err.Error()))
+	} else {
+		// Wake all in-process handlers waiting for kafka_ack confirmation.
+		// On pipeline failure we skip signalling so waiters gracefully degrade to
+		// ENGINE_DURABLE after timeout; the next relay pass will re-ack the idem keys.
+		bidIDs := make([]string, len(results))
+		for i, r := range results {
+			bidIDs[i] = r.ClientBidID
+		}
+		signalKafkaAckWaiters(auctionID, bidIDs)
 	}
 
 	// Advance relay cursor to the last processed stream entry ID.

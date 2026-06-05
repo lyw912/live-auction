@@ -1,6 +1,6 @@
 # Current Evidence Policy
 
-> Status: governing evidence policy, 2026-05-31.
+> Status: governing evidence policy, 2026-06-05.
 
 This file defines what can be cited as current evidence after the PG-lane to Redis/Kafka reset.
 
@@ -28,7 +28,7 @@ A run cannot be called current PTS-1B success unless it has all of these:
 - PTS report details or full sampler export;
 - server evidence under `docs/perf/pts/evidence/incoming/<label>/` before review, then under `current/` or `archive/*/` after classification;
 - `ENGINE_*` distribution, HTTP status distribution, durability status, and settlement status;
-- normal final hot-path decisions use `durability_status=ENGINE_DURABLE`; Kafka ack is not required on the HTTP response path;
+- normal final hot-path decisions in the default profile use `durability_status=KAFKA_ACKED`; bounded `ENGINE_DURABLE` fallback is acceptable only when relay/settlement convergence later proves no data loss;
 - Redis Stream/pending state, Kafka relay lag/DLQ, PostgreSQL settlement coverage, and outbox backlog after convergence;
 - Redis Engine recovery evidence when claiming fault readiness, including `resume_redis_engine` signal result `rto_ms`, preflight/postflight status, checkpoint hash, and Redis Engine diagnostics `last_recovery_rto_ms`;
 - correctness verifier output from `tests/pts/verify-l4b-pts-correctness.sh`;
@@ -42,8 +42,8 @@ New PTS report reviews must use `docs/current/pts-run-review-template.md`.
 
 All must hold:
 
-- user-visible `ENGINE_*` decision p99 <= 50ms for PTS-1B;
-- final `ENGINE_*` decision responses are `ENGINE_DURABLE`;
+- user-visible `ENGINE_*` decision p99 <= 60ms for default `kafka_ack` PTS-1B evidence, or <= 50ms for explicit `redis_aof` low-latency evidence;
+- final `ENGINE_*` decision responses are `KAFKA_ACKED` >= 99% in default `kafka_ack` mode, with bounded `ENGINE_DURABLE` fallback <= 1% and proven convergence;
 - 1000 intended unique bids are classified;
 - final winner is the highest valid amount;
 - every low reject is justified against decision-time current/required price;

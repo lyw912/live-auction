@@ -1,6 +1,6 @@
 # Fault Injection And Correctness Runbook
 
-> Status: current fault-gate runbook, 2026-05-31.
+> Status: current fault-gate runbook, 2026-06-05.
 
 This runbook defines what must be proven before claiming Redis/Kafka/PostgreSQL
 failure readiness for high-value auction bidding. A prose statement such as
@@ -12,8 +12,8 @@ Current hot bid boundary:
 
 ```text
 Redis live decision state
--> Redis Stream/idempotency replay record (`ENGINE_DURABLE` response boundary)
--> Kafka relay/WAL/fence
+-> Redis Stream/idempotency replay record (`ENGINE_DURABLE` Redis-AOF-local boundary)
+-> Kafka relay/WAL/fence (`KAFKA_ACKED` default response boundary when healthy)
 -> PostgreSQL settlement/audit/order truth
 -> outbox/realtime projection
 -> reconciler verifies and fails closed on uncertainty
@@ -44,15 +44,36 @@ This table is the fault readiness checklist. The layered execution plan is in
 |---|---|---|---|
 | Redis process restart, data retained | no wrong accept; bounded pause/reconcile if needed | reconnect, reload/check hot state, verify against Kafka/PG, resume only when safe | no wrong winner, no missing accepted decision, verifier pass |
 | Redis data loss / `FLUSHALL` | fail closed before accepting unsafe bids | pause auction or reject with explicit paused/reconciling state, rebuild from checkpoint/Kafka/PG, verify before resume | RTO measured; no bid accepted against unverified state |
-| Kafka relay timeout/broker restart | no `ENGINE_DURABLE` decision is lost; relay lag is visible | Redis Stream retains decisions; pending count/lag/DLQ visible; relay drains after restart or auction pauses/reconciles | Redis pending drains, Kafka lag/DLQ clean, verifier pass |
+| Kafka relay timeout/broker restart | no `ENGINE_DURABLE` decision is lost; relay lag is visible; in `kafka_ack` mode: fail-fast + circuit breaker ensure handlers degrade to `ENGINE_DURABLE` immediately, no 40ms timeout burned | Redis Stream retains decisions; `kafkaRelayUnhealthy` circuit opens; pending count/lag/DLQ visible; relay drains after restart — circuit closes automatically | Redis pending drains, Kafka lag/DLQ clean, `auction_kafka_ack_wait_timeout_total{reason=circuit_open}` resolves to 0, verifier pass |
 | settlement worker crash/restart | accepted engine decisions eventually settle once | Kafka offsets/engine_seq remain contiguous; idempotent settlement resumes | no duplicate public seq/order; verifier pass |
 | PostgreSQL latency/restart | no wrong settlement/order | hot engine may pause or expose pending; settlement catches up after PG returns | no stale epoch/seq writes; no unresolved settlement gap |
 | WebSocket reconnect storm during bids | clients converge to server truth | history/snapshot recovery returns current price/winner/status | no client-side winner/hammer; server timeline authoritative |
 
-## ENGINE_DURABLE Makes Fault Gates Stricter
+## Interpreting ENGINE_DURABLE Fallback in kafka_ack Runs
 
-Because the HTTP hot path returns at `ENGINE_DURABLE`, Kafka and PostgreSQL are
-not allowed to be vague "eventual" promises. Every fault run must prove:
+A `kafka_ack` mode run may produce a small number of `ENGINE_DURABLE` responses.
+These are **not failures**. Correct interpretation:
+
+| Signal | Meaning |
+|---|---|
+| `ENGINE_DURABLE` in response | 40ms latch timeout fired; decision is in Redis AOF + Stream + idem record |
+| `kafka_lag = 0` post-run | Relay confirmed those decisions to Kafka asynchronously |
+| `settlement = N/N` post-run | PostgreSQL applied all decisions including the fallback ones |
+| `circuit_open = 0` in metrics | Kafka did not fault; timeout was due to relay tail latency only |
+
+A run with ≤1% `ENGINE_DURABLE` AND `kafka_lag=0` AND full settlement AND
+`circuit_open=0` is a **valid pass** for the `kafka_ack` profile. The fallback
+decisions are indistinguishable from `KAFKA_ACKED` decisions in final state.
+
+A run with `circuit_open > 0` OR `kafka_lag > 0` at run end is a different
+category: it means Kafka was faulted and must be classified accordingly.
+
+## ENGINE_DURABLE / KAFKA_ACKED Make Fault Gates Stricter
+
+The HTTP hot path returns at `KAFKA_ACKED` by default when Kafka is healthy, with
+bounded fallback to `ENGINE_DURABLE` on latch timeout, relay fail-fast, or
+circuit-open. In both cases Kafka and PostgreSQL are not allowed to be vague
+"eventual" promises. Every fault run must prove:
 
 - Redis AOF/no-eviction and Redis Stream retention protect decisions before relay;
 - Redis pending decisions are bounded and observable;
@@ -60,6 +81,20 @@ not allowed to be vague "eventual" promises. Every fault run must prove:
 - PostgreSQL settlement applies every relayed decision exactly once;
 - outbox/WebSocket projection catches up or reports a gap/recovery state;
 - reconciler detects mismatches and prevents dangerous bidding until safe.
+
+### kafka_ack mode Kafka fault behavior
+
+When Kafka is faulted during a `kafka_ack` mode run:
+1. Relay's `AppendBatch` fails → `failFastKafkaAckWaiters` signals all currently
+   waiting handlers → they degrade to `ENGINE_DURABLE` immediately (no timeout).
+2. `kafkaRelayUnhealthy.Store(true)` opens the circuit → subsequent handlers skip
+   the latch (`~1ns`) and return `ENGINE_DURABLE` directly.
+3. When Kafka recovers, the next successful `AppendBatch` closes the circuit
+   (`kafkaRelayUnhealthy.Store(false)`) and normal `KAFKA_ACKED` responses resume.
+4. All decisions during the fault window are `ENGINE_DURABLE` (Redis-AOF-local),
+   which relay will eventually confirm to `KAFKA_ACKED` after recovery.
+5. Evidence: `auction_kafka_ack_wait_timeout_total{reason="circuit_open"}` should
+   spike during fault and return to 0 after recovery.
 
 ## Redis Data Loss Is Not Automatically Safe
 

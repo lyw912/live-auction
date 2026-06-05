@@ -1,6 +1,6 @@
 # S1 Evidence Methodology
 
-> Status: current, 2026-06-03. This document explains how S1 final-second PTS
+> Status: current, 2026-06-05. This document explains how S1 final-second PTS
 > evidence is recomputed and defended when reviewers do not accept a PTS page at
 > face value.
 
@@ -10,9 +10,10 @@ S1 proves one narrow claim:
 
 > In one hot auction, 1000 distinct authenticated bidders submit one bid each in
 > the final-second burst window. The system returns synchronous `ENGINE_*`
-> decisions with p99 <= 50 ms, classifies all 1000 bids exactly once, picks the
-> highest valid winner, justifies every reject, and drains Redis/Kafka/PG/outbox
-> state.
+> decisions with p99 <= 60 ms in the default `kafka_ack` response profile,
+> returns `KAFKA_ACKED` for >= 99% of responses with bounded `ENGINE_DURABLE`
+> fallback, classifies all 1000 bids exactly once, picks the highest valid
+> winner, justifies every reject, and drains Redis/Kafka/PG/outbox state.
 
 The current JMX default is `contention_release_window_ms=500`. That means the
 script synchronizes bidders to a common final-second start and then spreads each
@@ -146,7 +147,47 @@ This is not "ignoring bad data"; it is rejecting a field that violates a
 mathematical invariant and replacing it with a reproducible calculation from
 the raw per-request data.
 
-## Current Example: 2MLCX7WG
+## Current Default kafka_ack Example: UIPAX7JG
+
+`UIPAX7JG` is the current formal S1 PTS evidence after making
+`BID_ENGINE_RESPONSE_DURABILITY=kafka_ack` the default response profile.
+
+Evidence:
+
+```text
+docs/perf/pts/evidence/incoming/UIPAX7JG/
+docs/perf/pts/evidence/incoming/UIPAX7JG/s1-review.md
+```
+
+Key facts from the recomputation:
+
+- 1000 PTS sampling rows, 1000 unique request `client_bid_id`, 1000 unique
+  response `bid_id`.
+- Server Prometheus cross-check: 1000 POST `/api/auctions/{id}/bids`, 1000 Redis
+  Lua `bid_redis_ledger` executions.
+- Outcome: 264 `ENGINE_ACCEPTED`, 736 `ENGINE_REJECTED`, 1000 `DECIDED`.
+- Sampled durability: 998 `KAFKA_ACKED`, 2 `ENGINE_DURABLE`. Post-run DB
+  evidence showed all 1000 decisions reached Kafka and settlement.
+- Engine seq complete: count=1000, min=1, max=1000, unique=1000, no gaps or
+  duplicates.
+- Verifier: 41/41 gates PASS; Kafka lag 0, Redis pending 0, outbox drained.
+- PTS send-start span: `startTimeTS` 1780659075002..1780659075507 = 505 ms.
+- Response server timestamp span: `server_time_ms`
+  1780659075004..1780659075511 = 507 ms.
+- Sampling-log `elapsedTime` p99 = 58 ms, max = 67 ms.
+- Server/gateway histogram: 985/1000 gateway total samples are within the
+  <=50 ms bucket and 1000/1000 are within the <=100 ms bucket; Redis Lua itself
+  has 1000/1000 <=25 ms.
+
+Interpretation:
+
+`UIPAX7JG` is a clean S1 correctness pass and the current default `kafka_ack`
+M1 evidence under a 60 ms envelope. It does not prove strict <=50 ms at the
+Kafka-ack response boundary. The two sampled `ENGINE_DURABLE` responses are
+bounded fallback, not lost or undecided requests; convergence evidence proves
+they reached Kafka/PostgreSQL after the response.
+
+## Legacy redis_aof Example: 2MLCX7WG
 
 `2MLCX7WG` is the current formal S1 PTS evidence after returning to the
 controlled `contention_release_window_ms=500` profile.

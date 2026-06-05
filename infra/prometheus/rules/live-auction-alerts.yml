@@ -170,3 +170,39 @@ groups:
           summary: "Cancelled/ended auction not fenced in Redis hot engine"
           description: "Reconciler found an auction in a terminal PG state whose Redis hot-state was not marked paused. Bids may have been accepted after cancellation. Check /api/monitor/redis-engine."
           runbook: "docs/current/fault-injection-runbook.md"
+
+      - alert: LiveAuctionKafkaAckWaitDegradation
+        expr: increase(auction_kafka_ack_wait_timeout_total[2m]) > 10
+        for: 0m
+        labels:
+          severity: warning
+          component: redis-engine
+          scenario: kafka-ack
+        annotations:
+          summary: "kafka_ack mode: relay latch degrading to ENGINE_DURABLE"
+          description: "More than 10 waitKafkaAck degradations in 2 minutes. reason=fail_fast means Kafka fault detected mid-batch; reason=circuit_open means circuit breaker is open (Kafka down, all handlers skip wait); reason=timeout means relay too slow. Check auction_kafka_ack_wait_ms{outcome} for breakdown."
+          runbook: "docs/current/runtime-profiles.md#kafka-ack-response-durability-boundary"
+
+      - alert: LiveAuctionKafkaAckCircuitOpen
+        expr: increase(auction_kafka_ack_wait_timeout_total{reason="circuit_open"}[1m]) > 5
+        for: 0m
+        labels:
+          severity: critical
+          component: redis-engine
+          scenario: kafka-ack
+        annotations:
+          summary: "kafka_ack circuit breaker open — Kafka broker unreachable"
+          description: "Circuit breaker opened: relay AppendBatch failed with a hard Kafka error and all subsequent kafka_ack handlers are skipping the wait. Check Kafka broker health, auction_bid_relay_kafka_batch_fail_total, and relay goroutine logs."
+          runbook: "docs/current/runtime-profiles.md#kafka-ack-response-durability-boundary"
+
+      - alert: LiveAuctionKafkaAckWaitP99High
+        expr: histogram_quantile(0.99, sum by (le, outcome) (rate(auction_kafka_ack_wait_ms_bucket{outcome="acked"}[2m]))) > 30
+        for: 1m
+        labels:
+          severity: warning
+          component: redis-engine
+          scenario: kafka-ack
+        annotations:
+          summary: "kafka_ack wait P99 exceeds event-driven relay budget"
+          description: "P99 kafka_ack latch wait is above 30ms. At this level, total bid P99 risks breaching the default kafka_ack 60ms envelope. Check relay trigger goroutine is running (runRelayOnTrigger), Kafka broker produce latency, and Redis pipeline latency."
+          runbook: "docs/current/runtime-profiles.md#kafka-ack-response-durability-boundary"

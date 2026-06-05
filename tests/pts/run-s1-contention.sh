@@ -2,7 +2,7 @@
 # run-s1-contention.sh — S1 绝杀时刻 full run sequence
 #
 # Runs both sub-tests:
-#   S1-burst  (asset alias L1-C1): tight contention band, decision p99 ≤ 50ms, M1 headline
+#   S1-burst  (asset alias L1-C1): tight contention band, default kafka_ack p99 ≤ 60ms, M1 headline
 #   S1-ladder (asset alias L1-C0): strictly increasing amounts, accept-path control
 #
 # Upload the JMX to PTS manually; this script handles server-side prep + post-run verify.
@@ -33,6 +33,19 @@ echo "   Sampler to screenshot: '出价决策 bid-decision'"
 echo "   JMX default: contention_release_window_ms=500 (short final-second release window)"
 echo "   Optional diagnostic property: contention_release_window_ms=0 (strict-barrier comparison)"
 echo "   Optional conservative property: contention_release_window_ms=1000 (one-second final-window burst)"
+echo "   Default durability: BID_ENGINE_RESPONSE_DURABILITY=kafka_ack"
+echo "   Accepted current evidence: UIPAX7JG — 1000 decisions, 998 KAFKA_ACKED / 2 ENGINE_DURABLE,"
+echo "                              p99 58ms, 505ms offered window, verifier PASS."
+echo ""
+echo "   *** 2-AGENT SYNC FIX (重要) ***"
+echo "   新 JMX 不需要 PTS 自定义全局参数。两个 agent 会基于公网机器时钟"
+echo "   自动对齐到同一个 wall-clock barrier：下一分钟边界 + 15s，且至少"
+echo "   保留 20s 等待时间。只要两个 agent 启动偏移在几秒内，总窗口应回到"
+echo "   contention_release_window_ms=500 附近。"
+echo "   如果 PTS UI 没有参数输入能力，直接上传 JMX + CSV 并立即执行即可。"
+echo ""
+echo "   Explicit diagnostic override: BID_ENGINE_RESPONSE_DURABILITY=redis_aof"
+echo "             responses return at ENGINE_DURABLE and target the old ≤50ms low-latency boundary."
 echo ""
 echo "   [optional S1-ladder control]"
 echo "   JMX:       tests/pts/scenarios/s1-final-second-contention/s1-accepted-ladder-control-1000vu.jmx"

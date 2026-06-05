@@ -7,6 +7,17 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            react: ['react', 'react-dom'],
+            arco: ['@arco-design/web-react'],
+            icons: ['lucide-react']
+          }
+        }
+      }
+    },
     server: {
       proxy: {
         '/api': {

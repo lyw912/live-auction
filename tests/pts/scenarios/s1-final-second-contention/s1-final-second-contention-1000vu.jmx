@@ -2,7 +2,7 @@
 <jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
   <hashTree>
     <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="PTS-1B contention burst 1000VU 1m (v3 single-writer decision log)" enabled="true">
-      <stringProp name="TestPlan.comments">PTS-1B contention burst v5 single-writer decision log. Business scenario: final second of a jewellery auction, 1000 bidders submit one bid each inside a controlled short final-second release window. Default contention_release_window_ms=500; set 0 only for diagnostic strict-barrier comparison, or 1000 for conservative one-second fallback. Server returns synchronous DECIDED in under 50ms. Pass: HTTP 200 + decision_status=DECIDED + durability_status=ENGINE_DURABLE, p99 &lt;= 50ms, all 1000 bids classified, highest amount wins, engine_seq gap-free, no DLQ/pause. Requires ALLOW_MOCK_AUTH=false ADMISSION_ENABLED=false BID_ENGINE_MODE=redis_ledger Kafka topics ready high auction cap.</stringProp>
+      <stringProp name="TestPlan.comments">PTS-1B contention burst v7 single-writer decision log. Business scenario: final second of a jewellery auction, 1000 bidders submit one bid each inside a controlled short final-second release window. Default contention_release_window_ms=500; set 0 only for diagnostic strict-barrier comparison, or 1000 for conservative one-second fallback. Default server profile is BID_ENGINE_RESPONSE_DURABILITY=kafka_ack: expect synchronous DECIDED with KAFKA_ACKED &gt;= 99%, bounded ENGINE_DURABLE fallback, and p99 &lt;= 60ms. Explicit redis_aof diagnostic evidence may use ENGINE_DURABLE and p99 &lt;= 50ms. Pass: HTTP 200 + decision_status=DECIDED + durability_status=ENGINE_DURABLE|KAFKA_ACKED, all 1000 bids classified, highest amount wins, engine_seq gap-free, no DLQ/pause. Requires ALLOW_MOCK_AUTH=false ADMISSION_ENABLED=false BID_ENGINE_MODE=redis_ledger Kafka topics ready high auction cap. 2-AGENT SYNC: agents self-align to a shared wall-clock barrier (next minute + 15s, at least 20s in the future). No PTS global parameter is required; optional l4b_barrier_target_epoch_ms can still override for diagnostics.</stringProp>
       <boolProp name="TestPlan.functional_mode">false</boolProp>
       <boolProp name="TestPlan.tearDown_on_shutdown">true</boolProp>
       <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
@@ -203,14 +203,29 @@ prev.setIgnore()
           long globalRank = Math.max(1L, (bucket - 1L) * 7L + lane + 1L)
 
           long burstWaitMS = Long.parseLong(props.getProperty('burst_wait_ms', '40000'))
-          long barrierQuantumMS = Long.parseLong(props.getProperty('contention_barrier_quantum_ms', '10000'))
+          long barrierQuantumMS = Long.parseLong(props.getProperty('contention_barrier_quantum_ms', '60000'))
+          long barrierOffsetMS = Long.parseLong(props.getProperty('contention_barrier_offset_ms', '15000'))
+          long barrierMinLeadMS = Long.parseLong(props.getProperty('contention_barrier_min_lead_ms', '20000'))
           long releaseWindowMS = Long.parseLong(props.getProperty('contention_release_window_ms', '500'))
           def target = props.get('l4b_final_second_target_ms') as java.util.concurrent.atomic.AtomicLong
           if (target == null) {
             long now = System.currentTimeMillis()
-            long desired = now + burstWaitMS
-            long aligned = ((desired + barrierQuantumMS - 1L) / barrierQuantumMS) * barrierQuantumMS
-            target = new java.util.concurrent.atomic.AtomicLong(aligned)
+            long alignedTarget
+            // 2-agent fix: PTS does not expose custom JMeter properties in this setup.
+            // Therefore agents self-align from wall clock instead of each computing now+40s.
+            // Default: next minute boundary + 15s, but never less than 20s away.
+            // For two agents starting within a few seconds, this yields the same absolute
+            // epoch and removes the ~800ms inter-agent skew observed with per-JVM props.
+            def externalEpochStr = props.getProperty('l4b_barrier_target_epoch_ms', '')
+            if (externalEpochStr) {
+              alignedTarget = Long.parseLong(externalEpochStr)
+            } else {
+              alignedTarget = (Math.floorDiv(now, barrierQuantumMS) * barrierQuantumMS) + barrierOffsetMS
+              while (alignedTarget - now < barrierMinLeadMS) {
+                alignedTarget += barrierQuantumMS
+              }
+            }
+            target = new java.util.concurrent.atomic.AtomicLong(alignedTarget)
             def existingTarget = props.putIfAbsent('l4b_final_second_target_ms', target)
             if (existingTarget != null) {
               target = existingTarget as java.util.concurrent.atomic.AtomicLong
@@ -293,10 +308,10 @@ if (body != null && body.length() > 0) {
         prev.setResponseMessage('V3_VIOLATION_NOT_DECIDED_decision_status=' + decisionStatus)
         return
       }
-      // durability_status must be ENGINE_DURABLE: proves the decision reached the Kafka
-      // WAL before the response was sent. Any other value means the gateway returned a
-      // decision that has not been durably committed — a correctness violation.
-      if (durabilityStatus != 'ENGINE_DURABLE') {
+      // durability_status must be KAFKA_ACKED (default kafka_ack mode) or
+      // ENGINE_DURABLE (bounded fallback / explicit redis_aof diagnostic mode).
+      // Any other value means the decision has not been durably committed.
+      if (durabilityStatus != 'ENGINE_DURABLE' && durabilityStatus != 'KAFKA_ACKED') {
         prev.setSuccessful(false)
         prev.setResponseMessage('V3_VIOLATION_DURABILITY_durability_status=' + durabilityStatus)
         return

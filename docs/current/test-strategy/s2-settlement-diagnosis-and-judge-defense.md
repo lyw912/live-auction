@@ -666,7 +666,8 @@ Average    : ~473 decisions/s
 Peak       : 1000 offered decisions/s near the top of the stair
 VU ceiling : preAllocatedVUs=800, maxVUs=1600; actual active VUs stayed <= 9
 Admission  : ADMISSION_ENABLED=false pressure profile
-Boundary   : HTTP request -> final ENGINE_* with durability_status=ENGINE_DURABLE
+Boundary   : HTTP request -> final ENGINE_* with configured durability_status
+             (default KAFKA_ACKED, bounded ENGINE_DURABLE fallback; older evidence may be redis_aof)
 ```
 
 This is an open model. `dropped_iterations=0` means the offered load was actually

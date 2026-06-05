@@ -146,22 +146,39 @@ where id in ('auc_live','auc_side');
 acl_room_id="$(docker exec live-auction-postgres psql -q -A -t -U live_auction \
   -d live_auction -c "SELECT room_id FROM auctions WHERE id = 'auc_live'")"
 
+append_redis_set() {
+  local file="$1"
+  local key="$2"
+  local value="$3"
+  local ttl="$4"
+  {
+    printf '*5\r\n'
+    printf '$3\r\nSET\r\n'
+    printf '$%s\r\n%s\r\n' "${#key}" "$key"
+    printf '$%s\r\n%s\r\n' "${#value}" "$value"
+    printf '$2\r\nEX\r\n'
+    printf '$%s\r\n%s\r\n' "${#ttl}" "$ttl"
+  } >> "$file"
+}
+
 if [ "${SKIP_PTS_CACHE_PRESEED:-0}" != "1" ] && [ -n "$acl_room_id" ] && [ -f "$SESSION_CSV_PATH" ]; then
   echo "Pre-seeding auth session + ACL Redis caches for PTS users..."
+  pipe_file="$(mktemp)"
+  cleanup_pipe_file() {
+    rm -f "$pipe_file"
+  }
+  trap cleanup_pipe_file EXIT
   total=0
   while IFS=',' read -r user_id token role; do
     [ "$user_id" = "user_id" ] && continue  # skip header
     # auth:session:{sha256(token)} = {"ID":"...","Role":"..."}
     token_hash="$(printf '%s' "$token" | sha256sum | cut -d' ' -f1)"
-    docker exec live-auction-redis redis-cli \
-      SET "auth:session:${token_hash}" "{\"ID\":\"${user_id}\",\"Role\":\"${role}\"}" \
-      EX 43200 >/dev/null
+    append_redis_set "$pipe_file" "auth:session:${token_hash}" "{\"ID\":\"${user_id}\",\"Role\":\"${role}\"}" 43200
     # acl:membership:{auc_live}:{user_id} = room_id
-    docker exec live-auction-redis redis-cli \
-      SET "acl:membership:{auc_live}:${user_id}" "${acl_room_id}" \
-      EX 43200 >/dev/null
+    append_redis_set "$pipe_file" "acl:membership:{auc_live}:${user_id}" "${acl_room_id}" 43200
     total=$((total+1))
   done < "$SESSION_CSV_PATH"
+  docker exec -i live-auction-redis redis-cli --pipe < "$pipe_file" >/dev/null
   echo "  Auth+ACL cache pre-seeded for $total PTS users (TTL=12h)"
 elif [ "${SKIP_PTS_CACHE_PRESEED:-0}" = "1" ]; then
   echo "Skipping reset-script auth+ACL Redis preseed; caller will preseed caches"

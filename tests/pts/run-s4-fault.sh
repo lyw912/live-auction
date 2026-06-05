@@ -41,7 +41,7 @@ export FAULT_WINDOW_SECONDS=5
 export L1F_RTO_TARGET_SECONDS=45
 
 echo "=== S4 故障 — profile: ${L1F_PROFILE}, ${K6_VUS} VU, fault_window=${FAULT_WINDOW_SECONDS}s ==="
-echo "    Steady state: decision success ≥ 99% AND bid decision p99 ≤ 50ms over 30s window"
+echo "    Steady state: decision success >= 99% AND bid decision p99 within configured M1 envelope over 30s window"
 echo ""
 
 run_fault() {

@@ -19,7 +19,8 @@ A credible experiment has four parts (Principles of Chaos Engineering + AWS FIS)
 
 ```
 1. STEADY STATE (numeric SLI, measured over a window):
-     decision success ≥ 99%  AND  bid decision p99 ≤ 50 ms,  over a trailing 30 s window
+     decision success >= 99% AND bid decision p99 within the configured M1 envelope
+     (60 ms for default kafka_ack, 50 ms for explicit redis_aof), over a trailing 30 s window
 2. HYPOTHESIS: "injecting <fault> for 5 s keeps the system SAFE (fail-closed or continue),
      and it returns to steady state within RTO target, losing zero accepted bids."
 3. INJECT: bounded blast radius (one dependency, one 5 s window), with an abort/stop condition.

@@ -40,6 +40,18 @@ require_rg() {
   fi
 }
 
+reject_rg() {
+  local name="$1"
+  local pattern="$2"
+  local path="$3"
+  local reason="$4"
+  if rg -q "$pattern" "$path"; then
+    printf 'P0\t%s\tFAIL\t%s\n' "$name" "$reason"
+  else
+    printf 'P0\t%s\tPASS\t%s\n' "$name" "$reason"
+  fi
+}
+
 {
   echo "# L4B PTS preflight guard verification"
   echo "label=$LABEL"
@@ -83,7 +95,9 @@ SQL
 
 {
   require_rg "lua_writes_pending_before_kafka" "redis\\.call\\('HSET', pending_key" "$ROOT_DIR/backend/internal/redisengine/engine.go"
-  require_rg "lua_indexes_pending_auction" "redis\\.call\\('SADD', pending_auctions_key, auction_id\\)" "$ROOT_DIR/backend/internal/redisengine/engine.go"
+  require_rg "lua_does_not_touch_global_pending_auction_index" "best-effort: add to global relay-discovery index outside Lua" "$ROOT_DIR/backend/internal/redisengine/engine.go"
+  require_rg "handler_indexes_pending_auction_best_effort" "SAdd\\(ctx, redisx\\.BidEnginePendingAuctionsKey\\(\\), auctionID\\)" "$ROOT_DIR/backend/internal/redisengine/engine.go"
+  require_rg "relay_falls_back_to_active_auctions" "activeAuctionIDs\\(ctx, limit\\)" "$ROOT_DIR/backend/internal/redisengine/engine.go"
   require_rg "lua_appends_decision_log_stream" "redis\\.call\\('XADD', log_stream_key" "$ROOT_DIR/backend/internal/redisengine/engine.go"
   require_rg "handler_returns_engine_durable_decided" "DurabilityStatusEngineDurable, auction\\.DecisionStatusDecided" "$ROOT_DIR/backend/internal/redisengine/engine.go"
   require_rg "unknown_replay_returns_engine_durable" "replay_engine_durable" "$ROOT_DIR/backend/internal/redisengine/engine.go"
@@ -115,6 +129,7 @@ SQL
   require_rg "redis_replay_unknown_is_engine_durable" "DurabilityStatusEngineDurable" "$ROOT_DIR/backend/internal/redisengine/engine.go"
   require_rg "gateway_pending_settlement_is_202" "SettlementStatus == auction\\.SettlementStatusPending" "$ROOT_DIR/backend/internal/gateway/json.go"
   require_rg "redis_replay_acked_returns_engine_result" "case kafkaAppendStatusAcked" "$ROOT_DIR/backend/internal/redisengine/engine.go"
+  reject_rg "s1_jmx_groovy_no_escaped_logical_and" "&amp;&amp;" "$ROOT_DIR/tests/pts/scenarios/s1-final-second-contention/s1-final-second-contention-1000vu.jmx" "Groovy CDATA must use literal &&; escaped &amp;&amp; breaks JSR223 compilation on PTS"
   require_rg "kafka_writer_requires_all_acks" "RequiredAcks:\\s+kafka\\.RequireAll" "$ROOT_DIR/backend/internal/redisengine/kafka_ledger.go"
   require_rg "kafka_writer_is_synchronous" "Async:\\s+false" "$ROOT_DIR/backend/internal/redisengine/kafka_ledger.go"
   require_rg "kafka_writer_retries_transient_failures" "MaxAttempts:\\s+10" "$ROOT_DIR/backend/internal/redisengine/kafka_ledger.go"

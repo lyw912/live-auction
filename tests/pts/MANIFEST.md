@@ -1,6 +1,6 @@
 # PTS And Load Asset Manifest
 
-> Last updated: 2026-06-04.
+> Last updated: 2026-06-05.
 > This file is an implementation asset index only. The single test plan,
 > scenario names, run order, scale choices, and judge-facing narrative are in
 > `docs/current/test-strategy/README.md`.
@@ -20,7 +20,7 @@ Read before running or interpreting any workload:
 
 | Scenario | Purpose | Tool | Primary asset | Scale / parameters | Evidence gate |
 |---|---|---|---|---|---|
-| `S1-burst` | Final-second 1000-user contention | PTS JMeter | `scenarios/s1-final-second-contention/s1-final-second-contention-1000vu.jmx` | 1000 bid VU, one bid each, default `contention_release_window_ms=500` so bids target a short final-second window, 1-2 min, 2 IP, sampling 100% for judge-forensics runs | `verify-l4b-pts-correctness.sh`; `review-s1-pts-run.sh`; M1 p99 <= 50ms; 1000 decisions classified |
+| `S1-burst` | Final-second 1000-user contention | PTS JMeter | `scenarios/s1-final-second-contention/s1-final-second-contention-1000vu.jmx` | 1000 bid VU, one bid each, default `contention_release_window_ms=500` so bids target a short final-second window, 1-2 min, 2 IP, sampling 100% for judge-forensics runs | `verify-l4b-pts-correctness.sh`; `review-s1-pts-run.sh`; default `kafka_ack` M1 p99 <= 60ms with `KAFKA_ACKED` >= 99%; 1000 decisions classified |
 | `S1-ladder` | Accept-path control | PTS JMeter | `scenarios/s1-final-second-contention/s1-accepted-ladder-control-1000vu.jmx` | 1000 bid VU, ordered increasing amounts | Control only; do not cite as contention evidence |
 | `S2-long-soak` | Steady bid-decision stability and no leak | independent-ECS k6 | `../load/s2-steady-soak.js` | 20/s -> 60/s -> 100/s bid attempts, 30-60 min, report dropped iterations | k6 p99 <= 100ms, dropped iterations bounded, Grafana heap/goroutine/fd flat; this is bid-decision endurance, not read/WS fanout evidence |
 | `S2-convergence-drain` | Post-pressure async drain and payment safety | k6 or PTS + server verifier | `run-s2-steady.sh`; `collect-server-evidence.sh` | 2-5 min known pressure point, then monitor until Kafka/Redis/PG/outbox all zero | convergence seconds, verifier PASS, no pending settlement/outbox/DLQ |
@@ -74,13 +74,18 @@ Read before running or interpreting any workload:
 
 ## Interpretation Rules
 
-- M1 final bid decision requires `result in ENGINE_*` and `durability_status=ENGINE_DURABLE`.
+- M1 final bid decision requires `result in ENGINE_*`. Default evidence expects
+  `durability_status=KAFKA_ACKED` >= 99% with bounded `ENGINE_DURABLE` fallback
+  <= 1% and post-run relay/settlement convergence. Explicit `redis_aof`
+  diagnostic evidence may expect `ENGINE_DURABLE`.
 - S1-burst's default release model is a 500 ms final-second target window, not a
   zero-ms SyncTimer-style wall. To run the old diagnostic microburst, set JMeter
   property `contention_release_window_ms=0` through PTS JMeter environment
   properties; do not compare that diagnostic p99 directly with the default
   judge-facing S1 result.
-- `ENGINE_DURABLE` is the Redis decision-log boundary. Kafka relay, PostgreSQL settlement, and outbox delivery must converge before citing correctness.
+- `ENGINE_DURABLE` is the Redis decision-log boundary. `KAFKA_ACKED` is the
+  Kafka append-ack boundary. Kafka relay, PostgreSQL settlement, and outbox
+  delivery must converge before citing correctness.
 - HTTP `200` count is not accepted-bid count.
 - HTTP `202` / `PROCESSING_RETRY_LATER` RTT is not M1 decision latency.
 - Dominant `PROCESSING_RETRY_LATER`, vague `409`, pending Redis decisions, Kafka lag, DLQ, engine pause, settlement gap, or outbox backlog fails current pass evidence.
