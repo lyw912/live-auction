@@ -110,10 +110,11 @@ Current 2026-06-06 evidence:
 
 - `TestAICommentarySystemMessagesSentinelRecapAndProductQA` passed for commentary creation and system-message readback.
 - The same test now verifies automatic commentary creation through `CreateAutoCommentary`, including source-seq dedupe and `auto_generated` safety marking.
+- The same test now verifies provider-backed automatic commentary: a fake provider result is used for `auction_commentary`, persisted as the job provider/model, and still marked `auto_generated`.
 - The same test now verifies host-only `GET/PATCH /api/host/auctions/{id}/ai-settings`; disabling `auto_commentary_enabled` stops `CreateAutoCommentary`, while manual host commentary remains available.
 - PC Playwright MCP clicked `生成解说`; Live Assist showed a generated message with source seq and factual price.
 - H5 Playwright MCP displayed that AI system message in the live chat overlay.
-- Bid gateway auto-commentary remains non-blocking: accepted/sold bid responses are written first, then a bounded background task writes a system message. Provider-backed generation is used only when `API_KEY` is configured; deterministic fallback remains explicit.
+- Bid gateway auto-commentary remains non-blocking: accepted/sold bid responses are written first, then a bounded background task writes a system message. Provider-backed generation is used when `API_KEY` is configured; deterministic fallback remains explicit.
 
 ## Compliant Live-Ops Tests
 

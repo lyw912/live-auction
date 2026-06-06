@@ -161,6 +161,33 @@ func TestAICommentarySystemMessagesSentinelRecapAndProductQA(t *testing.T) {
 	if auto.ID != replay.ID || auto.Source != "SYSTEM_AI" || auto.Safety["auto_generated"] != true {
 		t.Fatalf("auto commentary not idempotent/safe: auto=%#v replay=%#v", auto, replay)
 	}
+	providerGen := &fakeStructuredGenerator{results: map[string]aicap.StructuredResult{
+		"auction_commentary": {
+			Provider: "test-provider",
+			Model:    "commentary-model",
+			Output: map[string]any{
+				"auction_id":    row.ID,
+				"source_seq":    float64(43),
+				"style":         "heat",
+				"body":          "成交价已刷新，按系统结果为准。",
+				"facts_used":    []any{"auction_id", "source_seq", "current_price_cents"},
+				"safety_labels": []any{},
+			},
+			Safety: map[string]any{"provider_mode": "test"},
+		},
+	}}
+	providerAuto, providerJob, err := aiRepo.CreateAutoCommentary(context.Background(), providerGen, aicap.CommentaryRequest{
+		AuctionID:         row.ID,
+		SourceSeq:         43,
+		EventType:         "auction_sold",
+		CurrentPriceCents: 26000,
+	})
+	if err != nil {
+		t.Fatalf("provider auto commentary: %v", err)
+	}
+	if providerJob.Provider != "test-provider" || providerAuto.Body != "成交价已刷新，按系统结果为准。" || providerAuto.Safety["auto_generated"] != true {
+		t.Fatalf("provider auto commentary not used: msg=%#v job=%#v", providerAuto, providerJob)
+	}
 
 	req = httptest.NewRequest(http.MethodGet, "/api/rooms/"+row.RoomID+"/system-messages", nil)
 	for key, values := range userHeaders("user_1", "user") {

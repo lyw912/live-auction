@@ -636,7 +636,7 @@ func (h AuctionHandler) maybeCreateAutoCommentary(result auction.BidResponse) {
 		CurrentWinnerMasked: maskPublicUserIDPtr(result.CurrentWinnerID),
 	}
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
 		_, _, _ = h.AIRepo.CreateAutoCommentary(ctx, gen, req)
 	}()

@@ -316,7 +316,7 @@ func (r *Repository) CreateAutoCommentary(ctx context.Context, gen Generator, re
 		PromptVersion: PromptVersionCommentary,
 		SchemaName:    "auction_commentary",
 		Input:         inputMap,
-		Timeout:       2 * time.Second,
+		Timeout:       6 * time.Second,
 	})
 	status := "SUCCEEDED"
 	if err != nil {
