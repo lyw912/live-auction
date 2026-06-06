@@ -56,12 +56,15 @@ Current 2026-06-06 P1-E/P1-F evidence:
 
 - Industrial research and risk notes saved in `docs/atmosphere-ai-implementation-2026-06-06/10-p1e-p1f-industrial-research.md`.
 - Migration `202606060006_highlight_assets.sql` applied with `make backend-migrate-up`.
+- System dependencies installed persistently on the host: `ffmpeg 6.1.1` with `libvpx/libx264` encoders and `fonts-noto-cjk` for Chinese text rendering.
 - Backend realtime integration passed: `GOCACHE=/tmp/go-build-cache GOMODCACHE=/tmp/go-mod-cache GOPATH=/tmp/go-path go test ./internal/realtime -run 'TestPublishAuctionEventAlsoPublishesLeaderboardDelta|TestHub'`.
 - Backend AI/gateway integration passed: `GOCACHE=/tmp/go-build-cache GOMODCACHE=/tmp/go-mod-cache GOPATH=/tmp/go-path go test ./internal/ai` and `GOCACHE=/tmp/go-build-cache GOMODCACHE=/tmp/go-mod-cache GOPATH=/tmp/go-path go test ./internal/gateway -run 'TestAI|TestSentinelAndProductQA'`.
+- Backend AI/gateway integration passed after server WebM render implementation: `GOCACHE=/tmp/go-build-cache GOMODCACHE=/tmp/go-mod-cache GOPATH=/tmp/go-path go test ./internal/ai ./internal/gateway -run 'TestAI|Test.*Recap|TestAutoCommentary|TestSentinelAndProductQA'`. The recap test now verifies `media_type = video/webm`, `render_profile = server-webm-reel-v1`, and a decoded WebM EBML header.
 - Frontend build/domain tests passed: `pnpm --filter mobile-h5 build`, `pnpm --filter pc-console build`, and `pnpm test:frontend:domain`.
 - Real-browser Playwright passed for WS leaderboard delta: `H5_PORT=5318 PC_PORT=5319 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 pnpm exec playwright test tests/e2e/mobile-h5.spec.ts --project=mobile-h5 --reporter=line -g 'leaderboard delta'`.
+- Playwright MCP real PC-console check on 2026-06-06 opened the running merchant workbench, clicked the visible `生成复盘` button, observed `POST /api/host/auctions/auc_live/recap => 200`, and verified the resulting `打开高光` action uses a `data:video/webm` asset with `.webm` download filename.
 - P1-F risk note: leaderboard delta is published after durable outbox events and is non-critical; slow clients follow existing WS backpressure/recovery behavior. This avoids putting rank recomputation or cinematic work into the bid hot path.
-- P1-E risk note: server highlight asset generation is tied to host recap and persists a server HTML reel asset. It is a real server pipeline and can be swapped for MinIO/FFmpeg/MRE output later, but current output is not server-transcoded MP4/WebM.
+- P1-E risk note: server highlight asset generation is tied to host recap and persists a server WebM reel asset rendered through ffmpeg. It is isolated from the bid hot path, but it is still a single-node host-recap render path rather than a distributed media render farm.
 
 ## AI Listing Copilot Tests
 

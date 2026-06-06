@@ -3,6 +3,7 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -265,11 +266,19 @@ func TestAICommentarySystemMessagesSentinelRecapAndProductQA(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &recapPayload); err != nil {
 		t.Fatalf("decode recap: %v", err)
 	}
-	if recapPayload.Recap.AuctionID != row.ID || recapPayload.HighlightAsset.ID == "" || recapPayload.HighlightAsset.MediaType != "text/html" || !strings.HasPrefix(recapPayload.HighlightAsset.AssetURL, "data:text/html;base64,") {
+	if recapPayload.Recap.AuctionID != row.ID || recapPayload.HighlightAsset.ID == "" || recapPayload.HighlightAsset.MediaType != "video/webm" || !strings.HasPrefix(recapPayload.HighlightAsset.AssetURL, "data:video/webm;base64,") {
 		t.Fatalf("bad recap/highlight payload: %#v", recapPayload)
 	}
+	webmPayload := strings.TrimPrefix(recapPayload.HighlightAsset.AssetURL, "data:video/webm;base64,")
+	webmBytes, err := base64.StdEncoding.DecodeString(webmPayload)
+	if err != nil {
+		t.Fatalf("decode webm asset: %v", err)
+	}
+	if len(webmBytes) < 4 || webmBytes[0] != 0x1a || webmBytes[1] != 0x45 || webmBytes[2] != 0xdf || webmBytes[3] != 0xa3 {
+		t.Fatalf("expected webm EBML header, got %x", webmBytes[:4])
+	}
 	var storedAssets int
-	if err := db.QueryRow(context.Background(), `SELECT count(*) FROM auction_highlight_assets WHERE auction_id = $1 AND render_profile = 'server-html-reel-v1'`, row.ID).Scan(&storedAssets); err != nil {
+	if err := db.QueryRow(context.Background(), `SELECT count(*) FROM auction_highlight_assets WHERE auction_id = $1 AND render_profile = 'server-webm-reel-v1' AND media_type = 'video/webm'`, row.ID).Scan(&storedAssets); err != nil {
 		t.Fatalf("count highlight assets: %v", err)
 	}
 	if storedAssets == 0 {

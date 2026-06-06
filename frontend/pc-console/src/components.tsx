@@ -607,7 +607,7 @@ export function LiveAssistRail({
             {latestRecap.highlight_asset ? (
               <div className="recap-actions">
                 <a href={latestRecap.highlight_asset.asset_url} target="_blank" rel="noreferrer">打开高光</a>
-                <a href={latestRecap.highlight_asset.asset_url} download={`${latestRecap.item_title || 'auction'}-highlight.html`}>下载高光</a>
+                <a href={latestRecap.highlight_asset.asset_url} download={`${latestRecap.item_title || 'auction'}-highlight.${highlightAssetExtension(latestRecap.highlight_asset.media_type)}`}>下载高光</a>
               </div>
             ) : null}
           </div>
@@ -1585,4 +1585,10 @@ export function FlightRecorderDrawer({
       </div>
     </Drawer>
   );
+}
+
+function highlightAssetExtension(mediaType: string): string {
+  if (mediaType === 'video/webm') return 'webm';
+  if (mediaType === 'video/mp4') return 'mp4';
+  return 'html';
 }

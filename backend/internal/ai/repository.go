@@ -5,8 +5,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"html"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -875,29 +879,32 @@ func (r *Repository) createHighlightAsset(ctx context.Context, recap AuctionReca
 		"highlights":        recap.Highlights,
 	}
 	risk := map[string]any{
-		"async_pipeline":             true,
-		"does_not_block_bid_path":    true,
-		"buyer_identities_masked":    true,
-		"internal_demo_html_profile": true,
-		"replacement_ready":          "asset_url can be replaced by MinIO mp4/webm from a worker",
+		"async_pipeline":          true,
+		"does_not_block_bid_path": true,
+		"buyer_identities_masked": true,
+		"server_ffmpeg_pipeline":  true,
+		"format":                  "webm",
 	}
 	title := cleanText(recap.ItemTitle+" 高光复盘", 80)
-	htmlAsset := renderHighlightHTML(recap)
+	videoAsset, err := renderHighlightWebM(ctx, recap)
+	if err != nil {
+		return HighlightAsset{}, err
+	}
 	asset := HighlightAsset{
 		ID:            "hl_" + uuid.NewString(),
 		AuctionID:     recap.AuctionID,
 		RoomID:        recap.RoomID,
 		JobID:         job.ID,
 		Status:        "RENDERED",
-		MediaType:     "text/html",
+		MediaType:     "video/webm",
 		Title:         title,
-		AssetURL:      "data:text/html;base64," + base64.StdEncoding.EncodeToString([]byte(htmlAsset)),
-		RenderProfile: "server-html-reel-v1",
+		AssetURL:      "data:video/webm;base64," + base64.StdEncoding.EncodeToString(videoAsset),
+		RenderProfile: "server-webm-reel-v1",
 		DurationMS:    12_000,
 		Facts:         facts,
 		Risk:          risk,
 	}
-	err := r.db.QueryRow(ctx, `
+	err = r.db.QueryRow(ctx, `
 		INSERT INTO auction_highlight_assets (
 			id, auction_id, room_id, job_id, status, media_type, title,
 			asset_url, render_profile, duration_ms, facts_json, risk_json
@@ -908,6 +915,98 @@ func (r *Repository) createHighlightAsset(ctx context.Context, recap AuctionReca
 		asset.AssetURL, asset.RenderProfile, asset.DurationMS, asset.Facts, asset.Risk).
 		Scan(&asset.CreatedAt, &asset.UpdatedAt)
 	return asset, err
+}
+
+func renderHighlightWebM(ctx context.Context, recap AuctionRecap) ([]byte, error) {
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		return nil, fmt.Errorf("ffmpeg not found for highlight video: %w", err)
+	}
+	dir, err := os.MkdirTemp("", "live-auction-highlight-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+
+	textFiles := map[string]string{
+		"title.txt": cleanText(recap.ItemTitle, 36),
+		"price.txt": FormatCents(recap.FinalPriceCents),
+		"facts.txt": strings.Join([]string{
+			"真实出价 " + int64Text(recap.AcceptedBids) + " 口",
+			"参与买家 " + int64Text(recap.AcceptedBidders) + " 人",
+			"末段延时 " + int64Text(int64(recap.ExtendCount)) + " 次",
+		}, "  ·  "),
+		"winner.txt": "成交买家 " + firstNonEmpty(recap.WinnerMasked, "待确认"),
+		"next.txt":   firstNonEmpty(firstString(recap.NextActions), "提醒赢家完成支付"),
+		"brand.txt":  "直播竞拍高光复盘",
+	}
+	for name, value := range textFiles {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(value), 0o600); err != nil {
+			return nil, err
+		}
+	}
+
+	outPath := filepath.Join(dir, "highlight.webm")
+	filter := strings.Join([]string{
+		"drawbox=x=0:y=0:w=720:h=1280:color=0x101820@1:t=fill",
+		"drawbox=x=0:y=0:w=720:h=360:color=0xE9B44C@0.95:t=fill",
+		"drawbox=x=38:y=420:w=644:h=500:color=0xFFFFFF@0.10:t=fill",
+		"drawbox=x=52:y=434:w=616:h=472:color=0x111827@0.72:t=fill",
+		"drawbox=x=0:y=1030:w=720:h=250:color=0x2B5C7A@0.92:t=fill",
+		drawText(filepath.Join(dir, "brand.txt"), 54, 78, 30, "0x101820", "NotoSansCJK-Bold.ttc"),
+		drawText(filepath.Join(dir, "title.txt"), 54, 155, 48, "0x101820", "NotoSansCJK-Bold.ttc"),
+		drawText(filepath.Join(dir, "price.txt"), 54, 282, 78, "0x101820", "NotoSansCJK-Bold.ttc"),
+		drawText(filepath.Join(dir, "facts.txt"), 78, 508, 30, "0xF8FAFC", "NotoSansCJK-Regular.ttc"),
+		drawText(filepath.Join(dir, "winner.txt"), 78, 610, 38, "0xFFD166", "NotoSansCJK-Bold.ttc"),
+		drawText(filepath.Join(dir, "next.txt"), 78, 745, 34, "0xF8FAFC", "NotoSansCJK-Regular.ttc"),
+		"drawbox=x=78:y=860:w=220:h=6:color=0xE9B44C@1:t=fill",
+		drawText(filepath.Join(dir, "brand.txt"), 54, 1092, 32, "0xF8FAFC", "NotoSansCJK-Bold.ttc"),
+	}, ",")
+
+	renderCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(renderCtx, ffmpegPath,
+		"-hide_banner", "-loglevel", "error", "-y",
+		"-f", "lavfi", "-i", "color=c=0x101820:s=720x1280:d=12:r=24",
+		"-vf", filter,
+		"-an",
+		"-c:v", "libvpx-vp9",
+		"-pix_fmt", "yuv420p",
+		"-b:v", "900k",
+		"-deadline", "good",
+		"-cpu-used", "4",
+		outPath,
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("ffmpeg highlight render failed: %w: %s", err, cleanText(string(output), 300))
+	}
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) < 4 || data[0] != 0x1a || data[1] != 0x45 || data[2] != 0xdf || data[3] != 0xa3 {
+		return nil, fmt.Errorf("ffmpeg highlight render produced invalid webm asset")
+	}
+	return data, nil
+}
+
+func drawText(textFile string, x int, y int, size int, color string, fontName string) string {
+	return fmt.Sprintf(
+		"drawtext=fontfile='%s':textfile='%s':x=%d:y=%d:fontsize=%d:fontcolor=%s:line_spacing=10",
+		"/usr/share/fonts/opentype/noto/"+fontName,
+		textFile,
+		x,
+		y,
+		size,
+		color,
+	)
+}
+
+func firstString(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
 }
 
 func renderHighlightHTML(recap AuctionRecap) string {
