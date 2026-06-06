@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	aicap "live-auction/backend/internal/ai"
 	"live-auction/backend/internal/config"
 	"live-auction/backend/internal/gateway"
 	"live-auction/backend/internal/outbox"
@@ -56,6 +57,19 @@ func main() {
 			Run(ctx, log, 500*time.Millisecond)
 	}
 	go scheduler.NewRunner(deps.Postgres, schedulerWorkerID).Run(ctx, log, 500*time.Millisecond)
+	aiWorkerID := envOrDefault("AI_COMMENTARY_WORKER_ID", workerID)
+	if envFlag("DISABLE_EMBEDDED_AI_COMMENTARY_WORKER") {
+		log.Info("embedded ai commentary worker disabled", slog.String("worker_id", aiWorkerID))
+	} else {
+		go aicap.NewRepository(deps.Postgres).RunAutoCommentaryWorker(ctx, gateway.BuildAIGenerator(cfg), aicap.AutoCommentaryWorkerOptions{
+			WorkerID:         aiWorkerID,
+			PollInterval:     500 * time.Millisecond,
+			BatchSize:        4,
+			Lease:            30 * time.Second,
+			BackfillLookback: cfg.AICommentaryBackfillLookback,
+		})
+		log.Info("embedded ai commentary worker started", slog.String("worker_id", aiWorkerID))
+	}
 	settlementWorkerID := envOrDefault("REDIS_ENGINE_SETTLEMENT_WORKER_ID", workerID)
 	var bidLedger redisengine.BidLedger
 	if cfg.BidEngineMode != "postgres_lane" && cfg.BidEngineMode != "redis_guard" {

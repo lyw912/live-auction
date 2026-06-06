@@ -1083,7 +1083,23 @@ test('H5 winner result sheet locks order and shares the single payment path', as
   });
 
   await page.goto('/?stateMatrix=1');
-  await page.getByRole('button', { name: '成交', exact: true }).click();
+  await selectActiveBidsState(page);
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('auction:event', {
+      detail: {
+        auction_id: 'auc_live',
+        event_type: 'auction_sold',
+        seq: 42,
+        payload: {
+          amount_cents: 60000,
+          current_price_cents: 60000,
+          current_winner_id: 'user_1',
+          user_id: 'user_1',
+          order_id: 'ord_pending'
+        }
+      }
+    }));
+  });
   const sheet = page.getByTestId('result-sheet');
   await expect(sheet).toBeVisible();
   await expect(sheet.getByRole('heading', { name: '恭喜拍中' })).toBeVisible();

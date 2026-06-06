@@ -686,33 +686,33 @@ export function timelineTone(row: FlightRecorderTimelineRow) {
 }
 
 export function timelineImpact(row: FlightRecorderTimelineRow) {
-  if (row.kind === 'bid' && row.payload?.source === 'AUTO_MAX_BID') return 'Automatic Max Bid settlement wrote a real bid row; private ceiling remains hidden.';
+  if (row.kind === 'bid' && row.payload?.source === 'AUTO_MAX_BID') return '自动加价已真实写入一条出价记录，买家的封顶价没有对外暴露。';
   if (row.kind === 'auction_event') {
-    if (row.event_type === 'auction_sold') return 'Terminal auction result persisted; winner/order should be traceable below.';
-    if (row.event_type === 'bid_rejected') return 'Bid was rejected by server rules; price and winner remain authoritative.';
-    if (row.event_type === 'bid_accepted') return 'Authoritative bid advanced auction seq and current price.';
-    if (row.event_type === 'auction_extended') return 'Server extended end_at; clients must use this event, not local countdown.';
-    return 'Domain event changed the auction projection for clients.';
+    if (row.event_type === 'auction_sold') return '成交结果已经落库，下面应能追到中标订单。';
+    if (row.event_type === 'bid_rejected') return '这次出价被规则拒绝，当前价和领先人不变。';
+    if (row.event_type === 'bid_accepted') return '有效出价已经推进竞拍状态和当前价。';
+    if (row.event_type === 'auction_extended') return '最后窗口触发延时，买家端应以这次更新后的结束时间为准。';
+    return '这条竞拍事件改变了买家端看到的状态。';
   }
-  if (row.kind === 'bid') return row.status === 'ACCEPTED' ? 'Bid row confirms executable truth was recorded.' : 'Rejected bid row preserves audit and idempotency evidence.';
-  if (row.kind === 'outbox') return row.status === 'PUBLISHED' ? 'Realtime delivery was acknowledged by the relay path.' : 'Realtime delivery still needs relay/retry attention.';
-  if (row.kind === 'order') return 'Order/payment handoff state is tied to the auction terminal result.';
-  if (row.kind === 'payment_event') return 'Payment provider boundary event is recorded for reconciliation.';
-  if (row.kind === 'snapshot_rebuild') return 'Recovery path rebuilt client state from an authoritative source.';
-  if (row.kind === 'anomaly') return 'Operational anomaly requires host/ops review before claiming demo health.';
-  return 'Timeline row is sourced from backend flight recorder data.';
+  if (row.kind === 'bid') return row.status === 'ACCEPTED' ? '出价记录确认这次加价已经被系统接受。' : '被拒绝的出价也会保留，便于解释为什么没有改变价格。';
+  if (row.kind === 'outbox') return row.status === 'PUBLISHED' ? '直播间状态已推送给买家端。' : '买家端状态推送仍在等待重试。';
+  if (row.kind === 'order') return '订单和支付状态来自成交结果。';
+  if (row.kind === 'payment_event') return '支付回调已记录，可用于对账。';
+  if (row.kind === 'snapshot_rebuild') return '买家端状态已从权威记录重建。';
+  if (row.kind === 'anomaly') return '这条异常需要主播或运维确认后再继续演示。';
+  return '这条记录来自后端事件回放。';
 }
 
 export function timelineNextAction(row: FlightRecorderTimelineRow) {
-  if (row.kind === 'bid' && row.payload?.source === 'AUTO_MAX_BID') return 'Confirm public event payload exposes bid_source only, then inspect Max Bid aggregate readiness.';
-  if (row.kind === 'outbox' && row.status !== 'PUBLISHED') return 'Open Outbox diagnostics and inspect attempts, shard, and last_error.';
-  if (row.kind === 'anomaly') return 'Filter Anomalies by this auction/trace and capture the incident reason.';
-  if (row.kind === 'snapshot_rebuild' && row.status !== 'COMPLETED') return 'Check recovery diagnostics and whether clients are stuck recovering.';
-  if (row.kind === 'payment_event') return 'Compare order status and provider ids before discussing payment outcome.';
-  if (row.kind === 'order') return 'Verify winner, amount, deposit, and expiry before demoing fulfillment.';
-  if (row.kind === 'bid' && row.status === 'REJECTED') return 'Use reject_reason to explain user-facing copy and CTA behavior.';
-  if (row.trace_id) return `Trace ${row.trace_id} in logs if this row needs deeper investigation.`;
-  return 'No action needed unless the row conflicts with expected state.';
+  if (row.kind === 'bid' && row.payload?.source === 'AUTO_MAX_BID') return '确认买家端只展示自动加价结果，不展示封顶金额。';
+  if (row.kind === 'outbox' && row.status !== 'PUBLISHED') return '打开推送诊断，查看重试次数和最近错误。';
+  if (row.kind === 'anomaly') return '按这场竞拍筛选异常，记录原因后再继续。';
+  if (row.kind === 'snapshot_rebuild' && row.status !== 'COMPLETED') return '检查买家端恢复情况，确认是否仍停留在重连中。';
+  if (row.kind === 'payment_event') return '先核对订单状态和支付编号，再说明支付结果。';
+  if (row.kind === 'order') return '核对中标人、金额、保证金和支付截止时间。';
+  if (row.kind === 'bid' && row.status === 'REJECTED') return '用拒绝原因解释买家端提示和按钮状态。';
+  if (row.trace_id) return `需要深查时，用这条追踪号 ${row.trace_id} 查日志。`;
+  return '状态符合预期时无需处理。';
 }
 
 export function createRuleDraft(auction?: Auction): RuleDraft {

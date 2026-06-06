@@ -751,9 +751,13 @@ func (h AuctionHandler) maybeCreateAutoCommentary(result auction.BidResponse) {
 		CurrentWinnerMasked: maskPublicUserIDPtr(result.CurrentWinnerID),
 	}
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		_, _, _ = h.AIRepo.CreateAutoCommentary(ctx, gen, req)
+		if _, _, err := h.AIRepo.EnqueueAutoCommentary(ctx, req); err != nil {
+			fallbackCtx, fallbackCancel := context.WithTimeout(context.Background(), 8*time.Second)
+			defer fallbackCancel()
+			_, _, _ = h.AIRepo.CreateAutoCommentary(fallbackCtx, gen, req)
+		}
 	}()
 }
 

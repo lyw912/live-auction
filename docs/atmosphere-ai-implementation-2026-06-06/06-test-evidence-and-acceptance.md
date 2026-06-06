@@ -123,9 +123,12 @@ Current 2026-06-06 evidence:
 - The same test now verifies automatic commentary creation through `CreateAutoCommentary`, including source-seq dedupe and `auto_generated` safety marking.
 - The same test now verifies provider-backed automatic commentary: a fake provider result is used for `auction_commentary`, persisted as the job provider/model, and still marked `auto_generated`.
 - The same test now verifies host-only `GET/PATCH /api/host/auctions/{id}/ai-settings`; disabling `auto_commentary_enabled` stops `CreateAutoCommentary`, while manual host commentary remains available.
+- `TestAutoCommentaryWorkerQueuePersistsAndBackfillsEvents` verifies the durable automatic-commentary path: queue jobs are persisted as `PENDING`, duplicate source events dedupe by input hash, the worker processes jobs through the provider boundary, and recent `auction_events` without a matching system message are backfilled from event payload facts. The worker default backfill lookback is 24 hours and can be adjusted with `AI_COMMENTARY_BACKFILL_LOOKBACK`.
 - PC Playwright MCP clicked `生成解说`; Live Assist showed a generated message with source seq and factual price.
 - H5 Playwright MCP displayed that AI system message in the live chat overlay.
-- Bid gateway auto-commentary remains non-blocking: accepted/sold bid responses are written first, then a bounded background task writes a system message. Provider-backed generation is used when `API_KEY` is configured; deterministic fallback remains explicit.
+- Bid gateway auto-commentary remains non-blocking: accepted/sold bid responses are written first, then a background task only enqueues a durable job. The embedded worker claims jobs with a lease and retry limit, and also scans recent authoritative bid/sold events for missed commentary. Provider-backed generation is used when `API_KEY` is configured; deterministic fallback remains explicit.
+- PC event playback/order-detail wording was re-verified in the Playwright subset after Chinese/business-language cleanup: order detail now shows `支付编号`/`事件回放`, and event playback explanations use merchant-readable impact/next-step copy while keeping raw diagnostic fields inside the diagnostics table.
+- Final focused real-browser subset passed on 2026-06-06: `H5_PORT=5276 PC_PORT=5277 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 pnpm exec playwright test tests/e2e/mobile-h5.spec.ts tests/e2e/pc-console.spec.ts --project=mobile-h5 --project=pc-console --reporter=line -g 'feed product card|AI|recap|leaderboard|flight|order'` with 19/19 passed.
 
 ## Compliant Live-Ops Tests
 

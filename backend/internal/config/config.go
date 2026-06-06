@@ -54,12 +54,13 @@ type Config struct {
 	RedisEngineSettlementWorkers int
 	FakePaymentWebhookSecret     string
 
-	AIProviderMode   string
-	AIRelayBaseURL   string
-	AIRelayModel     string
-	AIAPIKey         string
-	AIRelayTimeout   time.Duration
-	AIRelayMaxTokens int
+	AIProviderMode               string
+	AIRelayBaseURL               string
+	AIRelayModel                 string
+	AIAPIKey                     string
+	AIRelayTimeout               time.Duration
+	AIRelayMaxTokens             int
+	AICommentaryBackfillLookback time.Duration
 
 	AdmissionEnabled       bool
 	WSTicketMaxInFlight    int
@@ -131,12 +132,13 @@ func Load() Config {
 		RedisEngineSettlementWorkers: getEnvInt("REDIS_ENGINE_SETTLEMENT_WORKERS", 1),
 		FakePaymentWebhookSecret:     getEnv("FAKE_PAYMENT_WEBHOOK_SECRET", "local_fake_payment_secret"),
 
-		AIProviderMode:   getEnv("AI_PROVIDER_MODE", "auto"),
-		AIRelayBaseURL:   getEnv("AI_RELAY_BASE_URL", "https://api.gptgod.online/v1"),
-		AIRelayModel:     getEnv("AI_RELAY_MODEL", "gemini-3.1-flash-image-preview"),
-		AIAPIKey:         getEnv("API_KEY", ""),
-		AIRelayTimeout:   getEnvDuration("AI_RELAY_TIMEOUT", getEnvMillisDuration("AI_RELAY_TIMEOUT_MS", 45*time.Second)),
-		AIRelayMaxTokens: getEnvInt("AI_RELAY_MAX_TOKENS", 2048),
+		AIProviderMode:               getEnv("AI_PROVIDER_MODE", "auto"),
+		AIRelayBaseURL:               getEnv("AI_RELAY_BASE_URL", "https://api.gptgod.online/v1"),
+		AIRelayModel:                 getEnv("AI_RELAY_MODEL", "gemini-3.1-flash-image-preview"),
+		AIAPIKey:                     getEnv("API_KEY", ""),
+		AIRelayTimeout:               getEnvDuration("AI_RELAY_TIMEOUT", getEnvMillisDuration("AI_RELAY_TIMEOUT_MS", 45*time.Second)),
+		AIRelayMaxTokens:             getEnvInt("AI_RELAY_MAX_TOKENS", 2048),
+		AICommentaryBackfillLookback: getEnvDuration("AI_COMMENTARY_BACKFILL_LOOKBACK", 24*time.Hour),
 
 		AdmissionEnabled:       getEnvBool("ADMISSION_ENABLED", true),
 		WSTicketMaxInFlight:    getEnvInt("WS_TICKET_MAX_IN_FLIGHT", 256),

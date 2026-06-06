@@ -140,6 +140,14 @@ func structToMap(value any) map[string]any {
 	return out
 }
 
+func mapToStruct(input map[string]any, out any) error {
+	raw, err := json.Marshal(input)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(raw, out)
+}
+
 func stringFromInput(input map[string]any, key string) string {
 	return cleanText(stringValue(input[key]), 240)
 }

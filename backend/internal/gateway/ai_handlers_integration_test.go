@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -301,6 +302,106 @@ func TestAICommentarySystemMessagesSentinelRecapAndProductQA(t *testing.T) {
 	}
 	if answer.Answer.Answer == "" || len(answer.Answer.FactsUsed) == 0 || answer.Job.Kind != "product_qa" {
 		t.Fatalf("bad qa answer: %#v", answer)
+	}
+}
+
+func TestAutoCommentaryWorkerQueuePersistsAndBackfillsEvents(t *testing.T) {
+	db := openMonitorDB(t)
+	repo := auction.NewRepository(db)
+	row := createMonitorAuction(t, repo, db)
+	aiRepo := aicap.NewRepository(db)
+	gen := &fakeStructuredGenerator{results: map[string]aicap.StructuredResult{
+		"auction_commentary": {
+			Provider: "test-provider",
+			Model:    "worker-commentary-model",
+			Output: map[string]any{
+				"style": "heat",
+				"body":  "刚刚有人加价，当前价格已刷新。",
+			},
+			Safety: map[string]any{"provider_mode": "test"},
+		},
+	}}
+	opts := aicap.AutoCommentaryWorkerOptions{
+		WorkerID:  "test-commentary-worker",
+		AuctionID: row.ID,
+		BatchSize: 4,
+		Lease:     5 * time.Second,
+	}
+
+	job, inserted, err := aiRepo.EnqueueAutoCommentary(context.Background(), aicap.CommentaryRequest{
+		AuctionID:         row.ID,
+		SourceSeq:         70,
+		EventType:         "bid_accepted",
+		CurrentPriceCents: 20_000,
+	})
+	if err != nil {
+		t.Fatalf("enqueue auto commentary: %v", err)
+	}
+	if !inserted || job.Status != "PENDING" || job.Safety["auto_requested"] != true {
+		t.Fatalf("bad queued job: inserted=%v job=%#v", inserted, job)
+	}
+	_, inserted, err = aiRepo.EnqueueAutoCommentary(context.Background(), aicap.CommentaryRequest{
+		AuctionID:         row.ID,
+		SourceSeq:         70,
+		EventType:         "bid_accepted",
+		CurrentPriceCents: 20_000,
+	})
+	if err != nil {
+		t.Fatalf("duplicate enqueue auto commentary: %v", err)
+	}
+	if inserted {
+		t.Fatalf("duplicate auto commentary queue job should dedupe")
+	}
+
+	noBackfillOpts := opts
+	noBackfillOpts.BackfillLookback = time.Nanosecond
+	stats, err := aiRepo.ProcessAutoCommentaryQueue(context.Background(), gen, noBackfillOpts)
+	if err != nil {
+		t.Fatalf("process auto commentary queue: %v", err)
+	}
+	if stats.Processed != 1 {
+		t.Fatalf("queued commentary not processed: %#v", stats)
+	}
+	var messages int
+	if err := db.QueryRow(context.Background(), `
+		SELECT count(*)
+		FROM auction_system_messages
+		WHERE auction_id = $1 AND source = 'SYSTEM_AI' AND source_seq = 70
+	`, row.ID).Scan(&messages); err != nil {
+		t.Fatalf("count system messages: %v", err)
+	}
+	if messages != 1 {
+		t.Fatalf("system messages for queued commentary = %d, want 1", messages)
+	}
+
+	if _, err := db.Exec(context.Background(), `
+		INSERT INTO auction_events (auction_id, seq, event_type, payload_json, server_time_ms, trace_id)
+		VALUES ($1, 71, 'auction_sold', '{"state_version":71,"current_price_cents":31000,"user_id":"user_1"}', $2, 'tr_ai_commentary_backfill')
+		ON CONFLICT (auction_id, seq) DO NOTHING
+	`, row.ID, time.Now().UTC().UnixMilli()); err != nil {
+		t.Fatalf("insert auction event for backfill: %v", err)
+	}
+	backfillOpts := opts
+	backfillOpts.BackfillLookback = time.Hour
+	stats, err = aiRepo.ProcessAutoCommentaryQueue(context.Background(), gen, backfillOpts)
+	if err != nil {
+		t.Fatalf("process backfilled commentary queue: %v", err)
+	}
+	if stats.Enqueued != 1 || stats.Processed != 1 {
+		t.Fatalf("missing-event backfill not processed: %#v", stats)
+	}
+	if err := db.QueryRow(context.Background(), `
+		SELECT count(*)
+		FROM auction_system_messages
+		WHERE auction_id = $1 AND source = 'SYSTEM_AI' AND source_seq IN (70, 71)
+	`, row.ID).Scan(&messages); err != nil {
+		t.Fatalf("count backfilled system messages: %v", err)
+	}
+	if messages != 2 {
+		t.Fatalf("system messages after backfill = %d, want 2", messages)
+	}
+	if len(gen.calls) < 2 || gen.calls[len(gen.calls)-1].Input["current_price_cents"] != float64(31_000) {
+		t.Fatalf("backfill should use event payload facts, calls=%#v", gen.calls)
 	}
 }
 

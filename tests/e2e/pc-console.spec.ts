@@ -310,7 +310,7 @@ test('PC console renders live API auctions, orders, and expanded diagnostic pane
   await expect(page.getByTestId('pc-auction-page')).toBeVisible();
   await expect(page.getByTestId('pc-command-center')).toBeVisible();
   await expect(page.getByTestId('auction-queue')).toBeVisible();
-  await expect(page.getByTestId('queue-group-active-pinned').getByText('青瓷手作茶盏')).toBeVisible();
+  await expect(page.getByTestId('queue-group-active').getByText('青瓷手作茶盏')).toBeVisible();
   await expect(page.getByTestId('queue-group-scheduled').getByText('银壶')).toBeVisible();
   await expect(page.getByTestId('queue-group-draft').getByText('紫砂壶')).toBeVisible();
   await expect(page.getByTestId('live-assist-rail')).toBeVisible();
@@ -343,26 +343,28 @@ test('PC console renders live API auctions, orders, and expanded diagnostic pane
   await expect(page.getByTestId('heat-summary').getByText('观看数据')).toBeVisible();
   await expect(page.getByTestId('heat-summary').getByText('暂不可用')).toBeVisible();
   await expect(page.getByTestId('max-bid-summary').getByText('自动加价概况')).toBeVisible();
-  await expect(page.getByTestId('max-bid-summary').getByText('Active intents')).toBeVisible();
-  await expect(page.getByTestId('max-bid-summary').getByText('Auto applied')).toBeVisible();
+  await expect(page.getByTestId('max-bid-summary').getByText('启用中')).toBeVisible();
+  await expect(page.getByTestId('max-bid-summary').getByText('已跟价')).toBeVisible();
   await expect(page.getByTestId('max-bid-summary')).not.toContainText('max_amount_cents');
   await expect(page.getByTestId('max-bid-summary')).not.toContainText('95000');
   await expect(page.getByTestId('risk-queue').getByText('Bid pressure throttle')).toBeVisible();
   await expect(page.getByTestId('risk-queue').getByText(/2 recent reject rows/)).toBeVisible();
   await expect(page.getByTestId('risk-queue').getByText('CLOCK_STEP_BACKWARD')).toBeVisible();
   await expect(page.getByTestId('risk-queue').getByText('user_activity_events')).toBeVisible();
-  await expect(page.getByTestId('system-chat-disabled').getByRole('button', { name: '发送模板' })).toBeDisabled();
+  await expect(page.getByTestId('live-assist-rail').getByRole('button', { name: '生成解说' })).toBeEnabled();
+  await expect(page.getByTestId('live-assist-rail').getByRole('button', { name: '检查风控' })).toBeEnabled();
+  await expect(page.getByTestId('live-assist-rail').getByRole('button', { name: '生成复盘' })).toBeEnabled();
   await expect(page.getByTestId('recent-events').getByText('bid_accepted')).toBeVisible();
   await expect(page.getByRole('button', { name: /事件回放/ })).toBeVisible();
 
   await page.getByRole('button', { name: '诊断', exact: true }).click();
-  await page.getByRole('tab', { name: 'Rejects' }).click();
+  await page.getByRole('tab', { name: '无效出价' }).click();
   await expect(page.getByText('BID_TOO_LOW')).toBeVisible();
   await expect(page.getByText('tr_reject')).toBeVisible();
-  await expect(page.getByLabel('Rejects').getByRole('button', { name: /tr_reject/ })).toBeVisible();
+  await expect(page.getByLabel('无效出价').getByRole('button', { name: /tr_reject/ })).toBeVisible();
 
-  await page.getByRole('tab', { name: 'Recovery' }).click();
-  await expect(page.getByLabel('Recovery').getByText('room_main')).toBeVisible();
+  await page.getByRole('tab', { name: '恢复记录' }).click();
+  await expect(page.getByLabel('恢复记录').getByText('room_main')).toBeVisible();
   await expect(page.getByText('snapshot_from_db')).toBeVisible();
 });
 
@@ -370,7 +372,7 @@ test('PC accessibility gate exposes live diagnostic state and named controls', a
   await page.goto('/');
   await expect(page.getByTestId('health-ribbon-status')).toHaveAttribute('role', 'status');
   await expect(page.getByTestId('health-ribbon-status')).toHaveAttribute('aria-live', 'polite');
-  await expect(page.getByTestId('health-ribbon-status')).toContainText('Outbox');
+  await expect(page.getByTestId('health-ribbon-status')).toContainText('待推送');
   await expect(page.getByLabel('room-selector')).toBeVisible();
   await expect(page.getByRole('button', { name: '刷新' })).toBeVisible();
 
@@ -381,8 +383,8 @@ test('PC accessibility gate exposes live diagnostic state and named controls', a
   await expect(riskQueue.locator('em').getByText('bids', { exact: true })).toBeVisible();
 
   await page.getByRole('button', { name: '诊断', exact: true }).click();
-  await page.getByRole('tab', { name: 'Rejects' }).click();
-  await expect(page.getByLabel('Rejects').getByRole('button', { name: /tr_reject/ })).toBeVisible();
+  await page.getByRole('tab', { name: '无效出价' }).click();
+  await expect(page.getByLabel('无效出价').getByRole('button', { name: /tr_reject/ })).toBeVisible();
   await expect(page.getByLabel('monitor-auction-id')).toBeVisible();
   await expect(page.getByLabel('monitor-user-id')).toBeVisible();
   await expect(page.getByLabel('monitor-trace-id')).toBeVisible();
@@ -436,15 +438,15 @@ test('PC host live assist renders private automatic bidding readiness without ex
   await summary.getByRole('button', { name: /审计自动出价/ }).click();
   const drawer = page.getByTestId('flight-recorder-drawer');
   await expect(drawer.getByText('AUTO_MAX_BID')).toBeVisible();
-  await expect(drawer.getByText(/Automatic Max Bid settlement wrote a real bid row/)).toBeVisible();
+  await expect(drawer.getByText(/自动加价已真实写入一条出价记录/)).toBeVisible();
   await expect(drawer).not.toContainText('max_amount_cents');
 });
 
 test('PC diagnostics row opens flight recorder drawer with real timeline impact and next action', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: '诊断', exact: true }).click();
-  await page.getByRole('tab', { name: 'Rejects' }).click();
-  await page.getByLabel('Rejects').getByRole('button', { name: /tr_reject/ }).click();
+  await page.getByRole('tab', { name: '无效出价' }).click();
+  await page.getByLabel('无效出价').getByRole('button', { name: /tr_reject/ }).click();
   const drawer = page.getByTestId('flight-recorder-drawer');
   await expect(drawer.getByText('auc_live')).toBeVisible();
   await expect(drawer.getByText('青瓷手作茶盏')).toBeVisible();
@@ -453,9 +455,9 @@ test('PC diagnostics row opens flight recorder drawer with real timeline impact 
   await expect(drawer.getByText('bid_accepted:PUBLISHED')).toBeVisible();
   await expect(drawer.getByText('PAYMENT_AUTHORIZED')).toBeVisible();
   await expect(drawer.getByText('CLOCK_STEP_BACKWARD')).toBeVisible();
-  await expect(drawer.getByText(/Authoritative bid advanced auction seq/)).toBeVisible();
-  await expect(drawer.getByText(/Use reject_reason to explain user-facing copy/)).toBeVisible();
-  await expect(drawer.getByText(/Operational anomaly requires host\/ops review/)).toBeVisible();
+  await expect(drawer.getByText(/有效出价已经推进竞拍状态和当前价/)).toBeVisible();
+  await expect(drawer.getByText(/用拒绝原因解释买家端提示和按钮状态/)).toBeVisible();
+  await expect(drawer.getByText(/这条异常需要主播或运维确认后再继续演示/)).toBeVisible();
 });
 
 test('PC auction queue pins active auction and explains active and narrating constraints', async ({ page }) => {

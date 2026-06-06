@@ -370,6 +370,189 @@ func (r *Repository) CreateAutoCommentary(ctx context.Context, gen Generator, re
 	return msg, job, err
 }
 
+func (r *Repository) EnqueueAutoCommentary(ctx context.Context, req CommentaryRequest) (Job, bool, error) {
+	if req.AuctionID == "" {
+		return Job{}, false, apierrors.New(apierrors.CodeInvalidArgument, "auction_id is required", http.StatusBadRequest)
+	}
+	state, err := r.auctionState(ctx, req.AuctionID)
+	if err != nil {
+		return Job{}, false, err
+	}
+	req.RoomID = firstNonEmpty(req.RoomID, state.RoomID)
+	req.ItemTitle = firstNonEmpty(req.ItemTitle, state.ItemTitle)
+	if req.CurrentPriceCents <= 0 {
+		req.CurrentPriceCents = state.CurrentPriceCents
+	}
+	if req.CurrentWinnerMasked == "" {
+		req.CurrentWinnerMasked = maskUserID(state.CurrentWinnerID)
+	}
+	if req.SourceSeq <= 0 {
+		req.SourceSeq = time.Now().UnixMilli()
+	}
+	inputMap := structToMap(req)
+	inputHash := InputHash(map[string]any{
+		"kind":           "auction_commentary",
+		"prompt_version": PromptVersionCommentary,
+		"input":          inputMap,
+		"auto_requested": true,
+	})
+	job := Job{
+		ID:            "aijob_" + uuid.NewString(),
+		RoomID:        req.RoomID,
+		AuctionID:     req.AuctionID,
+		Kind:          "auction_commentary",
+		Status:        "PENDING",
+		InputHash:     inputHash,
+		PromptVersion: PromptVersionCommentary,
+		Provider:      "queued",
+		Model:         "auto-commentary-worker",
+		Input:         inputMap,
+		Output:        map[string]any{},
+		Safety: map[string]any{
+			"auto_requested":    true,
+			"no_bid_decision":   true,
+			"non_blocking_path": true,
+		},
+	}
+	stored, inserted, err := r.insertAutoCommentaryQueueJob(ctx, job)
+	return stored, inserted, err
+}
+
+func (r *Repository) RunAutoCommentaryWorker(ctx context.Context, gen Generator, opts AutoCommentaryWorkerOptions) {
+	if opts.PollInterval <= 0 {
+		opts.PollInterval = time.Second
+	}
+	if opts.BatchSize <= 0 {
+		opts.BatchSize = 4
+	}
+	if opts.Lease <= 0 {
+		opts.Lease = 30 * time.Second
+	}
+	if opts.BackfillLookback <= 0 {
+		opts.BackfillLookback = 24 * time.Hour
+	}
+	opts.WorkerID = cleanText(firstNonEmpty(opts.WorkerID, "ai-commentary-worker"), 80)
+	ticker := time.NewTicker(opts.PollInterval)
+	defer ticker.Stop()
+	for {
+		stats, _ := r.ProcessAutoCommentaryQueue(ctx, gen, opts)
+		if stats.Processed+stats.Failed < opts.BatchSize {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+	}
+}
+
+func (r *Repository) ProcessAutoCommentaryQueue(ctx context.Context, gen Generator, opts AutoCommentaryWorkerOptions) (CommentaryQueueStats, error) {
+	if opts.BatchSize <= 0 {
+		opts.BatchSize = 4
+	}
+	if opts.Lease <= 0 {
+		opts.Lease = 30 * time.Second
+	}
+	if opts.BackfillLookback <= 0 {
+		opts.BackfillLookback = 24 * time.Hour
+	}
+	opts.WorkerID = cleanText(firstNonEmpty(opts.WorkerID, "ai-commentary-worker"), 80)
+	stats := CommentaryQueueStats{}
+	enqueued, err := r.EnqueueMissingAutoCommentary(ctx, opts.BatchSize, opts.BackfillLookback, opts.AuctionID)
+	if err != nil {
+		return stats, err
+	}
+	stats.Enqueued = enqueued
+	for i := 0; i < opts.BatchSize; i++ {
+		job, ok, err := r.claimAutoCommentaryQueueJob(ctx, opts.WorkerID, opts.Lease, opts.AuctionID)
+		if err != nil {
+			return stats, err
+		}
+		if !ok {
+			return stats, nil
+		}
+		var req CommentaryRequest
+		if err := mapToStruct(job.Input, &req); err != nil {
+			stats.Failed++
+			_ = r.failAutoCommentaryQueueJob(ctx, job.ID, opts.WorkerID, err, false)
+			continue
+		}
+		_, doneJob, err := r.CreateAutoCommentary(ctx, gen, req)
+		if err != nil {
+			stats.Failed++
+			_ = r.failAutoCommentaryQueueJob(ctx, job.ID, opts.WorkerID, err, true)
+			continue
+		}
+		stats.Processed++
+		_ = r.completeAutoCommentaryQueueJob(ctx, job.ID, opts.WorkerID, doneJob)
+	}
+	return stats, nil
+}
+
+func (r *Repository) EnqueueMissingAutoCommentary(ctx context.Context, limit int, lookback time.Duration, auctionID string) (int, error) {
+	if limit <= 0 {
+		limit = 4
+	}
+	if lookback <= 0 {
+		lookback = 24 * time.Hour
+	}
+	rows, err := r.db.Query(ctx, `
+		SELECT ev.auction_id, ev.seq, ev.event_type, a.room_id, COALESCE(i.title, ''),
+		       COALESCE(
+		         CASE
+		           WHEN ev.payload_json->>'current_price_cents' ~ '^[0-9]+$'
+		           THEN (ev.payload_json->>'current_price_cents')::bigint
+		           ELSE NULL
+		         END,
+		         a.current_price_cents
+		       ),
+		       COALESCE(ev.payload_json->>'user_id', a.current_winner_id, '')
+		FROM auction_events ev
+		JOIN auctions a ON a.id = ev.auction_id
+		LEFT JOIN items i ON i.id = a.item_id
+		LEFT JOIN auction_system_messages msg
+		  ON msg.auction_id = ev.auction_id
+		 AND msg.source = 'SYSTEM_AI'
+		 AND msg.source_seq = ev.seq
+		WHERE ev.event_type IN ('bid_accepted','auction_sold')
+		  AND msg.id IS NULL
+		  AND to_timestamp(ev.server_time_ms / 1000.0) >= now() - ($2::bigint * interval '1 millisecond')
+		  AND ($3 = '' OR ev.auction_id = $3)
+		ORDER BY ev.server_time_ms, ev.auction_id, ev.seq
+		LIMIT $1
+	`, limit, lookback.Milliseconds(), auctionID)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	enqueued := 0
+	for rows.Next() {
+		var req CommentaryRequest
+		var winnerID string
+		if err := rows.Scan(&req.AuctionID, &req.SourceSeq, &req.EventType, &req.RoomID, &req.ItemTitle, &req.CurrentPriceCents, &winnerID); err != nil {
+			return enqueued, err
+		}
+		req.CurrentWinnerMasked = maskUserID(winnerID)
+		_, inserted, err := r.EnqueueAutoCommentary(ctx, req)
+		if err != nil {
+			return enqueued, err
+		}
+		if inserted {
+			enqueued++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return enqueued, err
+	}
+	return enqueued, nil
+}
+
 func (r *Repository) InsertSystemMessage(ctx context.Context, roomID string, auctionID string, source string, sourceSeq int64, style string, body string, facts map[string]any, safety map[string]any) (SystemMessage, error) {
 	factsRaw, _ := json.Marshal(facts)
 	safetyRaw, _ := json.Marshal(safety)
@@ -1016,6 +1199,161 @@ func (r *Repository) insertJob(ctx context.Context, job Job) (Job, error) {
 		return Job{}, err
 	}
 	return job, nil
+}
+
+func (r *Repository) insertAutoCommentaryQueueJob(ctx context.Context, job Job) (Job, bool, error) {
+	inputRaw, _ := json.Marshal(job.Input)
+	outputRaw, _ := json.Marshal(job.Output)
+	safetyRaw, _ := json.Marshal(job.Safety)
+	var stored Job
+	var roomID *string
+	var auctionID *string
+	var inputStored []byte
+	var outputStored []byte
+	var safetyStored []byte
+	inserted := false
+	err := r.db.QueryRow(ctx, `
+		WITH inserted AS (
+		  INSERT INTO ai_generation_jobs (
+		    id, room_id, auction_id, kind, status, input_hash, prompt_version, provider, model,
+		    input_json, output_json, safety_json
+		  )
+		  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		  ON CONFLICT (kind, input_hash)
+		    WHERE kind = 'auction_commentary'
+		      AND (safety_json->>'auto_requested') = 'true'
+		  DO NOTHING
+		  RETURNING *, true AS inserted
+		)
+		SELECT id, room_id, auction_id, kind, status, input_hash, prompt_version, provider, model,
+		       input_json, output_json, safety_json, created_at, updated_at, inserted
+		FROM inserted
+		UNION ALL
+		SELECT id, room_id, auction_id, kind, status, input_hash, prompt_version, provider, model,
+		       input_json, output_json, safety_json, created_at, updated_at, false AS inserted
+		FROM ai_generation_jobs
+		WHERE kind = 'auction_commentary'
+		  AND input_hash = $6
+		  AND (safety_json->>'auto_requested') = 'true'
+		LIMIT 1
+	`, job.ID, nullableString(job.RoomID), nullableString(job.AuctionID), job.Kind, job.Status, job.InputHash, job.PromptVersion, job.Provider, job.Model, inputRaw, outputRaw, safetyRaw).
+		Scan(&stored.ID, &roomID, &auctionID, &stored.Kind, &stored.Status, &stored.InputHash, &stored.PromptVersion, &stored.Provider, &stored.Model, &inputStored, &outputStored, &safetyStored, &stored.CreatedAt, &stored.UpdatedAt, &inserted)
+	if err != nil {
+		return Job{}, false, err
+	}
+	if roomID != nil {
+		stored.RoomID = *roomID
+	}
+	if auctionID != nil {
+		stored.AuctionID = *auctionID
+	}
+	_ = json.Unmarshal(inputStored, &stored.Input)
+	_ = json.Unmarshal(outputStored, &stored.Output)
+	_ = json.Unmarshal(safetyStored, &stored.Safety)
+	return stored, inserted, nil
+}
+
+func (r *Repository) claimAutoCommentaryQueueJob(ctx context.Context, workerID string, lease time.Duration, auctionIDFilter string) (Job, bool, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return Job{}, false, err
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+	var job Job
+	var roomID *string
+	var auctionID *string
+	var inputRaw []byte
+	var outputRaw []byte
+	var safetyRaw []byte
+	err = tx.QueryRow(ctx, `
+		SELECT id, room_id, auction_id, kind, status, input_hash, prompt_version, provider, model,
+		       input_json, output_json, safety_json, created_at, updated_at
+		FROM ai_generation_jobs
+		WHERE kind = 'auction_commentary'
+		  AND status = 'PENDING'
+		  AND (safety_json->>'auto_requested') = 'true'
+		  AND (locked_until IS NULL OR locked_until < now())
+		  AND attempts < 3
+		  AND ($1 = '' OR auction_id = $1)
+		ORDER BY created_at, id
+		FOR UPDATE SKIP LOCKED
+		LIMIT 1
+	`, auctionIDFilter).Scan(&job.ID, &roomID, &auctionID, &job.Kind, &job.Status, &job.InputHash, &job.PromptVersion, &job.Provider, &job.Model, &inputRaw, &outputRaw, &safetyRaw, &job.CreatedAt, &job.UpdatedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Job{}, false, nil
+		}
+		return Job{}, false, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE ai_generation_jobs
+		SET worker_id = $2,
+		    locked_until = now() + ($3::bigint * interval '1 millisecond'),
+		    attempts = attempts + 1,
+		    updated_at = now()
+		WHERE id = $1
+	`, job.ID, workerID, lease.Milliseconds()); err != nil {
+		return Job{}, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Job{}, false, err
+	}
+	if roomID != nil {
+		job.RoomID = *roomID
+	}
+	if auctionID != nil {
+		job.AuctionID = *auctionID
+	}
+	_ = json.Unmarshal(inputRaw, &job.Input)
+	_ = json.Unmarshal(outputRaw, &job.Output)
+	_ = json.Unmarshal(safetyRaw, &job.Safety)
+	return job, true, nil
+}
+
+func (r *Repository) completeAutoCommentaryQueueJob(ctx context.Context, jobID string, workerID string, generated Job) error {
+	outputRaw, _ := json.Marshal(generated.Output)
+	safety := ensureMap(generated.Safety)
+	safety["auto_requested"] = true
+	safety["generated_job_id"] = generated.ID
+	safetyRaw, _ := json.Marshal(safety)
+	_, err := r.db.Exec(ctx, `
+		UPDATE ai_generation_jobs
+		SET status = 'SUCCEEDED',
+		    provider = $2,
+		    model = $3,
+		    output_json = $4,
+		    safety_json = $5,
+		    worker_id = NULL,
+		    locked_until = NULL,
+		    error_message = NULL,
+		    updated_at = now()
+		WHERE id = $1
+		  AND worker_id = $6
+	`, jobID, generated.Provider, generated.Model, outputRaw, safetyRaw, workerID)
+	return err
+}
+
+func (r *Repository) failAutoCommentaryQueueJob(ctx context.Context, jobID string, workerID string, cause error, retryable bool) error {
+	message := ""
+	if cause != nil {
+		message = cleanText(cause.Error(), 240)
+	}
+	statusExpr := "CASE WHEN $3::boolean AND attempts < 3 THEN 'PENDING' ELSE 'FAILED' END"
+	_, err := r.db.Exec(ctx, `
+		UPDATE ai_generation_jobs
+		SET status = `+statusExpr+`,
+		    provider = 'worker',
+		    model = 'auto-commentary-worker',
+		    error_message = $2,
+		    worker_id = NULL,
+		    locked_until = NULL,
+		    updated_at = now()
+		WHERE id = $1
+		  AND worker_id = $4
+	`, jobID, message, retryable, workerID)
+	return err
 }
 
 func (r *Repository) insertRiskAlert(ctx context.Context, alert SentinelAlert) (SentinelAlert, error) {

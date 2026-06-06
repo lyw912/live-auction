@@ -102,7 +102,7 @@ func NewRouterWithRealtimeAndLedger(cfg config.Config, deps *storage.Dependencie
 			WithResponseDurability(cfg.BidEngineResponseDurability)
 	}
 	aiRepo := aicap.NewRepository(deps.Postgres)
-	aiGen := buildAIGenerator(cfg)
+	aiGen := BuildAIGenerator(cfg)
 	auctionHandler := AuctionHandler{
 		Config: cfg,
 		Deps:   deps,
@@ -200,7 +200,7 @@ func NewRouterWithRealtimeAndLedger(cfg config.Config, deps *storage.Dependencie
 	return r
 }
 
-func buildAIGenerator(cfg config.Config) aicap.Generator {
+func BuildAIGenerator(cfg config.Config) aicap.Generator {
 	mode := cfg.AIProviderMode
 	if mode == "" || mode == "auto" {
 		if cfg.AIAPIKey == "" {

@@ -88,6 +88,21 @@ type CommentaryRequest struct {
 	AcceptedBids30s     int64  `json:"accepted_bids_30s"`
 }
 
+type CommentaryQueueStats struct {
+	Enqueued  int `json:"enqueued"`
+	Processed int `json:"processed"`
+	Failed    int `json:"failed"`
+}
+
+type AutoCommentaryWorkerOptions struct {
+	WorkerID         string
+	AuctionID        string
+	PollInterval     time.Duration
+	BatchSize        int
+	Lease            time.Duration
+	BackfillLookback time.Duration
+}
+
 type SystemMessage struct {
 	ID        int64          `json:"id"`
 	RoomID    string         `json:"room_id"`

@@ -1291,7 +1291,7 @@ export function OrderDetailDrawer({
         <div className="order-detail" data-testid="order-detail-drawer">
           <div className="order-detail-head">
             <div>
-              <span>order</span>
+              <span>订单编号</span>
               <strong>{order.id}</strong>
             </div>
             <Tag color={order.status === 'PAID' ? 'green' : order.status === 'ORDER_EXPIRED' ? 'red' : 'orange'}>{orderStatusLabel(order.status)}</Tag>
@@ -1307,23 +1307,23 @@ export function OrderDetailDrawer({
           </div>
 
           <div className="order-detail-section">
-            <span>Payment provider</span>
-            <code>{order.provider_payment_id ?? '尚未发起 provider payment'}</code>
+            <span>支付编号</span>
+            <code>{order.provider_payment_id ?? '尚未发起支付'}</code>
           </div>
 
           <div className="order-detail-section">
-            <span>Linked auction</span>
+            <span>关联竞拍</span>
             <div className="order-linked-row">
               <code>{order.auction_id}</code>
-              <Button icon={<ExternalLink size={14} />} onClick={() => onOpenFlightRecorder(order.auction_id)}>打开飞行记录</Button>
+              <Button icon={<ExternalLink size={14} />} onClick={() => onOpenFlightRecorder(order.auction_id)}>打开事件回放</Button>
             </div>
           </div>
 
           <div className="order-detail-section">
-            <span>Next action</span>
+            <span>下一步</span>
             <p>
               {order.status === 'ORDER_PENDING' && '提醒中标人完成支付；若支付链路异常，查看事件回放中的支付事件与异常。'}
-              {order.status === 'PAYMENT_INITIATED' && '支付已发起但未确认，检查支付编号与回调记录。'}
+              {order.status === 'PAYMENT_INITIATED' && '支付已发起但未确认，检查支付编号与支付回调。'}
               {order.status === 'PAID' && '订单已支付，可进入履约交接。'}
               {order.status === 'ORDER_EXPIRED' && '订单已超时，核查保证金状态与是否有迟到支付回调。'}
               {!['ORDER_PENDING', 'PAYMENT_INITIATED', 'PAID', 'ORDER_EXPIRED'].includes(order.status) && '查看订单、支付事件和竞拍记录后再对外承诺处理结果。'}
@@ -1388,16 +1388,16 @@ export function DiagnosticsPanel({
         <input aria-label="monitor-trace-id" data-testid="monitor-trace-id" className="native-input" placeholder="trace_id" value={monitorFilter.traceID} onChange={(event) => onFilterChange((current) => ({ ...current, traceID: event.currentTarget.value }))} />
       </div>
       <Tabs defaultActiveTab="auctions">
-        <Tabs.TabPane key="auctions" title="Auctions"><MonitorTable payload={monitor.auctions} empty="暂无竞拍诊断数据" sourceKey="auction_id" onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
-        <Tabs.TabPane key="redisEngine" title="Redis Engine"><MonitorTable payload={monitor.redisEngine} empty="暂无 redis engine 数据" sourceKey="auction_id" onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
-        <Tabs.TabPane key="rejects" title="Rejects"><MonitorTable payload={monitor.rejects} empty="暂无拒绝出价" sourceKey="trace_id" icon={<AlertTriangle size={16} />} onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
-        <Tabs.TabPane key="recovery" title="Recovery"><MonitorTable payload={monitor.recovery} empty="暂无恢复数据" sourceKey="room_id" onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
-        <Tabs.TabPane key="anomalies" title="Anomalies"><MonitorTable payload={monitor.anomalies} empty="暂无异常" sourceKey="id" icon={<AlertTriangle size={16} />} onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
-        <Tabs.TabPane key="outbox" title="Outbox"><MonitorTable payload={monitor.outbox} empty="暂无 outbox 数据" sourceKey="outbox_id" onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
-        <Tabs.TabPane key="watermarks" title="Watermarks"><MonitorTable payload={monitor.outboxWatermarks} empty="暂无 outbox watermark" sourceKey="shard_id" onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
-        <Tabs.TabPane key="snapshots" title="Snapshots"><MonitorTable payload={monitor.snapshots} empty="暂无 snapshot 记录" sourceKey="request_id" onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
-        <Tabs.TabPane key="signals" title="Signals"><MonitorTable payload={monitor.signals} empty="暂无 control signal" sourceKey="id" onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
-        <Tabs.TabPane key="scheduler" title="Scheduler"><MonitorTable payload={monitor.scheduler} empty="暂无 scheduler 数据" sourceKey="job_id" onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
+        <Tabs.TabPane key="auctions" title="竞拍状态"><MonitorTable payload={monitor.auctions} empty="暂无竞拍诊断数据" sourceKey="auction_id" onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
+        <Tabs.TabPane key="redisEngine" title="热引擎"><MonitorTable payload={monitor.redisEngine} empty="暂无热引擎数据" sourceKey="auction_id" onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
+        <Tabs.TabPane key="rejects" title="无效出价"><MonitorTable payload={monitor.rejects} empty="暂无拒绝出价" sourceKey="trace_id" icon={<AlertTriangle size={16} />} onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
+        <Tabs.TabPane key="recovery" title="恢复记录"><MonitorTable payload={monitor.recovery} empty="暂无恢复数据" sourceKey="room_id" onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
+        <Tabs.TabPane key="anomalies" title="异常"><MonitorTable payload={monitor.anomalies} empty="暂无异常" sourceKey="id" icon={<AlertTriangle size={16} />} onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
+        <Tabs.TabPane key="outbox" title="推送队列"><MonitorTable payload={monitor.outbox} empty="暂无推送队列数据" sourceKey="outbox_id" onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
+        <Tabs.TabPane key="watermarks" title="推送水位"><MonitorTable payload={monitor.outboxWatermarks} empty="暂无推送水位" sourceKey="shard_id" onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
+        <Tabs.TabPane key="snapshots" title="状态快照"><MonitorTable payload={monitor.snapshots} empty="暂无状态快照记录" sourceKey="request_id" onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
+        <Tabs.TabPane key="signals" title="控制信号"><MonitorTable payload={monitor.signals} empty="暂无控制信号" sourceKey="id" onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
+        <Tabs.TabPane key="scheduler" title="定时任务"><MonitorTable payload={monitor.scheduler} empty="暂无定时任务数据" sourceKey="job_id" onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
       </Tabs>
     </section>
   );
@@ -1517,7 +1517,7 @@ export function FlightRecorderDrawer({
     <Drawer
       className="flight-recorder-drawer"
       width={760}
-      title="Flight Recorder"
+      title="事件回放"
       visible={visible}
       onCancel={onClose}
       footer={null}
@@ -1526,35 +1526,35 @@ export function FlightRecorderDrawer({
       <div className="flight-recorder" data-testid="flight-recorder-drawer">
         <div className="flight-recorder-head">
           <div>
-            <span>auction</span>
+            <span>竞拍编号</span>
             <strong>{summary?.auction_id ?? auctionID}</strong>
           </div>
           <div>
-            <span>item</span>
+            <span>拍品</span>
             <strong>{summary?.item_title ?? '-'}</strong>
           </div>
           <div>
-            <span>status / seq</span>
-            <strong>{summary ? `${summary.status} / ${summary.seq}` : '-'}</strong>
+            <span>当前状态</span>
+            <strong>{summary ? `${summary.status} / 第 ${summary.seq} 次更新` : '-'}</strong>
           </div>
           <div>
-            <span>price</span>
+            <span>当前价</span>
             <strong>{formatCents(summary?.current_price_cents)}</strong>
           </div>
         </div>
 
         <div className="flight-recorder-counts">
-          <span>rules {payload?.rules?.length ?? 0}</span>
-          <span>orders {payload?.orders?.length ?? 0}</span>
-          <span>payments {payload?.payment_events?.length ?? 0}</span>
-          <span>anomalies {payload?.anomalies?.length ?? 0}</span>
-          <span>timeline {timeline.length}</span>
+          <span>规则 {payload?.rules?.length ?? 0}</span>
+          <span>订单 {payload?.orders?.length ?? 0}</span>
+          <span>支付 {payload?.payment_events?.length ?? 0}</span>
+          <span>异常 {payload?.anomalies?.length ?? 0}</span>
+          <span>事件 {timeline.length}</span>
         </div>
 
         {loading ? (
-          <div className="empty-state compact-empty">正在读取后端 flight recorder</div>
+          <div className="empty-state compact-empty">正在读取事件回放</div>
         ) : timeline.length === 0 ? (
-          <div className="empty-state compact-empty">暂无 flight recorder timeline</div>
+          <div className="empty-state compact-empty">暂无事件记录</div>
         ) : (
           <div className="flight-timeline">
             {timeline.map((row, index) => (
@@ -1563,20 +1563,20 @@ export function FlightRecorderDrawer({
                   <Tag color={timelineTone(row)}>{row.kind}</Tag>
                   <div>
                     <strong>{row.event_type}</strong>
-                    <span>{new Date(row.time).toLocaleString()} · ref {row.ref_id}</span>
+                    <span>{new Date(row.time).toLocaleString()} · 记录 {row.ref_id}</span>
                   </div>
-                  <code>{row.seq !== undefined ? `seq ${row.seq}` : row.status ?? '-'}</code>
+                  <code>{row.seq !== undefined ? `第 ${row.seq} 次更新` : row.status ?? '-'}</code>
                 </div>
                 <div className="flight-row-meta">
-                  {row.user_id ? <span>user {maskUser(row.user_id)}</span> : null}
+                  {row.user_id ? <span>用户 {maskUser(row.user_id)}</span> : null}
                   {row.amount_cents !== undefined ? <span>{formatCents(row.amount_cents)}</span> : null}
-                  {typeof row.payload?.source === 'string' ? <span>source {row.payload.source}</span> : null}
-                  {row.trace_id ? <span>trace {row.trace_id}</span> : null}
+                  {typeof row.payload?.source === 'string' ? <span>来源 {row.payload.source}</span> : null}
+                  {row.trace_id ? <span>追踪号 {row.trace_id}</span> : null}
                   {row.status ? <span>{row.status}</span> : null}
                 </div>
                 <div className="flight-row-explain">
-                  <div><span>Impact</span><p>{timelineImpact(row)}</p></div>
-                  <div><span>Next action</span><p>{timelineNextAction(row)}</p></div>
+                  <div><span>影响</span><p>{timelineImpact(row)}</p></div>
+                  <div><span>下一步</span><p>{timelineNextAction(row)}</p></div>
                 </div>
               </div>
             ))}
