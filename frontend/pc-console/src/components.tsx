@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Button, Drawer, Form, Input, InputNumber, Layout, Message, Modal, Space, Table, Tabs, Tag } from '@arco-design/web-react';
-import { Activity, AlertTriangle, Bell, BellOff, CheckCircle2, ClipboardList, Clock3, Database, ExternalLink, Gavel, ImageIcon, Play, RadioTower, RefreshCw, ShieldCheck, Square, Upload, Wifi } from 'lucide-react';
-import type { Auction, FlightRecorderPayload, FlightRecorderTimelineRow, HeatSummary, HostPrompt, Item, MaxBidSummary, MonitorPayload, Order, RedisEngineSummary, Room, RuleDraft, SignalRequest } from './domain';
+import { Activity, AlertTriangle, Bell, BellOff, Bot, CheckCircle2, ClipboardList, Clock3, Database, ExternalLink, Gavel, ImageIcon, Play, RadioTower, RefreshCw, ShieldCheck, Sparkles, Square, Upload, Wifi } from 'lucide-react';
+import type { Auction, AuctionRecap, FlightRecorderPayload, FlightRecorderTimelineRow, HeatSummary, HostPrompt, Item, ListingDraftJob, MaxBidSummary, MonitorPayload, Order, RedisEngineSummary, Room, RuleDraft, SentinelAlert, SignalRequest, SystemMessage } from './domain';
 import { anomalyKey, anomalySeverity, auctionScopedRows, connectionLabel, createRuleDraft, depositPreview, formatCents, formatRemaining, formatSeconds, isAckedAlert, liveHealthSummary, maskUser, monitorCount, monitorItems, overallCopy, promptSeverityClass, queueGroups, redisEngineSummary, riskQueue, rowAuctionID, rowSourceURL, severityTagColor, signalCopy, signalTargetID, signalType, sortedAuctions, statusTagColor, terminalStatus, timelineImpact, timelineNextAction, timelineTone, validateRule, visibleAnomalies } from './domain';
 
 export function ConsoleNav({ activeTab, onSelect }: { activeTab: string; onSelect: (tab: string) => void }) {
@@ -127,21 +127,40 @@ export function HealthRibbon({
 export function ItemCreatePanel({
   creating,
   itemDraft,
+  listingDraft,
+  listingDraftLoading,
   ruleValid,
+  onApplyListingDraft,
   onCreate,
   onDraftChange,
-  onFileChange
+  onFileChange,
+  onOpenListingCopilot
 }: {
   creating: boolean;
   itemDraft: { title: string; description: string; imageURL: string };
+  listingDraft?: ListingDraftJob;
+  listingDraftLoading: boolean;
   ruleValid: boolean;
+  onApplyListingDraft: () => void;
   onCreate: () => void;
   onDraftChange: React.Dispatch<React.SetStateAction<{ title: string; description: string; imageURL: string }>>;
   onFileChange: (file: File | null) => void;
+  onOpenListingCopilot: () => void;
 }) {
+  const draftTitle = listingDraft?.output_json.title_candidates?.[0];
   return (
     <div className="rule-panel item-create-panel" data-testid="wizard-product-step">
-      <h2>拍品上架</h2>
+      <div className="panel-heading inline-heading">
+        <h2>拍品上架</h2>
+        <Button size="mini" icon={<Sparkles size={14} />} loading={listingDraftLoading} onClick={onOpenListingCopilot}>AI 草稿</Button>
+      </div>
+      {listingDraft ? (
+        <div className="ai-draft-strip" data-testid="listing-draft-strip">
+          <span>{listingDraft.provider}/{listingDraft.model}</span>
+          <strong>{draftTitle ?? '草稿已生成'}</strong>
+          <Button size="mini" onClick={onApplyListingDraft} disabled={listingDraft.status !== 'SUCCEEDED'}>应用到表单</Button>
+        </div>
+      ) : null}
       <Form layout="vertical">
         <Form.Item label="标题">
           <Input aria-label="item-title" value={itemDraft.title} onChange={(value) => onDraftChange((current) => ({ ...current, title: value }))} />
@@ -451,28 +470,40 @@ export function LiveAssistRail({
   dismissedPromptIDs,
   heatLoading,
   heatSummary,
+  latestRecap,
   maxBidLoading,
   maxBidSummary,
   monitor,
+  onBuildRecap,
+  onCreateCommentary,
+  onEvaluateSentinel,
   onOpenFlightRecorder,
   prompts,
   promptsLoading,
   recentEvents,
   selectedAuction,
+  sentinelAlerts,
+  systemMessages,
   onDismissPrompt,
   onDriveDemoBid
 }: {
   dismissedPromptIDs: string[];
   heatLoading: boolean;
   heatSummary?: HeatSummary;
+  latestRecap?: AuctionRecap;
   maxBidLoading: boolean;
   maxBidSummary?: MaxBidSummary;
   monitor: Record<string, MonitorPayload>;
+  onBuildRecap: () => void;
+  onCreateCommentary: (eventType: string) => void;
+  onEvaluateSentinel: () => void;
   onOpenFlightRecorder: (auctionID: string) => void;
   prompts: HostPrompt[];
   promptsLoading: boolean;
   recentEvents: Array<Record<string, unknown>>;
   selectedAuction?: Auction;
+  sentinelAlerts: SentinelAlert[];
+  systemMessages: SystemMessage[];
   onDismissPrompt: (promptID: string) => void;
   onDriveDemoBid: (mode: 'reject' | 'outbid' | 'extend' | 'sold') => void;
 }) {
@@ -521,9 +552,49 @@ export function LiveAssistRail({
       </div>
       <div className="talk-points" data-testid="talk-points">
         <span>Talk Points</span>
-        <button type="button">证书/瑕疵</button>
-        <button type="button">封顶/保证金</button>
-        <button type="button">延时规则</button>
+        <button type="button" onClick={() => onCreateCommentary('product_evidence')}>证书/瑕疵</button>
+        <button type="button" onClick={() => onCreateCommentary('rule_guardrail')}>封顶/保证金</button>
+        <button type="button" onClick={() => onCreateCommentary('extended')}>延时规则</button>
+      </div>
+      <div className="ai-live-panel" data-testid="ai-live-panel">
+        <div className="heat-summary-head">
+          <span>AI 场控</span>
+          <strong>事实锚定</strong>
+        </div>
+        <div className="demo-driver-grid">
+          <Button size="mini" icon={<Bot size={13} />} onClick={() => onCreateCommentary('bid_accepted')}>生成解说</Button>
+          <Button size="mini" icon={<ShieldCheck size={13} />} onClick={onEvaluateSentinel}>检查风控</Button>
+          <Button size="mini" icon={<ClipboardList size={13} />} onClick={onBuildRecap}>生成复盘</Button>
+        </div>
+        <small>AI 只基于已发生的竞拍事实生成内容，不决定价格、赢家或订单。</small>
+        {systemMessages.length ? (
+          <div className="system-message-list">
+            {systemMessages.slice(0, 3).map((message) => (
+              <div className={`system-message style-${message.style}`} key={message.id}>
+                <strong>{message.source_seq ? `seq ${message.source_seq}` : message.source}</strong>
+                <span>{message.body}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {sentinelAlerts.length ? (
+          <div className="sentinel-list">
+            {sentinelAlerts.slice(0, 2).map((alert) => (
+              <div className="sentinel-alert" key={alert.id}>
+                <strong>{alert.severity} · {alert.risk_type} · {alert.score}</strong>
+                <span>{alert.explanation}</span>
+                <em>{alert.recommended_action}</em>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {latestRecap ? (
+          <div className="recap-card" data-testid="auction-recap-card">
+            <strong>{latestRecap.item_title}</strong>
+            <span>{formatCents(latestRecap.final_price_cents)} · {latestRecap.accepted_bids} bids · {latestRecap.status}</span>
+            <small>{latestRecap.next_actions?.[0] ?? '复盘已生成'}</small>
+          </div>
+        ) : null}
       </div>
       <div className="demo-driver" data-testid="demo-driver">
         <div className="heat-summary-head">
@@ -611,11 +682,6 @@ export function LiveAssistRail({
           </div>
         ))}
       </div>
-      <div className="system-chat-disabled" data-testid="system-chat-disabled">
-        <strong>系统弹幕模板</strong>
-        <span>当前 chat API 只支持用户消息，本场不启用主播一键系统弹幕。</span>
-        <Button disabled>发送模板</Button>
-      </div>
       {topPrompt ? <div className="risk-hint" data-testid="risk-hint">优先处理：{topPrompt.title}</div> : null}
       <EventTimeline events={recentEvents} selectedAuction={selectedAuction} onOpenFlightRecorder={onOpenFlightRecorder} />
     </aside>
@@ -649,6 +715,101 @@ export function EventTimeline({
         </div>
       ))}
     </div>
+  );
+}
+
+export function AICopilotDrawer({
+  draft,
+  loading,
+  notes,
+  category,
+  visible,
+  onApply,
+  onCategoryChange,
+  onClose,
+  onGenerate,
+  onNotesChange
+}: {
+  draft?: ListingDraftJob;
+  loading: boolean;
+  notes: string;
+  category: string;
+  visible: boolean;
+  onApply: () => void;
+  onCategoryChange: (category: string) => void;
+  onClose: () => void;
+  onGenerate: () => void;
+  onNotesChange: (notes: string) => void;
+}) {
+  const output = draft?.output_json;
+  return (
+    <Drawer
+      className="ai-copilot-drawer"
+      title="AI 拍品速建"
+      width={520}
+      visible={visible}
+      onCancel={onClose}
+      footer={null}
+    >
+      <div className="ai-copilot" data-testid="ai-copilot-drawer">
+        <div className="ai-boundary-note">
+          <Sparkles size={16} />
+          <span>生成内容只进入草稿；发布和规则保存仍走现有后端校验。</span>
+        </div>
+        <Form layout="vertical">
+          <Form.Item label="商家备注">
+            <Input.TextArea
+              aria-label="listing-copilot-notes"
+              value={notes}
+              onChange={onNotesChange}
+              placeholder="材质、来源、瑕疵、证书、尺寸、适合讲解的卖点"
+            />
+          </Form.Item>
+          <Form.Item label="类目">
+            <Input aria-label="listing-copilot-category" value={category} onChange={onCategoryChange} />
+          </Form.Item>
+          <Space>
+            <Button type="primary" icon={<Bot size={15} />} loading={loading} disabled={!notes.trim()} onClick={onGenerate}>生成结构化草稿</Button>
+            <Button disabled={!draft || draft.status !== 'SUCCEEDED'} onClick={onApply}>应用到表单</Button>
+          </Space>
+        </Form>
+        {draft ? (
+          <div className="ai-draft-review">
+            <div className="ai-draft-status">
+              <Tag color={draft.status === 'SUCCEEDED' ? 'green' : draft.status === 'FAILED' ? 'red' : 'gray'}>{draft.status}</Tag>
+              <span>{draft.provider}/{draft.model}</span>
+              <span>{new Date(draft.created_at).toLocaleString()}</span>
+            </div>
+            {draft.error_message ? <div className="risk-hint">{draft.error_message}</div> : null}
+            <section>
+              <h3>标题候选</h3>
+              <div className="draft-chip-row">
+                {(output?.title_candidates ?? []).map((title) => <Tag key={title}>{title}</Tag>)}
+              </div>
+            </section>
+            <section>
+              <h3>描述</h3>
+              <p>{output?.description ?? '-'}</p>
+            </section>
+            <section>
+              <h3>规则建议</h3>
+              <div className="heat-grid">
+                <div><span>起拍</span><strong>{formatCents(output?.rule_suggestion?.start_price_cents)}</strong></div>
+                <div><span>加价</span><strong>{formatCents(output?.rule_suggestion?.increment_cents)}</strong></div>
+                <div><span>封顶</span><strong>{formatCents(output?.rule_suggestion?.cap_price_cents)}</strong></div>
+                <div><span>时长</span><strong>{output?.rule_suggestion?.duration_seconds ?? '-'}s</strong></div>
+              </div>
+            </section>
+            <section>
+              <h3>人工核验</h3>
+              <div className="draft-chip-row warning">
+                {[...(output?.compliance_flags ?? []), ...(output?.requires_evidence ?? []), ...(output?.unsupported_claims ?? [])].map((flag) => <Tag color="orangered" key={flag}>{flag}</Tag>)}
+              </div>
+            </section>
+          </div>
+        ) : <div className="empty-state compact-empty">输入商家备注后生成草稿</div>}
+      </div>
+    </Drawer>
   );
 }
 

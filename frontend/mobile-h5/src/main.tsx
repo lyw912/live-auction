@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { CheckCircle2, ChevronUp, Radio, RefreshCw } from 'lucide-react';
 import type { AtmosphereCue, AtmosphereInput } from './atmosphere';
 import { AuctionStatePanel, BottomSheet, ChatComposer, ChatPanel, HistoryPanel, LeaderboardPanel, LiveStage, MoreSheet, StateMatrixTabs } from './components';
-import type { AuctionItem, AuctionOverlayMode, AuctionRealtimeEvent, AuctionState, AuctionSummary, AuthUser, BidderRequirement, BidPhase, BidResponse, BottomSheetKey, ChatMessage, ConnectionPhase, HistoryRow, LeaderboardPayload, MaxBidIntent, MaxBidPhase, OrderRow, PaymentPhase, PendingBidRequest, RecoveryPhase, ResultSheetKind, Scenario, SnapshotResponse, SoundCapability, WSTicketResponse } from './domain';
+import type { AuctionItem, AuctionOverlayMode, AuctionRealtimeEvent, AuctionState, AuctionSummary, AuthUser, BidderRequirement, BidPhase, BidResponse, BottomSheetKey, ChatMessage, ConnectionPhase, HistoryRow, LeaderboardPayload, MaxBidIntent, MaxBidPhase, OrderRow, PaymentPhase, PendingBidRequest, ProductQAAnswer, RecoveryPhase, ResultSheetKind, Scenario, SnapshotResponse, SoundCapability, SystemMessage, WSTicketResponse } from './domain';
 import { createAudioContext, createClientBidID, demoProductImageURL, demoUserID, deriveCountdown, deriveCountdownPhase, ensureDemoSession, extensionCopyFromEvent, formatCents, formatRemaining, heatSnapshot, isBidConfirmationPending, isCountdownExpired, isDangerousActionDisabled, isEngineRejected, isTestMatrixEnabled, leaderboardCopy, maxBidErrorCopy, maxBidStatusCopy, readJSON, rejectCopy, responseServerTimeMS, retryAfterMS, retryAfterMSFromHeaders, roomIDFromPath, scenarios, selectEntryAuction, visibleRoomAuctions, vibratePattern, playCueTone } from './domain';
 import { normalizeAtmosphere } from './atmosphere';
 import { reconnectDelayMS } from './realtime';
@@ -38,6 +38,10 @@ function App() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatDraft, setChatDraft] = useState('');
   const [chatSending, setChatSending] = useState(false);
+  const [systemMessages, setSystemMessages] = useState<SystemMessage[]>([]);
+  const [qaDraft, setQADraft] = useState('');
+  const [qaAnswer, setQAAnswer] = useState<ProductQAAnswer | undefined>();
+  const [qaLoading, setQALoading] = useState(false);
   const [leaderboard, setLeaderboard] = useState<LeaderboardPayload | null>(null);
   const [atmosphereCue, setAtmosphereCue] = useState<AtmosphereCue | null>(null);
   const [soundEnabled, setSoundEnabled] = useState(false);
@@ -1020,6 +1024,27 @@ function App() {
   }, [sessionReady]);
 
   useEffect(() => {
+    let cancelled = false;
+    const loadSystemMessages = async () => {
+      if (!sessionReady) return;
+      try {
+        const response = await fetch(`/api/rooms/${roomID}/system-messages?limit=10`);
+        const payload = await readJSON<{ items?: SystemMessage[] }>(response);
+        if (!response.ok || cancelled) return;
+        setSystemMessages(payload?.items ?? []);
+      } catch {
+        if (!cancelled) setSystemMessages([]);
+      }
+    };
+    void loadSystemMessages();
+    const timer = window.setInterval(loadSystemMessages, 5_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [sessionReady, roomID]);
+
+  useEffect(() => {
     const onAuctionEvent = (event: Event) => {
       const detail = (event as CustomEvent<AuctionRealtimeEvent>).detail;
       handleRealtimeEvent(detail);
@@ -1437,6 +1462,29 @@ function App() {
     }
   };
 
+  const askProductQA = async () => {
+    const question = qaDraft.trim();
+    if (!question || qaLoading || !activeAuctionID) return;
+    setQALoading(true);
+    try {
+      const response = await fetch(`/api/rooms/${roomID}/product-qa`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ auction_id: activeAuctionID, question })
+      });
+      const payload = await readJSON<ProductQAAnswer>(response);
+      if (response.ok && payload) {
+        setQAAnswer(payload);
+      } else {
+        setQAAnswer({ auction_id: activeAuctionID, answer: '未提供', facts_used: [], safety_note: '问答暂不可用，请稍后重试。' });
+      }
+    } catch {
+      setQAAnswer({ auction_id: activeAuctionID, answer: '未提供', facts_used: [], safety_note: '问答暂不可用，请稍后重试。' });
+    } finally {
+      setQALoading(false);
+    }
+  };
+
   return (
     <main className="app-shell" data-perf-surface={new URLSearchParams(window.location.search).get('perfSurface') === '1' ? '1' : undefined}>
       <LiveStage
@@ -1455,6 +1503,7 @@ function App() {
         scenario={scenario}
         soundEnabled={soundEnabled}
         soundCapability={soundCapability}
+        systemMessages={systemMessages}
         auctions={roomAuctions}
         activeAuctionID={activeAuctionID}
         currentPriceCents={currentPriceCents}
@@ -1523,6 +1572,9 @@ function App() {
           minimumNextBidCents={minimumNextBidCents}
           nextBidCents={nextBidCents}
           orderHistory={orderHistory}
+          qaAnswer={qaAnswer}
+          qaDraft={qaDraft}
+          qaLoading={qaLoading}
           scenario={scenario}
           connectionPhase={connectionPhase}
           followed={followed}
@@ -1535,6 +1587,8 @@ function App() {
           onRefreshHistory={loadHistory}
           onRefreshLeaderboard={() => void loadLeaderboard()}
           onRefreshMaxBid={() => void loadMaxBidIntent()}
+          onAskQA={askProductQA}
+          onQADraftChange={setQADraft}
           onSubmitMaxBid={submitMaxBidIntent}
           onToggleFollow={() => setFollowed((value) => !value)}
           onToggleSound={() => void toggleSound()}
@@ -1546,6 +1600,7 @@ function App() {
           chatMessages={chatMessages}
           chatSending={chatSending}
           currentUserID={currentUserID}
+          systemMessages={systemMessages}
           onDraftChange={setChatDraft}
           onSend={sendChat}
         />

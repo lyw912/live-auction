@@ -1360,7 +1360,6 @@ body {
 .max-bid-summary,
 .demo-driver,
 .risk-queue,
-.system-chat-disabled,
 .risk-hint {
   border: 1px solid var(--color-line);
   border-radius: var(--radius-md);
@@ -1511,20 +1510,6 @@ body {
   font-size: 18px;
   line-height: 1;
   overflow-wrap: anywhere;
-}
-
-.system-chat-disabled {
-  display: grid;
-  gap: 8px;
-}
-
-.system-chat-disabled strong {
-  color: var(--color-ink-900);
-}
-
-.system-chat-disabled span {
-  color: var(--color-muted);
-  line-height: 1.4;
 }
 
 .risk-hint {
@@ -1786,4 +1771,113 @@ body {
   .command-price strong {
     font-size: 32px;
   }
+}
+.inline-heading {
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.ai-draft-strip,
+.ai-boundary-note,
+.ai-live-panel,
+.system-message,
+.sentinel-alert,
+.recap-card {
+  border: 1px solid rgba(29, 43, 76, 0.12);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.ai-draft-strip {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  margin-bottom: 12px;
+}
+
+.ai-draft-strip span,
+.ai-draft-status span {
+  color: #667085;
+  font-size: 12px;
+}
+
+.ai-live-panel {
+  padding: 12px;
+}
+
+.system-message-list,
+.sentinel-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.system-message,
+.sentinel-alert,
+.recap-card {
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+}
+
+.system-message strong,
+.sentinel-alert strong,
+.recap-card strong {
+  font-size: 12px;
+  color: #1d2939;
+}
+
+.system-message span,
+.sentinel-alert span,
+.sentinel-alert em,
+.recap-card span,
+.recap-card small {
+  color: #667085;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.ai-copilot {
+  display: grid;
+  gap: 14px;
+}
+
+.ai-boundary-note {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 12px;
+  color: #344054;
+  background: #f8fafc;
+}
+
+.ai-draft-review {
+  display: grid;
+  gap: 14px;
+}
+
+.ai-draft-review section {
+  display: grid;
+  gap: 8px;
+}
+
+.ai-draft-review h3 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.ai-draft-review p {
+  margin: 0;
+  color: #344054;
+  line-height: 1.6;
+}
+
+.ai-draft-status,
+.draft-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
 }

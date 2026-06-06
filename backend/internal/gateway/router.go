@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	aicap "live-auction/backend/internal/ai"
 	"live-auction/backend/internal/auction"
 	"live-auction/backend/internal/config"
 	"live-auction/backend/internal/observability"
@@ -116,6 +117,7 @@ func NewRouterWithRealtimeAndLedger(cfg config.Config, deps *storage.Dependencie
 	hostPrompterHandler := HostPrompterHandler{Deps: deps}
 	heatSummaryHandler := HeatSummaryHandler{Deps: deps}
 	maxBidSummaryHandler := MaxBidSummaryHandler{Deps: deps}
+	aiHandler := AIHandler{Repo: aicap.NewRepository(deps.Postgres), Gen: aicap.DeterministicGenerator{}, RoomACL: newRoomACL(deps.Postgres, deps.Redis)}
 	r.Route("/api", func(r chi.Router) {
 		r.Post("/auth/login", authHandler.Login)
 		r.Post("/auth/logout", authHandler.Logout)
@@ -151,6 +153,15 @@ func NewRouterWithRealtimeAndLedger(cfg config.Config, deps *storage.Dependencie
 			r.Get("/rooms/{room_id}/auctions", auctionHandler.ListRoomAuctions)
 			r.Get("/rooms/{room_id}/chat", auctionHandler.ListChatMessages)
 			r.Post("/rooms/{room_id}/chat", auctionHandler.CreateChatMessage)
+			r.Get("/rooms/{room_id}/system-messages", aiHandler.ListSystemMessages)
+			r.Post("/rooms/{room_id}/product-qa", aiHandler.ProductQA)
+			r.With(requireHost).Post("/host/ai/listing-drafts", aiHandler.CreateListingDraft)
+			r.With(requireHost).Get("/host/ai/listing-drafts/{job_id}", aiHandler.GetListingDraft)
+			r.With(requireHost).Post("/host/ai/listing-drafts/{job_id}/apply", aiHandler.ApplyListingDraft)
+			r.With(requireHost).Post("/host/auctions/{id}/commentary", aiHandler.CreateCommentary)
+			r.With(requireHost).Get("/host/auctions/{id}/sentinel-alerts", aiHandler.ListSentinelAlerts)
+			r.With(requireHost).Post("/host/auctions/{id}/sentinel-evaluate", aiHandler.EvaluateSentinel)
+			r.With(requireHost).Post("/host/auctions/{id}/recap", aiHandler.BuildRecap)
 			r.With(requireHost).Get("/host/auctions/{id}/prompts", hostPrompterHandler.Prompts)
 			r.With(requireHost).Get("/host/auctions/{id}/heat-summary", heatSummaryHandler.Summary)
 			r.With(requireHost).Get("/host/auctions/{id}/max-bid-summary", maxBidSummaryHandler.Summary)

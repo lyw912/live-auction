@@ -2127,3 +2127,44 @@ button {
     grid-template-columns: 1fr;
   }
 }
+.chat-row.system {
+  border-color: rgba(44, 123, 229, 0.22);
+  background: rgba(44, 123, 229, 0.08);
+}
+
+.chat-row.system strong {
+  color: #1d4ed8;
+}
+
+.product-qa-sheet {
+  display: grid;
+  gap: 12px;
+}
+
+.product-qa-sheet .chat-input-row {
+  position: static;
+  padding: 0;
+  background: transparent;
+}
+
+.qa-answer {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.qa-answer strong {
+  color: #fff;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.qa-answer span,
+.qa-answer em {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 12px;
+  font-style: normal;
+}

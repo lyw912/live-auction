@@ -45,7 +45,7 @@ export type BidPhase = 'idle' | 'pending' | 'engine_pending' | 'engine_sold_pend
 export type PaymentPhase = 'idle' | 'pending' | 'paid' | 'failed' | 'expired';
 export type RecoveryPhase = 'idle' | 'recovering';
 export type ConnectionPhase = 'connecting' | 'connected' | 'recovering' | 'disconnected';
-export type BottomSheetKey = 'products' | 'details' | 'maxBid' | 'leaderboard' | 'history' | 'orders' | 'more';
+export type BottomSheetKey = 'products' | 'details' | 'maxBid' | 'leaderboard' | 'history' | 'orders' | 'qa' | 'more';
 export type AuctionOverlayMode = 'feed' | 'bid';
 export type ResultSheetKind = 'winner' | 'loser' | 'unsold';
 export type SoundCapability = 'ready' | 'unavailable' | 'blocked';
@@ -192,6 +192,22 @@ export type ChatMessage = {
   user_id: string;
   body: string;
   created_at: string;
+};
+export type SystemMessage = {
+  id: number;
+  room_id: string;
+  auction_id?: string;
+  source: string;
+  source_seq?: number;
+  style: string;
+  body: string;
+  created_at: string;
+};
+export type ProductQAAnswer = {
+  auction_id: string;
+  answer: string;
+  facts_used: string[];
+  safety_note: string;
 };
 export type OrderRow = {
   order_id?: string;

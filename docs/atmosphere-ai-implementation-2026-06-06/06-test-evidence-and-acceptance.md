@@ -78,6 +78,12 @@ Evidence:
 - screenshot of draft review UI;
 - backend test output.
 
+Current 2026-06-06 evidence:
+
+- `TestAIListingDraftIsHostOnlyStructuredAndApplyIsAuditOnly` passed against local PostgreSQL/Redis after migration.
+- PC Playwright MCP generated a real deterministic/local-template draft through `/api/host/ai/listing-drafts`; drawer showed `SUCCEEDED`, provider/model, title candidates, description, rule suggestion, and evidence flags.
+- UI apply fills the local create/rule form only; publishing still requires existing create/save actions and backend validation.
+
 ## AI Commentator Tests
 
 Scenarios:
@@ -99,6 +105,12 @@ Assertions:
 - no fake viewer count, fake discount, or unsupported urgency;
 - deterministic fallback appears within bounded time.
 
+Current 2026-06-06 evidence:
+
+- `TestAICommentarySystemMessagesSentinelRecapAndProductQA` passed for commentary creation and system-message readback.
+- PC Playwright MCP clicked `生成解说`; Live Assist showed a generated message with source seq and factual price.
+- H5 Playwright MCP displayed that AI system message in the live chat overlay.
+
 ## Sentinel Tests
 
 High-risk cases:
@@ -114,6 +126,33 @@ Assertions:
 - normal competition does not create alert;
 - alerts are visible in PC console/monitor;
 - no automatic bid rejection unless explicitly designed and documented.
+
+Current 2026-06-06 evidence:
+
+- `TestAICommentarySystemMessagesSentinelRecapAndProductQA` seeded rejected-bid probing and verified sentinel alert creation.
+- PC Live Assist has a real `检查风控` action and renders severity, score, explanation, and recommended action.
+- Current sentinel is deterministic aggregate rules only; no LLM explanation and no automatic bid blocking.
+
+## Recap And Product Q&A Tests
+
+Current 2026-06-06 evidence:
+
+- `TestAICommentarySystemMessagesSentinelRecapAndProductQA` verifies recap generation and product Q&A from auction facts.
+- H5 Playwright MCP opened the real `问答` sheet and asked `起拍价是多少`; response was `起拍价 ¥100.00` with fact provenance and no hidden-bid leakage.
+
+## Commands Run On 2026-06-06
+
+```bash
+make backend-migrate-up
+/bin/bash -lc "GOCACHE=/tmp/go-build-cache GOMODCACHE=/tmp/go-mod-cache GOPATH=/tmp/go-path go test ./internal/gateway -run 'TestAI'"
+pnpm build
+pnpm test:frontend:domain
+```
+
+Notes:
+
+- A non-escalated gateway test run failed because the sandbox blocked local Redis/PostgreSQL sockets; the same targeted AI tests passed with local service access.
+- Browser console noise observed during MCP checks was limited to missing `favicon.ico`.
 
 ## Judge Evidence Packet
 

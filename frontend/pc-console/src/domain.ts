@@ -203,6 +203,85 @@ export type SignalRequest = {
   payload_json?: Record<string, unknown>;
 };
 
+export type ListingDraftJob = {
+  id: string;
+  room_id: string;
+  kind: string;
+  status: string;
+  provider: string;
+  model: string;
+  output_json: {
+    title_candidates?: string[];
+    description?: string;
+    category?: string;
+    selling_points?: string[];
+    condition_questions?: string[];
+    compliance_flags?: string[];
+    requires_evidence?: string[];
+    unsupported_claims?: string[];
+    confidence?: number;
+    rationale?: string;
+    human_review_required?: boolean;
+    rule_suggestion?: {
+      start_price_cents?: number;
+      increment_cents?: number;
+      cap_price_cents?: number;
+      duration_seconds?: number;
+      extend_window_seconds?: number;
+      extend_by_seconds?: number;
+      max_extend_count?: number;
+      fat_finger_threshold_cents?: number;
+    };
+  };
+  safety_json?: Record<string, unknown>;
+  error_message?: string;
+  created_at: string;
+  applied_at?: string;
+};
+
+export type SystemMessage = {
+  id: number;
+  room_id: string;
+  auction_id?: string;
+  source: string;
+  source_seq?: number;
+  style: string;
+  body: string;
+  facts_json?: Record<string, unknown>;
+  safety_json?: Record<string, unknown>;
+  created_at: string;
+};
+
+export type SentinelAlert = {
+  id: number;
+  room_id: string;
+  auction_id: string;
+  severity: string;
+  risk_type: string;
+  score: number;
+  explanation: string;
+  recommended_action: string;
+  features_json?: Record<string, unknown>;
+  status: string;
+  created_at: string;
+};
+
+export type AuctionRecap = {
+  auction_id: string;
+  room_id: string;
+  item_title: string;
+  status: string;
+  final_price_cents: number;
+  winner_masked?: string;
+  accepted_bids: number;
+  accepted_bidders: number;
+  extend_count: number;
+  highlights: string[];
+  next_actions: string[];
+  share_card?: Record<string, unknown>;
+  generated_at: string;
+};
+
 export type RuleAPIError = {
   code?: string;
   message?: string;

@@ -3,8 +3,8 @@ import { createRoot } from 'react-dom/client';
 import { Layout, Message } from '@arco-design/web-react';
 import '@arco-design/web-react/dist/css/arco.css';
 
-import { AuctionCommandPanel, AuctionControlSummary, AuctionQueue, ConsoleNav, DiagnosticsPanel, EventTimeline, FlightRecorderDrawer, HealthRibbon, InventoryLotsPanel, ItemCreatePanel, LiveAssistRail, LiveHealthPanel, OrderDetailDrawer, OrdersPanel, RuleEditor } from './components';
-import type { Auction, AuthUser, FlightRecorderPayload, HeatSummary, HostPrompt, HostPromptsPayload, Item, MaxBidSummary, MonitorPayload, Order, RedisEngineMonitorPayload, Room, RuleAPIError, RuleDraft, SignalRequest } from './domain';
+import { AICopilotDrawer, AuctionCommandPanel, AuctionControlSummary, AuctionQueue, ConsoleNav, DiagnosticsPanel, EventTimeline, FlightRecorderDrawer, HealthRibbon, InventoryLotsPanel, ItemCreatePanel, LiveAssistRail, LiveHealthPanel, OrderDetailDrawer, OrdersPanel, RuleEditor } from './components';
+import type { Auction, AuctionRecap, AuthUser, FlightRecorderPayload, HeatSummary, HostPrompt, HostPromptsPayload, Item, ListingDraftJob, MaxBidSummary, MonitorPayload, Order, RedisEngineMonitorPayload, Room, RuleAPIError, RuleDraft, SentinelAlert, SignalRequest, SystemMessage } from './domain';
 import { activeAuction, createRuleDraft, defaultRoomID, depositPreview, ensureDemoSession, liveHealthSummary, monitorQuery, narratingAuction, readJSON, rulePayload, signalCopy, sortedAuctions, validateRule } from './domain';
 import './styles.css';
 
@@ -28,6 +28,14 @@ function App() {
   const [heatLoading, setHeatLoading] = useState(false);
   const [maxBidSummary, setMaxBidSummary] = useState<MaxBidSummary | undefined>();
   const [maxBidLoading, setMaxBidLoading] = useState(false);
+  const [listingCopilotOpen, setListingCopilotOpen] = useState(false);
+  const [listingNotes, setListingNotes] = useState('');
+  const [listingCategory, setListingCategory] = useState('collectibles');
+  const [listingDraftJob, setListingDraftJob] = useState<ListingDraftJob | undefined>();
+  const [listingDraftLoading, setListingDraftLoading] = useState(false);
+  const [systemMessages, setSystemMessages] = useState<SystemMessage[]>([]);
+  const [sentinelAlerts, setSentinelAlerts] = useState<SentinelAlert[]>([]);
+  const [latestRecap, setLatestRecap] = useState<AuctionRecap | undefined>();
   const [monitorFilter, setMonitorFilter] = useState({ type: '', auctionID: '', userID: '', traceID: '' });
   const [loading, setLoading] = useState(false);
   const [savingRule, setSavingRule] = useState(false);
@@ -261,6 +269,27 @@ function App() {
     };
   }, [selectedAuction?.id, sessionReady, loading]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const loadSystemMessages = async () => {
+      if (!sessionReady || !roomID) {
+        setSystemMessages([]);
+        return;
+      }
+      try {
+        const response = await fetch(`/api/rooms/${encodeURIComponent(roomID)}/system-messages?limit=10`);
+        const payload = await readJSON<{ items?: SystemMessage[] }>(response);
+        if (!cancelled) setSystemMessages(response.ok ? (payload.items ?? []) : []);
+      } catch {
+        if (!cancelled) setSystemMessages([]);
+      }
+    };
+    void loadSystemMessages();
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionReady, roomID, selectedAuction?.seq, loading]);
+
   const updateRule = (patch: Partial<RuleDraft>) => {
     setRule((current) => ({ ...current, ...patch }));
     setRuleSaveState('idle');
@@ -420,6 +449,125 @@ function App() {
     }
   };
 
+  const generateListingDraft = async () => {
+    setListingDraftLoading(true);
+    try {
+      const response = await fetch('/api/host/ai/listing-drafts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          room_id: roomID,
+          image_urls: itemDraft.imageURL.trim() ? [itemDraft.imageURL.trim()] : [],
+          seller_notes: listingNotes.trim(),
+          target_category: listingCategory.trim()
+        })
+      });
+      const payload = await readJSON<ListingDraftJob & { message?: string }>(response);
+      if (!response.ok) {
+        Message.error(payload.message ?? 'AI 草稿生成失败');
+        return;
+      }
+      setListingDraftJob(payload);
+      Message.success('AI 草稿已生成，需人工确认后应用');
+    } catch {
+      Message.error('AI 草稿生成失败');
+    } finally {
+      setListingDraftLoading(false);
+    }
+  };
+
+  const applyListingDraft = async () => {
+    const output = listingDraftJob?.output_json;
+    if (!listingDraftJob || !output) return;
+    const firstTitle = output.title_candidates?.[0];
+    setItemDraft((current) => ({
+      ...current,
+      title: firstTitle || current.title,
+      description: output.description || current.description
+    }));
+    const suggestion = output.rule_suggestion;
+    if (suggestion) {
+      updateRule({
+        startPriceCents: suggestion.start_price_cents ?? rule.startPriceCents,
+        incrementCents: suggestion.increment_cents ?? rule.incrementCents,
+        capPriceCents: suggestion.cap_price_cents ?? rule.capPriceCents,
+        durationSeconds: suggestion.duration_seconds ?? rule.durationSeconds,
+        extendWindowSeconds: suggestion.extend_window_seconds ?? rule.extendWindowSeconds,
+        extendBySeconds: suggestion.extend_by_seconds ?? rule.extendBySeconds,
+        maxExtendCount: suggestion.max_extend_count ?? rule.maxExtendCount,
+        fatFingerThresholdCents: suggestion.fat_finger_threshold_cents ?? rule.fatFingerThresholdCents
+      });
+    }
+    try {
+      await fetch(`/api/host/ai/listing-drafts/${listingDraftJob.id}/apply`, { method: 'POST' });
+    } catch {
+      // Local form application remains explicit; the marker is audit-only.
+    }
+    Message.success('草稿已应用到表单，请人工检查后创建或保存');
+  };
+
+  const createAICommentary = async (eventType: string) => {
+    if (!selectedAuction) return;
+    try {
+      const response = await fetch(`/api/host/auctions/${selectedAuction.id}/commentary`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          room_id: selectedAuction.room_id,
+          auction_id: selectedAuction.id,
+          source_seq: Math.max(1, selectedAuction.seq),
+          event_type: eventType,
+          item_title: selectedAuction.item?.title ?? selectedAuction.id,
+          current_price_cents: selectedAuction.current_price_cents,
+          current_winner_masked: selectedAuction.current_winner_id ?? '',
+          active_bidders_30s: heatSummary?.active_bidders_30s ?? 0,
+          accepted_bids_30s: heatSummary?.accepted_bids_30s ?? 0
+        })
+      });
+      const payload = await readJSON<{ message?: SystemMessage; code?: string }>(response);
+      if (!response.ok) {
+        Message.error(payload.code ?? 'AI 解说生成失败');
+        return;
+      }
+      if (payload.message) setSystemMessages((current) => [payload.message!, ...current.filter((row) => row.id !== payload.message!.id)].slice(0, 10));
+      Message.success('系统解说已生成');
+    } catch {
+      Message.error('AI 解说生成失败');
+    }
+  };
+
+  const evaluateSentinel = async () => {
+    if (!selectedAuction) return;
+    try {
+      const response = await fetch(`/api/host/auctions/${selectedAuction.id}/sentinel-evaluate`, { method: 'POST' });
+      const payload = await readJSON<{ items?: SentinelAlert[] }>(response);
+      if (!response.ok) {
+        Message.error('风控扫描失败');
+        return;
+      }
+      setSentinelAlerts(payload.items ?? []);
+      Message.success((payload.items ?? []).length ? '已生成风控提醒' : '未发现需提醒的异常模式');
+    } catch {
+      Message.error('风控扫描失败');
+    }
+  };
+
+  const buildRecap = async () => {
+    if (!selectedAuction) return;
+    try {
+      const response = await fetch(`/api/host/auctions/${selectedAuction.id}/recap`, { method: 'POST' });
+      const payload = await readJSON<{ recap?: AuctionRecap }>(response);
+      if (!response.ok || !payload.recap) {
+        Message.error('复盘生成失败');
+        return;
+      }
+      setLatestRecap(payload.recap);
+      Message.success('竞拍复盘已生成');
+    } catch {
+      Message.error('复盘生成失败');
+    }
+  };
+
   return (
     <Layout className="console-shell">
       <Layout.Sider className="sider" width={224}>
@@ -458,10 +606,14 @@ function App() {
               <ItemCreatePanel
                 creating={creating}
                 itemDraft={itemDraft}
+                listingDraft={listingDraftJob}
+                listingDraftLoading={listingDraftLoading}
                 ruleValid={ruleValidation.valid}
+                onApplyListingDraft={applyListingDraft}
                 onCreate={createItemAndAuction}
                 onFileChange={setItemImageFile}
                 onDraftChange={setItemDraft}
+                onOpenListingCopilot={() => setListingCopilotOpen(true)}
               />
               <RuleEditor
                 backendRuleError={backendRuleError}
@@ -518,14 +670,20 @@ function App() {
                 dismissedPromptIDs={dismissedPromptIDs}
                 heatLoading={heatLoading}
                 heatSummary={heatSummary}
+                latestRecap={latestRecap}
                 maxBidLoading={maxBidLoading}
                 maxBidSummary={maxBidSummary}
                 monitor={monitor}
+                onBuildRecap={buildRecap}
+                onCreateCommentary={createAICommentary}
+                onEvaluateSentinel={evaluateSentinel}
                 onOpenFlightRecorder={openFlightRecorder}
                 prompts={hostPrompts}
                 promptsLoading={promptsLoading}
                 recentEvents={recentEvents}
                 selectedAuction={selectedAuction}
+                sentinelAlerts={sentinelAlerts}
+                systemMessages={systemMessages}
                 onDismissPrompt={(promptID) => setDismissedPromptIDs((current) => Array.from(new Set([...current, promptID])))}
                 onDriveDemoBid={driveDemoBid}
               />
@@ -576,6 +734,18 @@ function App() {
           visible={Boolean(orderDetailID)}
           onClose={() => setOrderDetailID('')}
           onOpenFlightRecorder={openFlightRecorder}
+        />
+        <AICopilotDrawer
+          category={listingCategory}
+          draft={listingDraftJob}
+          loading={listingDraftLoading}
+          notes={listingNotes}
+          visible={listingCopilotOpen}
+          onApply={applyListingDraft}
+          onCategoryChange={setListingCategory}
+          onClose={() => setListingCopilotOpen(false)}
+          onGenerate={generateListingDraft}
+          onNotesChange={setListingNotes}
         />
       </Layout.Content>
     </Layout>

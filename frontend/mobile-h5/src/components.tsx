@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import { AlertTriangle, BadgeCheck, Bell, BellOff, CheckCircle2, ChevronUp, Clock3, CreditCard, Heart, History, Info, MessageCircle, MoreHorizontal, PackageCheck, RefreshCw, Send, ShieldCheck, ShoppingCart, Sparkles, Truck, Trophy, Users, Wifi, WifiOff, X } from 'lucide-react';
 import type { AtmosphereCue } from './atmosphere';
-import type { AuctionItem, AuctionState, AuctionSummary, BottomSheetKey, ChatMessage, ConnectionPhase, CountdownPhase, HeatSnapshot, HistoryRow, LeaderboardPayload, MaxBidIntent, MaxBidPhase, PaymentPhase, ResultSheetKind, Scenario, SoundCapability } from './domain';
+import type { AuctionItem, AuctionState, AuctionSummary, BottomSheetKey, ChatMessage, ConnectionPhase, CountdownPhase, HeatSnapshot, HistoryRow, LeaderboardPayload, MaxBidIntent, MaxBidPhase, PaymentPhase, ProductQAAnswer, ResultSheetKind, Scenario, SoundCapability, SystemMessage } from './domain';
 import { demoLiveVideoURL, demoProductImageURL, formatCents, formatClockTime, isDangerousActionDisabled, leaderboardActionCopy, riskActionCopy, scenarios } from './domain';
 
 export function LiveStage({
@@ -24,6 +24,7 @@ export function LiveStage({
   scenario,
   soundEnabled,
   soundCapability,
+  systemMessages,
   onOpenBid,
   onOpenMore,
   onOpenProducts,
@@ -50,6 +51,7 @@ export function LiveStage({
   scenario: Scenario;
   soundEnabled: boolean;
   soundCapability: SoundCapability;
+  systemMessages: SystemMessage[];
   onOpenBid: () => void;
   onOpenMore: () => void;
   onOpenProducts: () => void;
@@ -65,7 +67,19 @@ export function LiveStage({
   if (item.certificate) proofChips.push({ icon: <BadgeCheck size={13} />, label: item.certificate });
   if (item.condition) proofChips.push({ icon: <PackageCheck size={13} />, label: item.condition });
   if (item.shipping) proofChips.push({ icon: <Truck size={13} />, label: item.shipping });
-  const visibleChat = chatMessages.slice(-3);
+  const visibleSystem = systemMessages.slice(0, 2).map((message) => ({
+    id: `sys-${message.id}`,
+    user: 'AI',
+    body: message.body
+  }));
+  const visibleChat = [
+    ...visibleSystem,
+    ...chatMessages.slice(-3).map((message) => ({
+      id: `chat-${message.id}`,
+      user: message.user_id === currentUserID ? '我' : `${message.user_id.slice(0, 2)}**`,
+      body: message.body
+    }))
+  ].slice(-4);
   const connectionCopy = connectionPhase === 'connected'
     ? '已连接'
     : connectionPhase === 'recovering'
@@ -140,7 +154,7 @@ export function LiveStage({
             <span className="stage-chat-empty">等待实时弹幕</span>
           ) : visibleChat.map((message) => (
             <span className="stage-chat-line" key={message.id}>
-              <strong>{message.user_id === currentUserID ? '我' : `${message.user_id.slice(0, 2)}**`}</strong>
+              <strong>{message.user}</strong>
               {message.body}
             </span>
           ))}
@@ -505,6 +519,9 @@ export function BottomSheet({
   minimumNextBidCents,
   nextBidCents,
   orderHistory,
+  qaAnswer,
+  qaDraft,
+  qaLoading,
   scenario,
   followed,
   soundEnabled,
@@ -516,6 +533,8 @@ export function BottomSheet({
   onRefreshHistory,
   onRefreshLeaderboard,
   onRefreshMaxBid,
+  onAskQA,
+  onQADraftChange,
   onSubmitMaxBid,
   onToggleFollow,
   onToggleSound
@@ -536,6 +555,9 @@ export function BottomSheet({
   minimumNextBidCents: number;
   nextBidCents: number;
   orderHistory: HistoryRow[];
+  qaAnswer?: ProductQAAnswer;
+  qaDraft: string;
+  qaLoading: boolean;
   scenario: Scenario;
   followed: boolean;
   soundEnabled: boolean;
@@ -547,6 +569,8 @@ export function BottomSheet({
   onRefreshHistory: () => void;
   onRefreshLeaderboard: () => void;
   onRefreshMaxBid: () => void;
+  onAskQA: () => void;
+  onQADraftChange: (draft: string) => void;
   onSubmitMaxBid: () => void;
   onToggleFollow: () => void;
   onToggleSound: () => void;
@@ -558,6 +582,7 @@ export function BottomSheet({
     leaderboard: '实时榜单',
     history: '我的出价',
     orders: '我的订单',
+    qa: '拍品问答',
     more: '直播设置'
   };
   useEffect(() => {
@@ -586,6 +611,7 @@ export function BottomSheet({
             ['leaderboard', '榜单'],
             ['history', '历史'],
             ['orders', '订单'],
+            ['qa', '问答'],
             ['more', '更多']
           ] as Array<[BottomSheetKey, string]>).map(([key, label]) => (
             <button type="button" role="tab" aria-selected={activeSheet === key} key={key} onClick={() => onOpenSheet(key)}>{label}</button>
@@ -633,6 +659,15 @@ export function BottomSheet({
               onRefresh={onRefreshHistory}
               getPrimary={(row) => String(row.order_id ?? row.auction_id ?? '-')}
               getSecondary={(row) => `${formatCents(Number(row.amount_cents ?? 0))} · ${String(row.order_status ?? '-')}`}
+            />
+          )}
+          {activeSheet === 'qa' && (
+            <ProductQASheet
+              answer={qaAnswer}
+              draft={qaDraft}
+              loading={qaLoading}
+              onAsk={onAskQA}
+              onDraftChange={onQADraftChange}
             />
           )}
           {activeSheet === 'more' && (
@@ -1010,6 +1045,7 @@ export function ChatPanel({
   chatMessages,
   chatSending,
   currentUserID,
+  systemMessages,
   onDraftChange,
   onSend
 }: {
@@ -1017,6 +1053,7 @@ export function ChatPanel({
   chatMessages: ChatMessage[];
   chatSending: boolean;
   currentUserID: string;
+  systemMessages: SystemMessage[];
   onDraftChange: (draft: string) => void;
   onSend: () => void;
 }) {
@@ -1026,7 +1063,13 @@ export function ChatPanel({
         <h2><MessageCircle size={16} /> 弹幕</h2>
       </div>
       <div className="chat-list">
-        {chatMessages.length === 0 ? <p>暂无弹幕</p> : chatMessages.map((message) => (
+        {systemMessages.slice(0, 3).map((message) => (
+          <div className="chat-row system" key={`sys-${message.id}`}>
+            <strong>AI</strong>
+            <span>{message.body}</span>
+          </div>
+        ))}
+        {chatMessages.length === 0 && systemMessages.length === 0 ? <p>暂无弹幕</p> : chatMessages.map((message) => (
           <div className="chat-row" key={message.id}>
             <strong>{message.user_id === currentUserID ? '我' : `${message.user_id.slice(0, 2)}**`}</strong>
             <span>{message.body}</span>
@@ -1047,6 +1090,51 @@ export function ChatPanel({
           <Send size={15} />
         </button>
       </div>
+    </section>
+  );
+}
+
+export function ProductQASheet({
+  answer,
+  draft,
+  loading,
+  onAsk,
+  onDraftChange
+}: {
+  answer?: ProductQAAnswer;
+  draft: string;
+  loading: boolean;
+  onAsk: () => void;
+  onDraftChange: (draft: string) => void;
+}) {
+  return (
+    <section className="product-qa-sheet" data-testid="product-qa-sheet">
+      <div className="sheet-action-row">
+        <span>只回答拍品和规则已提供的信息</span>
+        <button type="button" disabled={!draft.trim() || loading} onClick={onAsk}>{loading ? '查询中' : '提问'}</button>
+      </div>
+      <div className="chat-input-row">
+        <input
+          aria-label="product-qa-input"
+          maxLength={80}
+          value={draft}
+          onChange={(event) => onDraftChange(event.currentTarget.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') onAsk();
+          }}
+          placeholder="例如：起拍价是多少？有瑕疵说明吗？"
+        />
+        <button type="button" aria-label="ask-product-qa" disabled={!draft.trim() || loading} onClick={onAsk}>
+          <Send size={15} />
+        </button>
+      </div>
+      {answer ? (
+        <div className="qa-answer">
+          <strong>{answer.answer}</strong>
+          <span>{answer.safety_note}</span>
+          {answer.facts_used.length ? <em>依据 {answer.facts_used.join(', ')}</em> : <em>未找到已提供事实</em>}
+        </div>
+      ) : <div className="heat-unavailable">未提供的信息会明确回答“未提供”。</div>}
     </section>
   );
 }
