@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-05T20:28:19.689Z",
+  "generated_at": "2026-06-06T07:57:17.777Z",
   "base_url": "https://api.gptgod.online/v1",
   "model": "gemini-3.1-flash-image-preview",
   "timeout_ms": 60000,
@@ -7,7 +7,7 @@
     {
       "name": "models_endpoint_optional",
       "status": "PASS",
-      "duration_ms": 701,
+      "duration_ms": 873,
       "summary": "configured model appears in /models",
       "sample_model_count": 1,
       "configured_model_listed": true
@@ -15,43 +15,43 @@
     {
       "name": "responses_text_required",
       "status": "FAIL",
-      "duration_ms": 1076,
-      "error": "HTTP 500: not implemented (request id: 202606052028212448629498268d9d6NHjP2Ibf)"
+      "duration_ms": 1169,
+      "error": "HTTP 500: not implemented (request id: 202606060757195836911548268d9d6aejw9Tom)"
     },
     {
       "name": "responses_json_schema_required",
       "status": "FAIL",
-      "duration_ms": 732,
-      "error": "HTTP 500: not implemented (request id: 202606052028219715955018268d9d6yxK7OjA1)"
+      "duration_ms": 799,
+      "error": "HTTP 500: not implemented (request id: 202606060757203796242888268d9d6sYthafZc)"
     },
     {
       "name": "responses_multimodal_data_url_optional",
       "status": "WARN",
-      "duration_ms": 797,
-      "error": "HTTP 500: not implemented (request id: 202606052028227715290808268d9d6knQxb5LJ)"
+      "duration_ms": 792,
+      "error": "HTTP 500: not implemented (request id: 202606060757211743941498268d9d6mc8H8k0J)"
     },
     {
       "name": "responses_multimodal_https_optional",
       "status": "WARN",
-      "duration_ms": 954,
-      "error": "HTTP 500: not implemented (request id: 202606052028237238020838268d9d68l6wiJ38)"
+      "duration_ms": 762,
+      "error": "HTTP 500: not implemented (request id: 202606060757219344264808268d9d6f1DK07Nr)"
     },
     {
       "name": "files_upload_optional",
       "status": "WARN",
-      "duration_ms": 300,
+      "duration_ms": 298,
       "error": "HTTP 404 non-JSON response: 404 page not found"
     },
     {
       "name": "responses_file_input_optional",
       "status": "WARN",
-      "duration_ms": 301,
+      "duration_ms": 290,
       "error": "HTTP 404 non-JSON response: 404 page not found"
     },
     {
       "name": "chat_plain_text_optional",
       "status": "PASS",
-      "duration_ms": 1974,
+      "duration_ms": 1687,
       "summary": "text chat completion returned expected marker",
       "finish_reason": "stop",
       "response_chars": 25
@@ -59,15 +59,15 @@
     {
       "name": "chat_structured_text_optional",
       "status": "PASS",
-      "duration_ms": 3908,
+      "duration_ms": 4235,
       "summary": "structured text can be generated through json_schema",
-      "body_chars": 16,
+      "body_chars": 19,
       "facts_used_count": 3
     },
     {
       "name": "chat_json_schema_optional",
       "status": "PASS",
-      "duration_ms": 2270,
+      "duration_ms": 2595,
       "summary": "strict json_schema response_format is supported",
       "keys": [
         "title",
@@ -78,7 +78,7 @@
     {
       "name": "chat_multimodal_https_optional",
       "status": "PASS",
-      "duration_ms": 2387,
+      "duration_ms": 2747,
       "summary": "HTTPS image_url input produced parseable visual answer",
       "dominant_color": "yellow",
       "subject": "JavaScript logo",
@@ -87,7 +87,7 @@
     {
       "name": "chat_json_object_optional",
       "status": "WARN",
-      "duration_ms": 2773,
+      "duration_ms": 3443,
       "error": "response is not JSON: "
     }
   ],

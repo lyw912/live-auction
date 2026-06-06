@@ -198,21 +198,21 @@ func NewRouterWithRealtimeAndLedger(cfg config.Config, deps *storage.Dependencie
 func buildAIGenerator(cfg config.Config) aicap.Generator {
 	mode := cfg.AIProviderMode
 	if mode == "" || mode == "auto" {
-		if cfg.AIRelayAPIKey == "" {
+		if cfg.AIAPIKey == "" {
 			return aicap.DeterministicGenerator{}
 		}
-		mode = "relay"
+		mode = "provider"
 	}
 	switch mode {
 	case "disabled":
 		return aicap.DisabledGenerator{}
 	case "deterministic":
 		return aicap.DeterministicGenerator{}
-	case "relay", "chat_completions_adapter":
+	case "provider", "chat_completions_adapter":
 		gen, err := aicap.NewChatCompletionsGenerator(aicap.ChatProviderConfig{
 			BaseURL:   cfg.AIRelayBaseURL,
 			Model:     cfg.AIRelayModel,
-			APIKey:    cfg.AIRelayAPIKey,
+			APIKey:    cfg.AIAPIKey,
 			Timeout:   cfg.AIRelayTimeout,
 			MaxTokens: cfg.AIRelayMaxTokens,
 		})

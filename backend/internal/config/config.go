@@ -1,8 +1,11 @@
 package config
 
 import (
+	"bufio"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -54,7 +57,7 @@ type Config struct {
 	AIProviderMode   string
 	AIRelayBaseURL   string
 	AIRelayModel     string
-	AIRelayAPIKey    string
+	AIAPIKey         string
 	AIRelayTimeout   time.Duration
 	AIRelayMaxTokens int
 
@@ -82,6 +85,7 @@ type Config struct {
 }
 
 func Load() Config {
+	loadDotEnvIfPresent()
 	cfg := Config{
 		AppEnv:      getEnv("APP_ENV", "local"),
 		HTTPAddr:    getEnv("HTTP_ADDR", ":18080"),
@@ -130,7 +134,7 @@ func Load() Config {
 		AIProviderMode:   getEnv("AI_PROVIDER_MODE", "auto"),
 		AIRelayBaseURL:   getEnv("AI_RELAY_BASE_URL", "https://api.gptgod.online/v1"),
 		AIRelayModel:     getEnv("AI_RELAY_MODEL", "gemini-3.1-flash-image-preview"),
-		AIRelayAPIKey:    getEnv("AI_RELAY_API_KEY", ""),
+		AIAPIKey:         getEnv("API_KEY", ""),
 		AIRelayTimeout:   getEnvDuration("AI_RELAY_TIMEOUT", getEnvMillisDuration("AI_RELAY_TIMEOUT_MS", 45*time.Second)),
 		AIRelayMaxTokens: getEnvInt("AI_RELAY_MAX_TOKENS", 2048),
 
@@ -168,6 +172,47 @@ func getEnv(key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func loadDotEnvIfPresent() {
+	for _, path := range dotenvCandidates() {
+		file, err := os.Open(path)
+		if err != nil {
+			continue
+		}
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			key, value, ok := strings.Cut(line, "=")
+			if !ok {
+				continue
+			}
+			key = strings.TrimSpace(strings.TrimPrefix(key, "export "))
+			if key == "" || os.Getenv(key) != "" {
+				continue
+			}
+			value = strings.TrimSpace(value)
+			value = strings.Trim(value, `"'`)
+			_ = os.Setenv(key, value)
+		}
+		_ = file.Close()
+		return
+	}
+}
+
+func dotenvCandidates() []string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return []string{".env"}
+	}
+	return []string{
+		filepath.Join(wd, ".env"),
+		filepath.Join(wd, "..", ".env"),
+		filepath.Join(wd, "..", "..", ".env"),
+	}
 }
 
 func getEnvInt(key string, fallback int) int {

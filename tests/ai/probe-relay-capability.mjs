@@ -9,7 +9,7 @@ const redPixelPNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP
 const defaultImageURL = 'https://raw.githubusercontent.com/github/explore/main/topics/javascript/javascript.png';
 
 const env = process.env;
-const apiKey = env.AI_RELAY_API_KEY || env.OPENAI_API_KEY || env.API_KEY || '';
+const apiKey = env.API_KEY || '';
 const model = env.AI_RELAY_MODEL || defaultModel;
 const baseURL = normalizeBaseURL(env.AI_RELAY_BASE_URL || defaultBaseURL);
 const timeoutMS = Number(env.AI_RELAY_TIMEOUT_MS || 30_000);
@@ -17,7 +17,7 @@ const imageURL = env.AI_RELAY_IMAGE_URL || defaultImageURL;
 const outputPath = resolve(env.AI_RELAY_PROBE_OUT || 'docs/atmosphere-ai-implementation-2026-06-06/evidence/ai-relay-probe-gptgod-latest.json');
 
 if (!apiKey || /^replace-/i.test(apiKey)) {
-  console.error('AI_RELAY_API_KEY, OPENAI_API_KEY, or API_KEY must be set to a real relay key. Do not commit it; pass it as an environment variable.');
+  console.error('API_KEY must be set to a real AI provider key. Do not commit real keys.');
   process.exit(2);
 }
 

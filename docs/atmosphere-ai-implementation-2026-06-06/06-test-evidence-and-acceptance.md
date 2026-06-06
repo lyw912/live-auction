@@ -113,7 +113,7 @@ Current 2026-06-06 evidence:
 - The same test now verifies host-only `GET/PATCH /api/host/auctions/{id}/ai-settings`; disabling `auto_commentary_enabled` stops `CreateAutoCommentary`, while manual host commentary remains available.
 - PC Playwright MCP clicked `生成解说`; Live Assist showed a generated message with source seq and factual price.
 - H5 Playwright MCP displayed that AI system message in the live chat overlay.
-- Bid gateway auto-commentary remains non-blocking: accepted/sold bid responses are written first, then a bounded background task writes a system message. Relay-backed generation is used only when `AI_RELAY_API_KEY` is configured; deterministic fallback remains explicit.
+- Bid gateway auto-commentary remains non-blocking: accepted/sold bid responses are written first, then a bounded background task writes a system message. Provider-backed generation is used only when `API_KEY` is configured; deterministic fallback remains explicit.
 
 ## Compliant Live-Ops Tests
 

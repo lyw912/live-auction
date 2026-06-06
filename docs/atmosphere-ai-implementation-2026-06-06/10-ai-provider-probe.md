@@ -10,7 +10,7 @@ This document is the gate before provider-backed AI development. The current rel
 Do not commit API keys. Run the probe with an environment variable:
 
 ```bash
-AI_RELAY_API_KEY='replace-manually' pnpm test:ai:probe
+API_KEY='replace-manually' pnpm test:ai:probe
 ```
 
 Optional overrides:
@@ -21,7 +21,7 @@ AI_RELAY_MODEL='gemini-3.1-flash-image-preview' \
 AI_RELAY_TIMEOUT_MS=60000 \
 AI_RELAY_IMAGE_URL='https://raw.githubusercontent.com/github/explore/main/topics/javascript/javascript.png' \
 AI_RELAY_PROBE_OUT='docs/atmosphere-ai-implementation-2026-06-06/evidence/ai-relay-probe-gptgod-latest.json' \
-AI_RELAY_API_KEY='replace-manually' \
+API_KEY='replace-manually' \
 pnpm test:ai:probe
 ```
 
@@ -102,7 +102,7 @@ docs/atmosphere-ai-implementation-2026-06-06/evidence/ai-relay-probe-gptgod-late
 
 When the probe passes:
 
-- backend config should accept `AI_RELAY_BASE_URL`, `AI_RELAY_MODEL`, `AI_RELAY_API_KEY`, and timeout settings;
+- backend config should accept `AI_RELAY_BASE_URL`, `AI_RELAY_MODEL`, `API_KEY`, and timeout settings;
 - current requests should use `/v1/chat/completions` with `response_format.type = "json_schema"` behind an internal provider interface;
 - use a generous output-token cap for strict schema calls because this model may consume reasoning tokens before emitting content;
 - keep the internal provider interface API-neutral so a future working `/v1/responses` or provider file upload path can replace the adapter without changing product flows;

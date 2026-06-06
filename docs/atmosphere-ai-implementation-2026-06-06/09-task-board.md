@@ -21,8 +21,8 @@ Use this as the execution board for the atmosphere/AI phase. Keep tasks small en
 | P0-05 | Done with limits: add final-countdown visual tension gated by state and reduced-motion. | H5 CSS/components | Countdown phase drives `data-countdown-phase`; hot/critical/hammer styles are state-gated and `prefers-reduced-motion` disables hammer pulse. This is visual/state tension only; it does not complete the full review-design P0-A heartbeat soundbed, "三二一/going once" cadence, or escalating haptics. |
 | P0-06 | Done: render heat meter from real fields. | H5/API | `heatSnapshot` derives active bidders, accepted bids, accepted bidder count, total accepted bids, and price velocity from leaderboard/auction fields with fallback source. |
 | P0-07 | Done: fix atmosphere cue ID and outbid cue event logic. | H5 state | `normalizeAtmosphere` uses monotonic cue IDs; outbid cue uses authoritative winner transition. Covered by `atmosphere-engine.spec.ts` and H5 event tests. |
-| P0-08 | Done: wire AI provider boundary with relay-backed Chat Completions adapter and deterministic fallback. | Backend | `backend/internal/ai` defines `Generator`; `ChatCompletionsGenerator` uses strict `json_schema` Chat Completions when `AI_RELAY_API_KEY` is configured, otherwise local deterministic templates. `go test ./internal/ai` covers request shape, HTTPS image filtering, and malformed JSON rejection. |
-| P0-09 | Done with limits: ship Listing Copilot backend draft endpoint with provider-backed mode and deterministic fallback. | Backend/PC | Host-only endpoint persists prompt version, provider/model, input/output JSON, safety flags, and `no_auto_publish`; relay mode supports strict structured output and HTTPS image URLs. Local default remains deterministic unless `AI_RELAY_API_KEY` is set. |
+| P0-08 | Done: wire AI provider boundary with provider-backed Chat Completions adapter and deterministic fallback. | Backend | `backend/internal/ai` defines `Generator`; `ChatCompletionsGenerator` uses strict `json_schema` Chat Completions when `API_KEY` is configured, otherwise local deterministic templates. `go test ./internal/ai` covers request shape, HTTPS image filtering, and malformed JSON rejection. |
+| P0-09 | Done with limits: ship Listing Copilot backend draft endpoint with provider-backed mode and deterministic fallback. | Backend/PC | Host-only endpoint persists prompt version, provider/model, input/output JSON, safety flags, and `no_auto_publish`; provider mode supports strict structured output and HTTPS image URLs. Local default remains deterministic unless `API_KEY` is set. |
 | P0-10 | Done with limits: add PC Listing Copilot review/apply UI with image upload. | PC | Drawer supports merchant notes, category, product-image upload, HTTPS provider-image status, structured draft review, field-level apply, and no auto-publish. Multimodal provider use requires a provider-fetchable HTTPS object URL; local MinIO HTTP images fall back to text draft with visible warning. |
 
 ### P0-01 To P0-07 Evidence Snapshot
@@ -39,7 +39,7 @@ Use this as the execution board for the atmosphere/AI phase. Keep tasks small en
 - Backend: `go test ./internal/ai` and `go test ./internal/gateway -run 'TestAI'` passed on 2026-06-06 with writable Go cache and local service access.
 - Frontend: `pnpm --filter pc-console build`, `pnpm --filter mobile-h5 build`, and `pnpm test:frontend:domain` passed on 2026-06-06.
 - Playwright MCP: PC Copilot drawer generated a `SUCCEEDED` deterministic/local-template draft from merchant notes, with title, description, rule suggestion, evidence flags, and no auto-publish claim.
-- Do not overclaim B1: provider-backed generation is wired but only active with `AI_RELAY_API_KEY`; product images are sent to the provider only when the uploaded object URL is HTTPS and provider-fetchable.
+- Do not overclaim B1: provider-backed generation is wired but only active with `API_KEY`; product images are sent to the provider only when the uploaded object URL is HTTPS and provider-fetchable.
 
 ## P1: Ceremony, Ranking, And AI Commentary
 
@@ -76,7 +76,7 @@ This board must not be read as "all P0-P2 review-design items are complete." Cur
 - P1-H is improved with automatic decided-event AI system messages and a server-side per-auction auto commentary toggle; true animated barrage and TTS remain missing.
 - P2-I/P2-J/P2-K are implemented as a compliance-limited H5 live-ops panel. They are not random reward 福袋, cash/promotion mechanics, or a backend campaign engine.
 - B1 Listing Copilot supports provider-backed strict structured output and HTTPS image URLs when configured; local default remains deterministic and HTTP/local object URLs are not sent as multimodal provider input.
-- B2 AI commentary is automatic for decided bid/sold events and host-triggered for manual prompts; it can use the relay-backed provider when configured, with deterministic fallback on missing/failed provider.
+- B2 AI commentary is automatic for decided bid/sold events and host-triggered for manual prompts; it can use the external AI provider when configured, with deterministic fallback on missing/failed provider.
 - B3 Sentinel is deterministic aggregate rules only, not LLM explanation or advanced anomaly model.
 - B4 Recap includes backend/PC host recap plus H5 buyer-safe share/highlight card; generated video/highlight clips remain missing.
 - B5 Q&A is deterministic fact lookup, not full AI导拍客服.
@@ -93,7 +93,7 @@ This board must not be read as "all P0-P2 review-design items are complete." Cur
 
 - Persistence uses generic `ai_generation_jobs`, `auction_system_messages`, and `auction_risk_alerts`.
 - System commentary is separate from `chat_messages` so provenance, source seq, and safety labels remain explicit.
-- Current runtime provider mode is `auto`: relay-backed Chat Completions is used only when `AI_RELAY_API_KEY` is configured; otherwise deterministic/local-template fallback is explicit.
+- Current runtime provider mode is `auto`: provider-backed Chat Completions is used only when `API_KEY` is configured; otherwise deterministic/local-template fallback is explicit.
 - AI never decides bids, winners, prices, settlement, orders, or automatic risk blocking.
 
 ## Do Not Start Yet
