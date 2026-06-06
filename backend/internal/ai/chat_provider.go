@@ -237,10 +237,24 @@ func chatMessagesForRequest(req StructuredRequest) []map[string]any {
 	if req.Kind == "product_qa" {
 		userText = "回答买家关于拍品和竞拍规则的问题。可参考 recent_turns 理解追问，但只能使用 facts 字段里的已审核事实；没有事实就回答未提供；不得承诺真伪、升值收益、隐藏最高价或平台外交易。follow_up_prompts 给出最多3个买家自然追问。"
 	}
-	content := []map[string]any{{"type": "text", "text": userText + "\n输入 JSON:\n" + mustJSON(req.Input)}}
+	textInput := req.Input
+	if req.Kind == "listing_draft" {
+		textInput = sanitizedListingTextInput(req.Input)
+	}
+	content := []map[string]any{{"type": "text", "text": userText + "\n输入 JSON:\n" + mustJSON(textInput)}}
 	if req.Kind == "listing_draft" {
 		for _, imageURL := range stringSlice(req.Input["image_urls"]) {
-			if isProviderFetchableHTTPS(imageURL) {
+			if isProviderImageURL(imageURL) {
+				content = append(content, map[string]any{
+					"type": "image_url",
+					"image_url": map[string]any{
+						"url": imageURL,
+					},
+				})
+			}
+		}
+		for _, imageURL := range stringSlice(req.Input["image_data_urls"]) {
+			if isProviderImageURL(imageURL) {
 				content = append(content, map[string]any{
 					"type": "image_url",
 					"image_url": map[string]any{
@@ -335,4 +349,40 @@ func mustJSON(value any) string {
 func isProviderFetchableHTTPS(raw string) bool {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	return err == nil && parsed.Scheme == "https" && parsed.Host != ""
+}
+
+func isProviderImageURL(raw string) bool {
+	if isProviderFetchableHTTPS(raw) {
+		return true
+	}
+	return isProviderImageDataURL(strings.TrimSpace(raw))
+}
+
+func isProviderImageDataURL(raw string) bool {
+	if len(raw) > 2_800_000 {
+		return false
+	}
+	if !(strings.HasPrefix(raw, "data:image/jpeg;base64,") ||
+		strings.HasPrefix(raw, "data:image/png;base64,") ||
+		strings.HasPrefix(raw, "data:image/webp;base64,")) {
+		return false
+	}
+	comma := strings.Index(raw, ",")
+	if comma < 0 || comma == len(raw)-1 {
+		return false
+	}
+	data := raw[comma+1:]
+	return len(data)%4 == 0
+}
+
+func sanitizedListingTextInput(input map[string]any) map[string]any {
+	out := map[string]any{}
+	for key, value := range input {
+		if key == "image_data_urls" {
+			out[key] = []string{"local_image_data_url"}
+			continue
+		}
+		out[key] = value
+	}
+	return out
 }

@@ -755,7 +755,7 @@ export function AICopilotDrawer({
   onNotesChange: (notes: string) => void;
 }) {
   const output = draft?.output_json;
-  const imageCanReachProvider = imageURL.trim().startsWith('https://');
+  const imageCanReachProvider = Boolean(imageFile) || imageURL.trim().startsWith('https://');
   return (
     <Drawer
       className="ai-copilot-drawer"
@@ -786,7 +786,7 @@ export function AICopilotDrawer({
               {imageURL ? (
                 <div className="ai-image-preview">
                   <img src={imageURL} alt="" />
-                  <Tag color={imageCanReachProvider ? 'green' : 'gold'}>{imageCanReachProvider ? '可用于多模态' : '仅用于表单'}</Tag>
+                  <Tag color={imageCanReachProvider ? 'green' : 'gold'}>{imageCanReachProvider ? '可用于 AI 看图' : '仅用于表单'}</Tag>
                 </div>
               ) : null}
             </div>
@@ -794,7 +794,7 @@ export function AICopilotDrawer({
               aria-label="listing-copilot-image-url"
               value={imageURL}
               onChange={onImageURLChange}
-              placeholder="上传后自动填入；HTTPS 对象地址才会发送给 AI"
+              placeholder="上传图片可用于 AI 看图；也可填 HTTPS 图片地址"
             />
           </Form.Item>
           <Form.Item label="商家备注">

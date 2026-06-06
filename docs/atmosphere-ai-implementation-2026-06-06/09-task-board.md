@@ -22,8 +22,8 @@ Use this as the execution board for the atmosphere/AI phase. Keep tasks small en
 | P0-06 | Done: render heat meter from real fields. | H5/API | `heatSnapshot` derives active bidders, accepted bids, accepted bidder count, total accepted bids, and price velocity from leaderboard/auction fields with fallback source. |
 | P0-07 | Done: fix atmosphere cue ID and outbid cue event logic. | H5 state | `normalizeAtmosphere` uses monotonic cue IDs; outbid cue uses authoritative winner transition. Covered by `atmosphere-engine.spec.ts` and H5 event tests. |
 | P0-08 | Done: wire AI provider boundary with provider-backed Chat Completions adapter and deterministic fallback. | Backend | `backend/internal/ai` defines `Generator`; `ChatCompletionsGenerator` uses strict `json_schema` Chat Completions when `API_KEY` is configured, otherwise local deterministic templates. `go test ./internal/ai` covers request shape, HTTPS image filtering, and malformed JSON rejection. |
-| P0-09 | Done with limits: ship Listing Copilot backend draft endpoint with provider-backed mode and deterministic fallback. | Backend/PC | Host-only endpoint persists prompt version, provider/model, input/output JSON, safety flags, and `no_auto_publish`; provider mode supports strict structured output and HTTPS image URLs. Local default remains deterministic unless `API_KEY` is set. |
-| P0-10 | Done with limits: add PC Listing Copilot review/apply UI with image upload. | PC | Drawer supports merchant notes, category, product-image upload, HTTPS provider-image status, structured draft review, field-level apply, and no auto-publish. Multimodal provider use requires a provider-fetchable HTTPS object URL; local MinIO HTTP images fall back to text draft with visible warning. |
+| P0-09 | Done with limits: ship Listing Copilot backend draft endpoint with provider-backed mode and deterministic fallback. | Backend/PC | Host-only endpoint persists prompt version, provider/model, input/output JSON, safety flags, and `no_auto_publish`; provider mode supports strict structured output, HTTPS image URLs, and safe `data:image/*;base64` local upload images. Local default remains deterministic unless `API_KEY` is set. |
+| P0-10 | Done with limits: add PC Listing Copilot review/apply UI with image upload. | PC | Drawer supports merchant notes, category, product-image upload, local image-to-AI data URL for files up to 2MB, HTTPS provider-image URLs, structured draft review, field-level apply, and no auto-publish. Oversized local images are saved to the item form but require merchant notes or an HTTPS URL for AI vision. |
 
 ### P0-01 To P0-07 Evidence Snapshot
 
@@ -39,7 +39,7 @@ Use this as the execution board for the atmosphere/AI phase. Keep tasks small en
 - Backend: `go test ./internal/ai` and `go test ./internal/gateway -run 'TestAI'` passed on 2026-06-06 with writable Go cache and local service access.
 - Frontend: `pnpm --filter pc-console build`, `pnpm --filter mobile-h5 build`, and `pnpm test:frontend:domain` passed on 2026-06-06.
 - Playwright MCP: PC Copilot drawer generated a `SUCCEEDED` deterministic/local-template draft from merchant notes, with title, description, rule suggestion, evidence flags, and no auto-publish claim.
-- Do not overclaim B1: provider-backed generation is wired but only active with `API_KEY`; product images are sent to the provider only when the uploaded object URL is HTTPS and provider-fetchable.
+- Do not overclaim B1: provider-backed generation is wired but only active with `API_KEY`; product images are sent to the provider as HTTPS image URLs or safe local upload data URLs. Oversized local images are not silently sent.
 
 ## P1: Ceremony, Ranking, And AI Commentary
 
@@ -75,7 +75,7 @@ This board must not be read as "all P0-P2 review-design items are complete." Cur
 - P1-G sound design 2.0 now includes an opt-in generated WAV asset pack, heartbeat bed loop, event sounds, haptics, WebAudio fallback, and browser TTS for system messages; no third-party licensed professional asset pack.
 - P1-H now includes automatic decided-event AI system messages, server-side per-auction auto commentary toggle, H5 chat display, and animated stage barrage.
 - P2-I/P2-J/P2-K are implemented as a compliance-limited backend/H5 live-ops engine with persisted task progress, persisted buyer-team choice/counts, and entry/leader effects. They are not random reward 福袋, cash/promotion mechanics, or price/winner-affecting campaigns.
-- B1 Listing Copilot supports provider-backed strict structured output and HTTPS image URLs when configured; local default remains deterministic and HTTP/local object URLs are not sent as multimodal provider input.
+- B1 Listing Copilot supports provider-backed strict structured output, HTTPS image URLs, and safe local upload data URLs when configured; local default remains deterministic and oversized local files require notes or an HTTPS URL.
 - B2 AI commentary is automatic for decided bid/sold events and host-triggered for manual prompts; both paths can use the external AI provider when configured, with deterministic fallback on missing/failed provider.
 - B3 Sentinel now uses provider-backed explanations over deterministic aggregate rule candidates, with deterministic fallback and audit jobs. It is still not an advanced cross-account anomaly model or automatic enforcement engine.
 - B4 Recap includes backend/PC host recap plus H5 buyer-safe share/highlight card, copy action, downloadable SVG highlight card, and browser-generated WebM highlight video. Remaining limit: no server-side rendering/transcoding service or licensed motion template pack.
@@ -86,7 +86,7 @@ This board must not be read as "all P0-P2 review-design items are complete." Cur
 - Done: new relay base URL, exact model name, API key presence, strict JSON schema output, plain text, and multimodal image understanding were probed on 2026-06-06. Evidence: `docs/atmosphere-ai-implementation-2026-06-06/evidence/ai-relay-probe-gptgod-latest.json`.
 - Current backend mode: `chat_completions_adapter`, not direct `/v1/responses`, because `/v1/responses` returned provider `not implemented` errors while `/v1/chat/completions` with strict `json_schema` passed.
 - Schema implementation note: `gemini-3.1-flash-image-preview` may spend hundreds of completion tokens on reasoning before emitting JSON; use a generous output-token cap and reject empty content.
-- Product image flow: merchant uploads to our backend; backend stores the image and gives the AI provider a short-lived provider-fetchable HTTPS object URL. Do not expose HTTP-image input fields to merchants.
+- Product image flow: merchant uploads to our backend; PC can send a small local upload as a safe `data:image/*;base64` provider image while still storing the object in our backend. HTTPS object URLs are also accepted. Do not send HTTP object URLs as if they were provider-fetchable.
 - Provider Files API is not a P0 dependency because the current relay upload probe did not pass.
 
 ## AI Implementation Decisions Made

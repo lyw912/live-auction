@@ -48,17 +48,22 @@ func (r *Repository) CreateListingDraft(ctx context.Context, hostID string, gen 
 	req.SellerNotes = cleanText(req.SellerNotes, 480)
 	req.TargetCategory = cleanText(req.TargetCategory, 80)
 	req.ImageURLs = limitStrings(req.ImageURLs, 5, 512)
-	if req.RoomID == "" || (req.SellerNotes == "" && len(req.ImageURLs) == 0) {
+	req.ImageDataURLs = limitStrings(req.ImageDataURLs, 3, 2_800_000)
+	if req.RoomID == "" || (req.SellerNotes == "" && len(req.ImageURLs) == 0 && len(req.ImageDataURLs) == 0) {
 		return Job{}, apierrors.New(apierrors.CodeInvalidArgument, "room_id and seller_notes or image_urls are required", http.StatusBadRequest)
 	}
 	if err := r.ensureHostRoom(ctx, hostID, req.RoomID); err != nil {
 		return Job{}, err
 	}
 	inputMap := structToMap(req)
+	storedInputMap := structToMap(req)
+	if len(req.ImageDataURLs) > 0 {
+		storedInputMap["image_data_urls"] = []string{"local_image_data_url"}
+	}
 	inputHash := InputHash(map[string]any{
 		"kind":           "listing_draft",
 		"prompt_version": PromptVersionListingDraft,
-		"input":          inputMap,
+		"input":          storedInputMap,
 	})
 	result, err := gen.GenerateStructured(ctx, StructuredRequest{
 		Kind:          "listing_draft",
@@ -97,7 +102,7 @@ func (r *Repository) CreateListingDraft(ctx context.Context, hostID string, gen 
 		PromptVersion: PromptVersionListingDraft,
 		Provider:      result.Provider,
 		Model:         result.Model,
-		Input:         inputMap,
+		Input:         storedInputMap,
 		Output:        result.Output,
 		Safety:        result.Safety,
 		ErrorMessage:  errorMessage,

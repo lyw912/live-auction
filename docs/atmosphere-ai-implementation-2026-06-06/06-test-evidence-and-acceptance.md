@@ -80,9 +80,9 @@ Evidence:
 
 Current 2026-06-06 evidence:
 
-- `go test ./internal/ai` passed for the relay Chat Completions adapter request shape, strict `json_schema`, HTTPS-only image forwarding, and malformed-content rejection.
+- `go test ./internal/ai` passed for the relay Chat Completions adapter request shape, strict `json_schema`, HTTPS image forwarding, safe local `data:image/*;base64` forwarding, text-payload image-data redaction, and malformed-content rejection.
 - `TestAIListingDraftIsHostOnlyStructuredAndApplyIsAuditOnly` passed against local PostgreSQL/Redis after migration.
-- PC drawer now accepts merchant notes, category, and product-image upload. Uploaded images are sent to the provider only when the resulting object URL is HTTPS/provider-fetchable; local HTTP MinIO URLs remain visible in the form and generate a text-only draft warning.
+- PC drawer now accepts merchant notes, category, and product-image upload. Small local uploads are sent to the provider as safe image data URLs while still being saved to the item form; HTTPS image URLs are also forwarded. Oversized local images are not silently sent and require merchant notes or an HTTPS image URL.
 - UI apply fills the local create/rule form only; publishing still requires existing create/save actions and backend validation.
 
 ## AI Commentator Tests

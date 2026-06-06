@@ -63,6 +63,7 @@ func TestChatCompletionsGeneratorListingDraftUsesStrictSchemaAndImages(t *testin
 			"seller_notes":    "老银鎏金手镯，有证书照片待补",
 			"target_category": "古董珠宝",
 			"image_urls":      []string{"https://cdn.example.test/item.jpg", "http://localhost/not-provider-fetchable.jpg"},
+			"image_data_urls": []string{"data:image/png;base64,aGVsbG8=", "data:text/plain;base64,aGVsbG8="},
 		},
 		Timeout: time.Second,
 	})
@@ -87,13 +88,20 @@ func TestChatCompletionsGeneratorListingDraftUsesStrictSchemaAndImages(t *testin
 	user := messages[1].(map[string]any)
 	content := user["content"].([]any)
 	imageCount := 0
+	textPayload := ""
 	for _, part := range content {
 		if part.(map[string]any)["type"] == "image_url" {
 			imageCount++
 		}
+		if part.(map[string]any)["type"] == "text" {
+			textPayload = part.(map[string]any)["text"].(string)
+		}
 	}
-	if imageCount != 1 {
-		t.Fatalf("image parts = %d, want provider-fetchable HTTPS only", imageCount)
+	if imageCount != 2 {
+		t.Fatalf("image parts = %d, want HTTPS plus safe image data URL", imageCount)
+	}
+	if bytes.Contains([]byte(textPayload), []byte("aGVsbG8=")) {
+		t.Fatalf("text payload should not include raw image data URL")
 	}
 }
 

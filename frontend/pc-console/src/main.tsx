@@ -481,19 +481,27 @@ function App() {
     setListingDraftLoading(true);
     try {
       let imageURL = copilotImageURL.trim() || itemDraft.imageURL.trim();
+      let imageDataURL = '';
       if (copilotImageFile) {
+        if (copilotImageFile.size <= 2_000_000) {
+          imageDataURL = await fileToDataURL(copilotImageFile);
+        } else {
+          Message.warning('图片超过 2MB，已保存到表单，AI 将按文字备注生成草稿');
+        }
         imageURL = await uploadItemImage(copilotImageFile) || imageURL;
         setCopilotImageURL(imageURL);
         setCopilotImageFile(null);
         setItemDraft((current) => ({ ...current, imageURL: imageURL || current.imageURL }));
       }
       const providerImageURLs = imageURL.startsWith('https://') ? [imageURL] : [];
+      const providerImageDataURLs = imageDataURL ? [imageDataURL] : [];
       const response = await fetch('/api/host/ai/listing-drafts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           room_id: roomID,
           image_urls: providerImageURLs,
+          image_data_urls: providerImageDataURLs,
           seller_notes: listingNotes.trim(),
           target_category: listingCategory.trim()
         })
@@ -504,8 +512,8 @@ function App() {
         return;
       }
       setListingDraftJob(payload);
-      if (imageURL && providerImageURLs.length === 0) {
-        Message.warning('图片已保存到拍品表单；当前地址不是 HTTPS，AI 将按文字备注生成草稿');
+      if (imageURL && providerImageURLs.length === 0 && providerImageDataURLs.length === 0) {
+        Message.warning('图片已保存到拍品表单；AI 未读取大图，请在备注里补充关键信息');
       }
       Message.success('AI 草稿已生成，需人工确认后应用');
     } catch {
@@ -817,6 +825,15 @@ function App() {
       </Layout.Content>
     </Layout>
   );
+}
+
+function fileToDataURL(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error ?? new Error('read image file'));
+    reader.readAsDataURL(file);
+  });
 }
 
 createRoot(document.getElementById('root')!).render(<App />);

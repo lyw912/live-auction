@@ -45,6 +45,7 @@ type Generator interface {
 type ListingDraftRequest struct {
 	RoomID         string   `json:"room_id"`
 	ImageURLs      []string `json:"image_urls"`
+	ImageDataURLs  []string `json:"image_data_urls"`
 	SellerNotes    string   `json:"seller_notes"`
 	TargetCategory string   `json:"target_category"`
 }
