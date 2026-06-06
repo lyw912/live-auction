@@ -69,6 +69,14 @@ type demoCompetingBidRequest struct {
 	ClientSeenSeq int64  `json:"client_seen_seq"`
 }
 
+type liveOpsTaskRequest struct {
+	TaskKey string `json:"task_key"`
+}
+
+type liveOpsTeamRequest struct {
+	TeamKey string `json:"team_key"`
+}
+
 type roomSummary struct {
 	ID     string `json:"id"`
 	HostID string `json:"host_id"`
@@ -122,6 +130,75 @@ func (h AuctionHandler) ListRooms(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": result})
+}
+
+func (h AuctionHandler) GetLiveOpsCampaign(w http.ResponseWriter, r *http.Request) {
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	roomID := chi.URLParam(r, "room_id")
+	if err := h.ACL.requireActiveMembership(r.Context(), user, roomID, "", traceID(r.Context())); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	campaign, err := h.Repo.GetLiveOpsCampaign(r.Context(), roomID, user.ID)
+	if err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, campaign)
+}
+
+func (h AuctionHandler) CompleteLiveOpsTask(w http.ResponseWriter, r *http.Request) {
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	roomID := chi.URLParam(r, "room_id")
+	if err := h.ACL.requireActiveMembership(r.Context(), user, roomID, "", traceID(r.Context())); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	taskKey := chi.URLParam(r, "task_key")
+	if taskKey == "" {
+		var req liveOpsTaskRequest
+		if err := decodeJSON(r, &req); err == nil {
+			taskKey = req.TaskKey
+		}
+	}
+	campaign, err := h.Repo.CompleteLiveOpsTask(r.Context(), roomID, user.ID, taskKey)
+	if err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, campaign)
+}
+
+func (h AuctionHandler) SelectLiveOpsTeam(w http.ResponseWriter, r *http.Request) {
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	roomID := chi.URLParam(r, "room_id")
+	if err := h.ACL.requireActiveMembership(r.Context(), user, roomID, "", traceID(r.Context())); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	var req liveOpsTeamRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "invalid json body", http.StatusBadRequest))
+		return
+	}
+	campaign, err := h.Repo.SelectLiveOpsTeam(r.Context(), roomID, user.ID, req.TeamKey)
+	if err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, campaign)
 }
 
 func (h AuctionHandler) CreateUploadURL(w http.ResponseWriter, r *http.Request) {

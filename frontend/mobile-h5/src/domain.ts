@@ -221,6 +221,25 @@ export type ProductQATurn = {
   answer: string;
   facts_used?: string[];
 };
+export type LiveOpsTask = {
+  key: 'watch' | 'follow' | 'ask' | 'leaderboard';
+  label: string;
+  description: string;
+  completed_at?: string;
+};
+export type LiveOpsCampaign = {
+  id: string;
+  room_id: string;
+  status: string;
+  title: string;
+  description: string;
+  tasks: LiveOpsTask[];
+  progress: number;
+  my_team?: 'craft' | 'story';
+  team_scores?: Array<{ key: 'craft' | 'story'; label: string; count: number }>;
+  disclaimer: string;
+  updated_at?: string;
+};
 export type OrderRow = {
   order_id?: string;
   auction_id?: string;

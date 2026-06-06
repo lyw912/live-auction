@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { CheckCircle2, ChevronUp, Radio, RefreshCw } from 'lucide-react';
 import type { AtmosphereCue, AtmosphereInput } from './atmosphere';
 import { AuctionStatePanel, BottomSheet, ChatComposer, ChatPanel, LeaderboardPanel, LiveOpsPanel, LiveStage, ResultSheet, StateMatrixTabs } from './components';
-import type { AuctionItem, AuctionOverlayMode, AuctionRealtimeEvent, AuctionState, AuctionSummary, AuctionSoundPack, AuthUser, BidderRequirement, BidPhase, BidResponse, BottomSheetKey, ChatMessage, ConnectionPhase, HistoryRow, LeaderboardPayload, MaxBidIntent, MaxBidPhase, OrderRow, PaymentPhase, PendingBidRequest, ProductQAAnswer, ProductQATurn, RecoveryPhase, ResultSheetKind, Scenario, SnapshotResponse, SoundCapability, SystemMessage, WSTicketResponse } from './domain';
+import type { AuctionItem, AuctionOverlayMode, AuctionRealtimeEvent, AuctionState, AuctionSummary, AuctionSoundPack, AuthUser, BidderRequirement, BidPhase, BidResponse, BottomSheetKey, ChatMessage, ConnectionPhase, HistoryRow, LeaderboardPayload, LiveOpsCampaign, MaxBidIntent, MaxBidPhase, OrderRow, PaymentPhase, PendingBidRequest, ProductQAAnswer, ProductQATurn, RecoveryPhase, ResultSheetKind, Scenario, SnapshotResponse, SoundCapability, SystemMessage, WSTicketResponse } from './domain';
 import { createAudioContext, createClientBidID, demoProductImageURL, demoUserID, deriveCountdown, deriveCountdownPhase, ensureDemoSession, extensionCopyFromEvent, formatCents, heatSnapshot, isBidConfirmationPending, isCountdownExpired, isDangerousActionDisabled, isEngineRejected, isTestMatrixEnabled, loadAuctionSoundPack, maxBidErrorCopy, maxBidStatusCopy, playAuctionSound, playCountdownTone, playCueTone, playLayeredCue, readJSON, rejectCopy, responseServerTimeMS, retryAfterMS, retryAfterMSFromHeaders, roomIDFromPath, scenarios, selectEntryAuction, speakSystemMessage, vibrateCountdownPhase, vibratePattern, visibleRoomAuctions } from './domain';
 import { normalizeAtmosphere } from './atmosphere';
 import { reconnectDelayMS } from './realtime';
@@ -69,7 +69,9 @@ function App() {
   const [followed, setFollowed] = useState(false);
   const [likeCount, setLikeCount] = useState(0);
   const [activeBuyerTeam, setActiveBuyerTeam] = useState<'craft' | 'story'>('craft');
-  const [warmupTasks, setWarmupTasks] = useState({ watched: false, followed: false, asked: false, ready: false });
+  const [liveOpsCampaign, setLiveOpsCampaign] = useState<LiveOpsCampaign | null>(null);
+  const [liveOpsBusy, setLiveOpsBusy] = useState('');
+  const [liveOpsError, setLiveOpsError] = useState('');
   const [stageItem, setStageItem] = useState<AuctionItem>({
     title: '青瓷手作茶盏',
     image_url: demoProductImageURL,
@@ -1073,6 +1075,49 @@ function App() {
     };
   }, [activeAuctionID, sessionReady]);
 
+  const loadLiveOpsCampaign = async () => {
+    try {
+      const response = await fetch(`/api/rooms/${roomID}/liveops`);
+      const payload = await readJSON<LiveOpsCampaign>(response);
+      if (response.ok && payload) {
+        setLiveOpsCampaign(payload);
+        if (payload.my_team === 'craft' || payload.my_team === 'story') setActiveBuyerTeam(payload.my_team);
+        setLiveOpsError('');
+      } else {
+        setLiveOpsError('互动准备暂不可用，请稍后再试');
+      }
+    } catch {
+      setLiveOpsError('互动准备暂不可用，请稍后再试');
+    }
+  };
+
+  useEffect(() => {
+    if (!sessionReady) return;
+    void loadLiveOpsCampaign();
+  }, [sessionReady, roomID]);
+
+  const completeLiveOpsTask = async (taskKey: 'watch' | 'follow' | 'ask' | 'leaderboard') => {
+    if (liveOpsBusy) return false;
+    setLiveOpsBusy(taskKey);
+    setLiveOpsError('');
+    try {
+      const response = await fetch(`/api/rooms/${roomID}/liveops/tasks/${taskKey}`, { method: 'POST' });
+      const payload = await readJSON<LiveOpsCampaign>(response);
+      if (response.ok && payload) {
+        setLiveOpsCampaign(payload);
+        if (payload.my_team === 'craft' || payload.my_team === 'story') setActiveBuyerTeam(payload.my_team);
+        return true;
+      }
+      setLiveOpsError('互动准备暂不可用，请稍后再试');
+      return false;
+    } catch {
+      setLiveOpsError('互动准备暂不可用，请稍后再试');
+      return false;
+    } finally {
+      setLiveOpsBusy('');
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
     const loadChat = async () => {
@@ -1557,7 +1602,7 @@ function App() {
         setQAAnswer(nextAnswer);
         setQAHistory((current) => [...current, nextAnswer].slice(-8));
         setQADraft('');
-        setWarmupTasks((current) => ({ ...current, asked: true }));
+        void completeLiveOpsTask('ask');
       } else {
         const failedAnswer = { auction_id: activeAuctionID, thread_id: threadID, question, answer: '未提供', facts_used: [], safety_note: '问答暂不可用，请稍后重试。' };
         setQAAnswer(failedAnswer);
@@ -1580,14 +1625,35 @@ function App() {
   const toggleFollow = () => {
     setFollowed((value) => {
       const next = !value;
-      if (next) setWarmupTasks((current) => ({ ...current, followed: true }));
+      if (next) void completeLiveOpsTask('follow');
       return next;
     });
   };
 
-  const openWarmupSheet = (sheet: BottomSheetKey, task: keyof typeof warmupTasks) => {
-    setWarmupTasks((current) => ({ ...current, [task]: true }));
+  const openWarmupSheet = (sheet: BottomSheetKey, task?: 'watch' | 'leaderboard') => {
     setActiveSheet(sheet);
+    if (task) void completeLiveOpsTask(task);
+  };
+
+  const selectBuyerTeam = async (team: 'craft' | 'story') => {
+    setActiveBuyerTeam(team);
+    setLiveOpsError('');
+    try {
+      const response = await fetch(`/api/rooms/${roomID}/liveops/team`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team_key: team })
+      });
+      const payload = await readJSON<LiveOpsCampaign>(response);
+      if (response.ok && payload) {
+        setLiveOpsCampaign(payload);
+        if (payload.my_team === 'craft' || payload.my_team === 'story') setActiveBuyerTeam(payload.my_team);
+      } else {
+        setLiveOpsError('阵营选择暂不可用，请稍后再试');
+      }
+    } catch {
+      setLiveOpsError('阵营选择暂不可用，请稍后再试');
+    }
   };
 
   return (
@@ -1615,7 +1681,7 @@ function App() {
         nextBidCents={nextBidCents}
         onLike={() => setLikeCount((count) => count + 1)}
         onOpenMore={() => setActiveSheet('more')}
-        onOpenProducts={() => openWarmupSheet('products', 'watched')}
+        onOpenProducts={() => openWarmupSheet('products', 'watch')}
         onOpenBid={openBidOverlay}
         onToggleFollow={toggleFollow}
         onToggleSound={() => void toggleSound()}
@@ -1626,14 +1692,15 @@ function App() {
           followed={followed}
           heat={heat}
           leaderboard={leaderboard}
+          liveOpsCampaign={liveOpsCampaign}
+          liveOpsBusy={liveOpsBusy}
+          liveOpsError={liveOpsError}
           likeCount={likeCount}
-          qaAsked={Boolean(qaAnswer)}
           scenario={scenario}
-          warmupTasks={warmupTasks}
-          onOpenProducts={() => openWarmupSheet('products', 'watched')}
-          onOpenQA={() => openWarmupSheet('qa', 'asked')}
-          onOpenLeaderboard={() => openWarmupSheet('leaderboard', 'ready')}
-          onSelectTeam={setActiveBuyerTeam}
+          onOpenProducts={() => openWarmupSheet('products', 'watch')}
+          onOpenQA={() => setActiveSheet('qa')}
+          onOpenLeaderboard={() => openWarmupSheet('leaderboard', 'leaderboard')}
+          onSelectTeam={(team) => void selectBuyerTeam(team)}
           onToggleFollow={toggleFollow}
         />
       )}

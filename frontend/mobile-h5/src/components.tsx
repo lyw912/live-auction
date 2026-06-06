@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, BadgeCheck, Bell, BellOff, CheckCircle2, ChevronUp, Clock3, Copy, CreditCard, Download, Flame, Heart, History, Info, MessageCircle, MoreHorizontal, PackageCheck, RefreshCw, Send, ShieldCheck, ShoppingCart, Sparkles, Truck, Trophy, Users, Wifi, WifiOff, X } from 'lucide-react';
 import type { AtmosphereCue } from './atmosphere';
-import type { AuctionItem, AuctionState, AuctionSummary, BottomSheetKey, ChatMessage, ConnectionPhase, CountdownPhase, CountdownPhaseState, HeatSnapshot, HistoryRow, LeaderboardPayload, MaxBidIntent, MaxBidPhase, PaymentPhase, ProductQAAnswer, ResultRecap, ResultSheetKind, Scenario, SoundCapability, SystemMessage } from './domain';
+import type { AuctionItem, AuctionState, AuctionSummary, BottomSheetKey, ChatMessage, ConnectionPhase, CountdownPhase, CountdownPhaseState, HeatSnapshot, HistoryRow, LeaderboardPayload, LiveOpsCampaign, MaxBidIntent, MaxBidPhase, PaymentPhase, ProductQAAnswer, ResultRecap, ResultSheetKind, Scenario, SoundCapability, SystemMessage } from './domain';
 import { buildHighlightCard, buildResultRecap, demoLiveVideoURL, demoProductImageURL, formatCents, formatClockTime, isDangerousActionDisabled, leaderboardActionCopy, rankBadgeLabel, riskActionCopy, scenarios } from './domain';
 
 export function LiveStage({
@@ -254,10 +254,11 @@ export function LiveOpsPanel({
   followed,
   heat,
   leaderboard,
+  liveOpsCampaign,
+  liveOpsBusy,
+  liveOpsError,
   likeCount,
-  qaAsked,
   scenario,
-  warmupTasks,
   onOpenProducts,
   onOpenQA,
   onOpenLeaderboard,
@@ -268,24 +269,27 @@ export function LiveOpsPanel({
   followed: boolean;
   heat: HeatSnapshot;
   leaderboard: LeaderboardPayload | null;
+  liveOpsCampaign: LiveOpsCampaign | null;
+  liveOpsBusy: string;
+  liveOpsError: string;
   likeCount: number;
-  qaAsked: boolean;
   scenario: Scenario;
-  warmupTasks: { watched: boolean; followed: boolean; asked: boolean; ready: boolean };
   onOpenProducts: () => void;
   onOpenQA: () => void;
   onOpenLeaderboard: () => void;
   onSelectTeam: (team: 'craft' | 'story') => void;
   onToggleFollow: () => void;
 }) {
-  const finishedTasks = [
-    warmupTasks.watched,
-    followed || warmupTasks.followed,
-    qaAsked || warmupTasks.asked,
-    warmupTasks.ready
-  ].filter(Boolean).length;
+  const taskMap = new Map((liveOpsCampaign?.tasks ?? []).map((task) => [task.key, task]));
+  const taskDone = (key: 'watch' | 'follow' | 'ask' | 'leaderboard') => Boolean(taskMap.get(key)?.completed_at);
+  const finishedTasks = liveOpsCampaign?.progress ?? 0;
+  const craftCount = liveOpsCampaign?.team_scores?.find((team) => team.key === 'craft')?.count ?? 0;
+  const storyCount = liveOpsCampaign?.team_scores?.find((team) => team.key === 'story')?.count ?? 0;
+  const teamTotal = craftCount + storyCount;
   const heatTotal = Math.max(1, heat.acceptedBids30s + heat.activeBidders30s + likeCount);
-  const craftScore = Math.min(100, Math.max(12, Math.round(((heat.acceptedBids30s * 2 + likeCount) / (heatTotal + 3)) * 100)));
+  const craftScore = teamTotal > 0
+    ? Math.round((craftCount / teamTotal) * 100)
+    : Math.min(100, Math.max(12, Math.round(((heat.acceptedBids30s * 2 + likeCount) / (heatTotal + 3)) * 100)));
   const storyScore = Math.max(0, 100 - craftScore);
   const topEntry = leaderboard?.entries?.[0];
   const leaderIsMe = topEntry?.is_current === true || leaderboard?.my_rank === 1;
@@ -299,15 +303,15 @@ export function LiveOpsPanel({
       <div className="warmup-card" data-testid="warmup-card">
         <div>
           <span><Sparkles size={13} /> 暖场任务</span>
-          <strong>{finishedTasks}/4 已完成</strong>
+          <strong>{finishedTasks}/{liveOpsCampaign?.tasks.length ?? 4} 已完成</strong>
         </div>
         <div className="warmup-task-grid">
-          <button type="button" className={warmupTasks.watched ? 'done' : ''} onClick={onOpenProducts}>看拍品</button>
-          <button type="button" className={(followed || warmupTasks.followed) ? 'done' : ''} onClick={onToggleFollow}>{followed ? '已关注' : '关注'}</button>
-          <button type="button" className={(qaAsked || warmupTasks.asked) ? 'done' : ''} onClick={onOpenQA}>问拍品</button>
-          <button type="button" className={warmupTasks.ready ? 'done' : ''} onClick={onOpenLeaderboard}>看榜单</button>
+          <button type="button" className={taskDone('watch') ? 'done' : ''} disabled={liveOpsBusy === 'watch'} onClick={onOpenProducts}>看拍品</button>
+          <button type="button" className={taskDone('follow') ? 'done' : ''} disabled={liveOpsBusy === 'follow'} onClick={onToggleFollow}>{followed ? '已关注' : '关注'}</button>
+          <button type="button" className={taskDone('ask') ? 'done' : ''} disabled={liveOpsBusy === 'ask'} onClick={onOpenQA}>问拍品</button>
+          <button type="button" className={taskDone('leaderboard') ? 'done' : ''} disabled={liveOpsBusy === 'leaderboard'} onClick={onOpenLeaderboard}>看榜单</button>
         </div>
-        <small>只记录互动准备，不抽奖、不承诺中奖或优惠。</small>
+        <small>{liveOpsError || liveOpsCampaign?.disclaimer || '只记录互动准备，不抽奖、不承诺中奖或优惠。'}</small>
       </div>
       <div className="buyer-pk-card" data-testid="buyer-pk-card">
         <div className="pk-title">
@@ -322,7 +326,7 @@ export function LiveOpsPanel({
             <span>故事派</span><strong>{storyScore}%</strong>
           </button>
         </div>
-        <small>进度来自真实出价热度和本机互动，不影响价格和成交。</small>
+        <small>进度来自真实出价热度和阵营选择，不影响价格和成交。</small>
       </div>
       <button type="button" className={`entry-effect-card ${leaderIsMe ? 'is-leader' : followed ? 'is-followed' : ''}`} data-testid="entry-effect-card" onClick={leaderIsMe || followed ? onOpenLeaderboard : onToggleFollow}>
         <span>{leaderIsMe ? <Trophy size={15} /> : <ShieldCheck size={15} />} {entryCopy}</span>

@@ -16,6 +16,28 @@ async function selectActiveBidsState(page: Page) {
 }
 
 test.beforeEach(async ({ page }) => {
+  const liveOpsProgress = new Set<string>();
+  let liveOpsTeam: 'craft' | 'story' | undefined;
+  const liveOpsPayload = () => ({
+    id: 'loc_test',
+    room_id: 'room_main',
+    status: 'ACTIVE',
+    title: '开拍前准备',
+    description: '完成信息查看、关注、问答和榜单确认，帮助自己理解本场规则。',
+    progress: liveOpsProgress.size,
+    my_team: liveOpsTeam,
+    team_scores: [
+      { key: 'craft', label: '工艺派', count: liveOpsTeam === 'craft' ? 1 : 0 },
+      { key: 'story', label: '故事派', count: liveOpsTeam === 'story' ? 1 : 0 }
+    ],
+    disclaimer: '不含抽奖、现金奖励或中标优先权；不会影响价格、排名、成交或保证金。',
+    tasks: ['watch', 'follow', 'ask', 'leaderboard'].map((key) => ({
+      key,
+      label: ({ watch: '看拍品', follow: '关注', ask: '问拍品', leaderboard: '看榜单' } as Record<string, string>)[key],
+      description: key,
+      ...(liveOpsProgress.has(key) ? { completed_at: '2026-06-06T08:00:00Z' } : {})
+    }))
+  });
   await page.route('/api/auth/me', async (route) => {
     await route.fulfill({ json: { user: { ID: 'user_1', Role: 'user' } } });
   });
@@ -175,6 +197,27 @@ test.beforeEach(async ({ page }) => {
       }
     });
   });
+  await page.route('/api/rooms/room_main/liveops', async (route) => {
+    await route.fulfill({ json: liveOpsPayload() });
+  });
+  await page.route('/api/rooms/room_main/liveops/tasks/*', async (route, request) => {
+    const task = new URL(request.url()).pathname.split('/').pop() ?? '';
+    if (!['watch', 'follow', 'ask', 'leaderboard'].includes(task)) {
+      await route.fulfill({ status: 400, json: { code: 'INVALID_ARGUMENT', message: 'unknown liveops task' } });
+      return;
+    }
+    liveOpsProgress.add(task);
+    await route.fulfill({ json: liveOpsPayload() });
+  });
+  await page.route('/api/rooms/room_main/liveops/team', async (route, request) => {
+    const body = request.postDataJSON() as { team_key?: 'craft' | 'story' };
+    if (body.team_key !== 'craft' && body.team_key !== 'story') {
+      await route.fulfill({ status: 400, json: { code: 'INVALID_ARGUMENT', message: 'unknown liveops team' } });
+      return;
+    }
+    liveOpsTeam = body.team_key;
+    await route.fulfill({ json: liveOpsPayload() });
+  });
   await page.addInitScript(() => {
     class MockAuctionWebSocket extends EventTarget {
       static CONNECTING = 0;
@@ -243,6 +286,17 @@ test('H5 does not expose test state matrix in normal demo entry', async ({ page 
 });
 
 test('H5 renders honest heat and all visible live actions are interactive', async ({ page }) => {
+  const liveOpsTasks: string[] = [];
+  const liveOpsTeams: string[] = [];
+  await page.route('/api/rooms/room_main/liveops/tasks/*', async (route, request) => {
+    const task = new URL(request.url()).pathname.split('/').pop() ?? '';
+    liveOpsTasks.push(task);
+    await route.fallback();
+  });
+  await page.route('/api/rooms/room_main/liveops/team', async (route, request) => {
+    liveOpsTeams.push((request.postDataJSON() as { team_key?: string }).team_key ?? '');
+    await route.fallback();
+  });
   await page.goto('/');
   await expect(page.getByText('2333')).toHaveCount(0);
   await expect(page.locator('.viewer-count.avatar-stack')).toContainText('近30秒 2 人');
@@ -253,18 +307,25 @@ test('H5 renders honest heat and all visible live actions are interactive', asyn
 
   await page.getByTestId('live-stage').getByRole('button', { name: '关注' }).click();
   await expect(page.getByTestId('live-stage').getByRole('button', { name: '已关注' })).toBeVisible();
+  await expect.poll(() => liveOpsTasks).toContain('follow');
   await page.getByRole('button', { name: '点赞' }).click();
   await expect(page.getByRole('button', { name: '点赞' })).toContainText('1');
   await expect(page.getByTestId('live-ops-panel')).toBeVisible();
   await expect(page.getByTestId('warmup-card')).toContainText('暖场任务');
   await page.getByTestId('warmup-card').getByRole('button', { name: '看拍品' }).click();
+  await expect.poll(() => liveOpsTasks).toContain('watch');
   await expect(page.getByTestId('bottom-sheet')).toContainText('本场商品');
   await page.getByTestId('bottom-sheet').getByRole('button', { name: '关闭' }).click();
   await expect(page.getByTestId('warmup-card')).toContainText('2/4 已完成');
   await expect(page.getByTestId('buyer-pk-card')).toContainText('买家阵营');
   await page.getByTestId('buyer-pk-card').getByRole('button', { name: /故事派/ }).click();
+  await expect.poll(() => liveOpsTeams).toContain('story');
   await expect(page.getByTestId('buyer-pk-card').getByRole('button', { name: /故事派/ })).toHaveClass(/active/);
   await page.getByTestId('entry-effect-card').click();
+  await expect(page.getByTestId('leaderboard-sheet')).toBeVisible();
+  await page.getByTestId('bottom-sheet').getByRole('button', { name: '关闭' }).click();
+  await page.getByTestId('warmup-card').getByRole('button', { name: '看榜单' }).click();
+  await expect.poll(() => liveOpsTasks).toContain('leaderboard');
   await expect(page.getByTestId('leaderboard-sheet')).toBeVisible();
   await page.getByTestId('bottom-sheet').getByRole('button', { name: '关闭' }).click();
   await expect(page.getByTestId('live-stage').getByRole('button', { name: '已关注' })).toBeVisible();
@@ -272,6 +333,41 @@ test('H5 renders honest heat and all visible live actions are interactive', asyn
   await expect(page.getByTestId('more-sheet')).toBeVisible();
   await page.getByTestId('more-sheet').getByRole('button', { name: '关闭' }).click();
   await expect(page.getByTestId('more-sheet')).toHaveCount(0);
+});
+
+test('H5 product QA completes liveops ask task only after a real answer', async ({ page }) => {
+  const liveOpsTasks: string[] = [];
+  let qaRequest: Record<string, unknown> | undefined;
+  await page.route('/api/rooms/room_main/liveops/tasks/*', async (route, request) => {
+    const task = new URL(request.url()).pathname.split('/').pop() ?? '';
+    liveOpsTasks.push(task);
+    await route.fallback();
+  });
+  await page.route('/api/rooms/room_main/product-qa', async (route, request) => {
+    qaRequest = request.postDataJSON() as Record<string, unknown>;
+    await route.fulfill({
+      json: {
+        auction_id: 'auc_live',
+        thread_id: qaRequest.thread_id,
+        question: qaRequest.question,
+        answer: '起拍价是 ¥350.00，加价阶梯是 ¥50.00。',
+        facts_used: ['current_price_cents', 'increment_cents'],
+        safety_note: '仅基于本场已展示信息。',
+        follow_up_prompts: ['有瑕疵说明吗？']
+      }
+    });
+  });
+
+  await page.goto('/');
+  await page.getByTestId('warmup-card').getByRole('button', { name: '问拍品' }).click();
+  await expect(page.getByTestId('product-qa-sheet')).toBeVisible();
+  await page.getByLabel('product-qa-input').fill('起拍价是多少？');
+  await page.getByLabel('ask-product-qa').click();
+
+  await expect(page.getByLabel('product-qa-thread')).toContainText('起拍价是 ¥350.00');
+  await expect.poll(() => qaRequest?.question).toBe('起拍价是多少？');
+  await expect.poll(() => liveOpsTasks).toContain('ask');
+  await expect(page.getByTestId('warmup-card')).toContainText('1/4 已完成');
 });
 
 test('H5 disables bid CTA for unsafe states and keeps text inside controls', async ({ page }) => {

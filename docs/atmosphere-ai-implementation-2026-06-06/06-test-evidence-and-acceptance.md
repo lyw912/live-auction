@@ -120,9 +120,12 @@ Current 2026-06-06 evidence:
 
 Current 2026-06-06 evidence:
 
-- `pnpm --filter mobile-h5 build` passed after adding `LiveOpsPanel`.
-- Browser test subset passed: `/bin/bash -lc "H5_PORT=5288 PC_PORT=5289 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 pnpm exec playwright test tests/e2e/mobile-h5.spec.ts --project=mobile-h5 --reporter=line -g 'honest heat|leaderboard sheet|realtime leaderboard'"`.
-- The H5 test clicks warm-up task buttons, buyer-team PK controls, and entry/leader effect card. Each opens an existing real sheet or changes visible local state; no button is decorative.
+- Migrations `202606060003_liveops_campaigns.sql` and `202606060004_liveops_team_choices.sql` applied with `make backend-migrate-up`.
+- Backend integration: `GOCACHE=/tmp/go-build-cache GOMODCACHE=/tmp/go-mod-cache GOPATH=/tmp/go-path go test ./internal/gateway -run 'TestLiveOps'` passed against local Postgres/Redis. It covers GET auto-create, persisted task completion, idempotent duplicate completion, persisted buyer-team selection/counts, invalid task/team rejection, and room ACL denial.
+- Regression integration: `GOCACHE=/tmp/go-build-cache GOMODCACHE=/tmp/go-mod-cache GOPATH=/tmp/go-path go test ./internal/gateway -run 'TestLiveOps|TestAICommentarySystemMessagesSentinelRecapAndProductQA|TestSentinelAndProductQAUseProviderWithFactGuards'` passed.
+- `pnpm --filter mobile-h5 build` and `pnpm test:frontend:domain` passed after replacing local warm-up state with server progress.
+- Real-browser subset passed: `H5_PORT=5288 PC_PORT=5289 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 pnpm exec playwright test tests/e2e/mobile-h5.spec.ts --project=mobile-h5 --reporter=line -g 'live actions|product QA completes liveops'`.
+- The H5 test clicks warm-up task buttons, buyer-team PK controls, entry/leader effect card, and product Q&A. Watch/follow/leaderboard/ask completion is asserted through `/api/rooms/room_main/liveops/tasks/{task_key}` calls and server-returned progress; buyer-team PK is asserted through `/api/rooms/room_main/liveops/team`; no button is decorative.
 - The live-ops copy states that warm-up has no lottery/promised reward and buyer PK does not affect price or winner.
 - Real-browser testing exposed and fixed two UX defects: entry effect was initially hidden behind the fixed chat composer, and clicking an already-followed entry card toggled follow off instead of opening leaderboard.
 
