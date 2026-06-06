@@ -67,6 +67,12 @@ assert.equal(h5.rankBadgeLabel(4), '第 4 名');
   assert.equal(recap.status, '已拍中');
   assert.equal(recap.price, '¥880.00');
   assert.match(recap.shareCopy, /3 人有效出价/);
+  const card = h5.buildHighlightCard({ ...recap, title: '青瓷<茶盏>&特别版' });
+  assert.equal(card.mimeType, 'image/svg+xml;charset=utf-8');
+  assert.match(card.filename, /青瓷-茶盏-特别版-highlight\.svg/);
+  assert.match(card.content, /3 人有效出价/);
+  assert.match(card.content, /青瓷&lt;茶盏&gt;&amp;特别版/);
+  assert.doesNotMatch(card.content, /青瓷<茶盏>&特别版/);
 }
 assert.equal(h5.isDangerousActionDisabled({ ctaDisabled: false, stale: false, sold: false }, 'connected'), false);
 assert.equal(h5.isDangerousActionDisabled({ ctaDisabled: false, stale: true, sold: false }, 'connected'), true);

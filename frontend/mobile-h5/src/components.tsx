@@ -1,8 +1,8 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
-import { AlertTriangle, BadgeCheck, Bell, BellOff, CheckCircle2, ChevronUp, Clock3, CreditCard, Flame, Heart, History, Info, MessageCircle, MoreHorizontal, PackageCheck, RefreshCw, Send, ShieldCheck, ShoppingCart, Sparkles, Truck, Trophy, Users, Wifi, WifiOff, X } from 'lucide-react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { AlertTriangle, BadgeCheck, Bell, BellOff, CheckCircle2, ChevronUp, Clock3, Copy, CreditCard, Download, Flame, Heart, History, Info, MessageCircle, MoreHorizontal, PackageCheck, RefreshCw, Send, ShieldCheck, ShoppingCart, Sparkles, Truck, Trophy, Users, Wifi, WifiOff, X } from 'lucide-react';
 import type { AtmosphereCue } from './atmosphere';
 import type { AuctionItem, AuctionState, AuctionSummary, BottomSheetKey, ChatMessage, ConnectionPhase, CountdownPhase, CountdownPhaseState, HeatSnapshot, HistoryRow, LeaderboardPayload, MaxBidIntent, MaxBidPhase, PaymentPhase, ProductQAAnswer, ResultRecap, ResultSheetKind, Scenario, SoundCapability, SystemMessage } from './domain';
-import { buildResultRecap, demoLiveVideoURL, demoProductImageURL, formatCents, formatClockTime, isDangerousActionDisabled, leaderboardActionCopy, rankBadgeLabel, riskActionCopy, scenarios } from './domain';
+import { buildHighlightCard, buildResultRecap, demoLiveVideoURL, demoProductImageURL, formatCents, formatClockTime, isDangerousActionDisabled, leaderboardActionCopy, rankBadgeLabel, riskActionCopy, scenarios } from './domain';
 
 export function LiveStage({
   activeAuctionID,
@@ -548,6 +548,7 @@ export function ResultSheet({
   onOpenOrders: () => void;
   onPay: () => void;
 }) {
+  const [shareFeedback, setShareFeedback] = useState('');
   if (!kind || activeSheet) return null;
   const soldPrice = formatCents(orderAmountCents || terminalPriceCents);
   const nextTitle = nextAuction?.item?.title ?? '下一件拍品';
@@ -564,14 +565,45 @@ export function ResultSheet({
     : kind === 'loser'
       ? '本场已落锤'
       : '本场未成交';
-  const recap: ResultRecap | null = heat ? buildResultRecap({
+  const recapHeat: HeatSnapshot = heat ?? {
+    activeBidders30s: 0,
+    acceptedBids30s: 0,
+    priceVelocityCentsPerMin: 0,
+    acceptedBidderCount: 0,
+    totalAcceptedBids: 0,
+    source: 'fallback'
+  };
+  const recap: ResultRecap = buildResultRecap({
     itemTitle: item.title ?? scenario.title,
     kind,
     terminalPriceCents: orderAmountCents || terminalPriceCents,
     terminalWinnerID,
-    heat,
+    heat: recapHeat,
     nextTitle: nextAuction?.item?.title
-  }) : null;
+  });
+  const copyRecap = async () => {
+    if (!recap) return;
+    try {
+      await copyText(recap.shareCopy);
+      setShareFeedback('已复制');
+    } catch {
+      setShareFeedback('复制失败');
+    }
+  };
+  const downloadHighlight = () => {
+    if (!recap) return;
+    const card = buildHighlightCard(recap);
+    const blob = new Blob([card.content], { type: card.mimeType });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = card.filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 250);
+    setShareFeedback('已保存');
+  };
 
   return (
     <section className={`result-sheet ${kind} ${compact ? 'is-compact' : ''}`} data-testid="result-sheet" aria-label={title}>
@@ -612,6 +644,15 @@ export function ResultSheet({
           </div>
           <p>{recap.facts.length ? recap.facts.join(' · ') : '只展示真实竞拍记录'}</p>
           <small>{recap.nextAction}</small>
+          <div className="result-recap-actions">
+            <button type="button" aria-label="copy-result-recap" onClick={() => void copyRecap()}>
+              <Copy size={14} /> 复制
+            </button>
+            <button type="button" aria-label="download-highlight-card" onClick={downloadHighlight}>
+              <Download size={14} /> 高光卡
+            </button>
+            {shareFeedback ? <b>{shareFeedback}</b> : null}
+          </div>
         </div>
       ) : null}
       {kind !== 'winner' && nextAuction ? (
@@ -1346,6 +1387,27 @@ export function ProductQASheet({
       ) : null}
     </section>
   );
+}
+
+async function copyText(value: string) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // Fall through to the legacy selection path for browsers without clipboard permission.
+    }
+  }
+  const input = document.createElement('textarea');
+  input.value = value;
+  input.setAttribute('readonly', 'true');
+  input.style.position = 'fixed';
+  input.style.left = '-9999px';
+  document.body.appendChild(input);
+  input.select();
+  const ok = document.execCommand('copy');
+  input.remove();
+  if (!ok) throw new Error('copy failed');
 }
 
 export function HistoryList({

@@ -296,6 +296,11 @@ export type ResultRecap = {
   nextAction: string;
   shareCopy: string;
 };
+export type HighlightCard = {
+  filename: string;
+  mimeType: string;
+  content: string;
+};
 export type WSTicketResponse = {
   ticket?: string;
   expires_in_ms?: number;
@@ -647,6 +652,55 @@ export function buildResultRecap(input: {
       : '回到商品列表';
   const shareCopy = `${input.itemTitle} · ${status} · ${price} · ${facts.join(' · ') || '真实竞拍记录'}`;
   return { title: input.itemTitle, status, price, winner, facts, nextAction, shareCopy };
+}
+
+export function buildHighlightCard(recap: ResultRecap): HighlightCard {
+  const lines = [
+    recap.status,
+    recap.title,
+    recap.price,
+    recap.winner,
+    recap.facts.join(' / ') || '真实竞拍记录',
+    recap.nextAction
+  ].map((value) => escapeSVG(value));
+  const filenameTitle = recap.title
+    .replace(/[^\p{L}\p{N}]+/gu, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 28) || 'auction-highlight';
+  const content = `<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1440" viewBox="0 0 1080 1440" role="img" aria-label="${lines[1]}高光卡">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#151515"/>
+      <stop offset="0.52" stop-color="#5b1430"/>
+      <stop offset="1" stop-color="#d49522"/>
+    </linearGradient>
+  </defs>
+  <rect width="1080" height="1440" fill="url(#bg)"/>
+  <rect x="70" y="70" width="940" height="1300" rx="44" fill="rgba(255,255,255,0.10)" stroke="rgba(255,255,255,0.28)" stroke-width="2"/>
+  <text x="120" y="180" fill="#ffe7a7" font-size="44" font-family="Arial, sans-serif" font-weight="700">${lines[0]}</text>
+  <text x="120" y="310" fill="#ffffff" font-size="72" font-family="Arial, sans-serif" font-weight="800">${lines[1]}</text>
+  <text x="120" y="450" fill="#ffffff" font-size="96" font-family="Arial, sans-serif" font-weight="900">${lines[2]}</text>
+  <text x="120" y="540" fill="#fff0c7" font-size="38" font-family="Arial, sans-serif" font-weight="700">成交/领先：${lines[3]}</text>
+  <rect x="120" y="650" width="840" height="220" rx="28" fill="rgba(255,255,255,0.16)"/>
+  <text x="160" y="735" fill="#ffffff" font-size="40" font-family="Arial, sans-serif" font-weight="700">高光事实</text>
+  <text x="160" y="815" fill="#fff5db" font-size="34" font-family="Arial, sans-serif">${lines[4]}</text>
+  <text x="120" y="1040" fill="#ffffff" font-size="42" font-family="Arial, sans-serif" font-weight="800">${lines[5]}</text>
+  <text x="120" y="1260" fill="rgba(255,255,255,0.72)" font-size="28" font-family="Arial, sans-serif">仅展示系统真实竞拍记录，用户身份已脱敏。</text>
+</svg>`;
+  return {
+    filename: `${filenameTitle}-highlight.svg`,
+    mimeType: 'image/svg+xml;charset=utf-8',
+    content
+  };
+}
+
+function escapeSVG(value: string) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
 }
 
 export async function ensureDemoSession(account: 'host' | 'user') {

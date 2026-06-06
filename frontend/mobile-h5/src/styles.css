@@ -2093,6 +2093,42 @@ button {
   margin: 0;
 }
 
+.result-recap-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.result-recap-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid rgba(255, 255, 255, .2);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .12);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 7px 10px;
+}
+
+.result-recap-actions b {
+  color: rgba(255, 255, 255, .78);
+  font-size: 12px;
+}
+
+.result-sheet.is-compact .result-recap-actions button {
+  border-color: rgba(185, 0, 53, .16);
+  background: rgba(185, 0, 53, .08);
+  color: #7f1230;
+}
+
+.result-sheet.is-compact .result-recap-actions b {
+  color: #7f1230;
+}
+
 .next-auction-card {
   display: grid;
   gap: 3px;

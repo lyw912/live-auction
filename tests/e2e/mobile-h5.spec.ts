@@ -877,6 +877,7 @@ test('H5 payment double click sends one mock payment and reaches paid UI', async
 });
 
 test('H5 winner result sheet locks order and shares the single payment path', async ({ page }) => {
+  await page.context().grantPermissions(['clipboard-write']);
   let payCount = 0;
   await page.route('/api/orders/ord_pending/pay-mock', async (route) => {
     payCount += 1;
@@ -899,6 +900,13 @@ test('H5 winner result sheet locks order and shares the single payment path', as
   await expect(sheet.getByText('订单 ord_pending 已锁定')).toBeVisible();
   await expect(sheet.getByText('保证金会随订单状态处理')).toBeVisible();
   await expect(page.getByTestId('bid-cta')).toHaveCount(1);
+  await sheet.getByLabel('copy-result-recap').click();
+  await expect(sheet.getByText('已复制')).toBeVisible();
+  const downloadPromise = page.waitForEvent('download');
+  await sheet.getByLabel('download-highlight-card').click();
+  const highlight = await downloadPromise;
+  expect(highlight.suggestedFilename()).toMatch(/highlight\.svg$/);
+  await expect(sheet.getByText('已保存')).toBeVisible();
 
   await sheet.getByTestId('result-pay-cta').dblclick();
   await expect(sheet.getByRole('heading', { name: '支付已完成' })).toBeVisible();
