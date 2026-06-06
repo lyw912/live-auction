@@ -95,7 +95,10 @@ func NewKafkaLedger(cfg KafkaLedgerConfig) (*KafkaLedger, error) {
 		Addr:     addr,
 		Topic:    cfg.BidTopic,
 		Balancer: &kafka.Hash{},
-		// RequireAll (acks=-1) for durable commits; exactly-once via idempotent producer.
+		// RequireAll (acks=-1) for durable commits; effectively-once semantics are
+		// guaranteed by PG unique constraints + engine_seq CAS on the consumer side
+		// (at-least-once producer + idempotent consumer = effectively exactly-once).
+		// segmentio/kafka-go Writer does not implement idempotent producer (KIP-185).
 		RequiredAcks: kafka.RequireAll,
 		// Async=false so WriteMessages blocks until acks=all, giving the relay
 		// per-batch durability confirmation before advancing the cursor.

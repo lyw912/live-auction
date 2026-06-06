@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"live-auction/backend/internal/auction"
 	"live-auction/backend/internal/observability"
 )
 
@@ -34,6 +35,21 @@ type Runner struct {
 	workerID string
 	now      func() time.Time
 	lastNow  time.Time
+	fencer   AuctionFencer
+}
+
+// AuctionFencer fences a live auction in Redis hot-state so the engine
+// rejects further bids. Errors are logged internally; callers see only
+// best-effort semantics (the reconciler is the backstop).
+type AuctionFencer interface {
+	FenceAuction(ctx context.Context, auctionID string, reason string)
+}
+
+// WithFencer attaches a hot-engine fencer so the scheduler fences Redis
+// immediately on terminal transitions rather than waiting for the reconciler.
+func (r *Runner) WithFencer(f AuctionFencer) *Runner {
+	r.fencer = f
+	return r
 }
 
 type Job struct {
@@ -235,7 +251,7 @@ func (r *Runner) processEndAuction(ctx context.Context, job Job) error {
 		proposedOrderID := "ord_" + uuid.NewString()
 		var orderID string
 		expireAt := now.Add(15 * time.Minute)
-		deposit := calculateDeposit(price, int64(depositBPS), depositFloorCents, depositCapCents)
+		deposit := auction.CalculateDeposit(price, int64(depositBPS), depositFloorCents, depositCapCents)
 		if err := tx.QueryRow(ctx, `
 			INSERT INTO orders (id, auction_id, winner_id, amount_cents, status, deposit_cents, deposit_status, expire_at)
 			VALUES ($1, $2, $3, $4, 'ORDER_PENDING', $5, 'HELD', $6)
@@ -262,7 +278,19 @@ func (r *Runner) processEndAuction(ctx context.Context, job Job) error {
 	if err := appendAuctionEvent(ctx, tx, job.TargetID, eventType, "scheduler:"+r.workerID, payload); err != nil {
 		return err
 	}
-	return r.markSucceededTx(ctx, tx, job.ID)
+	if err := r.markSucceededTx(ctx, tx, job.ID); err != nil {
+		return err
+	}
+	// Fence the Redis hot-state immediately after the PG terminal commit.
+	// The reconciler's checkTerminalFenced is the backstop if this fails.
+	if r.fencer != nil {
+		fenceReason := "SCHEDULER_ENDED"
+		if winnerID != nil {
+			fenceReason = "SCHEDULER_SOLD"
+		}
+		r.fencer.FenceAuction(ctx, job.TargetID, fenceReason)
+	}
+	return nil
 }
 
 func (r *Runner) processExpireOrder(ctx context.Context, job Job) error {
@@ -453,28 +481,6 @@ func upsertSchedulerJob(ctx context.Context, tx pgx.Tx, jobType string, targetTy
 		              updated_at = now()
 	`, "job_"+uuid.NewString(), jobType, targetType, targetID, idempotencyKey, runAt)
 	return err
-}
-
-func calculateDeposit(amountCents int64, depositBPS int64, floorCents int64, capCents int64) int64 {
-	raw := amountCents * depositBPS / 10000
-	half := amountCents / 2
-	floor := minInt64(floorCents, half)
-	capValue := minInt64(capCents, half)
-	return minInt64(maxInt64(raw, floor), capValue)
-}
-
-func minInt64(a int64, b int64) int64 {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func maxInt64(a int64, b int64) int64 {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 func retryStagger(jobID string) time.Duration {

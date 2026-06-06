@@ -169,7 +169,6 @@ local function store_result(result)
   redis.call('HSET', idem_key, 'engine_seq', tostring(result['engine_seq'] or 0))
   redis.call('HSET', idem_key, 'engine_epoch', tostring(result['engine_epoch'] or 0))
   redis.call('HSET', idem_key, 'kafka_append_status', 'UNKNOWN')
-  redis.call('HSET', idem_key, 'kafka_append_attempted', '0')
   redis.call('HSET', idem_key, 'expires_at_ms', tostring(now_ms + idem_ttl_ms))
   redis.call('PEXPIRE', idem_key, idem_ttl_ms)
   return encoded
@@ -1269,10 +1268,6 @@ func parseInt64(value string) int64 {
 func sha256Hex(payload []byte) string {
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
-}
-
-func isUnknownKafkaAppendFailure(err error) bool {
-	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
 }
 
 func recordDecision(result string, elapsed time.Duration) {
@@ -3027,7 +3022,10 @@ func (w *Worker) writeRedisStateSnapshot(ctx context.Context, auctionID string, 
 	pipe.HSet(ctx, redisx.BidEngineStateKey(auctionID), fields...)
 	pipe.PExpire(ctx, redisx.BidEngineStateKey(auctionID), engineStateTTL)
 	// Reset the relay cursor so the relay re-processes from the stream beginning on resume.
-	// This is safe: AppendBatch is idempotent (Kafka idempotent producer).
+	// The relay cursor deletion means old-epoch stream entries will be re-read; settlePayload
+	// guards against stale-epoch entries (engine_epoch mismatch → skip) so re-delivery is safe.
+	// Kafka producer is at-least-once; effectively-once is guaranteed by PG unique constraints
+	// + engine_seq CAS on the consumer (idempotent consumer = effectively exactly-once).
 	pipe.Del(ctx, redisx.BidEngineRelayCursorKey(auctionID))
 	_, err := pipe.Exec(ctx)
 	if err != nil {
@@ -3111,6 +3109,13 @@ func (w *Worker) settlePayload(ctx context.Context, auctionID string, ledgerID s
 		return err
 	}
 	if result.EngineEpoch != dbEpoch {
+		if result.EngineEpoch < dbEpoch && result.EngineSeq <= dbSeq {
+			// Pre-rebuild entry: already captured by the checkpoint that bumped engine_epoch.
+			// Skip cleanly without pausing — matches the batch path skipped_pre_rebuild branch.
+			_ = markSettlementSkipped(ctx, tx, auctionID, ledgerID, fmt.Sprintf("pre-rebuild skip epoch=%d db_epoch=%d seq=%d db_seq=%d", result.EngineEpoch, dbEpoch, result.EngineSeq, dbSeq))
+			observability.Inc("auction_bid_redis_settlement_total", map[string]string{"result": result.Result, "status": "skipped_pre_rebuild"})
+			return tx.Commit(ctx)
+		}
 		_ = markSettlementFailed(ctx, tx, auctionID, ledgerID, fmt.Sprintf("stale epoch redis=%d db=%d", result.EngineEpoch, dbEpoch))
 		_ = pauseTx(ctx, tx, auctionID, "REDIS_ENGINE_STALE_EPOCH", "settlement rejected stale engine epoch", map[string]any{
 			"redis_engine_epoch": result.EngineEpoch,
@@ -3498,6 +3503,22 @@ func settleAccepted(ctx context.Context, tx pgx.Tx, result engineResult) (int64,
 			return 0, err
 		}
 		payload["order_id"] = orderID
+	} else if endAt != nil {
+		// Extension: push the END_AUCTION scheduler job forward to the new end_at so
+		// the scheduler doesn't fire at the old time and end the auction prematurely.
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO scheduler_jobs (id, job_type, target_type, target_id, idempotency_key, run_at, status, next_attempt_at)
+			VALUES ($1, 'END_AUCTION', 'auction', $2, $3, $4, 'PENDING', $4)
+			ON CONFLICT (job_type, target_type, target_id, idempotency_key)
+			DO UPDATE SET run_at = EXCLUDED.run_at,
+			              status = CASE WHEN scheduler_jobs.status IN ('SUCCEEDED','DEAD') THEN scheduler_jobs.status ELSE 'PENDING' END,
+			              next_attempt_at = EXCLUDED.next_attempt_at,
+			              locked_by = NULL,
+			              locked_until = NULL,
+			              updated_at = now()
+		`, "job_end_"+result.AuctionID, result.AuctionID, "end:"+result.AuctionID, *endAt); err != nil {
+			return 0, err
+		}
 	}
 	if err := appendEvent(ctx, tx, result.AuctionID, publicSeq, result.EngineEpoch, result.EngineSeq, eventType, result.TraceID, payload); err != nil {
 		return 0, err
@@ -3658,6 +3679,20 @@ func appendEvent(ctx context.Context, tx pgx.Tx, auctionID string, seq int64, ep
 }
 
 func createOrder(ctx context.Context, tx pgx.Tx, auctionID string, winnerID string, amountCents int64) (string, error) {
+	// Fetch deposit configuration so all three settlement paths (redis engine,
+	// PG lane, scheduler) use the same canonical formula instead of a hardcoded 10%.
+	var bps, floorCents, capCents int64
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(ar.deposit_bps, 1000),
+		       COALESCE(ar.deposit_floor_cents, 10000),
+		       COALESCE(ar.deposit_cap_cents, 100000000)
+		FROM auctions a
+		JOIN auction_rules ar ON ar.auction_id = a.id AND ar.rule_version = a.rule_version
+		WHERE a.id = $1
+	`, auctionID).Scan(&bps, &floorCents, &capCents); err != nil {
+		return "", fmt.Errorf("createOrder: fetch deposit params for auction %s: %w", auctionID, err)
+	}
+	depositCents := auction.CalculateDeposit(amountCents, bps, floorCents, capCents)
 	orderID := "ord_" + uuid.NewString()
 	expireAt := time.Now().UTC().Add(15 * time.Minute)
 	var existing string
@@ -3666,7 +3701,7 @@ func createOrder(ctx context.Context, tx pgx.Tx, auctionID string, winnerID stri
 		VALUES ($1, $2, $3, $4, 'ORDER_PENDING', $5, 'HELD', $6)
 		ON CONFLICT (auction_id) DO UPDATE SET auction_id = EXCLUDED.auction_id
 		RETURNING id
-	`, orderID, auctionID, winnerID, amountCents, amountCents/10, expireAt).Scan(&existing)
+	`, orderID, auctionID, winnerID, amountCents, depositCents, expireAt).Scan(&existing)
 	if err != nil {
 		return "", err
 	}
@@ -3776,6 +3811,15 @@ func upsertEngineCheckpointSnapshot(ctx context.Context, tx pgx.Tx, auctionID st
 		     AND auction_engine_checkpoints.engine_seq <= EXCLUDED.engine_seq
 		   )
 	`, auctionID, snapshot.EngineEpoch, snapshot.EngineSeq, topic, partition, nextOffset, stateHash, string(payload))
+	return err
+}
+
+func markSettlementSkipped(ctx context.Context, tx pgx.Tx, auctionID string, streamID string, message string) error {
+	_, err := tx.Exec(ctx, `
+		UPDATE redis_engine_settlements
+		SET status = 'SKIPPED', settled_at = now(), updated_at = now(), error_message = $3
+		WHERE auction_id = $1 AND stream_id = $2
+	`, auctionID, streamID, message)
 	return err
 }
 
@@ -3965,7 +4009,7 @@ func (w *Worker) checkTerminalFenced(ctx context.Context, auctionID string) (*re
 		return nil, err
 	}
 	switch pgStatus {
-	case "CANCELLED", "ENDED":
+	case "CANCELLED", "ENDED", "SOLD":
 	default:
 		return nil, nil
 	}

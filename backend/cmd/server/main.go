@@ -56,7 +56,7 @@ func main() {
 			WithPublisher(rt.PublishAuctionEvent).
 			Run(ctx, log, 500*time.Millisecond)
 	}
-	go scheduler.NewRunner(deps.Postgres, schedulerWorkerID).Run(ctx, log, 500*time.Millisecond)
+	schedulerRunner := scheduler.NewRunner(deps.Postgres, schedulerWorkerID)
 	aiWorkerID := envOrDefault("AI_COMMENTARY_WORKER_ID", workerID)
 	if envFlag("DISABLE_EMBEDDED_AI_COMMENTARY_WORKER") {
 		log.Info("embedded ai commentary worker disabled", slog.String("worker_id", aiWorkerID))
@@ -93,7 +93,11 @@ func main() {
 			defer extraLedger.Close()
 			go redisengine.NewWorker(deps.Postgres, deps.Redis, extraLedger, extraID).WithLogger(log).RunKafkaSettlement(ctx, 10*time.Millisecond)
 		}
+		// Wire the Redis engine as the scheduler fencer so terminal transitions
+		// (SOLD/ENDED) immediately fence Redis hot-state rather than waiting for reconciler.
+		schedulerRunner.WithFencer(redisengine.New(deps.Postgres, deps.Redis, bidLedger))
 	}
+	go schedulerRunner.Run(ctx, log, 500*time.Millisecond)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,

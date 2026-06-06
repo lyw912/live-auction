@@ -1102,6 +1102,71 @@ func TestReconcileFencesTerminalHotEngine(t *testing.T) {
 	}
 }
 
+// TestReconcileFencesTerminalSold verifies that when PG status is SOLD but Redis
+// still reports ACTIVE (e.g., scheduler wrote SOLD before calling FenceAuction),
+// the reconciler detects the drift and fences Redis, preventing new bids.
+func TestReconcileFencesTerminalSold(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+
+	first, err := engine.PlaceBid(ctx, auctionID, "user_1", "sold-fence-first", auction.BidInput{
+		ClientBidID:   "sold-fence-first",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_sold_fence")
+	if err != nil {
+		t.Fatalf("first bid: %v", err)
+	}
+	if _, err := worker.ProcessPendingAppends(ctx, 100); err != nil {
+		t.Fatalf("relay: %v", err)
+	}
+	if _, err := worker.ProcessKafka(ctx, 1); err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+	// Force PG to SOLD (simulates scheduler completing after Redis bid won).
+	if _, err := db.Exec(ctx, `
+		UPDATE auctions SET status = 'SOLD', updated_at = now() WHERE id = $1
+	`, auctionID); err != nil {
+		t.Fatalf("force PG SOLD: %v", err)
+	}
+	// Simulate Redis still reporting ACTIVE (fencer not yet called).
+	setRedisHashFields(t, rdb, redisx.BidEngineStateKey(auctionID), map[string]any{
+		"status":       "ACTIVE",
+		"paused":       0,
+		"pause_reason": "",
+	})
+
+	report, err := worker.Reconcile(ctx, auctionID)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if report.Status != "REDIS_TERMINAL_UNFENCED" || report.DriftCount == 0 {
+		t.Fatalf("report = %#v, want REDIS_TERMINAL_UNFENCED with drift", report)
+	}
+	values, err := rdb.HGetAll(ctx, redisx.BidEngineStateKey(auctionID)).Result()
+	if err != nil {
+		t.Fatalf("read redis state: %v", err)
+	}
+	if values["paused"] != "1" || values["status"] != "SOLD" {
+		t.Fatalf("redis after reconcile = %#v, want paused=1 status=SOLD", values)
+	}
+	// Any further bid must be rejected ENGINE_PAUSED.
+	_, err = engine.PlaceBid(ctx, auctionID, "user_2", "sold-fence-after", auction.BidInput{
+		ClientBidID:   "sold-fence-after",
+		AmountCents:   20_000,
+		ClientSeenSeq: first.EngineSeq,
+	}, "tr_sold_fence_after")
+	var apiErr apierrors.APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != apierrors.CodeEnginePaused {
+		t.Fatalf("post-reconcile bid error = %v, want ENGINE_PAUSED", err)
+	}
+}
+
 // TestRelayFailsGracefullyWhenKafkaUnavailable verifies that when the relay's Kafka
 // batch produce fails, the stream entries remain intact (cursor not advanced) and
 // the hot PlaceBid path is unaffected — decisions are still DECIDED+ENGINE_DURABLE.

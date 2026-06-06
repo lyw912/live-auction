@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +14,24 @@ import (
 	"live-auction/backend/internal/auction"
 	apierrors "live-auction/backend/internal/platform/errors"
 )
+
+// mockFencer records FenceAuction calls for H3 scheduler fencing tests.
+type mockFencer struct {
+	mu      sync.Mutex
+	reasons []string
+}
+
+func (m *mockFencer) FenceAuction(_ context.Context, _ string, reason string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.reasons = append(m.reasons, reason)
+}
+
+func (m *mockFencer) recordedReasons() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.reasons...)
+}
 
 func TestEndAuctionNoWinnerMarksEndedAndWritesOutbox(t *testing.T) {
 	db := openDB(t)
@@ -452,4 +471,68 @@ func absDuration(value time.Duration) time.Duration {
 		return -value
 	}
 	return value
+}
+
+func TestEndAuctionSoldCallsFencer(t *testing.T) {
+	db := openDB(t)
+	quiesceSchedulerJobs(t, db)
+	ctx := context.Background()
+	repo := auction.NewRepository(db)
+	row := createActiveAuction(t, repo, db)
+	bid := auction.BidInput{ClientBidID: "fencer-sold-" + uuid.NewString(), AmountCents: 15_000}
+	if _, err := repo.PlaceBid(ctx, row.ID, "user_1", bid.ClientBidID, bid, "tr_fencer_sold"); err != nil {
+		t.Fatalf("PlaceBid: %v", err)
+	}
+	forceAuctionEndAt(t, db, row.ID, time.Now().UTC().Add(-time.Second))
+
+	fencer := &mockFencer{}
+	ok, err := NewRunner(db, "fencer-sold").WithFencer(fencer).ProcessOne(ctx)
+	if err != nil {
+		t.Fatalf("ProcessOne: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected scheduler job to be processed")
+	}
+
+	got, err := repo.GetAuction(ctx, row.ID)
+	if err != nil {
+		t.Fatalf("GetAuction: %v", err)
+	}
+	if got.Status != auction.StatusSold {
+		t.Fatalf("status = %s, want SOLD", got.Status)
+	}
+	reasons := fencer.recordedReasons()
+	if len(reasons) != 1 || reasons[0] != "SCHEDULER_SOLD" {
+		t.Fatalf("fencer reasons = %v, want [SCHEDULER_SOLD]", reasons)
+	}
+}
+
+func TestEndAuctionEndedCallsFencer(t *testing.T) {
+	db := openDB(t)
+	quiesceSchedulerJobs(t, db)
+	ctx := context.Background()
+	repo := auction.NewRepository(db)
+	row := createActiveAuction(t, repo, db)
+	forceAuctionEndAt(t, db, row.ID, time.Now().UTC().Add(-time.Second))
+
+	fencer := &mockFencer{}
+	ok, err := NewRunner(db, "fencer-ended").WithFencer(fencer).ProcessOne(ctx)
+	if err != nil {
+		t.Fatalf("ProcessOne: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected scheduler job to be processed")
+	}
+
+	got, err := repo.GetAuction(ctx, row.ID)
+	if err != nil {
+		t.Fatalf("GetAuction: %v", err)
+	}
+	if got.Status != auction.StatusEnded {
+		t.Fatalf("status = %s, want ENDED", got.Status)
+	}
+	reasons := fencer.recordedReasons()
+	if len(reasons) != 1 || reasons[0] != "SCHEDULER_ENDED" {
+		t.Fatalf("fencer reasons = %v, want [SCHEDULER_ENDED]", reasons)
+	}
 }

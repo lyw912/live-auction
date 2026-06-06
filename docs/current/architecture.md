@@ -55,6 +55,15 @@ field and evidence requirement:
 | PG settled | `settlement_status=SETTLED` | PostgreSQL has applied the decision | Idempotent settlement replay from Kafka |
 | PG order truth | order exists | Payment/order lifecycle closed | Idempotent order/payment flow |
 
+**Exactly-once semantics:** The Kafka producer (`segmentio/kafka-go Writer`) operates
+at-least-once (no idempotent producer; KIP-185 not implemented in this library). The
+consumer achieves **effectively exactly-once** via the idempotent consumer pattern:
+PG unique constraints (`orders.auction_id UNIQUE`, `bids UNIQUE(auction_id,user_id,client_bid_id)`)
+and `engine_seq` CAS ensure duplicate Kafka deliveries produce no additional business
+effect. PostgreSQL is the **exactly-once boundary**; Kafka is the at-least-once WAL
+(by design). This is the industry-standard pattern (at-least-once + idempotent consumer
+= effectively exactly-once).
+
 `KAFKA_ACKED` is the **default synchronous response boundary**
 (`BID_ENGINE_RESPONSE_DURABILITY=kafka_ack`). The handler waits for the relay's
 group-commit batch confirmation via an in-process latch. Kafka fault behavior is
