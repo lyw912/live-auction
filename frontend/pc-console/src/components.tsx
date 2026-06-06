@@ -598,6 +598,12 @@ export function LiveAssistRail({
             <strong>{latestRecap.item_title}</strong>
             <span>{formatCents(latestRecap.final_price_cents)} · {latestRecap.accepted_bids} bids · {latestRecap.status}</span>
             <small>{latestRecap.next_actions?.[0] ?? '复盘已生成'}</small>
+            {latestRecap.highlight_asset ? (
+              <div className="recap-actions">
+                <a href={latestRecap.highlight_asset.asset_url} target="_blank" rel="noreferrer">打开高光</a>
+                <a href={latestRecap.highlight_asset.asset_url} download={`${latestRecap.item_title || 'auction'}-highlight.html`}>下载高光</a>
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>

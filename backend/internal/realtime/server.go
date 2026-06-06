@@ -407,21 +407,6 @@ func writeWS(ctx context.Context, conn *websocket.Conn, writeMu *sync.Mutex, typ
 	return conn.Write(ctx, typ, data)
 }
 
-func (s *Server) PublishAuctionEvent(ctx context.Context, auctionID string, payload []byte) {
-	stats := s.hub.Publish(ctx, auctionID, payload)
-	if stats.Subscribers == 0 {
-		return
-	}
-	observability.Observe("auction_ws_publish_subscribers", float64(stats.Subscribers), nil, []float64{1, 10, 50, 100, 300, 1000})
-	observability.Observe("auction_ws_send_queue_depth", float64(stats.MaxQueueDepth), nil, []float64{1, 16, 64, 128, 256, 512})
-	observability.Observe("auction_ws_send_queue_bytes", float64(stats.MaxQueueBytes), nil, []float64{1024, 16384, 65536, 262144, 1048576, 4194304})
-	if stats.SlowClosed > 0 {
-		observability.Add("auction_ws_slow_consumer_disconnect_total", float64(stats.SlowClosed), nil)
-		observability.Observe("auction_ws_slow_consumer_queue_depth", float64(stats.SlowMaxDepth), nil, []float64{1, 16, 64, 128, 256, 512})
-		observability.Observe("auction_ws_slow_consumer_queue_bytes", float64(stats.SlowMaxBytes), nil, []float64{1024, 16384, 65536, 262144, 1048576, 4194304})
-	}
-}
-
 func (s *Server) recoveryMessages(ctx context.Context, auctionID string, lastSeq int64) ([][]byte, string) {
 	if lastSeq <= 0 {
 		return s.snapshotMessage(ctx, auctionID)

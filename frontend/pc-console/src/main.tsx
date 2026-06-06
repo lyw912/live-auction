@@ -4,7 +4,7 @@ import { Layout, Message } from '@arco-design/web-react';
 import '@arco-design/web-react/dist/css/arco.css';
 
 import { AICopilotDrawer, AuctionCommandPanel, AuctionControlSummary, AuctionQueue, ConsoleNav, DiagnosticsPanel, EventTimeline, FlightRecorderDrawer, HealthRibbon, InventoryLotsPanel, ItemCreatePanel, LiveAssistRail, LiveHealthPanel, OrderDetailDrawer, OrdersPanel, RuleEditor } from './components';
-import type { Auction, AuctionAISettings, AuctionRecap, AuthUser, FlightRecorderPayload, HeatSummary, HostPrompt, HostPromptsPayload, Item, ListingDraftJob, MaxBidSummary, MonitorPayload, Order, RedisEngineMonitorPayload, Room, RuleAPIError, RuleDraft, SentinelAlert, SignalRequest, SystemMessage } from './domain';
+import type { Auction, AuctionAISettings, AuctionRecap, AuthUser, FlightRecorderPayload, HeatSummary, HighlightAsset, HostPrompt, HostPromptsPayload, Item, ListingDraftJob, MaxBidSummary, MonitorPayload, Order, RedisEngineMonitorPayload, Room, RuleAPIError, RuleDraft, SentinelAlert, SignalRequest, SystemMessage } from './domain';
 import { activeAuction, createRuleDraft, defaultRoomID, depositPreview, ensureDemoSession, liveHealthSummary, monitorQuery, narratingAuction, readJSON, rulePayload, signalCopy, sortedAuctions, validateRule } from './domain';
 import './styles.css';
 
@@ -603,13 +603,13 @@ function App() {
     if (!selectedAuction) return;
     try {
       const response = await fetch(`/api/host/auctions/${selectedAuction.id}/recap`, { method: 'POST' });
-      const payload = await readJSON<{ recap?: AuctionRecap }>(response);
+      const payload = await readJSON<{ recap?: AuctionRecap; highlight_asset?: HighlightAsset }>(response);
       if (!response.ok || !payload.recap) {
         Message.error('复盘生成失败');
         return;
       }
-      setLatestRecap(payload.recap);
-      Message.success('竞拍复盘已生成');
+      setLatestRecap({ ...payload.recap, highlight_asset: payload.highlight_asset });
+      Message.success(payload.highlight_asset ? '复盘与服务端高光已生成' : '竞拍复盘已生成');
     } catch {
       Message.error('复盘生成失败');
     }

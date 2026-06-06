@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -238,7 +239,41 @@ func TestAICommentarySystemMessagesSentinelRecapAndProductQA(t *testing.T) {
 		t.Fatalf("expected sentinel job, got %#v", alerts.Job)
 	}
 
-	assertAPIStatus(t, router, http.MethodPost, "/api/host/auctions/"+row.ID+"/recap", nil, userHeaders("host_1", "host"), http.StatusOK)
+	req = httptest.NewRequest(http.MethodPost, "/api/host/auctions/"+row.ID+"/recap", nil)
+	for key, values := range userHeaders("host_1", "host") {
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
+	}
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("recap status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var recapPayload struct {
+		Recap struct {
+			AuctionID string `json:"auction_id"`
+		} `json:"recap"`
+		HighlightAsset struct {
+			ID            string `json:"id"`
+			MediaType     string `json:"media_type"`
+			AssetURL      string `json:"asset_url"`
+			RenderProfile string `json:"render_profile"`
+		} `json:"highlight_asset"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &recapPayload); err != nil {
+		t.Fatalf("decode recap: %v", err)
+	}
+	if recapPayload.Recap.AuctionID != row.ID || recapPayload.HighlightAsset.ID == "" || recapPayload.HighlightAsset.MediaType != "text/html" || !strings.HasPrefix(recapPayload.HighlightAsset.AssetURL, "data:text/html;base64,") {
+		t.Fatalf("bad recap/highlight payload: %#v", recapPayload)
+	}
+	var storedAssets int
+	if err := db.QueryRow(context.Background(), `SELECT count(*) FROM auction_highlight_assets WHERE auction_id = $1 AND render_profile = 'server-html-reel-v1'`, row.ID).Scan(&storedAssets); err != nil {
+		t.Fatalf("count highlight assets: %v", err)
+	}
+	if storedAssets == 0 {
+		t.Fatalf("expected persisted highlight asset")
+	}
 	qaBody := bytes.NewBufferString(`{"auction_id":"` + row.ID + `","question":"起拍价是多少"}`)
 	req = httptest.NewRequest(http.MethodPost, "/api/rooms/"+row.RoomID+"/product-qa", qaBody)
 	for key, values := range userHeaders("user_1", "user") {

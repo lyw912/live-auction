@@ -141,6 +141,23 @@ type AuctionRecap struct {
 	GeneratedAt     time.Time      `json:"generated_at"`
 }
 
+type HighlightAsset struct {
+	ID            string         `json:"id"`
+	AuctionID     string         `json:"auction_id"`
+	RoomID        string         `json:"room_id"`
+	JobID         string         `json:"job_id"`
+	Status        string         `json:"status"`
+	MediaType     string         `json:"media_type"`
+	Title         string         `json:"title"`
+	AssetURL      string         `json:"asset_url"`
+	RenderProfile string         `json:"render_profile"`
+	DurationMS    int            `json:"duration_ms"`
+	Facts         map[string]any `json:"facts_json"`
+	Risk          map[string]any `json:"risk_json"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+}
+
 type ProductQARequest struct {
 	AuctionID string          `json:"auction_id"`
 	ThreadID  string          `json:"thread_id,omitempty"`

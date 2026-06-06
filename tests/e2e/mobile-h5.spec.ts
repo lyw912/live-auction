@@ -503,6 +503,47 @@ test('H5 opens browser WebSocket with ticket subprotocol and consumes authoritat
   await expect(page.getByLabel('auction-state').getByText('陈** 领先').first()).toBeVisible();
 });
 
+test('H5 applies WebSocket leaderboard delta without polling leaderboard', async ({ page }) => {
+  let leaderboardReads = 0;
+  await page.route('/api/auctions/auc_live/leaderboard?limit=5', async (route) => {
+    leaderboardReads += 1;
+    await route.fallback();
+  });
+
+  await page.goto('/?stateMatrix=1');
+  await expect(page.getByText('WebSocket 已连接 · 状态来自服务端事件')).toBeVisible();
+  await expect(page.getByTestId('leaderboard-panel')).toContainText('榜一');
+  const readsAfterInitialLoad = leaderboardReads;
+
+  await page.evaluate(() => {
+    const [entry] = ((window as typeof window & { __auctionWS?: Array<{ url: string; socket: { dispatchServerMessage: (payload: unknown) => void } }> }).__auctionWS ?? [])
+      .filter(({ url }) => url.includes('/ws?'));
+    entry.socket.dispatchServerMessage({
+      auction_id: 'auc_live',
+      event_type: 'leaderboard_delta',
+      seq: 44,
+      current_price_cents: 52000,
+      next_valid_bid_cents: 57000,
+      current_winner_id: 'user_1',
+      leader_amount_cents: 52000,
+      accepted_bidder_count: 3,
+      active_bidders_30s: 3,
+      accepted_bids_30s: 6,
+      price_velocity_cents_per_min: 12000,
+      entries: [
+        { rank: 1, user_id: 'user_1', user_masked: '我**', amount_cents: 52000, bid_count: 4 },
+        { rank: 2, user_id: 'user_2', user_masked: '陈**', amount_cents: 50000, bid_count: 3 }
+      ]
+    });
+  });
+
+  await expect(page.getByLabel('auction-state').locator('h2')).toHaveText('¥520.00');
+  await expect(page.getByTestId('leaderboard-panel-rank-strip')).toContainText('第 1 名');
+  await expect(page.getByTestId('leaderboard-panel-rank-strip')).toContainText('正在领先');
+  await expect(page.getByTestId('leaderboard-panel')).toContainText('4 口');
+  expect(leaderboardReads).toBe(readsAfterInitialLoad);
+});
+
 test('H5 keeps recovery snapshot quiet while WebSocket is healthy', async ({ page }) => {
   let snapshotReads = 0;
   await page.route('/api/auctions/auc_live', async (route) => {

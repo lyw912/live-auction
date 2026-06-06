@@ -287,6 +287,24 @@ export type AuctionRecap = {
   next_actions: string[];
   share_card?: Record<string, unknown>;
   generated_at: string;
+  highlight_asset?: HighlightAsset;
+};
+
+export type HighlightAsset = {
+  id: string;
+  auction_id: string;
+  room_id: string;
+  job_id: string;
+  status: string;
+  media_type: string;
+  title: string;
+  asset_url: string;
+  render_profile: string;
+  duration_ms: number;
+  facts_json?: Record<string, unknown>;
+  risk_json?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
 };
 
 export type RuleAPIError = {

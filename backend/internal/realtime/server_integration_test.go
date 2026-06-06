@@ -351,6 +351,71 @@ func TestHubClosesSlowConsumerOnByteBudgetOverflow(t *testing.T) {
 	}
 }
 
+func TestPublishAuctionEventAlsoPublishesLeaderboardDelta(t *testing.T) {
+	db := openDBForRealtime(t)
+	rdb := openRedisForRealtime(t)
+	repo := auction.NewRepository(db)
+	auctionRow := createActiveAuctionForRealtime(t, repo, db)
+	rt := NewServer(db, rdb)
+	input := auction.BidInput{
+		ClientBidID: "lb-delta-" + uuid.NewString(),
+		AmountCents: 15_000,
+	}
+	bid, err := repo.PlaceBid(context.Background(), auctionRow.ID, "user_1", input.ClientBidID, input, "tr_lb_delta")
+	if err != nil {
+		t.Fatalf("PlaceBid: %v", err)
+	}
+
+	sub := rt.hub.Subscribe(auctionRow.ID, nil)
+	defer rt.hub.Unsubscribe(auctionRow.ID, sub)
+	data, err := json.Marshal(map[string]any{
+		"auction_id": auctionRow.ID,
+		"event_type": "bid_accepted",
+		"seq":        bid.Seq,
+		"payload": map[string]any{
+			"user_id":             "user_1",
+			"current_price_cents": 15_000,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal event: %v", err)
+	}
+	rt.PublishAuctionEvent(context.Background(), auctionRow.ID, data)
+
+	first := <-sub.Messages()
+	sub.Ack(first)
+	if !strings.Contains(string(first.data), `"event_type":"bid_accepted"`) {
+		t.Fatalf("first message = %s, want original auction event", string(first.data))
+	}
+	second := <-sub.Messages()
+	sub.Ack(second)
+	var delta struct {
+		EventType           string `json:"event_type"`
+		AuctionID           string `json:"auction_id"`
+		Seq                 int64  `json:"seq"`
+		CurrentPriceCents   int64  `json:"current_price_cents"`
+		AcceptedBidderCount int64  `json:"accepted_bidder_count"`
+		Entries             []struct {
+			Rank        int    `json:"rank"`
+			UserID      string `json:"user_id"`
+			AmountCents int64  `json:"amount_cents"`
+			BidCount    int64  `json:"bid_count"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal(second.data, &delta); err != nil {
+		t.Fatalf("unmarshal delta %s: %v", string(second.data), err)
+	}
+	if delta.EventType != "leaderboard_delta" || delta.AuctionID != auctionRow.ID || delta.Seq < bid.Seq {
+		t.Fatalf("unexpected delta envelope: %#v", delta)
+	}
+	if delta.CurrentPriceCents != 15_000 || delta.AcceptedBidderCount != 1 || len(delta.Entries) != 1 {
+		t.Fatalf("unexpected delta body: %#v", delta)
+	}
+	if got := delta.Entries[0]; got.Rank != 1 || got.UserID != "user_1" || got.AmountCents != 15_000 || got.BidCount != 1 {
+		t.Fatalf("unexpected top entry: %#v", got)
+	}
+}
+
 func TestSnapshotRebuildSingleflightBoundsReconnectStorm(t *testing.T) {
 	db := openDBForRealtime(t)
 	rdb := openRedisForRealtime(t)

@@ -179,12 +179,12 @@ func (h AIHandler) BuildRecap(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
 		return
 	}
-	recap, job, err := h.Repo.BuildAuctionRecap(r.Context(), user.ID, chi.URLParam(r, "id"))
+	recap, job, asset, err := h.Repo.BuildAuctionRecap(r.Context(), user.ID, chi.URLParam(r, "id"))
 	if err != nil {
 		writeResult(w, r, http.StatusOK, nil, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"recap": recap, "job": job})
+	writeJSON(w, http.StatusOK, map[string]any{"recap": recap, "job": job, "highlight_asset": asset})
 }
 
 func (h AIHandler) ProductQA(w http.ResponseWriter, r *http.Request) {

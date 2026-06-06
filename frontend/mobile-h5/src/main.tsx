@@ -231,6 +231,39 @@ function App() {
     }
   };
 
+  const applyLeaderboardDelta = (delta: LeaderboardPayload) => {
+    if (!delta || delta.auction_id !== activeAuctionIDRef.current) return;
+    const currentSeq = leaderboardRef.current?.seq ?? lastSeqRef.current;
+    if (delta.seq != null && currentSeq != null && delta.seq < currentSeq) return;
+    const entries = (delta.entries ?? []).map((entry) => ({
+      ...entry,
+      is_current: entry.user_id === currentUserIDRef.current
+    }));
+    const mine = entries.find((entry) => entry.user_id === currentUserIDRef.current);
+    const leader = entries[0];
+    const leaderAmount = delta.leader_amount_cents || leader?.amount_cents || delta.current_price_cents;
+    const myBestAmount = mine?.amount_cents;
+    const gapToLeader = myBestAmount != null ? Math.max(0, leaderAmount - myBestAmount) : undefined;
+    setLeaderboard((previous) => ({
+      ...previous,
+      ...delta,
+      entries,
+      leader_amount_cents: leaderAmount,
+      my_rank: mine?.rank ?? (previous?.auction_id === delta.auction_id ? previous.my_rank : undefined),
+      my_best_amount_cents: myBestAmount ?? (previous?.auction_id === delta.auction_id ? previous.my_best_amount_cents : undefined),
+      gap_to_leader_cents: gapToLeader ?? (previous?.auction_id === delta.auction_id ? previous.gap_to_leader_cents : undefined),
+      state: mine?.rank === 1 ? 'LEADING' : mine ? 'OUTBID' : 'NOT_BID'
+    }));
+    setCurrentPriceCents(delta.current_price_cents);
+    setMinimumNextBidCents(delta.next_valid_bid_cents ?? delta.current_price_cents + activeIncrementCentsRef.current);
+    setNextBidCents((prepared) => Math.max(delta.next_valid_bid_cents ?? delta.current_price_cents + activeIncrementCentsRef.current, prepared));
+    if (delta.server_time_ms) syncServerTimeMS(delta.server_time_ms);
+    if (leader?.user_masked) setLeaderMasked(leader.user_masked);
+    if (soundEnabledRef.current && audioContextRef.current && soundCapabilityRef.current === 'ready') {
+      playLayeredCue(audioContextRef.current, 'rank_change', soundPackRef.current);
+    }
+  };
+
   const stopHeartbeat = () => {
     try {
       heartbeatRef.current?.source.stop();
@@ -893,6 +926,11 @@ function App() {
 
   const handleRealtimeEvent = (detail: AuctionRealtimeEvent) => {
     if (!detail || detail.auction_id !== activeAuctionIDRef.current) return;
+    if (detail.event_type === 'leaderboard_delta') {
+      applyLeaderboardDelta(detail as unknown as LeaderboardPayload);
+      setConnectionPhase('connected');
+      return;
+    }
     const currentSeq = lastSeqRef.current;
     if (detail.event_type === 'outbox_gap_notice' || (detail.seq != null && detail.seq > currentSeq + 1)) {
       void recoverFromSnapshot();
@@ -1006,7 +1044,6 @@ function App() {
       setConfirmIdempotencyKey('');
       setConfirmAmountCents(0);
     }
-    void loadLeaderboard(detail.auction_id);
     setConnectionPhase('connected');
   };
 

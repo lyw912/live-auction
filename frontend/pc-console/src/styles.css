@@ -1839,6 +1839,23 @@ body {
   font-style: normal;
 }
 
+.recap-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.recap-actions a {
+  border: 1px solid #d0d5dd;
+  border-radius: 6px;
+  padding: 5px 9px;
+  color: #1d2939;
+  background: #fff;
+  text-decoration: none;
+  font-size: 12px;
+}
+
 .ai-copilot {
   display: grid;
   gap: 14px;

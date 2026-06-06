@@ -298,6 +298,7 @@ export type LeaderboardEntry = {
 };
 export type LeaderboardPayload = {
   auction_id: string;
+  event_type?: string;
   seq?: number;
   server_time_ms?: number;
   current_price_cents: number;
@@ -314,6 +315,11 @@ export type LeaderboardPayload = {
   accepted_bids_30s?: number;
   price_velocity_cents_per_min?: number;
   entries?: LeaderboardEntry[];
+  projection?: {
+    source?: string;
+    top_limit?: number;
+    generated_ms?: number;
+  };
 };
 export type HeatSnapshot = {
   activeBidders30s: number;

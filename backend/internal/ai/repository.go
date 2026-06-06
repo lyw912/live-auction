@@ -2,8 +2,10 @@ package ai
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"html"
 	"net/http"
 	"strings"
 	"time"
@@ -628,17 +630,17 @@ func (r *Repository) ListRiskAlerts(ctx context.Context, hostID string, auctionI
 	return out, rows.Err()
 }
 
-func (r *Repository) BuildAuctionRecap(ctx context.Context, hostID string, auctionID string) (AuctionRecap, Job, error) {
+func (r *Repository) BuildAuctionRecap(ctx context.Context, hostID string, auctionID string) (AuctionRecap, Job, HighlightAsset, error) {
 	state, err := r.auctionState(ctx, auctionID)
 	if err != nil {
-		return AuctionRecap{}, Job{}, err
+		return AuctionRecap{}, Job{}, HighlightAsset{}, err
 	}
 	if err := r.ensureHostRoom(ctx, hostID, state.RoomID); err != nil {
-		return AuctionRecap{}, Job{}, err
+		return AuctionRecap{}, Job{}, HighlightAsset{}, err
 	}
 	var acceptedBidders int64
 	if err := r.db.QueryRow(ctx, `SELECT count(DISTINCT user_id) FROM bids WHERE auction_id = $1 AND status = 'ACCEPTED'`, auctionID).Scan(&acceptedBidders); err != nil {
-		return AuctionRecap{}, Job{}, err
+		return AuctionRecap{}, Job{}, HighlightAsset{}, err
 	}
 	recap := BuildRecap(AuctionRecap{
 		AuctionID:       auctionID,
@@ -670,7 +672,86 @@ func (r *Repository) BuildAuctionRecap(ctx context.Context, hostID string, aucti
 		},
 		ReviewedBy: hostID,
 	})
-	return recap, job, err
+	if err != nil {
+		return AuctionRecap{}, Job{}, HighlightAsset{}, err
+	}
+	asset, err := r.createHighlightAsset(ctx, recap, job)
+	return recap, job, asset, err
+}
+
+func (r *Repository) createHighlightAsset(ctx context.Context, recap AuctionRecap, job Job) (HighlightAsset, error) {
+	facts := map[string]any{
+		"auction_id":        recap.AuctionID,
+		"item_title":        recap.ItemTitle,
+		"status":            recap.Status,
+		"final_price_cents": recap.FinalPriceCents,
+		"winner_masked":     recap.WinnerMasked,
+		"accepted_bids":     recap.AcceptedBids,
+		"accepted_bidders":  recap.AcceptedBidders,
+		"extend_count":      recap.ExtendCount,
+		"highlights":        recap.Highlights,
+	}
+	risk := map[string]any{
+		"async_pipeline":             true,
+		"does_not_block_bid_path":    true,
+		"buyer_identities_masked":    true,
+		"internal_demo_html_profile": true,
+		"replacement_ready":          "asset_url can be replaced by MinIO mp4/webm from a worker",
+	}
+	title := cleanText(recap.ItemTitle+" 高光复盘", 80)
+	htmlAsset := renderHighlightHTML(recap)
+	asset := HighlightAsset{
+		ID:            "hl_" + uuid.NewString(),
+		AuctionID:     recap.AuctionID,
+		RoomID:        recap.RoomID,
+		JobID:         job.ID,
+		Status:        "RENDERED",
+		MediaType:     "text/html",
+		Title:         title,
+		AssetURL:      "data:text/html;base64," + base64.StdEncoding.EncodeToString([]byte(htmlAsset)),
+		RenderProfile: "server-html-reel-v1",
+		DurationMS:    12_000,
+		Facts:         facts,
+		Risk:          risk,
+	}
+	err := r.db.QueryRow(ctx, `
+		INSERT INTO auction_highlight_assets (
+			id, auction_id, room_id, job_id, status, media_type, title,
+			asset_url, render_profile, duration_ms, facts_json, risk_json
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		RETURNING created_at, updated_at
+	`, asset.ID, asset.AuctionID, asset.RoomID, asset.JobID, asset.Status, asset.MediaType, asset.Title,
+		asset.AssetURL, asset.RenderProfile, asset.DurationMS, asset.Facts, asset.Risk).
+		Scan(&asset.CreatedAt, &asset.UpdatedAt)
+	return asset, err
+}
+
+func renderHighlightHTML(recap AuctionRecap) string {
+	lines := []string{}
+	for _, item := range recap.Highlights {
+		lines = append(lines, "<li>"+html.EscapeString(item)+"</li>")
+	}
+	nextActions := []string{}
+	for _, item := range recap.NextActions {
+		nextActions = append(nextActions, "<span>"+html.EscapeString(item)+"</span>")
+	}
+	return `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>` + html.EscapeString(recap.ItemTitle) + ` 高光复盘</title>
+<style>
+body{margin:0;background:#101820;color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.reel{min-height:100vh;display:grid;place-items:center;padding:32px;background:radial-gradient(circle at 20% 15%,#e6b85c55,transparent 28%),linear-gradient(135deg,#101820,#27333f)}
+.panel{width:min(760px,92vw);border:1px solid #ffffff24;border-radius:18px;padding:30px;background:#111827cc;box-shadow:0 28px 80px #0008}
+h1{font-size:clamp(32px,6vw,64px);margin:0 0 10px;letter-spacing:0}.price{font-size:clamp(40px,8vw,82px);font-weight:900;color:#ffd166;margin:10px 0}
+.meta{display:flex;gap:10px;flex-wrap:wrap}.meta span,.actions span{border:1px solid #ffffff2b;border-radius:999px;padding:8px 12px;background:#ffffff12}
+li{margin:10px 0;font-size:20px}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:22px}
+</style><body><main class="reel"><section class="panel">
+<h1>` + html.EscapeString(recap.ItemTitle) + `</h1>
+<div class="price">` + html.EscapeString(FormatCents(recap.FinalPriceCents)) + `</div>
+<div class="meta"><span>` + html.EscapeString(recap.Status) + `</span><span>` + html.EscapeString(recap.WinnerMasked) + `</span><span>` + html.EscapeString(time.Now().Format("15:04:05")) + `</span></div>
+<ul>` + strings.Join(lines, "") + `</ul>
+<div class="actions">` + strings.Join(nextActions, "") + `</div>
+</section></main></body></html>`
 }
 
 func (r *Repository) AnswerProductQuestion(ctx context.Context, roomID string, gen Generator, req ProductQARequest) (ProductQAAnswer, Job, error) {
