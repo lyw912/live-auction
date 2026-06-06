@@ -1003,6 +1003,11 @@ test('H5 winner result sheet locks order and shares the single payment path', as
   const highlight = await downloadPromise;
   expect(highlight.suggestedFilename()).toMatch(/highlight\.svg$/);
   await expect(sheet.getByText('已保存')).toBeVisible();
+  const videoDownloadPromise = page.waitForEvent('download');
+  await sheet.getByLabel('download-highlight-video').click();
+  const highlightVideo = await videoDownloadPromise;
+  expect(highlightVideo.suggestedFilename()).toMatch(/highlight\.webm$/);
+  await expect(sheet.getByText('视频已保存')).toBeVisible();
 
   await sheet.getByTestId('result-pay-cta').dblclick();
   await expect(sheet.getByRole('heading', { name: '支付已完成' })).toBeVisible();

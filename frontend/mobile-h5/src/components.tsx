@@ -608,6 +608,23 @@ export function ResultSheet({
     window.setTimeout(() => URL.revokeObjectURL(url), 250);
     setShareFeedback('已保存');
   };
+  const downloadHighlightVideo = async () => {
+    if (!recap) return;
+    try {
+      const clip = await buildHighlightVideo(recap);
+      const url = URL.createObjectURL(clip.blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = clip.filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setShareFeedback('视频已保存');
+    } catch {
+      setShareFeedback('当前浏览器不支持视频生成');
+    }
+  };
 
   return (
     <section className={`result-sheet ${kind} ${compact ? 'is-compact' : ''}`} data-testid="result-sheet" aria-label={title}>
@@ -654,6 +671,9 @@ export function ResultSheet({
             </button>
             <button type="button" aria-label="download-highlight-card" onClick={downloadHighlight}>
               <Download size={14} /> 高光卡
+            </button>
+            <button type="button" aria-label="download-highlight-video" onClick={() => void downloadHighlightVideo()}>
+              <Download size={14} /> 短视频
             </button>
             {shareFeedback ? <b>{shareFeedback}</b> : null}
           </div>
@@ -1412,6 +1432,143 @@ async function copyText(value: string) {
   const ok = document.execCommand('copy');
   input.remove();
   if (!ok) throw new Error('copy failed');
+}
+
+async function buildHighlightVideo(recap: ResultRecap): Promise<{ blob: Blob; filename: string }> {
+  const canvas = document.createElement('canvas');
+  canvas.width = 720;
+  canvas.height = 1280;
+  const ctx = canvas.getContext('2d');
+  const capture = canvas.captureStream?.bind(canvas);
+  if (!ctx || !capture || typeof MediaRecorder === 'undefined') {
+    throw new Error('highlight video unsupported');
+  }
+  const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+    ? 'video/webm;codecs=vp9'
+    : MediaRecorder.isTypeSupported('video/webm;codecs=vp8')
+      ? 'video/webm;codecs=vp8'
+      : 'video/webm';
+  const stream = capture(30);
+  const chunks: BlobPart[] = [];
+  const recorder = new MediaRecorder(stream, { mimeType });
+  const done = new Promise<Blob>((resolve, reject) => {
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) chunks.push(event.data);
+    };
+    recorder.onerror = () => reject(new Error('record highlight video'));
+    recorder.onstop = () => resolve(new Blob(chunks, { type: mimeType }));
+  });
+  recorder.start();
+  const startedAt = performance.now();
+  const durationMS = 4200;
+  await new Promise<void>((resolve) => {
+    const drawFrame = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / durationMS);
+      drawHighlightFrame(ctx, recap, progress);
+      if (progress < 1) {
+        requestAnimationFrame(drawFrame);
+      } else {
+        resolve();
+      }
+    };
+    requestAnimationFrame(drawFrame);
+  });
+  recorder.stop();
+  stream.getTracks().forEach((track) => track.stop());
+  const filenameTitle = recap.title
+    .replace(/[^\p{L}\p{N}]+/gu, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 28) || 'auction-highlight';
+  return { blob: await done, filename: `${filenameTitle}-highlight.webm` };
+}
+
+function drawHighlightFrame(ctx: CanvasRenderingContext2D, recap: ResultRecap, progress: number) {
+  const width = ctx.canvas.width;
+  const height = ctx.canvas.height;
+  const gradient = ctx.createLinearGradient(0, 0, width, height);
+  gradient.addColorStop(0, '#101827');
+  gradient.addColorStop(0.44, '#14433b');
+  gradient.addColorStop(1, '#d18a2f');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, width, height);
+  ctx.save();
+  ctx.globalAlpha = 0.18;
+  ctx.fillStyle = '#ffffff';
+  for (let index = 0; index < 18; index += 1) {
+    const x = (index * 97 + progress * 180) % (width + 120) - 60;
+    const y = (index * 139 + progress * 260) % (height + 120) - 60;
+    ctx.beginPath();
+    ctx.arc(x, y, index % 3 === 0 ? 18 : 10, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+  roundedRect(ctx, 48, 70, width - 96, height - 140, 30, 'rgba(255,255,255,0.13)', 'rgba(255,255,255,0.28)');
+  ctx.fillStyle = '#ffe6a7';
+  ctx.font = '700 34px Arial, sans-serif';
+  ctx.fillText(recap.status, 82, 150);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '800 50px Arial, sans-serif';
+  wrapCanvasText(ctx, recap.title, 82, 250, width - 164, 58, 2);
+  const scale = 1 + Math.sin(progress * Math.PI) * 0.035;
+  ctx.save();
+  ctx.translate(82, 440);
+  ctx.scale(scale, scale);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '900 78px Arial, sans-serif';
+  ctx.fillText(recap.price, 0, 0);
+  ctx.restore();
+  ctx.fillStyle = '#fff0c7';
+  ctx.font = '700 30px Arial, sans-serif';
+  ctx.fillText(`成交/领先：${recap.winner}`, 82, 520);
+  roundedRect(ctx, 82, 625, width - 164, 210, 22, 'rgba(255,255,255,0.15)');
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '800 32px Arial, sans-serif';
+  ctx.fillText('高光事实', 112, 690);
+  ctx.fillStyle = '#fff5db';
+  ctx.font = '400 28px Arial, sans-serif';
+  wrapCanvasText(ctx, recap.facts.join(' · ') || '真实竞拍记录', 112, 755, width - 224, 38, 2);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '800 36px Arial, sans-serif';
+  wrapCanvasText(ctx, recap.nextAction, 82, 975, width - 164, 44, 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.75)';
+  ctx.font = '400 24px Arial, sans-serif';
+  ctx.fillText('仅展示系统真实竞拍记录，用户身份已脱敏。', 82, 1158);
+}
+
+function roundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number, fill: string, stroke?: string) {
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.arcTo(x + width, y, x + width, y + height, radius);
+  ctx.arcTo(x + width, y + height, x, y + height, radius);
+  ctx.arcTo(x, y + height, x, y, radius);
+  ctx.arcTo(x, y, x + width, y, radius);
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.fill();
+  if (stroke) {
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+}
+
+function wrapCanvasText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number, lineHeight: number, maxLines: number) {
+  const chars = Array.from(text);
+  let line = '';
+  let lineCount = 0;
+  for (const char of chars) {
+    const next = line + char;
+    if (ctx.measureText(next).width > maxWidth && line) {
+      lineCount += 1;
+      ctx.fillText(lineCount === maxLines ? `${line.slice(0, Math.max(0, line.length - 1))}...` : line, x, y);
+      if (lineCount >= maxLines) return;
+      y += lineHeight;
+      line = char;
+    } else {
+      line = next;
+    }
+  }
+  if (line && lineCount < maxLines) ctx.fillText(line, x, y);
 }
 
 export function HistoryList({
