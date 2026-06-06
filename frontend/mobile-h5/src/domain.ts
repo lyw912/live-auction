@@ -49,7 +49,7 @@ export type BottomSheetKey = 'products' | 'details' | 'maxBid' | 'leaderboard' |
 export type AuctionOverlayMode = 'feed' | 'bid';
 export type ResultSheetKind = 'winner' | 'loser' | 'unsold';
 export type SoundCapability = 'ready' | 'unavailable' | 'blocked';
-export type AuctionSoundKey = 'heartbeat_bed' | 'rank_whoosh' | 'coin_leading' | 'hammer_hit' | 'system_chime';
+export type AuctionSoundKey = 'heartbeat_bed' | 'rank_whoosh' | 'coin_leading' | 'hammer_hit' | 'system_chime' | 'lucky_open' | 'entry_badge' | 'pk_surge';
 export type AuctionSoundPack = Partial<Record<AuctionSoundKey, AudioBuffer>>;
 export type MaxBidPhase = 'idle' | 'pending' | 'canceling' | 'error';
 export type CountdownPhase = 'normal' | 'hot' | 'critical' | 'hammer' | 'syncing' | 'stale' | 'terminal';
@@ -559,7 +559,10 @@ const auctionSoundURLs: Record<AuctionSoundKey, string> = {
   rank_whoosh: '/audio/auction/whoosh-rank.wav',
   coin_leading: '/audio/auction/coin-leading.wav',
   hammer_hit: '/audio/auction/hammer-hit.wav',
-  system_chime: '/audio/auction/system-chime.wav'
+  system_chime: '/audio/auction/system-chime.wav',
+  lucky_open: '/audio/auction/lucky-open.wav',
+  entry_badge: '/audio/auction/entry-badge.wav',
+  pk_surge: '/audio/auction/pk-surge.wav'
 };
 
 export async function loadAuctionSoundPack(ctx: AudioContext): Promise<AuctionSoundPack> {
@@ -653,11 +656,14 @@ export function playCountdownTone(ctx: AudioContext, phase: CountdownPhase, beat
   oscillator.stop(ctx.currentTime + (phase === 'hammer' ? 0.24 : 0.14));
 }
 
-export function playLayeredCue(ctx: AudioContext, kind: 'system_message' | 'rank_change' | 'result', pack?: AuctionSoundPack | null) {
+export function playLayeredCue(ctx: AudioContext, kind: 'system_message' | 'rank_change' | 'result' | 'lucky_open' | 'entry_badge' | 'pk_surge', pack?: AuctionSoundPack | null) {
   const assetKey: Record<typeof kind, AuctionSoundKey> = {
     system_message: 'system_chime',
     rank_change: 'rank_whoosh',
-    result: 'hammer_hit'
+    result: 'hammer_hit',
+    lucky_open: 'lucky_open',
+    entry_badge: 'entry_badge',
+    pk_surge: 'pk_surge'
   };
   if (playAuctionSound(ctx, pack ?? null, assetKey[kind], kind === 'result' ? 0.84 : 0.62)) return;
   if (document.visibilityState === 'hidden') return;
@@ -670,7 +676,10 @@ export function playLayeredCue(ctx: AudioContext, kind: 'system_message' | 'rank
   const notes: Record<typeof kind, number[]> = {
     system_message: [660, 880],
     rank_change: [520, 740, 980],
-    result: [440, 660, 880]
+    result: [440, 660, 880],
+    lucky_open: [740, 988, 1318, 1760],
+    entry_badge: [392, 784, 1176],
+    pk_surge: [220, 440, 880]
   };
   notes[kind].forEach((frequency, index) => {
     const oscillator = ctx.createOscillator();

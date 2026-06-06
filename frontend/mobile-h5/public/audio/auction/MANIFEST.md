@@ -9,6 +9,9 @@ Files:
 - `coin-leading.wav`: new-leading cue.
 - `hammer-hit.wav`: sold/result hammer cue.
 - `system-chime.wav`: AI/system message cue.
+- `lucky-open.wav`: 福袋 reward reveal cue.
+- `entry-badge.wav`: entry badge / participation cue.
+- `pk-surge.wav`: buyer PK team switch surge cue.
 
 Regenerate:
 

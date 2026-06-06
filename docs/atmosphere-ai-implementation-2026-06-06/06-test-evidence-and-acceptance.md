@@ -170,11 +170,11 @@ Current 2026-06-06 evidence:
 
 Current 2026-06-06 evidence:
 
-- `pnpm --filter mobile-h5 build` passed after adding measured FLIP leaderboard rows, system barrage, generated WAV sound assets, layered cue audio, heartbeat bed loop, and browser TTS helpers.
+- `pnpm --filter mobile-h5 build` passed after adding measured FLIP leaderboard rows, system barrage, generated WAV sound assets, layered cue audio, heartbeat bed loop, 福袋/入场/PK cue audio, and browser TTS helpers.
 - Real browser check on 2026-06-06 loaded H5 at `5298`, found the `.system-barrage-layer`, and saved screenshot evidence to `docs/atmosphere-ai-implementation-2026-06-06/evidence/h5-barrage-flip-2026-06-06.png`.
 - The barrage layer renders actual `auction_system_messages` content only; it does not synthesize fake heat, fake viewers, or decorative inactive controls.
 - FLIP row animation uses measured DOM positions and Web Animations; `prefers-reduced-motion` disables barrage animation and leaderboard row transitions.
-- Generated H5 sound assets are project-owned deterministic WAV files under `frontend/mobile-h5/public/audio/auction`; `MANIFEST.md` documents regeneration and asset purpose. Real Chromium check on 2026-06-06 clicked `开启提示音` and observed 200 responses for `heartbeat-bed.wav`, `hammer-hit.wav`, `whoosh-rank.wav`, `coin-leading.wav`, and `system-chime.wav`. Screenshot evidence: `docs/atmosphere-ai-implementation-2026-06-06/evidence/h5-sound-asset-pack-2026-06-06.png`.
+- Generated H5 sound assets are project-owned deterministic WAV files under `frontend/mobile-h5/public/audio/auction`; `MANIFEST.md` documents regeneration and asset purpose. The pack now includes heartbeat, hammer, rank, leading, system message, 福袋开奖, 入场牌, and PK surge cues. Real Chromium check on 2026-06-06 clicked `开启提示音` and observed 200 responses for the initial sound pack. Screenshot evidence: `docs/atmosphere-ai-implementation-2026-06-06/evidence/h5-sound-asset-pack-2026-06-06.png`.
 - Real browser check on 2026-06-06 closed the bid panel, selected the `成交` terminal state, and verified the feed-mode result ceremony covers the full 393x851 H5 viewport. Screenshot evidence: `docs/atmosphere-ai-implementation-2026-06-06/evidence/h5-cinematic-result-2026-06-06.png`.
 - Hammer countdown copy now renders `第一次/第二次/最后一次` plus server-authority copy; local countdown zero still enters syncing rather than creating a terminal result.
 

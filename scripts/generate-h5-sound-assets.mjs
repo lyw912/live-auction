@@ -76,7 +76,26 @@ const assets = {
   'system-chime.wav': render(0.7, (t) => (
     sine(660, t) * Math.exp(-t * 4) +
     sine(880, Math.max(0, t - 0.08)) * Math.exp(-Math.max(0, t - 0.08) * 5) * 0.64
-  ) * 0.24)
+  ) * 0.24),
+  'lucky-open.wav': render(1.15, (t, i) => {
+    const sparkle = (
+      sine(880 + t * 360, t) * Math.exp(-t * 2.2) +
+      sine(1320 + t * 520, t) * Math.exp(-t * 2.8) * 0.58
+    );
+    const burst = t > 0.42 ? noise(i + 311) * Math.exp(-(t - 0.42) * 9) * 0.24 : 0;
+    const hit = t > 0.38 ? sine(196, t) * Math.exp(-(t - 0.38) * 7) * 0.38 : 0;
+    return (sparkle + burst + hit) * 0.3;
+  }),
+  'entry-badge.wav': render(0.8, (t) => (
+    sine(392, t) * Math.exp(-t * 3.2) +
+    sine(784, Math.max(0, t - 0.1)) * Math.exp(-Math.max(0, t - 0.1) * 4.2) * 0.62 +
+    sine(1176, Math.max(0, t - 0.2)) * Math.exp(-Math.max(0, t - 0.2) * 5.2) * 0.38
+  ) * 0.26),
+  'pk-surge.wav': render(0.86, (t, i) => {
+    const sweep = sine(180 + t * 780, t) * (0.2 + t);
+    const crowd = noise(i + 719) * Math.sin(Math.PI * Math.min(1, t / 0.86)) * 0.16;
+    return (sweep + crowd) * 0.28;
+  })
 };
 
 await mkdir(outDir, { recursive: true });

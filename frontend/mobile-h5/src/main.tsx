@@ -1648,6 +1648,9 @@ function App() {
       if (response.ok && payload) {
         setLiveOpsCampaign(payload);
         if (payload.my_team === 'craft' || payload.my_team === 'story') setActiveBuyerTeam(payload.my_team);
+        if (soundEnabledRef.current && audioContextRef.current && soundCapabilityRef.current === 'ready') {
+          playLayeredCue(audioContextRef.current, 'pk_surge', soundPackRef.current);
+        }
       } else {
         setLiveOpsError('阵营选择暂不可用，请稍后再试');
       }
@@ -1663,6 +1666,10 @@ function App() {
       const payload = await readJSON<LiveOpsCampaign>(response);
       if (response.ok && payload) {
         setLiveOpsCampaign(payload);
+        if (soundEnabledRef.current && audioContextRef.current && soundCapabilityRef.current === 'ready') {
+          playLayeredCue(audioContextRef.current, 'entry_badge', soundPackRef.current);
+        }
+        vibratePattern('leading');
       } else {
         setLiveOpsError('请先完成暖场任务再参与福袋');
       }
@@ -1678,6 +1685,10 @@ function App() {
       const payload = await readJSON<LiveOpsCampaign>(response);
       if (response.ok && payload) {
         setLiveOpsCampaign(payload);
+        if (soundEnabledRef.current && audioContextRef.current && soundCapabilityRef.current === 'ready') {
+          playLayeredCue(audioContextRef.current, 'lucky_open', soundPackRef.current);
+        }
+        vibratePattern('sold');
       } else {
         setLiveOpsError('请先参与福袋再开奖');
       }

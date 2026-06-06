@@ -325,12 +325,17 @@ export function LiveOpsPanel({
         </div>
         <small>{liveOpsError || liveOpsCampaign?.disclaimer || '只记录互动准备，不抽奖、不承诺中奖或优惠。'}</small>
       </div>
-      <div className="lucky-draw-card" data-testid="lucky-draw-card">
+      <div className="lucky-draw-card" data-testid="lucky-draw-card" data-draw-state={luckyDraw?.my_entry_status ?? 'READY'}>
         <div>
           <span><Sparkles size={13} /> {luckyDraw?.title ?? '开拍福袋'}</span>
           <strong>{drawStatus}</strong>
         </div>
         <p>{luckyDraw?.description ?? '完成准备后参与，奖励用于直播间互动展示。'}</p>
+        {luckyDraw?.my_entry_status === 'OPENED' ? (
+          <div className="lucky-reward-reveal" aria-label="lucky-draw-reward">
+            {luckyDraw.my_reward_label ?? '直播间奖励'}
+          </div>
+        ) : null}
         <div className="lucky-draw-actions">
           {luckyDraw?.my_entry_status === 'ENTERED' ? (
             <button type="button" onClick={onOpenLuckyDraw}>开奖</button>

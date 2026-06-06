@@ -878,6 +878,47 @@ button {
   justify-content: flex-end;
 }
 
+.lucky-draw-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.lucky-draw-card::after {
+  content: "";
+  position: absolute;
+  inset: -40% -80%;
+  background: linear-gradient(105deg, transparent 40%, rgba(255,255,255,.34) 50%, transparent 60%);
+  transform: translateX(-60%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.lucky-draw-card[data-draw-state="ENTERED"] {
+  border-color: rgba(212, 149, 34, .36);
+  background: linear-gradient(135deg, #fffaf0, #f8fffb);
+}
+
+.lucky-draw-card[data-draw-state="OPENED"] {
+  border-color: rgba(212, 149, 34, .56);
+  background: linear-gradient(135deg, #fff7d6, #f4fbff);
+}
+
+.lucky-draw-card[data-draw-state="OPENED"]::after {
+  animation: lucky-sheen 900ms ease-out 1;
+  opacity: 1;
+}
+
+.lucky-reward-reveal {
+  border-radius: var(--radius-sm);
+  background: rgba(17, 24, 39, .92);
+  color: #fff7d6;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-weight: 900;
+  text-align: center;
+  animation: reward-pop 520ms cubic-bezier(.2, 1.2, .2, 1) 1;
+}
+
 .lucky-draw-actions button {
   min-height: 34px;
   border: 0;
@@ -892,6 +933,17 @@ button {
 .lucky-draw-actions button:disabled {
   background: var(--color-surface-2);
   color: var(--color-muted);
+}
+
+@keyframes lucky-sheen {
+  from { transform: translateX(-65%); }
+  to { transform: translateX(65%); }
+}
+
+@keyframes reward-pop {
+  0% { transform: scale(.92); opacity: 0; }
+  70% { transform: scale(1.03); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
 }
 
 .pk-bars {
