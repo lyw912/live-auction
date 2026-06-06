@@ -131,6 +131,37 @@ func TestChatCompletionsGeneratorRejectsMalformedContent(t *testing.T) {
 	}
 }
 
+func TestAnswerFromFactsCombinesMultipleRuleFacts(t *testing.T) {
+	answer := AnswerFromFacts("auc_1", "起拍价和加价是多少", "测试拍品", "", map[string]any{
+		"start_price_cents": int64(10000),
+		"increment_cents":   int64(5000),
+	})
+	if answer.Answer != "每次加价 ¥50.00；起拍价 ¥100.00" {
+		t.Fatalf("answer = %q", answer.Answer)
+	}
+	if len(answer.FactsUsed) != 2 || answer.FactsUsed[0] != "auction.increment_cents" || answer.FactsUsed[1] != "auction.start_price_cents" {
+		t.Fatalf("facts = %#v", answer.FactsUsed)
+	}
+}
+
+func TestChatCompletionsGeneratorSupportsSentinelAndProductQASchemas(t *testing.T) {
+	kinds := []string{"sentinel_explanation", "product_qa"}
+	for _, kind := range kinds {
+		t.Run(kind, func(t *testing.T) {
+			schema, err := schemaForRequest(StructuredRequest{Kind: kind})
+			if err != nil {
+				t.Fatalf("schema: %v", err)
+			}
+			if schema.name != kind {
+				t.Fatalf("schema name = %q", schema.name)
+			}
+			if schema.body["type"] != "object" {
+				t.Fatalf("schema body = %#v", schema.body)
+			}
+		})
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {

@@ -151,12 +151,12 @@ func (h AIHandler) EvaluateSentinel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
 		return
 	}
-	alerts, err := h.Repo.EvaluateSentinel(r.Context(), user.ID, chi.URLParam(r, "id"))
+	alerts, job, err := h.Repo.EvaluateSentinel(r.Context(), user.ID, h.generator(), chi.URLParam(r, "id"))
 	if err != nil {
 		writeResult(w, r, http.StatusOK, nil, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": alerts})
+	writeJSON(w, http.StatusOK, map[string]any{"items": alerts, "job": job})
 }
 
 func (h AIHandler) ListSentinelAlerts(w http.ResponseWriter, r *http.Request) {
@@ -207,12 +207,12 @@ func (h AIHandler) ProductQA(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "invalid json body", http.StatusBadRequest))
 		return
 	}
-	answer, err := h.Repo.AnswerProductQuestion(r.Context(), roomID, req)
+	answer, job, err := h.Repo.AnswerProductQuestion(r.Context(), roomID, h.generator(), req)
 	if err != nil {
 		writeResult(w, r, http.StatusOK, nil, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, answer)
+	writeJSON(w, http.StatusOK, map[string]any{"answer": answer, "job": job})
 }
 
 func (h AIHandler) generator() aicap.Generator {

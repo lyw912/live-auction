@@ -16,6 +16,23 @@ import (
 	"live-auction/backend/internal/storage"
 )
 
+type fakeStructuredGenerator struct {
+	results map[string]aicap.StructuredResult
+	errs    map[string]error
+	calls   []aicap.StructuredRequest
+}
+
+func (g *fakeStructuredGenerator) GenerateStructured(_ context.Context, req aicap.StructuredRequest) (aicap.StructuredResult, error) {
+	g.calls = append(g.calls, req)
+	if err := g.errs[req.Kind]; err != nil {
+		return aicap.StructuredResult{}, err
+	}
+	if result, ok := g.results[req.Kind]; ok {
+		return result, nil
+	}
+	return aicap.DeterministicGenerator{}.GenerateStructured(context.Background(), req)
+}
+
 func TestAIListingDraftIsHostOnlyStructuredAndApplyIsAuditOnly(t *testing.T) {
 	db := openMonitorDB(t)
 	rdb := openMonitorRedis(t)
@@ -180,12 +197,18 @@ func TestAICommentarySystemMessagesSentinelRecapAndProductQA(t *testing.T) {
 	}
 	var alerts struct {
 		Items []map[string]any `json:"items"`
+		Job   struct {
+			Kind string `json:"kind"`
+		} `json:"job"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &alerts); err != nil {
 		t.Fatalf("decode alerts: %v", err)
 	}
 	if len(alerts.Items) == 0 {
 		t.Fatalf("expected sentinel alert")
+	}
+	if alerts.Job.Kind != "sentinel_explanation" {
+		t.Fatalf("expected sentinel job, got %#v", alerts.Job)
 	}
 
 	assertAPIStatus(t, router, http.MethodPost, "/api/host/auctions/"+row.ID+"/recap", nil, userHeaders("host_1", "host"), http.StatusOK)
@@ -203,13 +226,92 @@ func TestAICommentarySystemMessagesSentinelRecapAndProductQA(t *testing.T) {
 		t.Fatalf("product qa status = %d body=%s", rec.Code, rec.Body.String())
 	}
 	var answer struct {
-		Answer    string   `json:"answer"`
-		FactsUsed []string `json:"facts_used"`
+		Answer struct {
+			Answer    string   `json:"answer"`
+			FactsUsed []string `json:"facts_used"`
+		} `json:"answer"`
+		Job struct {
+			Kind string `json:"kind"`
+		} `json:"job"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &answer); err != nil {
 		t.Fatalf("decode qa answer: %v", err)
 	}
-	if answer.Answer == "" || len(answer.FactsUsed) == 0 {
+	if answer.Answer.Answer == "" || len(answer.Answer.FactsUsed) == 0 || answer.Job.Kind != "product_qa" {
 		t.Fatalf("bad qa answer: %#v", answer)
+	}
+}
+
+func TestSentinelAndProductQAUseProviderWithFactGuards(t *testing.T) {
+	db := openMonitorDB(t)
+	repo := auction.NewRepository(db)
+	row := createMonitorAuction(t, repo, db)
+	aiRepo := aicap.NewRepository(db)
+	for i := 0; i < 5; i++ {
+		bidID := "ai-provider-sentinel-" + uuid.NewString()
+		if _, err := repo.PlaceBid(context.Background(), row.ID, "user_1", bidID, auction.BidInput{
+			ClientBidID:   bidID,
+			AmountCents:   1,
+			ClientSeenSeq: row.Seq,
+		}, "tr_ai_provider_sentinel"); err != nil {
+			t.Fatalf("seed provider sentinel rejected bid: %v", err)
+		}
+	}
+	gen := &fakeStructuredGenerator{results: map[string]aicap.StructuredResult{
+		"sentinel_explanation": {
+			Provider: "test-provider",
+			Model:    "sentinel-model",
+			Output: map[string]any{
+				"alerts": []any{map[string]any{
+					"risk_type":          "bid_rule_probe",
+					"severity":           "HIGH",
+					"score":              float64(82),
+					"explanation":        "连续低于规则的出价被拒，先面向全场说明加价规则。",
+					"recommended_action": "提醒规则并观察后续有效出价",
+					"facts_used":         []any{"rejected_bids"},
+				}},
+			},
+			Safety: map[string]any{"provider_mode": "test"},
+		},
+		"product_qa": {
+			Provider: "test-provider",
+			Model:    "qa-model",
+			Output: map[string]any{
+				"answer":      "起拍价为 ¥100.00，每次加价 ¥10.00。",
+				"facts_used":  []any{"auction.start_price_display", "auction.increment_display"},
+				"safety_note": "只基于本场已审核规则回答。",
+			},
+			Safety: map[string]any{"provider_mode": "test"},
+		},
+	}}
+	alerts, sentinelJob, err := aiRepo.EvaluateSentinel(context.Background(), "host_1", gen, row.ID)
+	if err != nil {
+		t.Fatalf("provider sentinel: %v", err)
+	}
+	if len(alerts) == 0 || alerts[0].Features["provider_reviewed"] != true || alerts[0].Severity != "HIGH" || sentinelJob.Provider != "test-provider" {
+		t.Fatalf("provider sentinel not used: alerts=%#v job=%#v", alerts, sentinelJob)
+	}
+	answer, qaJob, err := aiRepo.AnswerProductQuestion(context.Background(), row.RoomID, gen, aicap.ProductQARequest{AuctionID: row.ID, Question: "起拍价和加价是多少"})
+	if err != nil {
+		t.Fatalf("provider qa: %v", err)
+	}
+	if answer.Answer != "起拍价为 ¥100.00，每次加价 ¥10.00。" || qaJob.Provider != "test-provider" || len(answer.FactsUsed) != 2 {
+		t.Fatalf("provider qa not used: answer=%#v job=%#v", answer, qaJob)
+	}
+	gen.results["product_qa"] = aicap.StructuredResult{
+		Provider: "test-provider",
+		Model:    "qa-model",
+		Output: map[string]any{
+			"answer":      "这件一定保真并且未来会升值。",
+			"facts_used":  []any{"unapproved.certification"},
+			"safety_note": "unsafe",
+		},
+	}
+	guarded, guardedJob, err := aiRepo.AnswerProductQuestion(context.Background(), row.RoomID, gen, aicap.ProductQARequest{AuctionID: row.ID, Question: "能保真升值吗"})
+	if err != nil {
+		t.Fatalf("guarded qa: %v", err)
+	}
+	if guarded.Answer == "这件一定保真并且未来会升值。" || guardedJob.Provider != "test-provider" || guardedJob.Output["answer"] == "这件一定保真并且未来会升值。" {
+		t.Fatalf("unsafe qa was not guarded: answer=%#v job=%#v", guarded, guardedJob)
 	}
 }

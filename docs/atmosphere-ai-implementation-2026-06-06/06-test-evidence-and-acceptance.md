@@ -144,15 +144,19 @@ Assertions:
 Current 2026-06-06 evidence:
 
 - `TestAICommentarySystemMessagesSentinelRecapAndProductQA` seeded rejected-bid probing and verified sentinel alert creation.
+- `TestSentinelAndProductQAUseProviderWithFactGuards` verifies provider-backed sentinel explanation is used when returned risk types match deterministic candidates, writes a `sentinel_explanation` job, and marks alert features with the linked AI job id.
 - PC Live Assist has a real `检查风控` action and renders severity, score, explanation, and recommended action.
-- Current sentinel is deterministic aggregate rules only; no LLM explanation and no automatic bid blocking.
+- Real browser check on 2026-06-06 clicked PC `检查风控`; `/api/host/auctions/auc_live/sentinel-evaluate` returned `200` with a provider-backed `sentinel_explanation` job using `chat_completions_adapter`. The checked live auction had no candidate anomalies, so `items` was correctly empty.
+- Sentinel still uses deterministic aggregate rules as the candidate generator, but explanation/scoring copy can now be provider-backed. It does not use hidden max-bid data and does not automatically block bids.
 
 ## Recap And Product Q&A Tests
 
 Current 2026-06-06 evidence:
 
 - `TestAICommentarySystemMessagesSentinelRecapAndProductQA` verifies recap generation and product Q&A from auction facts.
+- `TestSentinelAndProductQAUseProviderWithFactGuards` verifies provider-backed product Q&A uses only approved fact keys, persists a `product_qa` job, and falls back when the provider returns unsafe authenticity/investment claims or unapproved fact references.
 - H5 Playwright MCP opened the real `问答` sheet and asked `起拍价是多少`; response was `起拍价 ¥100.00` with fact provenance and no hidden-bid leakage.
+- Real browser check on 2026-06-06 clicked H5 `问拍品`, asked `起拍价和加价是多少`, and verified the visible answer `起拍价是¥100.00，加价幅度是¥50.00。` with `auction.start_price_display` and `auction.increment_display` provenance. The backend returned a `SUCCEEDED` `product_qa` job from `chat_completions_adapter`.
 - H5 now renders a buyer-safe result recap/share card from public state facts only. It does not call host-only recap APIs and does not expose buyer identity or private max-bid data.
 
 ## Commands Run On 2026-06-06
@@ -165,6 +169,7 @@ pnpm test:frontend:domain
 pnpm --filter mobile-h5 build
 pnpm --filter pc-console build
 /bin/bash -lc "GOCACHE=/tmp/go-build-cache GOMODCACHE=/tmp/go-mod-cache GOPATH=/tmp/go-path go test ./internal/gateway -run 'TestAI|TestPlaceBid'"
+/bin/bash -lc "GOCACHE=/tmp/go-build-cache GOMODCACHE=/tmp/go-mod-cache GOPATH=/tmp/go-path go test ./internal/gateway -run 'TestAI|TestSentinelAndProductQA'"
 /bin/bash -lc "H5_PORT=5288 PC_PORT=5289 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 pnpm exec playwright test tests/e2e/mobile-h5.spec.ts tests/e2e/atmosphere-engine.spec.ts --project=mobile-h5 --reporter=line -g 'honest heat|bottom sheets open close|official bid hints|countdown|result|leaderboard'"
 /bin/bash -lc "H5_PORT=5288 PC_PORT=5289 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 pnpm exec playwright test tests/e2e/pc-console.spec.ts tests/e2e/pc-console-live.spec.ts --project=pc-console --reporter=line -g 'AI|Live Assist|sentinel|recap|commentary|draft'"
 ```

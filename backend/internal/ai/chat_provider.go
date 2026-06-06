@@ -179,6 +179,43 @@ func schemaForRequest(req StructuredRequest) (strictSchema, error) {
 				"safety_labels": stringArraySchema(0, 8),
 			},
 		}}, nil
+	case "sentinel_explanation":
+		return strictSchema{name: "sentinel_explanation", body: map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"required":             []string{"alerts"},
+			"properties": map[string]any{
+				"alerts": map[string]any{
+					"type":     "array",
+					"minItems": 0,
+					"maxItems": 3,
+					"items": map[string]any{
+						"type":                 "object",
+						"additionalProperties": false,
+						"required":             []string{"risk_type", "severity", "score", "explanation", "recommended_action", "facts_used"},
+						"properties": map[string]any{
+							"risk_type":          enumSchema([]string{"single_bidder_price_push", "bid_rule_probe", "sold_unpaid_pressure"}),
+							"severity":           enumSchema([]string{"LOW", "MED", "HIGH"}),
+							"score":              integerSchema(1, 100),
+							"explanation":        stringSchema(1, 160),
+							"recommended_action": stringSchema(1, 120),
+							"facts_used":         stringArraySchema(1, 8),
+						},
+					},
+				},
+			},
+		}}, nil
+	case "product_qa":
+		return strictSchema{name: "product_qa", body: map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"required":             []string{"answer", "facts_used", "safety_note"},
+			"properties": map[string]any{
+				"answer":      stringSchema(1, 160),
+				"facts_used":  stringArraySchema(1, 8),
+				"safety_note": stringSchema(1, 80),
+			},
+		}}, nil
 	default:
 		return strictSchema{}, fmt.Errorf("unsupported AI schema kind %q", req.Kind)
 	}
@@ -192,6 +229,12 @@ func chatMessagesForRequest(req StructuredRequest) []map[string]any {
 	}
 	if req.Kind == "auction_commentary" {
 		userText = "生成一条不超过40字的直播系统解说。只能引用输入事实，不得诱导冲动消费，不得制造假紧迫。"
+	}
+	if req.Kind == "sentinel_explanation" {
+		userText = "为主播风控台生成告警解释。只能在 candidates 中已有风险类型内改写解释、建议和分数；不得新增风险类型，不得指控真实身份，不得自动封禁。"
+	}
+	if req.Kind == "product_qa" {
+		userText = "回答买家关于拍品和竞拍规则的问题。只能使用 facts 字段里的已审核事实；没有事实就回答未提供；不得承诺真伪、升值收益、隐藏最高价或平台外交易。"
 	}
 	content := []map[string]any{{"type": "text", "text": userText + "\n输入 JSON:\n" + mustJSON(req.Input)}}
 	if req.Kind == "listing_draft" {
@@ -277,7 +320,7 @@ func enumSchema(values []string) map[string]any {
 }
 
 func temperatureForKind(kind string) float64 {
-	if kind == "auction_commentary" {
+	if kind == "auction_commentary" || kind == "product_qa" {
 		return 0.4
 	}
 	return 0.2

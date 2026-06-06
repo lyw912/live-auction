@@ -60,9 +60,9 @@ Use this as the execution board for the atmosphere/AI phase. Keep tasks small en
 |---|---|---|---|
 | P2-01 | Done: add deterministic shill/troll sentinel rules. | Backend/PC | `EvaluateSentinel` flags rejected-bid probing, single-bidder push, and sold-unpaid pressure; it never blocks bids automatically. |
 | P2-02 | Done: add sentinel host alert UI. | PC/Backend | Live Assist can run checks and render severity, score, explanation, and recommended action. |
-| P2-03 | Partial: add sentinel explanation. | Backend | Alerts use aggregate features only and expose no private max-bid/user-secret data. This is deterministic explanation, not LLM explanation or advanced shill model. |
+| P2-03 | Done: add provider-backed sentinel explanation with deterministic fallback. | Backend | `EvaluateSentinel` now sends only aggregate features and rule candidates through the AI provider boundary, validates returned risk types against the candidate set, persists a `sentinel_explanation` job, and never exposes private max-bid/user-secret data or auto-blocks bids. Targeted gateway tests cover provider output and fallback. |
 | P2-04 | Done with limits: add auction recap/highlight generator. | Backend/PC/H5 | Backend/PC recap remains host-only; H5 now renders a buyer-safe result recap/share card from public current-state facts only (item, terminal price, masked winner, accepted bidders/bids, next action). It is not video/highlight generation. |
-| P2-05 | Partial: add buyer product Q&A from approved listing facts. | Backend/H5 | H5 Q&A sheet answers from item/rule facts and returns "未提供" when facts are absent; Playwright MCP verified 起拍价 answer. This is fact-only deterministic Q&A, not a full provider-backed AI shopping assistant. |
+| P2-05 | Done: add provider-backed buyer product Q&A from approved listing facts. | Backend/H5 | H5 Q&A calls the backend Q&A endpoint; backend sends only whitelisted item/rule facts to the provider, validates `facts_used` against that whitelist, rejects unsafe authenticity/investment/private-bid claims back to fallback, persists a `product_qa` job, and returns buyer-safe answer copy. |
 | P2-06 | Done with limits: add compliant warm-up, buyer PK, entry/leader effects. | Product/H5 | H5 `LiveOpsPanel` adds warm-up task buttons, buyer-team PK progress, and entry/leader effect cards. Buttons open real sheets or toggle real local state; copy explicitly says no lottery, no promised reward, no price/winner impact. This is not a random 福袋, reward campaign, or backend promotion engine. |
 
 ## Review Design Cross-Check
@@ -77,9 +77,9 @@ This board must not be read as "all P0-P2 review-design items are complete." Cur
 - P2-I/P2-J/P2-K are implemented as a compliance-limited H5 live-ops panel. They are not random reward 福袋, cash/promotion mechanics, or a backend campaign engine.
 - B1 Listing Copilot supports provider-backed strict structured output and HTTPS image URLs when configured; local default remains deterministic and HTTP/local object URLs are not sent as multimodal provider input.
 - B2 AI commentary is automatic for decided bid/sold events and host-triggered for manual prompts; it can use the external AI provider when configured, with deterministic fallback on missing/failed provider.
-- B3 Sentinel is deterministic aggregate rules only, not LLM explanation or advanced anomaly model.
+- B3 Sentinel now uses provider-backed explanations over deterministic aggregate rule candidates, with deterministic fallback and audit jobs. It is still not an advanced cross-account anomaly model or automatic enforcement engine.
 - B4 Recap includes backend/PC host recap plus H5 buyer-safe share/highlight card; generated video/highlight clips remain missing.
-- B5 Q&A is deterministic fact lookup, not full AI导拍客服.
+- B5 Q&A now uses provider-backed answers constrained to approved listing/rule facts, with deterministic fallback. It is still not a full multi-turn 导拍客服 or personalized shopping assistant.
 
 ## AI Provider Gate
 

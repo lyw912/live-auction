@@ -1487,9 +1487,10 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ auction_id: activeAuctionID, question })
       });
-      const payload = await readJSON<ProductQAAnswer>(response);
-      if (response.ok && payload) {
-        setQAAnswer(payload);
+      const payload = await readJSON<ProductQAAnswer | { answer?: ProductQAAnswer }>(response);
+      const answer = payload && 'answer' in payload && typeof payload.answer === 'object' ? payload.answer : payload as ProductQAAnswer | undefined;
+      if (response.ok && answer) {
+        setQAAnswer(answer);
         setWarmupTasks((current) => ({ ...current, asked: true }));
       } else {
         setQAAnswer({ auction_id: activeAuctionID, answer: '未提供', facts_used: [], safety_note: '问答暂不可用，请稍后重试。' });

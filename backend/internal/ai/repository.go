@@ -424,13 +424,13 @@ func (r *Repository) ListSystemMessages(ctx context.Context, roomID string, limi
 	return out, rows.Err()
 }
 
-func (r *Repository) EvaluateSentinel(ctx context.Context, hostID string, auctionID string) ([]SentinelAlert, error) {
+func (r *Repository) EvaluateSentinel(ctx context.Context, hostID string, gen Generator, auctionID string) ([]SentinelAlert, Job, error) {
 	state, err := r.auctionState(ctx, auctionID)
 	if err != nil {
-		return nil, err
+		return nil, Job{}, err
 	}
 	if err := r.ensureHostRoom(ctx, hostID, state.RoomID); err != nil {
-		return nil, err
+		return nil, Job{}, err
 	}
 	var features struct {
 		AcceptedBids     int64
@@ -469,7 +469,7 @@ func (r *Repository) EvaluateSentinel(ctx context.Context, hostID string, auctio
 		LEFT JOIN top_bidder t ON true
 	`, auctionID).Scan(&features.AcceptedBids, &features.AcceptedBidders, &features.RejectedBids, &features.TopBidderBids, &features.TopBidderAmount, &features.OrderPendingMins)
 	if err != nil {
-		return nil, err
+		return nil, Job{}, err
 	}
 	alerts := []SentinelAlert{}
 	if features.AcceptedBids >= 4 && features.AcceptedBidders <= 1 {
@@ -516,14 +516,81 @@ func (r *Repository) EvaluateSentinel(ctx context.Context, hostID string, auctio
 			},
 		})
 	}
+	input := SentinelEvaluationInput{
+		RoomID:    state.RoomID,
+		AuctionID: auctionID,
+		ItemTitle: state.ItemTitle,
+		Status:    state.Status,
+		Features: map[string]any{
+			"accepted_bids":         features.AcceptedBids,
+			"accepted_bidders":      features.AcceptedBidders,
+			"rejected_bids":         features.RejectedBids,
+			"top_bidder_bids":       features.TopBidderBids,
+			"top_bidder_amount":     features.TopBidderAmount,
+			"order_pending_minutes": features.OrderPendingMins,
+		},
+		Candidates: alerts,
+	}
+	inputMap := structToMap(input)
+	result, err := gen.GenerateStructured(ctx, StructuredRequest{
+		Kind:          "sentinel_explanation",
+		PromptVersion: PromptVersionSentinel,
+		SchemaName:    "sentinel_explanation",
+		Input:         inputMap,
+		Timeout:       8 * time.Second,
+	})
+	status := "SUCCEEDED"
+	errorMessage := ""
+	if err != nil {
+		status = "FAILED"
+		errorMessage = cleanText(err.Error(), 240)
+		result = StructuredResult{
+			Provider: "deterministic",
+			Model:    "fallback-template",
+			Output: map[string]any{
+				"alerts": structToAnySlice(alerts),
+			},
+			Safety: map[string]any{
+				"fallback":             true,
+				"aggregate_facts_only": true,
+				"no_auto_block":        true,
+			},
+		}
+	}
+	alerts = NormalizeSentinelAlerts(result.Output, input)
+	result.Output = map[string]any{"alerts": structToAnySlice(alerts)}
+	result.Safety = ensureMap(result.Safety)
+	result.Safety["aggregate_facts_only"] = true
+	result.Safety["no_auto_block"] = true
+	job, err := r.insertJob(ctx, Job{
+		ID:            "aijob_" + uuid.NewString(),
+		RoomID:        state.RoomID,
+		AuctionID:     auctionID,
+		Kind:          "sentinel_explanation",
+		Status:        status,
+		InputHash:     InputHash(inputMap),
+		PromptVersion: PromptVersionSentinel,
+		Provider:      result.Provider,
+		Model:         result.Model,
+		Input:         inputMap,
+		Output:        result.Output,
+		Safety:        result.Safety,
+		ErrorMessage:  errorMessage,
+		ReviewedBy:    hostID,
+	})
+	if err != nil {
+		return nil, Job{}, err
+	}
 	for i := range alerts {
+		alerts[i].Features = ensureMap(alerts[i].Features)
+		alerts[i].Features["ai_job_id"] = job.ID
 		inserted, err := r.insertRiskAlert(ctx, alerts[i])
 		if err != nil {
-			return nil, err
+			return nil, Job{}, err
 		}
 		alerts[i] = inserted
 	}
-	return alerts, nil
+	return alerts, job, nil
 }
 
 func (r *Repository) ListRiskAlerts(ctx context.Context, hostID string, auctionID string) ([]SentinelAlert, error) {
@@ -601,24 +668,97 @@ func (r *Repository) BuildAuctionRecap(ctx context.Context, hostID string, aucti
 	return recap, job, err
 }
 
-func (r *Repository) AnswerProductQuestion(ctx context.Context, roomID string, req ProductQARequest) (ProductQAAnswer, error) {
+func (r *Repository) AnswerProductQuestion(ctx context.Context, roomID string, gen Generator, req ProductQARequest) (ProductQAAnswer, Job, error) {
 	req.Question = cleanText(req.Question, 120)
 	if req.AuctionID == "" || req.Question == "" {
-		return ProductQAAnswer{}, apierrors.New(apierrors.CodeInvalidArgument, "auction_id and question are required", http.StatusBadRequest)
+		return ProductQAAnswer{}, Job{}, apierrors.New(apierrors.CodeInvalidArgument, "auction_id and question are required", http.StatusBadRequest)
 	}
 	state, err := r.auctionState(ctx, req.AuctionID)
 	if err != nil {
-		return ProductQAAnswer{}, err
+		return ProductQAAnswer{}, Job{}, err
 	}
 	if roomID != "" && state.RoomID != roomID {
-		return ProductQAAnswer{}, apierrors.New(apierrors.CodeForbiddenRoom, "auction does not belong to room", http.StatusForbidden)
+		return ProductQAAnswer{}, Job{}, apierrors.New(apierrors.CodeForbiddenRoom, "auction does not belong to room", http.StatusForbidden)
 	}
 	rules := map[string]any{
 		"start_price_cents": state.StartPriceCents,
 		"increment_cents":   state.IncrementCents,
 		"cap_price_cents":   state.CapPriceCents,
 	}
-	return AnswerFromFacts(req.AuctionID, req.Question, state.ItemTitle, state.ItemDescription, rules), nil
+	facts := map[string]any{
+		"item.title":                  state.ItemTitle,
+		"auction.start_price_cents":   state.StartPriceCents,
+		"auction.increment_cents":     state.IncrementCents,
+		"auction.cap_price_cents":     state.CapPriceCents,
+		"auction.start_price_display": FormatCents(state.StartPriceCents),
+		"auction.increment_display":   FormatCents(state.IncrementCents),
+	}
+	if strings.TrimSpace(state.ItemDescription) != "" {
+		facts["item.description"] = state.ItemDescription
+	}
+	if state.CapPriceCents > 0 {
+		facts["auction.cap_price_display"] = FormatCents(state.CapPriceCents)
+	}
+	allowedFacts := map[string]string{}
+	for key := range facts {
+		allowedFacts[key] = key
+	}
+	fallback := AnswerFromFacts(req.AuctionID, req.Question, state.ItemTitle, state.ItemDescription, rules)
+	inputMap := map[string]any{
+		"room_id":    state.RoomID,
+		"auction_id": req.AuctionID,
+		"question":   req.Question,
+		"facts":      facts,
+	}
+	result, err := gen.GenerateStructured(ctx, StructuredRequest{
+		Kind:          "product_qa",
+		PromptVersion: PromptVersionProductQA,
+		SchemaName:    "product_qa",
+		Input:         inputMap,
+		Timeout:       12 * time.Second,
+	})
+	status := "SUCCEEDED"
+	errorMessage := ""
+	if err != nil {
+		status = "FAILED"
+		errorMessage = cleanText(err.Error(), 240)
+		result = StructuredResult{
+			Provider: "deterministic",
+			Model:    "fallback-template",
+			Output:   structToMap(fallback),
+			Safety: map[string]any{
+				"fallback":               true,
+				"approved_facts_only":    true,
+				"no_private_bid_data":    true,
+				"no_authenticity_claims": true,
+			},
+		}
+	}
+	answer := NormalizeProductQAAnswer(result.Output, fallback, allowedFacts)
+	result.Output = structToMap(answer)
+	result.Safety = ensureMap(result.Safety)
+	result.Safety["approved_facts_only"] = true
+	result.Safety["no_private_bid_data"] = true
+	result.Safety["no_authenticity_claims"] = true
+	job, err := r.insertJob(ctx, Job{
+		ID:            "aijob_" + uuid.NewString(),
+		RoomID:        state.RoomID,
+		AuctionID:     req.AuctionID,
+		Kind:          "product_qa",
+		Status:        status,
+		InputHash:     InputHash(inputMap),
+		PromptVersion: PromptVersionProductQA,
+		Provider:      result.Provider,
+		Model:         result.Model,
+		Input:         inputMap,
+		Output:        result.Output,
+		Safety:        result.Safety,
+		ErrorMessage:  errorMessage,
+	})
+	if err != nil {
+		return ProductQAAnswer{}, Job{}, err
+	}
+	return answer, job, nil
 }
 
 type auctionState struct {

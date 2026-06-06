@@ -115,6 +115,15 @@ type SentinelAlert struct {
 	UpdatedAt         time.Time      `json:"updated_at"`
 }
 
+type SentinelEvaluationInput struct {
+	RoomID     string          `json:"room_id"`
+	AuctionID  string          `json:"auction_id"`
+	ItemTitle  string          `json:"item_title"`
+	Status     string          `json:"status"`
+	Features   map[string]any  `json:"features"`
+	Candidates []SentinelAlert `json:"candidates"`
+}
+
 type AuctionRecap struct {
 	AuctionID       string         `json:"auction_id"`
 	RoomID          string         `json:"room_id"`
@@ -244,6 +253,73 @@ func BuildCommentary(req CommentaryRequest) (body string, style string, safety m
 	}
 }
 
+func NormalizeSentinelAlerts(raw map[string]any, input SentinelEvaluationInput) []SentinelAlert {
+	rawAlerts, _ := raw["alerts"].([]any)
+	out := make([]SentinelAlert, 0, len(rawAlerts))
+	allowedRiskTypes := map[string]bool{}
+	candidatesByType := map[string]SentinelAlert{}
+	for _, candidate := range input.Candidates {
+		allowedRiskTypes[candidate.RiskType] = true
+		candidatesByType[candidate.RiskType] = candidate
+	}
+	for _, item := range rawAlerts {
+		itemMap, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		riskType := cleanText(stringValue(itemMap["risk_type"]), 64)
+		if !allowedRiskTypes[riskType] {
+			continue
+		}
+		base := candidatesByType[riskType]
+		score := int(clampFloat(floatValue(itemMap["score"]), 1, 100))
+		if score == 0 {
+			score = base.Score
+		}
+		base.Score = score
+		base.Severity = normalizeSeverity(firstNonEmpty(stringValue(itemMap["severity"]), base.Severity))
+		base.Explanation = cleanText(firstNonEmpty(stringValue(itemMap["explanation"]), base.Explanation), 160)
+		base.RecommendedAction = cleanText(firstNonEmpty(stringValue(itemMap["recommended_action"]), base.RecommendedAction), 120)
+		base.Features = ensureMap(base.Features)
+		base.Features["provider_reviewed"] = true
+		base.Features["facts_used"] = limitStrings(stringSlice(itemMap["facts_used"]), 8, 48)
+		out = append(out, base)
+	}
+	if len(out) == 0 {
+		return input.Candidates
+	}
+	return out
+}
+
+func NormalizeProductQAAnswer(raw map[string]any, fallback ProductQAAnswer, allowedFacts map[string]string) ProductQAAnswer {
+	answer := ProductQAAnswer{
+		AuctionID:  fallback.AuctionID,
+		Answer:     cleanText(stringValue(raw["answer"]), 160),
+		FactsUsed:  limitStrings(stringSlice(raw["facts_used"]), 8, 64),
+		SafetyNote: cleanText(firstNonEmpty(stringValue(raw["safety_note"]), "只回答已审核拍品和规则信息。"), 80),
+	}
+	if answer.Answer == "" {
+		return fallback
+	}
+	if strings.Contains(answer.Answer, "保真") || strings.Contains(answer.Answer, "升值") || strings.Contains(answer.Answer, "稳赚") || strings.Contains(answer.Answer, "隐藏") {
+		return fallback
+	}
+	validFacts := []string{}
+	for _, fact := range answer.FactsUsed {
+		if _, ok := allowedFacts[fact]; ok {
+			validFacts = append(validFacts, fact)
+		}
+	}
+	if len(validFacts) == 0 {
+		return fallback
+	}
+	answer.FactsUsed = validFacts
+	if strings.TrimSpace(answer.SafetyNote) == "" {
+		answer.SafetyNote = "不提供真伪、投资收益或隐藏出价信息。"
+	}
+	return answer
+}
+
 func BuildRecap(input AuctionRecap) AuctionRecap {
 	input.GeneratedAt = time.Now().UTC()
 	input.Highlights = append(input.Highlights, "成交价 "+FormatCents(input.FinalPriceCents))
@@ -272,35 +348,45 @@ func BuildRecap(input AuctionRecap) AuctionRecap {
 
 func AnswerFromFacts(auctionID string, question string, itemTitle string, description string, rules map[string]any) ProductQAAnswer {
 	q := strings.ToLower(strings.TrimSpace(question))
-	answer := "未提供"
+	answers := []string{}
 	facts := []string{}
 	if strings.Contains(q, "标题") || strings.Contains(q, "拍品") || strings.Contains(q, "商品") {
-		answer = itemTitle
+		answers = append(answers, itemTitle)
 		facts = append(facts, "item.title")
 	}
 	if (strings.Contains(q, "描述") || strings.Contains(q, "瑕疵") || strings.Contains(q, "来源")) && strings.TrimSpace(description) != "" {
-		answer = cleanText(description, 120)
+		answers = append(answers, cleanText(description, 120))
 		facts = append(facts, "item.description")
 	}
 	if strings.Contains(q, "加价") {
-		answer = "每次加价 " + FormatCents(int64Value(rules["increment_cents"]))
+		answers = append(answers, "每次加价 "+FormatCents(int64Value(rules["increment_cents"])))
 		facts = append(facts, "auction.increment_cents")
 	}
 	if strings.Contains(q, "起拍") {
-		answer = "起拍价 " + FormatCents(int64Value(rules["start_price_cents"]))
+		answers = append(answers, "起拍价 "+FormatCents(int64Value(rules["start_price_cents"])))
 		facts = append(facts, "auction.start_price_cents")
 	}
 	if strings.Contains(q, "封顶") {
 		capValue := int64Value(rules["cap_price_cents"])
 		if capValue > 0 {
-			answer = "封顶价 " + FormatCents(capValue)
+			answers = append(answers, "封顶价 "+FormatCents(capValue))
 			facts = append(facts, "auction.cap_price_cents")
 		}
 	}
-	if answer == "未提供" {
+	if len(answers) == 0 {
 		return ProductQAAnswer{AuctionID: auctionID, Answer: "未提供", FactsUsed: []string{}, SafetyNote: "只回答已审核拍品和规则信息。"}
 	}
+	answer := cleanText(strings.Join(answers, "；"), 160)
 	return ProductQAAnswer{AuctionID: auctionID, Answer: answer, FactsUsed: facts, SafetyNote: "不提供真伪、投资收益或隐藏出价信息。"}
+}
+
+func normalizeSeverity(value string) string {
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "LOW", "MED", "HIGH":
+		return strings.ToUpper(strings.TrimSpace(value))
+	default:
+		return "MED"
+	}
 }
 
 func FormatCents(cents int64) string {

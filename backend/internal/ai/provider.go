@@ -58,6 +58,51 @@ func (DeterministicGenerator) GenerateStructured(ctx context.Context, req Struct
 			},
 			Safety: safety,
 		}, nil
+	case "sentinel_explanation":
+		input := SentinelEvaluationInput{
+			RoomID:     stringFromInput(req.Input, "room_id"),
+			AuctionID:  stringFromInput(req.Input, "auction_id"),
+			ItemTitle:  stringFromInput(req.Input, "item_title"),
+			Status:     stringFromInput(req.Input, "status"),
+			Features:   mapFromInput(req.Input, "features"),
+			Candidates: sentinelCandidatesFromInput(req.Input["candidates"]),
+		}
+		alerts := NormalizeSentinelAlerts(map[string]any{}, input)
+		return StructuredResult{
+			Provider: "deterministic",
+			Model:    "local-template",
+			Output: map[string]any{
+				"alerts": structToAnySlice(alerts),
+			},
+			Safety: map[string]any{
+				"provider_mode":        "deterministic",
+				"aggregate_facts_only": true,
+				"no_auto_block":        true,
+			},
+		}, nil
+	case "product_qa":
+		facts := mapFromInput(req.Input, "facts")
+		allowedFacts := map[string]string{}
+		for key := range facts {
+			allowedFacts[key] = key
+		}
+		answer := AnswerFromFacts(
+			stringFromInput(req.Input, "auction_id"),
+			stringFromInput(req.Input, "question"),
+			allowedFacts["item.title"],
+			allowedFacts["item.description"],
+			map[string]any{
+				"start_price_cents": int64Value(facts["auction.start_price_cents"]),
+				"increment_cents":   int64Value(facts["auction.increment_cents"]),
+				"cap_price_cents":   int64Value(facts["auction.cap_price_cents"]),
+			},
+		)
+		return resultFromStruct("deterministic", "local-template", answer, map[string]any{
+			"provider_mode":          "deterministic",
+			"approved_facts_only":    true,
+			"no_private_bid_data":    true,
+			"no_authenticity_claims": true,
+		}), nil
 	default:
 		return StructuredResult{
 			Provider: "deterministic",
@@ -97,4 +142,29 @@ func structToMap(value any) map[string]any {
 
 func stringFromInput(input map[string]any, key string) string {
 	return cleanText(stringValue(input[key]), 240)
+}
+
+func mapFromInput(input map[string]any, key string) map[string]any {
+	value, ok := input[key].(map[string]any)
+	if !ok || value == nil {
+		return map[string]any{}
+	}
+	return value
+}
+
+func sentinelCandidatesFromInput(value any) []SentinelAlert {
+	raw, _ := json.Marshal(value)
+	var out []SentinelAlert
+	_ = json.Unmarshal(raw, &out)
+	return out
+}
+
+func structToAnySlice(value any) []any {
+	raw, _ := json.Marshal(value)
+	var out []any
+	_ = json.Unmarshal(raw, &out)
+	if out == nil {
+		return []any{}
+	}
+	return out
 }
