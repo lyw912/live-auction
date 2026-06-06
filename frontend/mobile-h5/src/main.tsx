@@ -1656,6 +1656,36 @@ function App() {
     }
   };
 
+  const enterLuckyDraw = async () => {
+    setLiveOpsError('');
+    try {
+      const response = await fetch(`/api/rooms/${roomID}/liveops/lucky-draw/enter`, { method: 'POST' });
+      const payload = await readJSON<LiveOpsCampaign>(response);
+      if (response.ok && payload) {
+        setLiveOpsCampaign(payload);
+      } else {
+        setLiveOpsError('请先完成暖场任务再参与福袋');
+      }
+    } catch {
+      setLiveOpsError('福袋暂不可用，请稍后再试');
+    }
+  };
+
+  const openLuckyDraw = async () => {
+    setLiveOpsError('');
+    try {
+      const response = await fetch(`/api/rooms/${roomID}/liveops/lucky-draw/open`, { method: 'POST' });
+      const payload = await readJSON<LiveOpsCampaign>(response);
+      if (response.ok && payload) {
+        setLiveOpsCampaign(payload);
+      } else {
+        setLiveOpsError('请先参与福袋再开奖');
+      }
+    } catch {
+      setLiveOpsError('开奖暂不可用，请稍后再试');
+    }
+  };
+
   return (
     <main className="app-shell" data-perf-surface={new URLSearchParams(window.location.search).get('perfSurface') === '1' ? '1' : undefined}>
       <LiveStage
@@ -1700,6 +1730,8 @@ function App() {
           onOpenProducts={() => openWarmupSheet('products', 'watch')}
           onOpenQA={() => setActiveSheet('qa')}
           onOpenLeaderboard={() => openWarmupSheet('leaderboard', 'leaderboard')}
+          onEnterLuckyDraw={() => void enterLuckyDraw()}
+          onOpenLuckyDraw={() => void openLuckyDraw()}
           onSelectTeam={(team) => void selectBuyerTeam(team)}
           onToggleFollow={toggleFollow}
         />

@@ -23,6 +23,16 @@ type liveOpsTestPayload struct {
 	Progress   int    `json:"progress"`
 	MyTeam     string `json:"my_team"`
 	Disclaimer string `json:"disclaimer"`
+	LuckyDraw  struct {
+		Status             string `json:"status"`
+		Participants       int    `json:"participants"`
+		MyEntryStatus      string `json:"my_entry_status"`
+		MyRewardKey        string `json:"my_reward_key"`
+		MyRewardLabel      string `json:"my_reward_label"`
+		EligibleTaskCount  int    `json:"eligible_task_count"`
+		CompletedTaskCount int    `json:"completed_task_count"`
+		CanEnter           bool   `json:"can_enter"`
+	} `json:"lucky_draw"`
 	TeamScores []struct {
 		Key   string `json:"key"`
 		Count int    `json:"count"`
@@ -71,6 +81,21 @@ func TestLiveOpsCampaignRoutesPersistTaskProgress(t *testing.T) {
 	}
 
 	assertAPIStatus(t, router, http.MethodPost, "/api/rooms/"+roomID+"/liveops/tasks/bad", nil, userHeaders("user_1", "user"), http.StatusBadRequest)
+	assertAPIStatus(t, router, http.MethodPost, "/api/rooms/"+roomID+"/liveops/lucky-draw/enter", nil, userHeaders("user_1", "user"), http.StatusBadRequest)
+	for _, task := range []string{"follow", "ask", "leaderboard"} {
+		payload = requestLiveOps(t, router, http.MethodPost, "/api/rooms/"+roomID+"/liveops/tasks/"+task, userHeaders("user_1", "user"), http.StatusOK)
+	}
+	if !payload.LuckyDraw.CanEnter || payload.LuckyDraw.CompletedTaskCount != 4 {
+		t.Fatalf("lucky draw should be enterable after tasks: %#v", payload.LuckyDraw)
+	}
+	payload = requestLiveOps(t, router, http.MethodPost, "/api/rooms/"+roomID+"/liveops/lucky-draw/enter", userHeaders("user_1", "user"), http.StatusOK)
+	if payload.LuckyDraw.MyEntryStatus != "ENTERED" || payload.LuckyDraw.Participants != 1 {
+		t.Fatalf("lucky draw entry not persisted: %#v", payload.LuckyDraw)
+	}
+	payload = requestLiveOps(t, router, http.MethodPost, "/api/rooms/"+roomID+"/liveops/lucky-draw/open", userHeaders("user_1", "user"), http.StatusOK)
+	if payload.LuckyDraw.MyEntryStatus != "OPENED" || payload.LuckyDraw.MyRewardKey == "" || payload.LuckyDraw.MyRewardLabel == "" {
+		t.Fatalf("lucky draw reward not opened: %#v", payload.LuckyDraw)
+	}
 	payload = requestLiveOpsWithBody(t, router, http.MethodPost, "/api/rooms/"+roomID+"/liveops/team", bytes.NewBufferString(`{"team_key":"story"}`), userHeaders("user_1", "user"), http.StatusOK)
 	if payload.MyTeam != "story" || teamCount(payload, "story") != 1 {
 		t.Fatalf("story team choice was not persisted: %#v", payload)

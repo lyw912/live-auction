@@ -18,6 +18,7 @@ async function selectActiveBidsState(page: Page) {
 test.beforeEach(async ({ page }) => {
   const liveOpsProgress = new Set<string>();
   let liveOpsTeam: 'craft' | 'story' | undefined;
+  let liveOpsDrawStatus: 'READY' | 'ENTERED' | 'OPENED' = 'READY';
   const liveOpsPayload = () => ({
     id: 'loc_test',
     room_id: 'room_main',
@@ -25,12 +26,26 @@ test.beforeEach(async ({ page }) => {
     title: '开拍前准备',
     description: '完成信息查看、关注、问答和榜单确认，帮助自己理解本场规则。',
     progress: liveOpsProgress.size,
+    lucky_draw: {
+      status: liveOpsDrawStatus,
+      title: '开拍福袋',
+      description: '完成准备后参与，开奖展示演示奖励，不影响价格或中标。',
+      opens_at: '2099-05-22T14:00:00Z',
+      server_time: '2099-05-22T13:58:45Z',
+      participants: liveOpsDrawStatus === 'READY' ? 0 : 1,
+      my_entry_status: liveOpsDrawStatus === 'READY' ? undefined : liveOpsDrawStatus,
+      my_reward_key: liveOpsDrawStatus === 'OPENED' ? 'badge' : undefined,
+      my_reward_label: liveOpsDrawStatus === 'OPENED' ? '直播间高光入场牌' : undefined,
+      eligible_task_count: 4,
+      completed_task_count: liveOpsProgress.size,
+      can_enter: liveOpsProgress.size >= 4
+    },
     my_team: liveOpsTeam,
     team_scores: [
       { key: 'craft', label: '工艺派', count: liveOpsTeam === 'craft' ? 1 : 0 },
       { key: 'story', label: '故事派', count: liveOpsTeam === 'story' ? 1 : 0 }
     ],
-    disclaimer: '不含抽奖、现金奖励或中标优先权；不会影响价格、排名、成交或保证金。',
+    disclaimer: '福袋和阵营为比赛演示玩法；奖励不影响价格、排名、成交或保证金。',
     tasks: ['watch', 'follow', 'ask', 'leaderboard'].map((key) => ({
       key,
       label: ({ watch: '看拍品', follow: '关注', ask: '问拍品', leaderboard: '看榜单' } as Record<string, string>)[key],
@@ -218,6 +233,22 @@ test.beforeEach(async ({ page }) => {
     liveOpsTeam = body.team_key;
     await route.fulfill({ json: liveOpsPayload() });
   });
+  await page.route('/api/rooms/room_main/liveops/lucky-draw/enter', async (route) => {
+    if (liveOpsProgress.size < 4) {
+      await route.fulfill({ status: 400, json: { code: 'INVALID_ARGUMENT', message: 'complete tasks' } });
+      return;
+    }
+    liveOpsDrawStatus = 'ENTERED';
+    await route.fulfill({ json: liveOpsPayload() });
+  });
+  await page.route('/api/rooms/room_main/liveops/lucky-draw/open', async (route) => {
+    if (liveOpsDrawStatus === 'READY') {
+      await route.fulfill({ status: 400, json: { code: 'INVALID_ARGUMENT', message: 'enter first' } });
+      return;
+    }
+    liveOpsDrawStatus = 'OPENED';
+    await route.fulfill({ json: liveOpsPayload() });
+  });
   await page.addInitScript(() => {
     class MockAuctionWebSocket extends EventTarget {
       static CONNECTING = 0;
@@ -337,10 +368,20 @@ test('H5 renders honest heat and all visible live actions are interactive', asyn
 
 test('H5 product QA completes liveops ask task only after a real answer', async ({ page }) => {
   const liveOpsTasks: string[] = [];
+  let luckyEntered = false;
+  let luckyOpened = false;
   let qaRequest: Record<string, unknown> | undefined;
   await page.route('/api/rooms/room_main/liveops/tasks/*', async (route, request) => {
     const task = new URL(request.url()).pathname.split('/').pop() ?? '';
     liveOpsTasks.push(task);
+    await route.fallback();
+  });
+  await page.route('/api/rooms/room_main/liveops/lucky-draw/enter', async (route) => {
+    luckyEntered = true;
+    await route.fallback();
+  });
+  await page.route('/api/rooms/room_main/liveops/lucky-draw/open', async (route) => {
+    luckyOpened = true;
     await route.fallback();
   });
   await page.route('/api/rooms/room_main/product-qa', async (route, request) => {
@@ -368,6 +409,19 @@ test('H5 product QA completes liveops ask task only after a real answer', async 
   await expect.poll(() => qaRequest?.question).toBe('起拍价是多少？');
   await expect.poll(() => liveOpsTasks).toContain('ask');
   await expect(page.getByTestId('warmup-card')).toContainText('1/4 已完成');
+  await page.getByTestId('bottom-sheet').getByRole('button', { name: '关闭' }).click();
+  await page.getByTestId('warmup-card').getByRole('button', { name: '看拍品' }).click();
+  await page.getByTestId('bottom-sheet').getByRole('button', { name: '关闭' }).click();
+  await page.getByTestId('live-stage').getByRole('button', { name: '关注' }).click();
+  await page.getByTestId('warmup-card').getByRole('button', { name: '看榜单' }).click();
+  await page.getByTestId('bottom-sheet').getByRole('button', { name: '关闭' }).click();
+  await expect(page.getByTestId('warmup-card')).toContainText('4/4 已完成');
+  await page.getByTestId('lucky-draw-card').getByRole('button', { name: '参与福袋' }).click();
+  await expect.poll(() => luckyEntered).toBe(true);
+  await expect(page.getByTestId('lucky-draw-card')).toContainText('可开奖');
+  await page.getByTestId('lucky-draw-card').getByRole('button', { name: '开奖' }).click();
+  await expect.poll(() => luckyOpened).toBe(true);
+  await expect(page.getByTestId('lucky-draw-card')).toContainText('直播间高光入场牌');
 });
 
 test('H5 disables bid CTA for unsafe states and keeps text inside controls', async ({ page }) => {

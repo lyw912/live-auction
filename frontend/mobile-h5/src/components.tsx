@@ -262,6 +262,8 @@ export function LiveOpsPanel({
   onOpenProducts,
   onOpenQA,
   onOpenLeaderboard,
+  onEnterLuckyDraw,
+  onOpenLuckyDraw,
   onSelectTeam,
   onToggleFollow
 }: {
@@ -277,6 +279,8 @@ export function LiveOpsPanel({
   onOpenProducts: () => void;
   onOpenQA: () => void;
   onOpenLeaderboard: () => void;
+  onEnterLuckyDraw: () => void;
+  onOpenLuckyDraw: () => void;
   onSelectTeam: (team: 'craft' | 'story') => void;
   onToggleFollow: () => void;
 }) {
@@ -298,6 +302,14 @@ export function LiveOpsPanel({
     : followed
       ? '欢迎回来，已关注'
       : '关注后点亮入场牌';
+  const luckyDraw = liveOpsCampaign?.lucky_draw;
+  const drawStatus = luckyDraw?.my_entry_status === 'OPENED'
+    ? `已开出：${luckyDraw.my_reward_label ?? '直播间奖励'}`
+    : luckyDraw?.my_entry_status === 'ENTERED'
+      ? `${luckyDraw.participants} 人已参与 · 可开奖`
+      : luckyDraw?.can_enter
+        ? `${luckyDraw.participants} 人已参与 · 现在可参加`
+        : `完成 ${luckyDraw?.completed_task_count ?? finishedTasks}/${luckyDraw?.eligible_task_count ?? 4} 后解锁`;
   return (
     <section className="live-ops-panel" data-testid="live-ops-panel" aria-label="live-ops-panel">
       <div className="warmup-card" data-testid="warmup-card">
@@ -312,6 +324,22 @@ export function LiveOpsPanel({
           <button type="button" className={taskDone('leaderboard') ? 'done' : ''} disabled={liveOpsBusy === 'leaderboard'} onClick={onOpenLeaderboard}>看榜单</button>
         </div>
         <small>{liveOpsError || liveOpsCampaign?.disclaimer || '只记录互动准备，不抽奖、不承诺中奖或优惠。'}</small>
+      </div>
+      <div className="lucky-draw-card" data-testid="lucky-draw-card">
+        <div>
+          <span><Sparkles size={13} /> {luckyDraw?.title ?? '开拍福袋'}</span>
+          <strong>{drawStatus}</strong>
+        </div>
+        <p>{luckyDraw?.description ?? '完成准备后参与，奖励用于直播间互动展示。'}</p>
+        <div className="lucky-draw-actions">
+          {luckyDraw?.my_entry_status === 'ENTERED' ? (
+            <button type="button" onClick={onOpenLuckyDraw}>开奖</button>
+          ) : luckyDraw?.my_entry_status === 'OPENED' ? (
+            <button type="button" onClick={onOpenLeaderboard}>查看榜单</button>
+          ) : (
+            <button type="button" disabled={!luckyDraw?.can_enter} onClick={onEnterLuckyDraw}>参与福袋</button>
+          )}
+        </div>
       </div>
       <div className="buyer-pk-card" data-testid="buyer-pk-card">
         <div className="pk-title">

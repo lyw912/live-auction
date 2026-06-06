@@ -201,6 +201,44 @@ func (h AuctionHandler) SelectLiveOpsTeam(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, campaign)
 }
 
+func (h AuctionHandler) EnterLiveOpsLuckyDraw(w http.ResponseWriter, r *http.Request) {
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	roomID := chi.URLParam(r, "room_id")
+	if err := h.ACL.requireActiveMembership(r.Context(), user, roomID, "", traceID(r.Context())); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	campaign, err := h.Repo.EnterLiveOpsLuckyDraw(r.Context(), roomID, user.ID)
+	if err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, campaign)
+}
+
+func (h AuctionHandler) OpenLiveOpsLuckyDraw(w http.ResponseWriter, r *http.Request) {
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	roomID := chi.URLParam(r, "room_id")
+	if err := h.ACL.requireActiveMembership(r.Context(), user, roomID, "", traceID(r.Context())); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	campaign, err := h.Repo.OpenLiveOpsLuckyDraw(r.Context(), roomID, user.ID)
+	if err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, campaign)
+}
+
 func (h AuctionHandler) CreateUploadURL(w http.ResponseWriter, r *http.Request) {
 	var req uploadURLRequest
 	if err := decodeJSON(r, &req); err != nil {

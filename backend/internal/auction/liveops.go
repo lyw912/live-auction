@@ -2,6 +2,7 @@ package auction
 
 import (
 	"context"
+	"hash/fnv"
 	"net/http"
 	"time"
 
@@ -19,23 +20,40 @@ type LiveOpsTask struct {
 }
 
 type LiveOpsCampaign struct {
-	ID          string        `json:"id"`
-	RoomID      string        `json:"room_id"`
-	Status      string        `json:"status"`
-	Title       string        `json:"title"`
-	Description string        `json:"description"`
-	Tasks       []LiveOpsTask `json:"tasks"`
-	Progress    int           `json:"progress"`
-	MyTeam      string        `json:"my_team,omitempty"`
-	TeamScores  []LiveOpsTeam `json:"team_scores"`
-	Disclaimer  string        `json:"disclaimer"`
-	UpdatedAt   time.Time     `json:"updated_at"`
+	ID          string           `json:"id"`
+	RoomID      string           `json:"room_id"`
+	Status      string           `json:"status"`
+	Title       string           `json:"title"`
+	Description string           `json:"description"`
+	Tasks       []LiveOpsTask    `json:"tasks"`
+	Progress    int              `json:"progress"`
+	MyTeam      string           `json:"my_team,omitempty"`
+	TeamScores  []LiveOpsTeam    `json:"team_scores"`
+	LuckyDraw   LiveOpsLuckyDraw `json:"lucky_draw"`
+	Disclaimer  string           `json:"disclaimer"`
+	UpdatedAt   time.Time        `json:"updated_at"`
 }
 
 type LiveOpsTeam struct {
 	Key   string `json:"key"`
 	Label string `json:"label"`
 	Count int    `json:"count"`
+}
+
+type LiveOpsLuckyDraw struct {
+	Status             string     `json:"status"`
+	Title              string     `json:"title"`
+	Description        string     `json:"description"`
+	OpensAt            time.Time  `json:"opens_at"`
+	ServerTime         time.Time  `json:"server_time"`
+	Participants       int        `json:"participants"`
+	MyEntryStatus      string     `json:"my_entry_status,omitempty"`
+	MyRewardKey        string     `json:"my_reward_key,omitempty"`
+	MyRewardLabel      string     `json:"my_reward_label,omitempty"`
+	EligibleTaskCount  int        `json:"eligible_task_count"`
+	CompletedTaskCount int        `json:"completed_task_count"`
+	CanEnter           bool       `json:"can_enter"`
+	OpenedAt           *time.Time `json:"opened_at,omitempty"`
 }
 
 var liveOpsTaskCatalog = []LiveOpsTask{
@@ -68,6 +86,9 @@ func (r *Repository) GetLiveOpsCampaign(ctx context.Context, roomID string, user
 	campaign.Tasks = tasks
 	campaign.Progress = len(progress)
 	if err := r.attachLiveOpsTeams(ctx, &campaign, userID); err != nil {
+		return LiveOpsCampaign{}, err
+	}
+	if err := r.attachLiveOpsLuckyDraw(ctx, &campaign, userID); err != nil {
 		return LiveOpsCampaign{}, err
 	}
 	return campaign, nil
@@ -112,6 +133,50 @@ func (r *Repository) SelectLiveOpsTeam(ctx context.Context, roomID string, userI
 		ON CONFLICT (campaign_id, user_id)
 		DO UPDATE SET team_key = EXCLUDED.team_key, updated_at = now()
 	`, campaign.ID, roomID, userID, teamKey); err != nil {
+		return LiveOpsCampaign{}, err
+	}
+	return r.GetLiveOpsCampaign(ctx, roomID, userID)
+}
+
+func (r *Repository) EnterLiveOpsLuckyDraw(ctx context.Context, roomID string, userID string) (LiveOpsCampaign, error) {
+	if roomID == "" || userID == "" {
+		return LiveOpsCampaign{}, apierrors.New(apierrors.CodeInvalidArgument, "room_id and user_id are required", http.StatusBadRequest)
+	}
+	campaign, err := r.GetLiveOpsCampaign(ctx, roomID, userID)
+	if err != nil {
+		return LiveOpsCampaign{}, err
+	}
+	if !campaign.LuckyDraw.CanEnter {
+		return LiveOpsCampaign{}, apierrors.New(apierrors.CodeInvalidArgument, "complete warm-up tasks before entering lucky draw", http.StatusBadRequest)
+	}
+	if _, err := r.db.Exec(ctx, `
+		INSERT INTO liveops_lucky_draw_entries (campaign_id, room_id, user_id, entry_status)
+		VALUES ($1, $2, $3, 'ENTERED')
+		ON CONFLICT (campaign_id, user_id)
+		DO UPDATE SET entry_status = liveops_lucky_draw_entries.entry_status
+	`, campaign.ID, roomID, userID); err != nil {
+		return LiveOpsCampaign{}, err
+	}
+	return r.GetLiveOpsCampaign(ctx, roomID, userID)
+}
+
+func (r *Repository) OpenLiveOpsLuckyDraw(ctx context.Context, roomID string, userID string) (LiveOpsCampaign, error) {
+	if roomID == "" || userID == "" {
+		return LiveOpsCampaign{}, apierrors.New(apierrors.CodeInvalidArgument, "room_id and user_id are required", http.StatusBadRequest)
+	}
+	campaign, err := r.GetLiveOpsCampaign(ctx, roomID, userID)
+	if err != nil {
+		return LiveOpsCampaign{}, err
+	}
+	if campaign.LuckyDraw.MyEntryStatus == "" {
+		return LiveOpsCampaign{}, apierrors.New(apierrors.CodeInvalidArgument, "enter lucky draw before opening", http.StatusBadRequest)
+	}
+	rewardKey, rewardLabel := deterministicLuckyDrawReward(campaign.ID, userID)
+	if _, err := r.db.Exec(ctx, `
+		UPDATE liveops_lucky_draw_entries
+		SET entry_status = 'OPENED', reward_key = $1, reward_label = $2, opened_at = COALESCE(opened_at, now())
+		WHERE campaign_id = $3 AND user_id = $4
+	`, rewardKey, rewardLabel, campaign.ID, userID); err != nil {
 		return LiveOpsCampaign{}, err
 	}
 	return r.GetLiveOpsCampaign(ctx, roomID, userID)
@@ -213,8 +278,58 @@ func (r *Repository) attachLiveOpsTeams(ctx context.Context, campaign *LiveOpsCa
 	return nil
 }
 
+func (r *Repository) attachLiveOpsLuckyDraw(ctx context.Context, campaign *LiveOpsCampaign, userID string) error {
+	var participants int
+	if err := r.db.QueryRow(ctx, `
+		SELECT count(*)
+		FROM liveops_lucky_draw_entries
+		WHERE campaign_id = $1
+	`, campaign.ID).Scan(&participants); err != nil {
+		return err
+	}
+	draw := LiveOpsLuckyDraw{
+		Status:             "READY",
+		Title:              "开拍福袋",
+		Description:        "完成准备后参与，开奖展示演示奖励，不影响价格或中标。",
+		OpensAt:            campaign.UpdatedAt.Add(90 * time.Second),
+		ServerTime:         time.Now().UTC(),
+		Participants:       participants,
+		EligibleTaskCount:  len(liveOpsTaskCatalog),
+		CompletedTaskCount: campaign.Progress,
+		CanEnter:           campaign.Progress >= len(liveOpsTaskCatalog),
+	}
+	var openedAt *time.Time
+	if err := r.db.QueryRow(ctx, `
+		SELECT entry_status, COALESCE(reward_key, ''), COALESCE(reward_label, ''), opened_at
+		FROM liveops_lucky_draw_entries
+		WHERE campaign_id = $1 AND user_id = $2
+	`, campaign.ID, userID).Scan(&draw.MyEntryStatus, &draw.MyRewardKey, &draw.MyRewardLabel, &openedAt); err != nil && err != pgx.ErrNoRows {
+		return err
+	}
+	draw.OpenedAt = openedAt
+	if draw.MyEntryStatus == "OPENED" {
+		draw.Status = "OPENED"
+	} else if draw.MyEntryStatus == "ENTERED" {
+		draw.Status = "ENTERED"
+	}
+	campaign.LuckyDraw = draw
+	return nil
+}
+
 func validLiveOpsTeam(key string) bool {
 	return key == "craft" || key == "story"
 }
 
-const liveOpsDisclaimer = "不含抽奖、现金奖励或中标优先权；不会影响价格、排名、成交或保证金。"
+func deterministicLuckyDrawReward(campaignID string, userID string) (string, string) {
+	rewards := []struct{ key, label string }{
+		{"coupon", "下场围观券"},
+		{"badge", "直播间高光入场牌"},
+		{"priority_qa", "主播优先答疑卡"},
+	}
+	hash := fnv.New32a()
+	_, _ = hash.Write([]byte(campaignID + ":" + userID))
+	reward := rewards[int(hash.Sum32())%len(rewards)]
+	return reward.key, reward.label
+}
+
+const liveOpsDisclaimer = "福袋和阵营为比赛演示玩法；奖励不影响价格、排名、成交或保证金。"

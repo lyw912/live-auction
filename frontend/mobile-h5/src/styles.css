@@ -797,6 +797,7 @@ button {
 }
 
 .warmup-card,
+.lucky-draw-card,
 .buyer-pk-card,
 .entry-effect-card {
   border: 1px solid var(--color-line);
@@ -806,6 +807,7 @@ button {
 }
 
 .warmup-card,
+.lucky-draw-card,
 .buyer-pk-card {
   display: grid;
   gap: 8px;
@@ -813,6 +815,7 @@ button {
 }
 
 .warmup-card > div:first-child,
+.lucky-draw-card > div:first-child,
 .pk-title {
   display: flex;
   justify-content: space-between;
@@ -821,6 +824,7 @@ button {
 }
 
 .warmup-card span,
+.lucky-draw-card span,
 .pk-title span,
 .entry-effect-card span {
   display: inline-flex;
@@ -832,6 +836,7 @@ button {
 }
 
 .warmup-card strong,
+.lucky-draw-card strong,
 .pk-title strong,
 .entry-effect-card strong {
   color: var(--color-ink-950);
@@ -861,10 +866,32 @@ button {
 }
 
 .warmup-card small,
+.lucky-draw-card p,
 .buyer-pk-card small {
   color: var(--color-muted);
   font-size: 11px;
   font-weight: 700;
+}
+
+.lucky-draw-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.lucky-draw-actions button {
+  min-height: 34px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: #111827;
+  color: #fff8e6;
+  padding: 0 14px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.lucky-draw-actions button:disabled {
+  background: var(--color-surface-2);
+  color: var(--color-muted);
 }
 
 .pk-bars {

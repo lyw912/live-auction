@@ -237,6 +237,21 @@ export type LiveOpsCampaign = {
   progress: number;
   my_team?: 'craft' | 'story';
   team_scores?: Array<{ key: 'craft' | 'story'; label: string; count: number }>;
+  lucky_draw?: {
+    status: 'READY' | 'ENTERED' | 'OPENED';
+    title: string;
+    description: string;
+    opens_at: string;
+    server_time: string;
+    participants: number;
+    my_entry_status?: string;
+    my_reward_key?: string;
+    my_reward_label?: string;
+    eligible_task_count: number;
+    completed_task_count: number;
+    can_enter: boolean;
+    opened_at?: string;
+  };
   disclaimer: string;
   updated_at?: string;
 };

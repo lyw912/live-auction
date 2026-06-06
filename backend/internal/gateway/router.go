@@ -158,6 +158,8 @@ func NewRouterWithRealtimeAndLedger(cfg config.Config, deps *storage.Dependencie
 			r.Get("/rooms/{room_id}/liveops", auctionHandler.GetLiveOpsCampaign)
 			r.Post("/rooms/{room_id}/liveops/tasks/{task_key}", auctionHandler.CompleteLiveOpsTask)
 			r.Post("/rooms/{room_id}/liveops/team", auctionHandler.SelectLiveOpsTeam)
+			r.Post("/rooms/{room_id}/liveops/lucky-draw/enter", auctionHandler.EnterLiveOpsLuckyDraw)
+			r.Post("/rooms/{room_id}/liveops/lucky-draw/open", auctionHandler.OpenLiveOpsLuckyDraw)
 			r.Get("/rooms/{room_id}/chat", auctionHandler.ListChatMessages)
 			r.Post("/rooms/{room_id}/chat", auctionHandler.CreateChatMessage)
 			r.Get("/rooms/{room_id}/system-messages", aiHandler.ListSystemMessages)
