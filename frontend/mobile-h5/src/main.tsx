@@ -5,7 +5,7 @@ import { CheckCircle2, ChevronUp, Radio, RefreshCw } from 'lucide-react';
 import type { AtmosphereCue, AtmosphereInput } from './atmosphere';
 import { AuctionStatePanel, BottomSheet, ChatComposer, ChatPanel, LeaderboardPanel, LiveOpsPanel, LiveStage, ResultSheet, StateMatrixTabs } from './components';
 import type { AuctionItem, AuctionOverlayMode, AuctionRealtimeEvent, AuctionState, AuctionSummary, AuthUser, BidderRequirement, BidPhase, BidResponse, BottomSheetKey, ChatMessage, ConnectionPhase, HistoryRow, LeaderboardPayload, MaxBidIntent, MaxBidPhase, OrderRow, PaymentPhase, PendingBidRequest, ProductQAAnswer, RecoveryPhase, ResultSheetKind, Scenario, SnapshotResponse, SoundCapability, SystemMessage, WSTicketResponse } from './domain';
-import { createAudioContext, createClientBidID, demoProductImageURL, demoUserID, deriveCountdown, deriveCountdownPhase, ensureDemoSession, extensionCopyFromEvent, formatCents, heatSnapshot, isBidConfirmationPending, isCountdownExpired, isDangerousActionDisabled, isEngineRejected, isTestMatrixEnabled, maxBidErrorCopy, maxBidStatusCopy, playCountdownTone, playCueTone, readJSON, rejectCopy, responseServerTimeMS, retryAfterMS, retryAfterMSFromHeaders, roomIDFromPath, scenarios, selectEntryAuction, vibrateCountdownPhase, vibratePattern, visibleRoomAuctions } from './domain';
+import { createAudioContext, createClientBidID, demoProductImageURL, demoUserID, deriveCountdown, deriveCountdownPhase, ensureDemoSession, extensionCopyFromEvent, formatCents, heatSnapshot, isBidConfirmationPending, isCountdownExpired, isDangerousActionDisabled, isEngineRejected, isTestMatrixEnabled, maxBidErrorCopy, maxBidStatusCopy, playCountdownTone, playCueTone, playLayeredCue, readJSON, rejectCopy, responseServerTimeMS, retryAfterMS, retryAfterMSFromHeaders, roomIDFromPath, scenarios, selectEntryAuction, speakSystemMessage, vibrateCountdownPhase, vibratePattern, visibleRoomAuctions } from './domain';
 import { normalizeAtmosphere } from './atmosphere';
 import { reconnectDelayMS } from './realtime';
 import './styles.css';
@@ -104,6 +104,7 @@ function App() {
   const recoveringRef = useRef(false);
   const activeCueRef = useRef<AtmosphereCue | null>(null);
   const countdownCueRef = useRef('');
+  const spokenSystemMessageRef = useRef(0);
 
   useEffect(() => {
     lastSeqRef.current = lastSeq;
@@ -257,6 +258,15 @@ function App() {
       if (activeCueRef.current?.id === atmosphereCue.id) activeCueRef.current = null;
     };
   }, [atmosphereCue]);
+
+  useEffect(() => {
+    const latest = systemMessages[0];
+    if (!latest || latest.id <= spokenSystemMessageRef.current) return;
+    spokenSystemMessageRef.current = latest.id;
+    if (!soundEnabledRef.current || soundCapabilityRef.current !== 'ready') return;
+    if (audioContextRef.current) playLayeredCue(audioContextRef.current, 'system_message');
+    speakSystemMessage(latest.body);
+  }, [systemMessages]);
 
   useEffect(() => {
     const cueKey = `${activeAuctionID}:${countdownPhase.phase}:${countdownPhase.beat}`;

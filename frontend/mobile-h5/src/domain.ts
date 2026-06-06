@@ -562,6 +562,47 @@ export function playCountdownTone(ctx: AudioContext, phase: CountdownPhase, beat
   oscillator.stop(ctx.currentTime + (phase === 'hammer' ? 0.24 : 0.14));
 }
 
+export function playLayeredCue(ctx: AudioContext, kind: 'system_message' | 'rank_change' | 'result') {
+  if (document.visibilityState === 'hidden') return;
+  const now = ctx.currentTime;
+  const master = ctx.createGain();
+  master.gain.setValueAtTime(0.0001, now);
+  master.gain.exponentialRampToValueAtTime(kind === 'result' ? 0.085 : 0.052, now + 0.02);
+  master.gain.exponentialRampToValueAtTime(0.0001, now + 0.52);
+  master.connect(ctx.destination);
+  const notes: Record<typeof kind, number[]> = {
+    system_message: [660, 880],
+    rank_change: [520, 740, 980],
+    result: [440, 660, 880]
+  };
+  notes[kind].forEach((frequency, index) => {
+    const oscillator = ctx.createOscillator();
+    const gain = ctx.createGain();
+    oscillator.type = index === 0 ? 'triangle' : 'sine';
+    oscillator.frequency.setValueAtTime(frequency, now + index * 0.07);
+    gain.gain.setValueAtTime(0.0001, now + index * 0.07);
+    gain.gain.exponentialRampToValueAtTime(0.045, now + index * 0.07 + 0.018);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + index * 0.07 + 0.18);
+    oscillator.connect(gain);
+    gain.connect(master);
+    oscillator.start(now + index * 0.07);
+    oscillator.stop(now + index * 0.07 + 0.2);
+  });
+}
+
+export function speakSystemMessage(message: string) {
+  if (document.visibilityState === 'hidden') return false;
+  if (!('speechSynthesis' in window) || !('SpeechSynthesisUtterance' in window)) return false;
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(message.slice(0, 48));
+  utterance.lang = 'zh-CN';
+  utterance.rate = 1.05;
+  utterance.pitch = 1.02;
+  utterance.volume = 0.82;
+  window.speechSynthesis.speak(utterance);
+  return true;
+}
+
 export function vibrateCountdownPhase(phase: CountdownPhase, beat = '') {
   if (!('vibrate' in navigator) || isReducedMotionPreferred() || document.visibilityState === 'hidden') return;
   if (phase === 'critical') navigator.vibrate?.(14);

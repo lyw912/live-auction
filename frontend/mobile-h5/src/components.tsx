@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { AlertTriangle, BadgeCheck, Bell, BellOff, CheckCircle2, ChevronUp, Clock3, CreditCard, Flame, Heart, History, Info, MessageCircle, MoreHorizontal, PackageCheck, RefreshCw, Send, ShieldCheck, ShoppingCart, Sparkles, Truck, Trophy, Users, Wifi, WifiOff, X } from 'lucide-react';
 import type { AtmosphereCue } from './atmosphere';
 import type { AuctionItem, AuctionState, AuctionSummary, BottomSheetKey, ChatMessage, ConnectionPhase, CountdownPhase, CountdownPhaseState, HeatSnapshot, HistoryRow, LeaderboardPayload, MaxBidIntent, MaxBidPhase, PaymentPhase, ProductQAAnswer, ResultRecap, ResultSheetKind, Scenario, SoundCapability, SystemMessage } from './domain';
@@ -121,6 +121,7 @@ export function LiveStage({
           <span>{atmosphereCue.detail}</span>
         </div>
       )}
+      <BarrageLayer messages={systemMessages} />
       <div className="video-topbar">
         <div className="host-profile">
           <span className="host-avatar">{roomID.slice(0, 1).toUpperCase()}</span>
@@ -192,6 +193,25 @@ export function LiveStage({
         <button type="button" onClick={onOpenMore} aria-label="更多"><MoreHorizontal size={20} /></button>
       </div>
     </section>
+  );
+}
+
+function BarrageLayer({ messages }: { messages: SystemMessage[] }) {
+  const items = messages.slice(0, 4);
+  if (items.length === 0) return null;
+  return (
+    <div className="system-barrage-layer" aria-label="系统飘屏" aria-live="polite">
+      {items.map((message, index) => (
+        <span
+          className={`system-barrage system-barrage-${message.style || 'steady'}`}
+          key={message.id}
+          style={{ '--barrage-lane': index, '--barrage-delay': `${index * 260}ms` } as React.CSSProperties}
+        >
+          <strong>AI</strong>
+          {message.body}
+        </span>
+      ))}
+    </div>
   );
 }
 export function ChatComposer({
@@ -972,14 +992,7 @@ export function LeaderboardSheet({ activeAuctionID, leaderboard, nextBidCents, o
         <span>{actionCopy.action}</span>
         <em>{actionCopy.freshness}</em>
       </div>
-      {entries.length === 0 ? <p>暂无有效出价</p> : entries.map((entry) => (
-        <div className={`leaderboard-row ${entry.is_current ? 'is-current' : ''}`} key={`${entry.rank}-${entry.user_id}`} data-rank={entry.rank}>
-          <span>{rankBadgeLabel(entry.rank)}</span>
-          <strong>{entry.is_current ? '我' : entry.user_masked}</strong>
-          <em>{formatCents(entry.amount_cents)}</em>
-          <small>{entry.bid_count} 口</small>
-        </div>
-      ))}
+      {entries.length === 0 ? <p>暂无有效出价</p> : <LeaderboardRows entries={entries} />}
     </div>
   );
 }
@@ -1045,17 +1058,66 @@ export function LeaderboardPanel({
         {(leaderboard?.entries ?? []).length === 0 ? (
           <p>暂无有效出价</p>
         ) : (
-          leaderboard?.entries?.map((entry) => (
-            <div className={`leaderboard-row ${entry.is_current ? 'is-current' : ''}`} key={`${entry.rank}-${entry.user_id}`} data-rank={entry.rank}>
-              <span>{rankBadgeLabel(entry.rank)}</span>
-              <strong>{entry.is_current ? '我' : entry.user_masked}</strong>
-              <em>{formatCents(entry.amount_cents)}</em>
-              <small>{entry.bid_count} 口</small>
-            </div>
-          ))
+          <LeaderboardRows entries={leaderboard?.entries ?? []} />
         )}
       </div>
     </section>
+  );
+}
+
+function LeaderboardRows({ entries }: { entries: NonNullable<LeaderboardPayload['entries']> }) {
+  const rowRefs = useRef(new Map<string, HTMLDivElement>());
+  const previousRectsRef = useRef(new Map<string, DOMRect>());
+  const listKey = useMemo(() => entries.map((entry) => `${entry.user_id}:${entry.rank}:${entry.amount_cents}:${entry.bid_count}`).join('|'), [entries]);
+
+  useLayoutEffect(() => {
+    const previousRects = previousRectsRef.current;
+    const nextRects = new Map<string, DOMRect>();
+    rowRefs.current.forEach((node, key) => {
+      const next = node.getBoundingClientRect();
+      nextRects.set(key, next);
+      const previous = previousRects.get(key);
+      if (!previous) {
+        node.animate([
+          { opacity: 0, transform: 'translate3d(10px, 0, 0)' },
+          { opacity: 1, transform: 'translate3d(0, 0, 0)' }
+        ], { duration: 180, easing: 'cubic-bezier(.2,.8,.2,1)' });
+        return;
+      }
+      const deltaY = previous.top - next.top;
+      if (Math.abs(deltaY) > 1) {
+        node.animate([
+          { transform: `translate3d(0, ${deltaY}px, 0)` },
+          { transform: 'translate3d(0, 0, 0)' }
+        ], { duration: 260, easing: 'cubic-bezier(.2,.8,.2,1)' });
+      }
+    });
+    previousRectsRef.current = nextRects;
+  }, [listKey]);
+
+  return (
+    <>
+      {entries.map((entry) => {
+        const key = entry.user_id || `${entry.rank}-${entry.amount_cents}`;
+        return (
+          <div
+            className={`leaderboard-row ${entry.is_current ? 'is-current' : ''}`}
+            key={key}
+            data-rank={entry.rank}
+            data-flip-key={key}
+            ref={(node) => {
+              if (node) rowRefs.current.set(key, node);
+              else rowRefs.current.delete(key);
+            }}
+          >
+            <span>{rankBadgeLabel(entry.rank)}</span>
+            <strong>{entry.is_current ? '我' : entry.user_masked}</strong>
+            <em>{formatCents(entry.amount_cents)}</em>
+            <small>{entry.bid_count} 口</small>
+          </div>
+        );
+      })}
+    </>
   );
 }
 

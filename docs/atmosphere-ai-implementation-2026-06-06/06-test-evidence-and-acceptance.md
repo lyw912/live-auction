@@ -159,6 +159,15 @@ Current 2026-06-06 evidence:
 - Real browser check on 2026-06-06 clicked H5 `问拍品`, asked `起拍价和加价是多少`, and verified the visible answer `起拍价是¥100.00，加价幅度是¥50.00。` with `auction.start_price_display` and `auction.increment_display` provenance. The backend returned a `SUCCEEDED` `product_qa` job from `chat_completions_adapter`.
 - H5 now renders a buyer-safe result recap/share card from public state facts only. It does not call host-only recap APIs and does not expose buyer identity or private max-bid data.
 
+## H5 Atmosphere Interaction Evidence
+
+Current 2026-06-06 evidence:
+
+- `pnpm --filter mobile-h5 build` passed after adding measured FLIP leaderboard rows, system barrage, layered cue audio, and browser TTS helpers.
+- Real browser check on 2026-06-06 loaded H5 at `5298`, found the `.system-barrage-layer`, and saved screenshot evidence to `docs/atmosphere-ai-implementation-2026-06-06/evidence/h5-barrage-flip-2026-06-06.png`.
+- The barrage layer renders actual `auction_system_messages` content only; it does not synthesize fake heat, fake viewers, or decorative inactive controls.
+- FLIP row animation uses measured DOM positions and Web Animations; `prefers-reduced-motion` disables barrage animation and leaderboard row transitions.
+
 ## Commands Run On 2026-06-06
 
 ```bash
