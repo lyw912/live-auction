@@ -8,6 +8,11 @@ import type { Auction, AuctionAISettings, AuctionRecap, AuthUser, FlightRecorder
 import { activeAuction, auctionStatusLabel, createRuleDraft, defaultRoomID, depositPreview, ensureDemoSession, liveHealthSummary, monitorQuery, narratingAuction, readJSON, rulePayload, signalCopy, sortedAuctions, validateRule } from './domain';
 import './styles.css';
 
+function auctionDisplayName(auction?: Auction) {
+  if (!auction) return '未选择拍品';
+  return auction.item?.title ?? auction.item_id ?? '未命名拍品';
+}
+
 function App() {
   const [items, setItems] = useState<Item[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
@@ -664,7 +669,7 @@ function App() {
                 <h1>拍品管理</h1>
                 <p>上架拍品并配置冻结前竞拍规则；开拍和取消进入竞拍页处理。</p>
               </div>
-              <span>{selectedAuction ? `当前选中 ${selectedAuction.id}` : '未选中竞拍'}</span>
+              <span>{selectedAuction ? `当前选中「${auctionDisplayName(selectedAuction)}」` : '未选中竞拍'}</span>
             </div>
             <InventoryLotsPanel
               auctions={auctions}
@@ -706,7 +711,7 @@ function App() {
                 <h1>竞拍控场</h1>
                 <p>选择队列中的拍品，执行排期、开拍、取消、讲解和实时氛围演示。</p>
               </div>
-              <span>{pinnedActiveAuction ? `${auctionStatusLabel(pinnedActiveAuction.status)} ${pinnedActiveAuction.id}` : '当前无开拍中拍品'}</span>
+              <span>{pinnedActiveAuction ? `${auctionStatusLabel(pinnedActiveAuction.status)}「${auctionDisplayName(pinnedActiveAuction)}」` : '当前无开拍中拍品'}</span>
             </div>
             <div className="command-center" data-testid="pc-command-center">
               <AuctionQueue

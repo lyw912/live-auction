@@ -465,12 +465,12 @@ test('PC auction queue pins active auction and explains active and narrating con
   await expect(page.getByTestId('queue-group-active').getByText('当前直播主拍品')).toBeVisible();
   await page.getByTestId('auction-queue').getByText('银壶').click();
   await expect(page.getByTestId('auction-control-summary').getByRole('button', { name: '开拍' })).toBeDisabled();
-  await expect(page.getByText(/房间已有开拍中的拍品 auc_live/)).toBeVisible();
-  await expect(page.getByTestId('queue-group-scheduled').getByText(/需先处理开拍中拍品 auc_live/)).toBeVisible();
+  await expect(page.getByText(/房间已有开拍中的拍品「青瓷手作茶盏」/)).toBeVisible();
+  await expect(page.getByTestId('queue-group-scheduled').getByText(/需先处理「青瓷手作茶盏」/)).toBeVisible();
   await page.getByTestId('auction-queue').getByText('紫砂壶').click();
   await expect(page.getByTestId('auction-control-summary').getByRole('button', { name: '开始讲解' })).toBeDisabled();
-  await expect(page.getByTestId('auction-control-summary').getByText(/讲解中拍品为 auc_live/)).toBeVisible();
-  await expect(page.getByTestId('queue-group-draft').getByText(/讲解中拍品为 auc_live/)).toBeVisible();
+  await expect(page.getByTestId('auction-control-summary').getByText(/讲解中拍品为「青瓷手作茶盏」/)).toBeVisible();
+  await expect(page.getByTestId('queue-group-draft').getByText(/讲解中「青瓷手作茶盏」/)).toBeVisible();
 });
 
 test('PC creates item and auction through backend upload and create APIs', async ({ page }) => {

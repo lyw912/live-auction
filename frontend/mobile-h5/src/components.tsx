@@ -85,10 +85,23 @@ export function LiveStage({
   const connectionCopy = connectionPhase === 'connected'
     ? '已连接'
     : connectionPhase === 'recovering'
-      ? '同步中'
+      ? '正在同步'
       : connectionPhase === 'connecting'
         ? '连接中'
         : '已断开';
+  const roomCopy = roomID === 'room_main'
+    ? '竞拍专场'
+    : roomID.replace(/^room[_-]?/i, '专场 ');
+  const stageStatusCopy = scenario.stale
+    ? '正在同步价格'
+    : scenario.status === 'ACTIVE'
+      ? heat.source === 'leaderboard' ? `有效出价 ${heat.acceptedBidderCount} 人` : '等待有效出价'
+      : auctionStatusLabel(scenario.status);
+  const floatingActionCopy = scenario.sold
+    ? '查看结果'
+    : scenario.status === 'ACTIVE' && !scenario.ctaDisabled
+      ? `出价 ${formatCents(nextBidCents)}`
+      : '看拍品信息';
 
   return (
     <section
@@ -127,7 +140,7 @@ export function LiveStage({
       <div className="video-topbar">
         <div className="host-profile">
           <span className="host-avatar">{roomID.slice(0, 1).toUpperCase()}</span>
-          <span><strong>竞拍直播间</strong><em>本场直播</em></span>
+          <span><strong>{roomCopy}</strong><em>正在直播</em></span>
           <button type="button" className={followed ? 'is-followed' : ''} onClick={onToggleFollow}>{followed ? '已关注' : '关注'}</button>
         </div>
         <span className="viewer-count avatar-stack" title="真实竞价热度，不展示虚构观看人数"><Users size={13} /> 近30秒 {heat.activeBidders30s} 人</span>
@@ -146,7 +159,7 @@ export function LiveStage({
       <div className="stage-safe-zone">
         <div className="live-topic-row" aria-label="live-topic">
           <span>{auctionStatusLabel(scenario.status)}</span>
-          <span>{heat.source === 'leaderboard' ? `有效出价 ${heat.acceptedBidderCount} 人` : '热度同步中'}</span>
+          <span>{stageStatusCopy}</span>
         </div>
         {proofChips.length > 0 && <div className="proof-chip-row" aria-label="product-proof">
           {proofChips.map((chip) => (
@@ -188,7 +201,7 @@ export function LiveStage({
             <small data-testid="floating-auction-status">{auctionStatusLabel(scenario.status)} · {connectionCopy}</small>
           </span>
         </span>
-        <span className="floating-product-action">{scenario.ctaDisabled && !scenario.winner ? '看详情' : `出价 ${formatCents(nextBidCents)}`}</span>
+        <span className="floating-product-action">{floatingActionCopy}</span>
       </button>
       <div className="live-action-rail" aria-label="live-actions">
         <button type="button" onClick={onOpenProducts} aria-label="商品列表"><ShoppingCart size={20} /><span>{queuedCount + 1}</span></button>
@@ -218,6 +231,33 @@ function BarrageLayer({ messages }: { messages: SystemMessage[] }) {
     </div>
   );
 }
+
+function buyerHistoryStatus(row: HistoryRow) {
+  const status = String(row.result ?? row.status ?? '');
+  if (status.includes('ACCEPT') || status.includes('LEADING')) return '已出价成功';
+  if (status.includes('REJECT') || status.includes('LOW')) return '未达到有效出价';
+  if (status.includes('PENDING')) return '确认中';
+  if (status.includes('SOLD')) return '已成交';
+  return '已记录';
+}
+
+function buyerOrderStatus(status: string) {
+  switch (status) {
+    case 'ORDER_PENDING':
+    case 'PAYMENT_INITIATED':
+      return '待支付';
+    case 'PAID':
+      return '已支付';
+    case 'ORDER_EXPIRED':
+    case 'EXPIRED':
+      return '已超时';
+    case 'FAILED':
+      return '处理失败';
+    default:
+      return '等待同步';
+  }
+}
+
 export function ChatComposer({
   chatDraft,
   chatSending,
@@ -544,12 +584,10 @@ export function AuctionStatePanel({
         {scenario.cta}
       </button>
       <div className="dock-shortcuts" aria-label="bid-dock-shortcuts">
-        <button type="button" onClick={() => onOpenSheet('products')}>商品</button>
-        <button type="button" onClick={() => onOpenSheet('details')}>规则</button>
+        <button type="button" onClick={() => onOpenSheet('details')}>拍品与规则</button>
+        <button type="button" onClick={() => onOpenSheet('leaderboard')}>出价榜</button>
         <button type="button" onClick={() => onOpenSheet('maxBid')}>自动加价</button>
-        <button type="button" onClick={() => onOpenSheet('leaderboard')}>榜单</button>
-        <button type="button" onClick={() => onOpenSheet('history')}>历史</button>
-        <button type="button" onClick={() => onOpenSheet('orders')}>订单</button>
+        <button type="button" onClick={() => onOpenSheet('more')}>更多</button>
       </div>
     </section>
   );
@@ -841,7 +879,7 @@ export function BottomSheet({
     products: '本场商品',
     details: '商品与规则',
     maxBid: '自动加价',
-    leaderboard: '实时榜单',
+    leaderboard: '出价榜',
     history: '我的出价',
     orders: '我的订单',
     qa: '拍品问答',
@@ -868,14 +906,10 @@ export function BottomSheet({
         </div>
         <div className="sheet-tabs" role="tablist" aria-label="sheet-tabs">
           {([
-            ['products', '商品'],
-            ['details', '规则'],
-            ['maxBid', '自动'],
-            ['leaderboard', '榜单'],
-            ['history', '历史'],
-            ['orders', '订单'],
-            ['qa', '问答'],
-            ['liveops', '互动'],
+            ['products', '本场'],
+            ['details', '详情'],
+            ['leaderboard', '出价榜'],
+            ['maxBid', '自动加价'],
             ['more', '更多']
           ] as Array<[BottomSheetKey, string]>).map(([key, label]) => (
             <button type="button" role="tab" aria-selected={activeSheet === key} key={key} onClick={() => onOpenSheet(key)}>{label}</button>
@@ -909,8 +943,8 @@ export function BottomSheet({
               historyError={historyError}
               historyLoading={historyLoading}
               onRefresh={onRefreshHistory}
-              getPrimary={(row) => String(row.auction_id ?? row.bid_id ?? '-')}
-              getSecondary={(row) => `${formatCents(Number(row.amount_cents ?? 0))} · ${String(row.result ?? row.status ?? '-')}`}
+              getPrimary={(row) => `出价 ${formatCents(Number(row.amount_cents ?? 0))}`}
+              getSecondary={(row) => buyerHistoryStatus(row)}
             />
           )}
           {activeSheet === 'orders' && (
@@ -921,8 +955,8 @@ export function BottomSheet({
               historyError={historyError}
               historyLoading={historyLoading}
               onRefresh={onRefreshHistory}
-              getPrimary={(row) => String(row.order_id ?? row.auction_id ?? '-')}
-              getSecondary={(row) => `${formatCents(Number(row.amount_cents ?? 0))} · ${String(row.order_status ?? '-')}`}
+              getPrimary={(row) => `订单 ${formatCents(Number(row.amount_cents ?? 0))}`}
+              getSecondary={(row) => buyerOrderStatus(String(row.order_status ?? row.status ?? ''))}
             />
           )}
           {activeSheet === 'qa' && (
@@ -960,6 +994,10 @@ export function BottomSheet({
             <MoreSheet
               followed={followed}
               onClose={onClose}
+              onOpenHistory={() => onOpenSheet('history')}
+              onOpenLiveOps={() => onOpenSheet('liveops')}
+              onOpenOrders={() => onOpenSheet('orders')}
+              onOpenQA={() => onOpenSheet('qa')}
               onToggleFollow={onToggleFollow}
               soundEnabled={soundEnabled}
               onToggleSound={onToggleSound}
@@ -1278,12 +1316,20 @@ function LeaderboardRows({ entries, burstMode = false }: { entries: NonNullable<
 export function MoreSheet({
   followed,
   onClose,
+  onOpenHistory,
+  onOpenLiveOps,
+  onOpenOrders,
+  onOpenQA,
   onToggleFollow,
   soundEnabled,
   onToggleSound
 }: {
   followed: boolean;
   onClose: () => void;
+  onOpenHistory: () => void;
+  onOpenLiveOps: () => void;
+  onOpenOrders: () => void;
+  onOpenQA: () => void;
   onToggleFollow: () => void;
   soundEnabled: boolean;
   onToggleSound: () => void;
@@ -1301,6 +1347,22 @@ export function MoreSheet({
       <button type="button" onClick={onToggleSound}>
         {soundEnabled ? <BellOff size={16} /> : <Bell size={16} />}
         {soundEnabled ? '关闭提示音' : '开启提示音'}
+      </button>
+      <button type="button" onClick={onOpenQA}>
+        <MessageCircle size={16} />
+        拍品问答
+      </button>
+      <button type="button" onClick={onOpenLiveOps}>
+        <Sparkles size={16} />
+        互动福利
+      </button>
+      <button type="button" onClick={onOpenHistory}>
+        <History size={16} />
+        我的出价
+      </button>
+      <button type="button" onClick={onOpenOrders}>
+        <CreditCard size={16} />
+        我的订单
       </button>
       <p>页面只展示真实竞价数据；异常竞拍由商家端处理。</p>
     </div>
@@ -1359,14 +1421,14 @@ export function HistoryPanel({
           empty="暂无出价"
           rows={bidHistory}
           getPrimary={(row) => String(row.auction_id ?? row.bid_id ?? '-')}
-          getSecondary={(row) => `${formatCents(Number(row.amount_cents ?? 0))} · ${String(row.result ?? row.status ?? '-')}`}
+          getSecondary={(row) => buyerHistoryStatus(row)}
         />
         <HistoryList
           title="订单"
           empty="暂无订单"
           rows={orderHistory}
-          getPrimary={(row) => String(row.order_id ?? row.auction_id ?? '-')}
-          getSecondary={(row) => `${formatCents(Number(row.amount_cents ?? 0))} · ${String(row.order_status ?? '-')}`}
+          getPrimary={(row) => `订单 ${formatCents(Number(row.amount_cents ?? 0))}`}
+          getSecondary={(row) => buyerOrderStatus(String(row.order_status ?? row.status ?? ''))}
         />
       </div>
     </section>

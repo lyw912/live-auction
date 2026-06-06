@@ -8,7 +8,7 @@ export function ConsoleNav({ activeTab, onSelect }: { activeTab: string; onSelec
   const rows = [
     { key: 'inventory', label: '拍品', icon: <ClipboardList size={16} /> },
     { key: 'rules', label: '竞拍', icon: <RadioTower size={16} /> },
-    { key: 'health', label: '直播健康', icon: <ShieldCheck size={16} /> },
+    { key: 'health', label: '风险处理', icon: <ShieldCheck size={16} /> },
     { key: 'diagnostics', label: '诊断', icon: <Activity size={16} /> }
   ];
   return (
@@ -28,6 +28,31 @@ export function ConsoleNav({ activeTab, onSelect }: { activeTab: string; onSelec
       </nav>
     </>
   );
+}
+
+function roomDisplayName(roomID: string) {
+  if (!roomID) return '未选择直播间';
+  if (roomID === 'room_main') return '主直播间';
+  if (roomID === 'room_side') return '副直播间';
+  return roomID.replace(/^room[_-]?/i, '直播间 ');
+}
+
+function auctionDisplayName(auction?: Pick<Auction, 'id' | 'item_id' | 'item'>) {
+  if (!auction) return '未选择拍品';
+  return auction.item?.title ?? auction.item_id ?? '未命名拍品';
+}
+
+function draftStatusLabel(status?: string) {
+  switch (status) {
+    case 'SUCCEEDED':
+      return '草稿已生成';
+    case 'FAILED':
+      return '生成失败';
+    case 'PENDING':
+      return '生成中';
+    default:
+      return '等待生成';
+  }
 }
 
 export function InventoryLotsPanel({
@@ -62,7 +87,7 @@ export function InventoryLotsPanel({
                 <span className={`queue-thumb ${auction.item?.image_url ? 'has-media' : ''}`} style={auction.item?.image_url ? { '--queue-thumb-url': `url("${auction.item.image_url}")` } as React.CSSProperties : undefined}>
                   {!auction.item?.image_url && <ImageIcon size={18} />}
                 </span>
-                <strong>{auction.item?.title ?? auction.id}</strong>
+                <strong>{auctionDisplayName(auction)}</strong>
                 <em>{auctionStatusLabel(auction.status)} · {editable ? '规则可编辑' : '规则已冻结'}</em>
               </button>
             );
@@ -98,13 +123,13 @@ export function HealthRibbon({
   return (
     <section className="health-ribbon" data-testid="health-ribbon">
       <div className="ribbon-room">
-        <strong>{roomID}</strong>
+        <strong>{roomDisplayName(roomID)}</strong>
         <span>当前时间 {new Date(now).toLocaleTimeString()}</span>
       </div>
       <div className="ribbon-metrics" data-testid="health-ribbon-status" role="status" aria-live="polite">
         <span><Wifi size={15} /> {recoveryLabel}</span>
-        <span><Database size={15} /> 待推送 {monitorCount(monitor.outbox)} · 最久 {retryAgeMS}ms</span>
-        <span><Clock3 size={15} /> 定时任务 {monitorCount(monitor.scheduler)}</span>
+        <span><Database size={15} /> 待同步 {monitorCount(monitor.outbox)} · 最久 {retryAgeMS}ms</span>
+        <span><Clock3 size={15} /> 待执行 {monitorCount(monitor.scheduler)}</span>
         <span><AlertTriangle size={15} /> 异常 {monitorCount(monitor.anomalies)}</span>
       </div>
       <Space>
@@ -114,8 +139,8 @@ export function HealthRibbon({
           value={roomID}
           onChange={(event) => onRoomChange(event.currentTarget.value)}
         >
-          {rooms.length === 0 ? <option value={roomID}>{roomID}</option> : rooms.map((room) => (
-            <option key={room.id} value={room.id}>{room.id}</option>
+          {rooms.length === 0 ? <option value={roomID}>{roomDisplayName(roomID)}</option> : rooms.map((room) => (
+            <option key={room.id} value={room.id}>{roomDisplayName(room.id)}</option>
           ))}
         </select>
         <Button type="primary" icon={<RefreshCw size={16} />} loading={loading} onClick={onRefresh}>刷新</Button>
@@ -156,7 +181,7 @@ export function ItemCreatePanel({
       </div>
       {listingDraft ? (
         <div className="ai-draft-strip" data-testid="listing-draft-strip">
-          <span>{listingDraft.provider}/{listingDraft.model}</span>
+          <span>{draftStatusLabel(listingDraft.status)}</span>
           <strong>{draftTitle ?? '草稿已生成'}</strong>
           <Button size="mini" onClick={onApplyListingDraft} disabled={listingDraft.status !== 'SUCCEEDED'}>应用到表单</Button>
         </div>
@@ -165,8 +190,8 @@ export function ItemCreatePanel({
         <Form.Item label="标题">
           <Input aria-label="item-title" value={itemDraft.title} onChange={(value) => onDraftChange((current) => ({ ...current, title: value }))} />
         </Form.Item>
-        <Form.Item label="图片 URL">
-          <Input aria-label="item-image-url" value={itemDraft.imageURL} onChange={(value) => onDraftChange((current) => ({ ...current, imageURL: value }))} prefix={<Upload size={14} />} />
+        <Form.Item label="图片地址">
+          <Input aria-label="item-image-url" value={itemDraft.imageURL} onChange={(value) => onDraftChange((current) => ({ ...current, imageURL: value }))} prefix={<Upload size={14} />} placeholder="可粘贴图片地址，也可直接上传图片" />
         </Form.Item>
         <Form.Item label="上传图片文件">
           <input
@@ -234,7 +259,7 @@ export function AuctionCommandPanel({
             <Button disabled={selectedAuction.status !== 'SCHEDULED'} onClick={() => onAction('unschedule')}>撤回排期</Button>
             <Button disabled={!canStart} icon={<Play size={14} />} onClick={() => onAction('start')}>开拍</Button>
             <Button disabled={isTerminal} status="danger" icon={<Square size={14} />} onClick={() => {
-              Modal.confirm({ title: '确认取消竞拍', content: selectedAuction.id, onOk: () => onAction('cancel') });
+              Modal.confirm({ title: '确认取消竞拍', content: auctionDisplayName(selectedAuction), onOk: () => onAction('cancel') });
             }}>取消</Button>
             <Button disabled={!canNarrate} onClick={() => onAction('narrate-start')}>开始讲解</Button>
             <Button disabled={!selectedAuction.is_narrating} onClick={() => onAction('narrate-stop')}>停止讲解</Button>
@@ -242,10 +267,10 @@ export function AuctionCommandPanel({
           <div className="action-guardrail">
             {selectedAuction.status === 'DRAFT' && '待完善状态可编辑规则并排期；排期后会锁定买家预期，避免开拍前临时改价。'}
             {selectedAuction.status === 'SCHEDULED' && !activeConflict && '已排期后价格规则会冻结；如需修改，先撤回排期，再改规则并重新排期。'}
-            {selectedAuction.status === 'SCHEDULED' && activeConflict && `房间已有开拍中的拍品 ${activeAuction?.id}；同一房间只能有一个开拍中拍品，需先结束或取消当前竞拍。`}
+            {selectedAuction.status === 'SCHEDULED' && activeConflict && `房间已有开拍中的拍品「${auctionDisplayName(activeAuction)}」；同一房间只能有一个开拍中拍品，需先结束或取消当前竞拍。`}
             {selectedAuction.status === 'ACTIVE' && '开拍中只允许切换讲解或带原因取消，不能修改价格规则。'}
             {isTerminal && '终态竞拍不可再操作，订单和诊断保留可追溯记录。'}
-            {selectedAuction.status !== 'SCHEDULED' && narratingConflict && `讲解中拍品为 ${narratingAuction?.id}；切换讲解前需先停止当前讲解。`}
+            {selectedAuction.status !== 'SCHEDULED' && narratingConflict && `讲解中拍品为「${auctionDisplayName(narratingAuction)}」；切换讲解前需先停止当前讲解。`}
           </div>
         </>
       ) : <div className="empty-state">暂无可控制竞拍</div>}
@@ -371,8 +396,8 @@ export function QueueCard({
   const activeConflict = Boolean(active && active.id !== auction.id);
   const narratingConflict = Boolean(narrating && narrating.id !== auction.id);
   const constraints: string[] = [];
-  if (auction.status === 'SCHEDULED' && activeConflict) constraints.push(`需先处理开拍中拍品 ${active?.id}`);
-  if (!auction.is_narrating && narratingConflict) constraints.push(`讲解中拍品为 ${narrating?.id}`);
+  if (auction.status === 'SCHEDULED' && activeConflict) constraints.push(`需先处理「${auctionDisplayName(active)}」`);
+  if (!auction.is_narrating && narratingConflict) constraints.push(`讲解中「${auctionDisplayName(narrating)}」`);
   if (auction.status === 'ACTIVE') constraints.push('当前直播主拍品');
   if (auction.status === 'DRAFT') constraints.push('排期前可编辑');
   return (
@@ -821,15 +846,14 @@ export function AICopilotDrawer({
             <Input aria-label="listing-copilot-category" value={category} onChange={onCategoryChange} />
           </Form.Item>
           <Space>
-            <Button type="primary" icon={<Bot size={15} />} loading={loading} disabled={!notes.trim()} onClick={onGenerate}>生成结构化草稿</Button>
+            <Button type="primary" icon={<Bot size={15} />} loading={loading} disabled={!notes.trim()} onClick={onGenerate}>生成拍品草稿</Button>
             <Button disabled={!draft || draft.status !== 'SUCCEEDED'} onClick={onApply}>应用到表单</Button>
           </Space>
         </Form>
         {draft ? (
           <div className="ai-draft-review">
             <div className="ai-draft-status">
-              <Tag color={draft.status === 'SUCCEEDED' ? 'green' : draft.status === 'FAILED' ? 'red' : 'gray'}>{draft.status}</Tag>
-              <span>{draft.provider}/{draft.model}</span>
+              <Tag color={draft.status === 'SUCCEEDED' ? 'green' : draft.status === 'FAILED' ? 'red' : 'gray'}>{draftStatusLabel(draft.status)}</Tag>
               <span>{new Date(draft.created_at).toLocaleString()}</span>
             </div>
             {draft.error_message ? <div className="risk-hint">{draft.error_message}</div> : null}
@@ -899,7 +923,7 @@ export function RuleEditor({
   ];
   return (
     <div className="rule-panel rule-wizard" data-testid="seller-rule-wizard">
-      <h2>规则 {selectedAuction ? selectedAuction.id : ''}</h2>
+      <h2>竞拍规则</h2>
       <div className="wizard-steps" aria-label="seller-rule-wizard-steps">
         {steps.map((step) => (
           <div className={`wizard-step ${step.key === 'preview' && !ruleValidation.valid ? 'has-error' : ''}`} key={step.key}>
@@ -1061,7 +1085,7 @@ export function LiveHealthPanel({
     }
     Modal.confirm({
       title: signalCopy(signalTypeValue),
-      content: `目标竞拍 ${active.id}。该操作会写入 system_control_signals，由后台 worker 审计处理。`,
+      content: `目标竞拍「${auctionDisplayName(active)}」。执行后会记录处置原因并进入后台审计。`,
       okText: '确认执行',
       cancelText: '取消',
       onOk: () => sendSignal(signalTypeValue, 'auction', active.id, reason, {
@@ -1201,18 +1225,18 @@ export function LiveHealthPanel({
         <div className="health-panel note-panel">
           <div className="health-panel-head">
             <span><ClipboardList size={15} /> 主动事件</span>
-            <strong>audit trail</strong>
+            <strong>处置记录</strong>
           </div>
           <div className="note-target">
             <select className="native-input" value={noteTarget} onChange={(event) => setNoteTarget(event.currentTarget.value as 'auction' | 'room')}>
               <option value="auction">当前竞拍</option>
               <option value="room">当前直播间</option>
             </select>
-            <code>{targetID ?? '-'}</code>
+            <span title={targetID ?? undefined}>{noteTarget === 'auction' ? '记录到当前竞拍' : '记录到当前直播间'}</span>
           </div>
           <Input.TextArea
             autoSize={{ minRows: 4, maxRows: 6 }}
-            placeholder="记录商家侧观察、客服反馈、人工处置原因。会写入 system_control_signals。"
+            placeholder="记录商家侧观察、客服反馈或人工处置原因，便于复盘。"
             value={note}
             onChange={setNote}
           />
@@ -1355,16 +1379,16 @@ export function DiagnosticsPanel({
     <section className="band diagnostics" data-testid="diagnostics">
       <div className="section-title">
         <h2>诊断</h2>
-        <span><Database size={16} /> API</span>
+        <span><Database size={16} /> 运维排查信息</span>
       </div>
       <div className="engine-diagnostics" data-testid="redis-engine-summary">
-        <span><RadioTower size={14} /> redis_ledger</span>
-        <span>pending Redis {engineSummary.pending_redis_decisions}</span>
-        <span>append {engineSummary.append_success_count}/{engineSummary.append_failure_count}/{engineSummary.append_unknown_count}</span>
-        <span>settlement {engineSummary.pending_settlements}/{engineSummary.failed_settlements}</span>
-        <span>lag max {engineSummary.settlement_lag_max_ms}ms</span>
-        <span>recovery RTO {engineSummary.last_recovery_rto_ms ?? '-'}ms {engineSummary.last_recovery_status ?? ''}</span>
-        <span>paused {engineSummary.paused_auctions}</span>
+        <span><RadioTower size={14} /> 出价确认链路</span>
+        <span>待确认 {engineSummary.pending_redis_decisions}</span>
+        <span>写入结果 {engineSummary.append_success_count}/{engineSummary.append_failure_count}/{engineSummary.append_unknown_count}</span>
+        <span>待入账 {engineSummary.pending_settlements}/{engineSummary.failed_settlements}</span>
+        <span>最长延迟 {engineSummary.settlement_lag_max_ms}ms</span>
+        <span>最近恢复 {engineSummary.last_recovery_rto_ms ?? '-'}ms {engineSummary.last_recovery_status ?? ''}</span>
+        <span>暂停中 {engineSummary.paused_auctions}</span>
         <span>{latestAppendLabel}</span>
       </div>
       <div className="monitor-filter" aria-label="monitor-filter">
@@ -1375,21 +1399,21 @@ export function DiagnosticsPanel({
           onChange={(event) => onFilterChange((current) => ({ ...current, type: event.currentTarget.value }))}
         >
           <option value="">全部异常</option>
-          <option value="AUTH_SESSION_EXPIRED">AUTH_SESSION_EXPIRED</option>
-          <option value="ACL_FORBIDDEN">ACL_FORBIDDEN</option>
-          <option value="RATE_LIMIT_REDIS_DOWN">RATE_LIMIT_REDIS_DOWN</option>
-          <option value="BID_AUCTION_TOO_HOT">BID_AUCTION_TOO_HOT</option>
-          <option value="RATE_LIMITED">RATE_LIMITED</option>
-          <option value="PAYMENT_WEBHOOK_INVALID_SIGNATURE">PAYMENT_WEBHOOK_INVALID_SIGNATURE</option>
-          <option value="PAYMENT_RECONCILE_MISMATCH">PAYMENT_RECONCILE_MISMATCH</option>
+          <option value="AUTH_SESSION_EXPIRED">登录已过期</option>
+          <option value="ACL_FORBIDDEN">无操作权限</option>
+          <option value="RATE_LIMIT_REDIS_DOWN">限流服务异常</option>
+          <option value="BID_AUCTION_TOO_HOT">出价过于密集</option>
+          <option value="RATE_LIMITED">操作过于频繁</option>
+          <option value="PAYMENT_WEBHOOK_INVALID_SIGNATURE">支付回调校验失败</option>
+          <option value="PAYMENT_RECONCILE_MISMATCH">支付对账不一致</option>
         </select>
-        <input aria-label="monitor-auction-id" data-testid="monitor-auction-id" className="native-input" placeholder="auction_id" value={monitorFilter.auctionID} onChange={(event) => onFilterChange((current) => ({ ...current, auctionID: event.currentTarget.value }))} />
-        <input aria-label="monitor-user-id" data-testid="monitor-user-id" className="native-input" placeholder="user_id" value={monitorFilter.userID} onChange={(event) => onFilterChange((current) => ({ ...current, userID: event.currentTarget.value }))} />
-        <input aria-label="monitor-trace-id" data-testid="monitor-trace-id" className="native-input" placeholder="trace_id" value={monitorFilter.traceID} onChange={(event) => onFilterChange((current) => ({ ...current, traceID: event.currentTarget.value }))} />
+        <input aria-label="monitor-auction-id" data-testid="monitor-auction-id" className="native-input" placeholder="拍品编号" value={monitorFilter.auctionID} onChange={(event) => onFilterChange((current) => ({ ...current, auctionID: event.currentTarget.value }))} />
+        <input aria-label="monitor-user-id" data-testid="monitor-user-id" className="native-input" placeholder="用户编号" value={monitorFilter.userID} onChange={(event) => onFilterChange((current) => ({ ...current, userID: event.currentTarget.value }))} />
+        <input aria-label="monitor-trace-id" data-testid="monitor-trace-id" className="native-input" placeholder="排查编号" value={monitorFilter.traceID} onChange={(event) => onFilterChange((current) => ({ ...current, traceID: event.currentTarget.value }))} />
       </div>
       <Tabs defaultActiveTab="auctions">
         <Tabs.TabPane key="auctions" title="竞拍状态"><MonitorTable payload={monitor.auctions} empty="暂无竞拍诊断数据" sourceKey="auction_id" onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
-        <Tabs.TabPane key="redisEngine" title="热引擎"><MonitorTable payload={monitor.redisEngine} empty="暂无热引擎数据" sourceKey="auction_id" onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
+        <Tabs.TabPane key="redisEngine" title="出价确认"><MonitorTable payload={monitor.redisEngine} empty="暂无出价确认数据" sourceKey="auction_id" onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
         <Tabs.TabPane key="rejects" title="无效出价"><MonitorTable payload={monitor.rejects} empty="暂无拒绝出价" sourceKey="trace_id" icon={<AlertTriangle size={16} />} onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
         <Tabs.TabPane key="recovery" title="恢复记录"><MonitorTable payload={monitor.recovery} empty="暂无恢复数据" sourceKey="room_id" onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>
         <Tabs.TabPane key="anomalies" title="异常"><MonitorTable payload={monitor.anomalies} empty="暂无异常" sourceKey="id" icon={<AlertTriangle size={16} />} onOpenFlightRecorder={onOpenFlightRecorder} /></Tabs.TabPane>

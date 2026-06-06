@@ -1396,17 +1396,20 @@ test('H5 renders bid and order history from user APIs', async ({ page }) => {
 
   await page.goto('/');
   await openBidPanel(page);
-  await page.getByLabel('bid-dock-shortcuts').getByRole('button', { name: '历史' }).click();
+  await page.getByLabel('bid-dock-shortcuts').getByRole('button', { name: '更多' }).click();
   const historySheet = page.getByTestId('bottom-sheet');
   await expect(historySheet).toBeVisible();
+  await historySheet.getByRole('button', { name: '我的出价' }).click();
   await historySheet.getByRole('button', { name: /刷新/ }).click();
-  await expect(historySheet.getByText('auc_live')).toHaveCount(2);
-  await expect(historySheet.getByText('¥450.00 · ACCEPTED')).toBeVisible();
-  await expect(historySheet.getByText('¥400.00 · OUTBID')).toBeVisible();
+  await expect(historySheet.getByText('出价 ¥450.00')).toBeVisible();
+  await expect(historySheet.getByText('已出价成功')).toBeVisible();
+  await expect(historySheet.getByText('出价 ¥400.00')).toBeVisible();
+  await expect(historySheet.getByText('已记录')).toBeVisible();
 
-  await historySheet.getByRole('tab', { name: '订单' }).click();
-  await expect(historySheet.getByText('ord_hist_1')).toBeVisible();
-  await expect(historySheet.getByText('¥600.00 · PAID')).toBeVisible();
+  await historySheet.getByRole('tab', { name: '更多' }).click();
+  await historySheet.getByRole('button', { name: '我的订单' }).click();
+  await expect(historySheet.getByText('订单 ¥600.00')).toBeVisible();
+  await expect(historySheet.getByText('已支付')).toBeVisible();
 });
 
 test('H5 bottom sheets open close and keep the primary bid CTA singular', async ({ page }) => {
@@ -1609,15 +1612,18 @@ test('H5 bottom sheet history and orders use existing user APIs', async ({ page 
 
   await page.goto('/');
   await openBidPanel(page);
-  await page.getByLabel('bid-dock-shortcuts').getByRole('button', { name: '历史' }).click();
+  await page.getByLabel('bid-dock-shortcuts').getByRole('button', { name: '更多' }).click();
   const sheet = page.getByTestId('bottom-sheet');
+  await sheet.getByRole('button', { name: '我的出价' }).click();
   await sheet.getByRole('button', { name: /刷新/ }).click();
-  await expect(sheet.getByText('¥450.00 · ACCEPTED')).toBeVisible();
+  await expect(sheet.getByText('出价 ¥450.00')).toBeVisible();
+  await expect(sheet.getByText('已出价成功')).toBeVisible();
   await expect(page.getByTestId('bid-cta')).toHaveCount(1);
 
-  await sheet.getByRole('tab', { name: '订单' }).click();
-  await expect(sheet.getByText('ord_sheet_1')).toBeVisible();
-  await expect(sheet.getByText('¥600.00 · ORDER_PENDING')).toBeVisible();
+  await sheet.getByRole('tab', { name: '更多' }).click();
+  await sheet.getByRole('button', { name: '我的订单' }).click();
+  await expect(sheet.getByText('订单 ¥600.00')).toBeVisible();
+  await expect(sheet.getByText('待支付')).toBeVisible();
   await expect(page.getByTestId('bid-cta')).toBeVisible();
 });
 
@@ -1869,7 +1875,7 @@ test('H5 leaderboard sheet shows action metrics without moving the bid CTA', asy
   await page.goto('/');
   await openBidPanel(page);
   const ctaBefore = await page.getByTestId('bid-cta').boundingBox();
-  await page.getByLabel('bid-dock-shortcuts').getByRole('button', { name: '榜单' }).click();
+  await page.getByLabel('bid-dock-shortcuts').getByRole('button', { name: '出价榜' }).click();
   await expect(page.getByTestId('leaderboard-sheet')).toContainText('第 2 名 · 差 ¥50.00');
   await expect(page.getByTestId('leaderboard-sheet')).toContainText('下一口 ¥400.00');
   await expect(page.getByTestId('leaderboard-sheet')).toContainText('近30秒 3 口');
