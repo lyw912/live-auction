@@ -108,8 +108,10 @@ Assertions:
 Current 2026-06-06 evidence:
 
 - `TestAICommentarySystemMessagesSentinelRecapAndProductQA` passed for commentary creation and system-message readback.
+- The same test now verifies automatic commentary creation through `CreateAutoCommentary`, including source-seq dedupe and `auto_generated` safety marking.
 - PC Playwright MCP clicked `生成解说`; Live Assist showed a generated message with source seq and factual price.
 - H5 Playwright MCP displayed that AI system message in the live chat overlay.
+- Bid gateway auto-commentary remains non-blocking: accepted/sold bid responses are written first, then a bounded background task writes a system message. This is deterministic/local-template in the current runtime.
 
 ## Sentinel Tests
 
@@ -139,6 +141,7 @@ Current 2026-06-06 evidence:
 
 - `TestAICommentarySystemMessagesSentinelRecapAndProductQA` verifies recap generation and product Q&A from auction facts.
 - H5 Playwright MCP opened the real `问答` sheet and asked `起拍价是多少`; response was `起拍价 ¥100.00` with fact provenance and no hidden-bid leakage.
+- H5 now renders a buyer-safe result recap/share card from public state facts only. It does not call host-only recap APIs and does not expose buyer identity or private max-bid data.
 
 ## Commands Run On 2026-06-06
 
@@ -147,12 +150,19 @@ make backend-migrate-up
 /bin/bash -lc "GOCACHE=/tmp/go-build-cache GOMODCACHE=/tmp/go-mod-cache GOPATH=/tmp/go-path go test ./internal/gateway -run 'TestAI'"
 pnpm build
 pnpm test:frontend:domain
+pnpm --filter mobile-h5 build
+pnpm --filter pc-console build
+/bin/bash -lc "GOCACHE=/tmp/go-build-cache GOMODCACHE=/tmp/go-mod-cache GOPATH=/tmp/go-path go test ./internal/gateway -run 'TestAI|TestPlaceBid'"
+/bin/bash -lc "H5_PORT=5288 PC_PORT=5289 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 pnpm exec playwright test tests/e2e/mobile-h5.spec.ts tests/e2e/atmosphere-engine.spec.ts --project=mobile-h5 --reporter=line -g 'honest heat|bottom sheets open close|official bid hints|countdown|result|leaderboard'"
+/bin/bash -lc "H5_PORT=5288 PC_PORT=5289 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 pnpm exec playwright test tests/e2e/pc-console.spec.ts tests/e2e/pc-console-live.spec.ts --project=pc-console --reporter=line -g 'AI|Live Assist|sentinel|recap|commentary|draft'"
 ```
 
 Notes:
 
 - A non-escalated gateway test run failed because the sandbox blocked local Redis/PostgreSQL sockets; the same targeted AI tests passed with local service access.
 - Browser console noise observed during MCP checks was limited to missing `favicon.ico`.
+- Playwright MCP screenshot/text inspection on 2026-06-06 confirmed the PC AI 场控 panel renders `生成解说`, `检查风控`, `生成复盘`, and `隐藏自动` as usable controls with compact layout.
+- H5 Playwright MCP inspected the real room surface; first-load `401 /api/auth/me` is the expected pre-login probe, and business controls were rendered without fake viewer count.
 
 ## Judge Evidence Packet
 

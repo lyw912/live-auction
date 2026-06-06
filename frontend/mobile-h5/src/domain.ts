@@ -51,6 +51,7 @@ export type ResultSheetKind = 'winner' | 'loser' | 'unsold';
 export type SoundCapability = 'ready' | 'unavailable' | 'blocked';
 export type MaxBidPhase = 'idle' | 'pending' | 'canceling' | 'error';
 export type CountdownPhase = 'normal' | 'hot' | 'critical' | 'hammer' | 'syncing' | 'stale' | 'terminal';
+export type CountdownPhaseState = { phase: CountdownPhase; remainingMS: number | null; beat: string };
 
 export type MaxBidIntent = {
   id: string;
@@ -277,6 +278,15 @@ export type HeatSnapshot = {
   totalAcceptedBids?: number;
   source: 'leaderboard' | 'auction' | 'fallback';
 };
+export type ResultRecap = {
+  title: string;
+  status: string;
+  price: string;
+  winner: string;
+  facts: string[];
+  nextAction: string;
+  shareCopy: string;
+};
 export type WSTicketResponse = {
   ticket?: string;
   expires_in_ms?: number;
@@ -352,7 +362,7 @@ export function deriveCountdownPhase(input: {
   terminal: boolean;
   stale: boolean;
   active: boolean;
-}): { phase: CountdownPhase; remainingMS: number | null; beat: string } {
+}): CountdownPhaseState {
   if (input.terminal) return { phase: 'terminal', remainingMS: null, beat: '' };
   if (input.stale || !input.active) return { phase: 'stale', remainingMS: null, beat: '' };
   const remainingMS = remainingCountdownMS(input.endAt, input.serverTimeMS, input.nowMS, input.serverTimeSyncedAt);
@@ -451,6 +461,13 @@ export function leaderboardActionCopy(payload: LeaderboardPayload | null, fallba
   };
 }
 
+export function rankBadgeLabel(rank: number) {
+  if (rank === 1) return '榜一';
+  if (rank === 2) return '榜二';
+  if (rank === 3) return '榜三';
+  return `第 ${rank} 名`;
+}
+
 export function heatSnapshot(payload: LeaderboardPayload | null, activeAuction?: AuctionSummary): HeatSnapshot {
   if (payload) {
     return {
@@ -525,6 +542,61 @@ export function playCueTone(ctx: AudioContext, kind: AtmosphereCue['kind']) {
   gain.connect(ctx.destination);
   oscillator.start();
   oscillator.stop(ctx.currentTime + 0.18);
+}
+
+export function playCountdownTone(ctx: AudioContext, phase: CountdownPhase, beat = '') {
+  if (document.visibilityState === 'hidden') return;
+  if (!['critical', 'hammer'].includes(phase)) return;
+  const oscillator = ctx.createOscillator();
+  const gain = ctx.createGain();
+  const base = phase === 'hammer' ? 720 : 560;
+  const beatBoost = beat.includes('最后') ? 220 : beat ? 120 : 0;
+  oscillator.type = phase === 'hammer' ? 'triangle' : 'sine';
+  oscillator.frequency.value = base + beatBoost;
+  gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(phase === 'hammer' ? 0.075 : 0.045, ctx.currentTime + 0.012);
+  gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + (phase === 'hammer' ? 0.22 : 0.12));
+  oscillator.connect(gain);
+  gain.connect(ctx.destination);
+  oscillator.start();
+  oscillator.stop(ctx.currentTime + (phase === 'hammer' ? 0.24 : 0.14));
+}
+
+export function vibrateCountdownPhase(phase: CountdownPhase, beat = '') {
+  if (!('vibrate' in navigator) || isReducedMotionPreferred() || document.visibilityState === 'hidden') return;
+  if (phase === 'critical') navigator.vibrate?.(14);
+  if (phase === 'hammer') navigator.vibrate?.(beat.includes('最后') ? [24, 28, 24] : [18, 18, 18]);
+}
+
+export function buildResultRecap(input: {
+  itemTitle: string;
+  kind: 'winner' | 'loser' | 'unsold';
+  terminalPriceCents: number;
+  terminalWinnerID?: string;
+  heat: HeatSnapshot;
+  extendCount?: number;
+  nextTitle?: string;
+}): ResultRecap {
+  const price = formatCents(input.terminalPriceCents);
+  const status = input.kind === 'winner' ? '已拍中' : input.kind === 'loser' ? '已落锤' : '未成交';
+  const winner = input.kind === 'unsold'
+    ? '无成交买家'
+    : input.kind === 'winner'
+      ? '我'
+      : input.terminalWinnerID ? `${input.terminalWinnerID.slice(0, 2)}**` : '领先者';
+  const facts = [
+    input.heat.acceptedBidderCount > 0 ? `${input.heat.acceptedBidderCount} 人有效出价` : '',
+    input.heat.totalAcceptedBids != null ? `${input.heat.totalAcceptedBids} 口有效出价` : '',
+    input.extendCount && input.extendCount > 0 ? `末段延时 ${input.extendCount} 次` : '',
+    input.heat.priceVelocityCentsPerMin > 0 ? `${formatCents(input.heat.priceVelocityCentsPerMin)}/分` : ''
+  ].filter(Boolean);
+  const nextAction = input.kind === 'winner'
+    ? '完成订单支付'
+    : input.nextTitle
+      ? `继续看 ${input.nextTitle}`
+      : '回到商品列表';
+  const shareCopy = `${input.itemTitle} · ${status} · ${price} · ${facts.join(' · ') || '真实竞拍记录'}`;
+  return { title: input.itemTitle, status, price, winner, facts, nextAction, shareCopy };
 }
 
 export async function ensureDemoSession(account: 'host' | 'user') {

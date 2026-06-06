@@ -45,14 +45,14 @@ Use this as the execution board for the atmosphere/AI phase. Keep tasks small en
 
 | ID | Task | Owner area | Acceptance evidence |
 |---|---|---|---|
-| P1-01 | Not done: add hammer ceremony triggered only by server terminal event. | H5 | Required evidence remains missing: local countdown-zero must not celebrate; server terminal sold event must trigger a distinct hammer ceremony. |
-| P1-02 | Not done: add winner/loser/unsold/cancelled ceremony variants. | H5 | Required visual snapshots and state-specific UX remain missing. |
-| P1-03 | Not done: add leaderboard bid count and rank status labels. | H5 | Required component test and mobile screenshot remain missing. |
-| P1-04 | Not done: add FLIP/rank transition animation. | H5 | Required visual/manual trace and layout-shift check remain missing. |
-| P1-05 | Not done: add opt-in critical countdown sound/haptics. | H5 | Current sound/haptic policy tests cover cue opt-in/degradation, but the critical countdown soundbed/haptic escalation requested by the review design is not implemented. |
+| P1-01 | Done with limits: add hammer ceremony triggered only by server terminal event. | H5 | H5 now renders the full result ceremony only from terminal `selected` states (`sold_winner`/`sold_loser`/`ended`); local countdown zero remains `syncing` and cannot create the result card. Focused H5 Playwright result/countdown tests passed on 2026-06-06. |
+| P1-02 | Done with limits: add winner/loser/unsold ceremony variants. | H5 | `ResultSheet` now has winner, loser, and unsold copy plus a share-style recap card in feed mode; cancelled remains a calm terminal state without celebration. Particle effect is capped CSS confetti and disabled by reduced motion CSS. |
+| P1-03 | Done: add leaderboard bid count and rank status labels. | H5 | Leaderboard rows now show `榜一/榜二/榜三/第 N 名` plus `bid_count`; focused H5 Playwright leaderboard tests passed on 2026-06-06. |
+| P1-04 | Done with limits: add rank transition animation. | H5 | Rows now use stable grid dimensions and transform/background transition for rank/current-user changes. This is a lightweight transition, not a full measured FLIP implementation. |
+| P1-05 | Done with limits: add opt-in critical countdown sound/haptics. | H5 | `playCountdownTone`/`vibrateCountdownPhase` trigger only at phase/beat boundary while connected, active, and user sound is enabled; no sound/haptic during recovery, stale, hidden tab, or reduced-motion. It is synthesized tones, not a full sound design asset pack. |
 | P1-06 | Done with limits: add system commentary message stream/provenance. | Backend/H5/PC | `auction_system_messages` stores source, seq, style, facts, safety; PC creates commentary; H5 displays AI system messages. The stream is not yet a full animated system-barrage channel. |
-| P1-07 | Partial: add AI commentator generator with deterministic fallback. | Backend | `TestAICommentarySystemMessagesSentinelRecapAndProductQA` proves message creation with source seq and no hidden max-bid safety. Current behavior is host-triggered/deterministic; it is not automatic event-consumer commentary with rate limits and provider-backed generation. |
-| P1-08 | Deferred: host toggle for AI commentary. | PC/Backend | Current implementation is host-triggered, not automatic; per-auction auto-generation toggle remains future work. |
+| P1-07 | Done with limits: add AI commentator generator with deterministic fallback and automatic decided-event commentary. | Backend | Bid gateway now creates non-blocking auto commentary after accepted/sold decisions; `CreateAutoCommentary` dedupes by auction/source seq and marks `auto_generated`. Targeted gateway AI tests passed on 2026-06-06. This remains deterministic/local-template, not external provider-backed event consumer. |
+| P1-08 | Partial: host toggle for AI commentary visibility. | PC/Backend | PC Live Assist has a real local visibility toggle for auto commentary messages and manual generation remains available. Server-side per-auction auto-generation enable/disable storage/API remains future work. |
 
 ## P2: Trust, Recap, And Optional Live-Ops
 
@@ -61,7 +61,7 @@ Use this as the execution board for the atmosphere/AI phase. Keep tasks small en
 | P2-01 | Done: add deterministic shill/troll sentinel rules. | Backend/PC | `EvaluateSentinel` flags rejected-bid probing, single-bidder push, and sold-unpaid pressure; it never blocks bids automatically. |
 | P2-02 | Done: add sentinel host alert UI. | PC/Backend | Live Assist can run checks and render severity, score, explanation, and recommended action. |
 | P2-03 | Partial: add sentinel explanation. | Backend | Alerts use aggregate features only and expose no private max-bid/user-secret data. This is deterministic explanation, not LLM explanation or advanced shill model. |
-| P2-04 | Partial: add auction recap/highlight generator. | Backend/PC/H5 | Recap job hides buyer identities and appears in PC Live Assist. H5 share-card/highlight rendering remains missing, so the review-design B4 buyer-facing high-light path is not complete. |
+| P2-04 | Done with limits: add auction recap/highlight generator. | Backend/PC/H5 | Backend/PC recap remains host-only; H5 now renders a buyer-safe result recap/share card from public current-state facts only (item, terminal price, masked winner, accepted bidders/bids, next action). It is not video/highlight generation. |
 | P2-05 | Partial: add buyer product Q&A from approved listing facts. | Backend/H5 | H5 Q&A sheet answers from item/rule facts and returns "未提供" when facts are absent; Playwright MCP verified 起拍价 answer. This is fact-only deterministic Q&A, not a full provider-backed AI shopping assistant. |
 | P2-06 | Deferred: explore warm-up/PK mechanics only after compliance review. | Product/H5/Backend | Written rule spec and explicit dark-pattern review are required before code. No warm-up lucky draw, buyer PK progress bar, entry effect, or榜一特效 is implemented. |
 
@@ -70,15 +70,15 @@ Use this as the execution board for the atmosphere/AI phase. Keep tasks small en
 This board must not be read as "all P0-P2 review-design items are complete." Current gaps against `docs/reviews/extreme-bidding-atmosphere-and-ai-judge-review-and-design-2026-06-05.md`:
 
 - P0-A is only partially covered by `P0-05`; heartbeat soundbed, "三二一/going once", and escalating haptics are missing.
-- P1-E victory ceremony is not implemented.
-- P1-F leaderboard 2.0, bid-count/rank labels, FLIP, and WS incremental ranking are not implemented.
-- P1-G sound design 2.0 is not implemented.
-- P1-H is only partially covered by system messages; true barrage animation and full host/AI system-message channel remain missing.
+- P1-E victory ceremony is implemented as a compact H5 result ceremony, but not as a full-screen cinematic/video highlight.
+- P1-F leaderboard 2.0 now covers bid-count and rank labels plus lightweight transitions; WS incremental ranking remains future work.
+- P1-G sound design 2.0 is partially implemented with opt-in synthesized critical/hammer tones and haptics; no asset sound pack/TTS.
+- P1-H is improved with automatic decided-event AI system messages and PC visibility toggle; true barrage animation and server-side per-auction auto toggle remain missing.
 - P2-I/P2-J/P2-K warm-up lucky draw, buyer PK progress bar, entry effects, and榜一 effects are not implemented.
 - B1 Listing Copilot is deterministic/local-template only, not full provider-backed multimodal AI.
-- B2 AI commentary is host-triggered/deterministic, not automatic event-driven provider-backed commentary.
+- B2 AI commentary is automatic for decided bid/sold events and host-triggered for manual prompts, but still deterministic/local-template rather than provider-backed.
 - B3 Sentinel is deterministic aggregate rules only, not LLM explanation or advanced anomaly model.
-- B4 Recap is backend/PC only; H5 share/highlight card remains missing.
+- B4 Recap includes backend/PC host recap plus H5 buyer-safe share/highlight card; generated video/highlight clips remain missing.
 - B5 Q&A is deterministic fact lookup, not full AI导拍客服.
 
 ## AI Provider Gate

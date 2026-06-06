@@ -3,9 +3,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { CheckCircle2, ChevronUp, Radio, RefreshCw } from 'lucide-react';
 import type { AtmosphereCue, AtmosphereInput } from './atmosphere';
-import { AuctionStatePanel, BottomSheet, ChatComposer, ChatPanel, HistoryPanel, LeaderboardPanel, LiveStage, MoreSheet, StateMatrixTabs } from './components';
+import { AuctionStatePanel, BottomSheet, ChatComposer, ChatPanel, LeaderboardPanel, LiveStage, ResultSheet, StateMatrixTabs } from './components';
 import type { AuctionItem, AuctionOverlayMode, AuctionRealtimeEvent, AuctionState, AuctionSummary, AuthUser, BidderRequirement, BidPhase, BidResponse, BottomSheetKey, ChatMessage, ConnectionPhase, HistoryRow, LeaderboardPayload, MaxBidIntent, MaxBidPhase, OrderRow, PaymentPhase, PendingBidRequest, ProductQAAnswer, RecoveryPhase, ResultSheetKind, Scenario, SnapshotResponse, SoundCapability, SystemMessage, WSTicketResponse } from './domain';
-import { createAudioContext, createClientBidID, demoProductImageURL, demoUserID, deriveCountdown, deriveCountdownPhase, ensureDemoSession, extensionCopyFromEvent, formatCents, formatRemaining, heatSnapshot, isBidConfirmationPending, isCountdownExpired, isDangerousActionDisabled, isEngineRejected, isTestMatrixEnabled, leaderboardCopy, maxBidErrorCopy, maxBidStatusCopy, readJSON, rejectCopy, responseServerTimeMS, retryAfterMS, retryAfterMSFromHeaders, roomIDFromPath, scenarios, selectEntryAuction, visibleRoomAuctions, vibratePattern, playCueTone } from './domain';
+import { createAudioContext, createClientBidID, demoProductImageURL, demoUserID, deriveCountdown, deriveCountdownPhase, ensureDemoSession, extensionCopyFromEvent, formatCents, heatSnapshot, isBidConfirmationPending, isCountdownExpired, isDangerousActionDisabled, isEngineRejected, isTestMatrixEnabled, maxBidErrorCopy, maxBidStatusCopy, playCountdownTone, playCueTone, readJSON, rejectCopy, responseServerTimeMS, retryAfterMS, retryAfterMSFromHeaders, roomIDFromPath, scenarios, selectEntryAuction, vibrateCountdownPhase, vibratePattern, visibleRoomAuctions } from './domain';
 import { normalizeAtmosphere } from './atmosphere';
 import { reconnectDelayMS } from './realtime';
 import './styles.css';
@@ -101,6 +101,7 @@ function App() {
   const atmosphereSeenRef = useRef<Set<string>>(new Set());
   const recoveringRef = useRef(false);
   const activeCueRef = useRef<AtmosphereCue | null>(null);
+  const countdownCueRef = useRef('');
 
   useEffect(() => {
     lastSeqRef.current = lastSeq;
@@ -254,6 +255,18 @@ function App() {
       if (activeCueRef.current?.id === atmosphereCue.id) activeCueRef.current = null;
     };
   }, [atmosphereCue]);
+
+  useEffect(() => {
+    const cueKey = `${activeAuctionID}:${countdownPhase.phase}:${countdownPhase.beat}`;
+    if (countdownCueRef.current === cueKey) return;
+    countdownCueRef.current = cueKey;
+    if (countdownPhase.phase !== 'critical' && countdownPhase.phase !== 'hammer') return;
+    if (connectionPhase !== 'connected' || recoveryPhase !== 'idle' || selected !== 'active_bids') return;
+    if (soundEnabledRef.current && audioContextRef.current && soundCapabilityRef.current === 'ready') {
+      playCountdownTone(audioContextRef.current, countdownPhase.phase, countdownPhase.beat);
+    }
+    vibrateCountdownPhase(countdownPhase.phase, countdownPhase.beat);
+  }, [activeAuctionID, connectionPhase, countdownPhase.beat, countdownPhase.phase, recoveryPhase, selected]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1491,7 +1504,7 @@ function App() {
         atmosphereCue={atmosphereCue}
         chatMessages={chatMessages}
         connectionPhase={connectionPhase}
-        countdownPhase={countdownPhase.phase}
+        countdownPhase={countdownPhase}
         countdownCopy={countdownCopy}
         currentUserID={currentUserID}
         followed={followed}
@@ -1519,7 +1532,7 @@ function App() {
         <AuctionStatePanel
           atmosphereCue={atmosphereCue}
           connectionPhase={connectionPhase}
-          countdownPhase={countdownPhase.phase}
+          countdownPhase={countdownPhase}
           countdownCopy={countdownCopy}
           currentPriceCents={currentPriceCents}
           extensionNotice={extensionNotice}
@@ -1545,6 +1558,24 @@ function App() {
           onPrimaryAction={handlePrimaryAction}
         />
       )}
+      {overlayMode === 'feed' && resultSheetKind ? (
+        <ResultSheet
+          activeSheet={activeSheet}
+          heat={heat}
+          item={stageItem}
+          kind={resultSheetKind}
+          nextAuction={nextAuction}
+          orderAmountCents={payableOrderAmountCents}
+          orderID={payableOrderID}
+          paymentPhase={paymentPhase}
+          scenario={scenario}
+          terminalPriceCents={terminalPriceCents || currentPriceCents}
+          terminalWinnerID={terminalWinnerID}
+          userBestCents={leaderboard?.my_best_amount_cents ?? 0}
+          onOpenOrders={() => setActiveSheet(resultSheetKind === 'winner' ? 'orders' : 'history')}
+          onPay={payOrder}
+        />
+      ) : null}
       {showStateMatrix && (
         <StateMatrixTabs selected={selected} onSelect={setSelected} />
       )}

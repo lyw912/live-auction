@@ -1,8 +1,8 @@
 import React, { useEffect } from 'react';
 import { AlertTriangle, BadgeCheck, Bell, BellOff, CheckCircle2, ChevronUp, Clock3, CreditCard, Heart, History, Info, MessageCircle, MoreHorizontal, PackageCheck, RefreshCw, Send, ShieldCheck, ShoppingCart, Sparkles, Truck, Trophy, Users, Wifi, WifiOff, X } from 'lucide-react';
 import type { AtmosphereCue } from './atmosphere';
-import type { AuctionItem, AuctionState, AuctionSummary, BottomSheetKey, ChatMessage, ConnectionPhase, CountdownPhase, HeatSnapshot, HistoryRow, LeaderboardPayload, MaxBidIntent, MaxBidPhase, PaymentPhase, ProductQAAnswer, ResultSheetKind, Scenario, SoundCapability, SystemMessage } from './domain';
-import { demoLiveVideoURL, demoProductImageURL, formatCents, formatClockTime, isDangerousActionDisabled, leaderboardActionCopy, riskActionCopy, scenarios } from './domain';
+import type { AuctionItem, AuctionState, AuctionSummary, BottomSheetKey, ChatMessage, ConnectionPhase, CountdownPhase, CountdownPhaseState, HeatSnapshot, HistoryRow, LeaderboardPayload, MaxBidIntent, MaxBidPhase, PaymentPhase, ProductQAAnswer, ResultRecap, ResultSheetKind, Scenario, SoundCapability, SystemMessage } from './domain';
+import { buildResultRecap, demoLiveVideoURL, demoProductImageURL, formatCents, formatClockTime, isDangerousActionDisabled, leaderboardActionCopy, rankBadgeLabel, riskActionCopy, scenarios } from './domain';
 
 export function LiveStage({
   activeAuctionID,
@@ -37,7 +37,7 @@ export function LiveStage({
   auctions: AuctionSummary[];
   chatMessages: ChatMessage[];
   connectionPhase: ConnectionPhase;
-  countdownPhase: CountdownPhase;
+  countdownPhase: CountdownPhaseState;
   countdownCopy: string;
   currentPriceCents: number;
   currentUserID: string;
@@ -94,6 +94,7 @@ export function LiveStage({
       aria-label="live-stage"
       data-testid="live-stage"
       data-atmosphere-kind={atmosphereCue?.kind ?? 'none'}
+      data-countdown-phase={countdownPhase.phase}
       style={mediaURL ? { '--stage-media-url': `url("${mediaURL}")` } as React.CSSProperties : undefined}
     >
       <video className="live-video-bg" src={videoURL} poster={mediaURL || demoProductImageURL} autoPlay muted loop playsInline aria-hidden="true" />
@@ -164,7 +165,13 @@ export function LiveStage({
           <p>{activeAuctionID || '当前拍品'} · {scenario.countdown ?? countdownCopy}</p>
         </div>
       </div>
-      <HeatMeter heat={heat} countdownPhase={countdownPhase} />
+      {countdownPhase.phase === 'hammer' && countdownPhase.beat && !scenario.stale && !scenario.sold ? (
+        <div className="hammer-beat-layer" data-testid="hammer-beat-layer" aria-live="polite">
+          <span>{countdownPhase.beat}</span>
+          <strong>等待服务端落锤</strong>
+        </div>
+      ) : null}
+      <HeatMeter heat={heat} countdownPhase={countdownPhase.phase} />
       <button className="floating-product-card" type="button" onClick={onOpenBid} data-testid="floating-product-card" aria-label="进入竞拍面板">
         <span className={`floating-thumb ${mediaURL ? 'has-media' : ''}`} style={mediaURL ? { '--floating-media-url': `url("${mediaURL}")` } as React.CSSProperties : undefined}>
           {!mediaURL && <ShoppingCart size={18} />}
@@ -251,7 +258,7 @@ export function AuctionStatePanel({
 }: {
   atmosphereCue: AtmosphereCue | null;
   connectionPhase: ConnectionPhase;
-  countdownPhase: CountdownPhase;
+  countdownPhase: CountdownPhaseState;
   countdownCopy: string;
   currentPriceCents: number;
   extensionNotice: string;
@@ -315,7 +322,7 @@ export function AuctionStatePanel({
       aria-label="auction-state"
       data-dock-state={dockState}
       data-atmosphere-kind={atmosphereCue?.kind ?? 'none'}
-      data-countdown-phase={countdownPhase}
+      data-countdown-phase={countdownPhase.phase}
     >
       <div className="bid-sheet-handle" aria-hidden="true" />
       <div className="bid-sheet-title">
@@ -336,10 +343,10 @@ export function AuctionStatePanel({
           <p className="eyebrow">{scenario.title}</p>
           <h2 data-testid="auction-price" aria-live="polite" aria-atomic="true">{scenario.price}</h2>
         </div>
-        <div className="countdown-row" data-testid="auction-countdown" data-effect={atmosphereCue?.kind === 'extended' ? 'extension-stretch' : 'none'} data-countdown-phase={countdownPhase}>
+        <div className="countdown-row" data-testid="auction-countdown" data-effect={atmosphereCue?.kind === 'extended' ? 'extension-stretch' : 'none'} data-countdown-phase={countdownPhase.phase}>
           <Clock3 size={16} />
           <span>{scenario.countdown ?? countdownCopy}</span>
-          {countdownPhase === 'hammer' && !scenario.stale && !scenario.sold && <strong>落锤窗口</strong>}
+          {countdownPhase.phase === 'hammer' && !scenario.stale && !scenario.sold && <strong>{countdownPhase.beat || '落锤窗口'}</strong>}
           {extensionNotice && !scenario.sold && <strong>{extensionNotice}</strong>}
         </div>
       </div>
@@ -368,6 +375,8 @@ export function AuctionStatePanel({
       ) : null}
       <ResultSheet
         activeSheet={null}
+        heat={undefined}
+        item={item}
         kind={resultSheetKind}
         nextAuction={nextAuction}
         paymentPhase={paymentPhase}
@@ -405,6 +414,8 @@ export function AuctionStatePanel({
 export function ResultSheet({
   activeSheet,
   compact = false,
+  heat,
+  item,
   kind,
   nextAuction,
   orderAmountCents,
@@ -419,6 +430,8 @@ export function ResultSheet({
 }: {
   activeSheet: BottomSheetKey | null;
   compact?: boolean;
+  heat?: HeatSnapshot;
+  item: AuctionItem;
   kind: ResultSheetKind | null;
   nextAuction?: AuctionSummary;
   orderAmountCents: number;
@@ -447,9 +460,18 @@ export function ResultSheet({
     : kind === 'loser'
       ? '本场已落锤'
       : '本场未成交';
+  const recap: ResultRecap | null = heat ? buildResultRecap({
+    itemTitle: item.title ?? scenario.title,
+    kind,
+    terminalPriceCents: orderAmountCents || terminalPriceCents,
+    terminalWinnerID,
+    heat,
+    nextTitle: nextAuction?.item?.title
+  }) : null;
 
   return (
     <section className={`result-sheet ${kind} ${compact ? 'is-compact' : ''}`} data-testid="result-sheet" aria-label={title}>
+      {!compact ? <div className="result-confetti" aria-hidden="true"><span /><span /><span /><span /><span /></div> : null}
       <div className="result-sheet-icon" aria-hidden="true">
         {kind === 'winner' ? <Trophy size={22} /> : kind === 'loser' ? <Clock3 size={22} /> : <AlertTriangle size={22} />}
       </div>
@@ -475,6 +497,18 @@ export function ResultSheet({
           </>
         )}
       </div>
+      {recap ? (
+        <div className="result-recap-card" data-testid="h5-result-recap-card">
+          <span>{recap.status}</span>
+          <strong>{recap.title}</strong>
+          <div>
+            <em>{recap.price}</em>
+            <em>{recap.winner}</em>
+          </div>
+          <p>{recap.facts.length ? recap.facts.join(' · ') : '只展示真实竞拍记录'}</p>
+          <small>{recap.nextAction}</small>
+        </div>
+      ) : null}
       {kind !== 'winner' && nextAuction ? (
         <div className="next-auction-card" data-testid="next-auction-handoff">
           <span>直播间下一件</span>
@@ -856,8 +890,8 @@ export function LeaderboardSheet({ activeAuctionID, leaderboard, nextBidCents, o
         <em>{actionCopy.freshness}</em>
       </div>
       {entries.length === 0 ? <p>暂无有效出价</p> : entries.map((entry) => (
-        <div className={`leaderboard-row ${entry.is_current ? 'is-current' : ''}`} key={`${entry.rank}-${entry.user_id}`}>
-          <span>#{entry.rank}</span>
+        <div className={`leaderboard-row ${entry.is_current ? 'is-current' : ''}`} key={`${entry.rank}-${entry.user_id}`} data-rank={entry.rank}>
+          <span>{rankBadgeLabel(entry.rank)}</span>
           <strong>{entry.is_current ? '我' : entry.user_masked}</strong>
           <em>{formatCents(entry.amount_cents)}</em>
           <small>{entry.bid_count} 口</small>
@@ -929,8 +963,8 @@ export function LeaderboardPanel({
           <p>暂无有效出价</p>
         ) : (
           leaderboard?.entries?.map((entry) => (
-            <div className={`leaderboard-row ${entry.is_current ? 'is-current' : ''}`} key={`${entry.rank}-${entry.user_id}`}>
-              <span>#{entry.rank}</span>
+            <div className={`leaderboard-row ${entry.is_current ? 'is-current' : ''}`} key={`${entry.rank}-${entry.user_id}`} data-rank={entry.rank}>
+              <span>{rankBadgeLabel(entry.rank)}</span>
               <strong>{entry.is_current ? '我' : entry.user_masked}</strong>
               <em>{formatCents(entry.amount_cents)}</em>
               <small>{entry.bid_count} 口</small>

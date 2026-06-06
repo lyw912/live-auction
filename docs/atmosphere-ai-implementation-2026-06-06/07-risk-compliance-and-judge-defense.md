@@ -46,6 +46,7 @@ Commentator:
 
 - sends masked user identity and public auction facts;
 - does not send private max bids, payment details, or risk scores.
+- automatic commentary is a post-decision side effect. If it times out, dedupes, or fails, the bid response and settlement path are unchanged.
 
 Sentinel:
 
@@ -79,6 +80,7 @@ A: Animation is transform/opacity/canvas-rAF only, reduced-motion is honored, pa
 | AI provider timeout | Job fails or template fallback; bid path unaffected. |
 | Invalid AI JSON | Reject output and show retry/manual entry. |
 | Commentary duplicate replay | Deduplicate by `auction_id + source_seq + kind`. |
+| Automatic commentary hidden in PC view | Hide auto-generated messages locally; manual host generation remains available. Server-side per-auction auto toggle is still future scope. |
 | Reconnect during critical countdown | Suppress tension, show recovering, disable dangerous actions. |
 | Local countdown reaches zero | Show syncing, no celebration. |
 | Reduced-motion user | No particles/pulsing; factual text remains. |

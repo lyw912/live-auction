@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/sync/singleflight"
 
+	aicap "live-auction/backend/internal/ai"
 	"live-auction/backend/internal/auction"
 	"live-auction/backend/internal/config"
 	"live-auction/backend/internal/observability"
@@ -38,6 +39,8 @@ type AuctionHandler struct {
 	Lanes  *bidLaneManager
 	Guard  *redisGuard
 	Engine *redisengine.Engine
+	AIRepo *aicap.Repository
+	AIGen  aicap.Generator
 }
 
 type uploadURLRequest struct {
@@ -564,6 +567,9 @@ func (h AuctionHandler) PlaceBid(w http.ResponseWriter, r *http.Request) {
 			recordBidGatewayStage("redis_engine", mode, "ok", time.Since(stageStart))
 			totalOutcome = "ok"
 		}
+		if err == nil {
+			h.maybeCreateAutoCommentary(result)
+		}
 		writeBidAdmissionResult(w, r, result, err)
 		return
 	}
@@ -591,7 +597,59 @@ func (h AuctionHandler) PlaceBid(w http.ResponseWriter, r *http.Request) {
 		// Outbox relay remains the durable projection repair path.
 		h.Guard.RefreshAfterAcceptedBid(r.Context(), result)
 	}
+	if err == nil {
+		h.maybeCreateAutoCommentary(result)
+	}
 	writeBidAdmissionResult(w, r, result, err)
+}
+
+func (h AuctionHandler) maybeCreateAutoCommentary(result auction.BidResponse) {
+	if h.AIRepo == nil || result.AuctionID == "" || result.Seq <= 0 {
+		return
+	}
+	eventType := ""
+	switch result.Result {
+	case auction.BidResultAccepted, auction.BidResultAcceptedExtended:
+		eventType = "bid_accepted"
+	case auction.BidResultAcceptedSold:
+		eventType = "auction_sold"
+	default:
+		return
+	}
+	gen := h.AIGen
+	if gen == nil {
+		gen = aicap.DeterministicGenerator{}
+	}
+	req := aicap.CommentaryRequest{
+		AuctionID:           result.AuctionID,
+		SourceSeq:           result.Seq,
+		EventType:           eventType,
+		CurrentPriceCents:   result.CurrentPriceCents,
+		CurrentWinnerMasked: maskPublicUserIDPtr(result.CurrentWinnerID),
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+		defer cancel()
+		_, _, _ = h.AIRepo.CreateAutoCommentary(ctx, gen, req)
+	}()
+}
+
+func maskPublicUserIDPtr(userID *string) string {
+	if userID == nil {
+		return ""
+	}
+	return maskPublicUserID(*userID)
+}
+
+func maskPublicUserID(userID string) string {
+	if userID == "" {
+		return ""
+	}
+	runes := []rune(userID)
+	if len(runes) <= 2 {
+		return userID + "**"
+	}
+	return string(runes[:2]) + "**"
 }
 
 func recordBidGatewayStage(stage string, mode string, outcome string, elapsed time.Duration) {

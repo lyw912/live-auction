@@ -41,7 +41,32 @@ assert.equal(h5.deriveCountdown('', 0, Date.now(), 0, false, true, false), '剩�
   assert.equal(h5.deriveCountdownPhase({ endAt, serverTimeMS: base, nowMS: base, serverTimeSyncedAt: base, terminal: false, stale: false, active: true }).phase, 'hot');
   assert.equal(h5.deriveCountdownPhase({ endAt, serverTimeMS: base + 5_100, nowMS: base + 5_100, serverTimeSyncedAt: base + 5_100, terminal: false, stale: false, active: true }).phase, 'critical');
   assert.equal(h5.deriveCountdownPhase({ endAt, serverTimeMS: base + 7_500, nowMS: base + 7_500, serverTimeSyncedAt: base + 7_500, terminal: false, stale: false, active: true }).phase, 'hammer');
+  assert.equal(h5.deriveCountdownPhase({ endAt, serverTimeMS: base + 7_500, nowMS: base + 7_500, serverTimeSyncedAt: base + 7_500, terminal: false, stale: false, active: true }).beat, '第一次');
+  assert.equal(h5.deriveCountdownPhase({ endAt, serverTimeMS: base + 8_500, nowMS: base + 8_500, serverTimeSyncedAt: base + 8_500, terminal: false, stale: false, active: true }).beat, '第二次');
+  assert.equal(h5.deriveCountdownPhase({ endAt, serverTimeMS: base + 9_500, nowMS: base + 9_500, serverTimeSyncedAt: base + 9_500, terminal: false, stale: false, active: true }).beat, '最后一次');
   assert.equal(h5.deriveCountdownPhase({ endAt, serverTimeMS: base + 7_500, nowMS: base + 7_500, serverTimeSyncedAt: base + 7_500, terminal: false, stale: true, active: true }).phase, 'stale');
+  assert.equal(h5.deriveCountdownPhase({ endAt, serverTimeMS: base + 10_100, nowMS: base + 10_100, serverTimeSyncedAt: base + 10_100, terminal: false, stale: false, active: true }).phase, 'syncing');
+}
+assert.equal(h5.rankBadgeLabel(1), '榜一');
+assert.equal(h5.rankBadgeLabel(4), '第 4 名');
+{
+  const recap = h5.buildResultRecap({
+    itemTitle: '青瓷茶盏',
+    kind: 'winner',
+    terminalPriceCents: 88000,
+    heat: {
+      activeBidders30s: 2,
+      acceptedBids30s: 4,
+      priceVelocityCentsPerMin: 12000,
+      acceptedBidderCount: 3,
+      totalAcceptedBids: 9,
+      source: 'leaderboard'
+    },
+    extendCount: 2
+  });
+  assert.equal(recap.status, '已拍中');
+  assert.equal(recap.price, '¥880.00');
+  assert.match(recap.shareCopy, /3 人有效出价/);
 }
 assert.equal(h5.isDangerousActionDisabled({ ctaDisabled: false, stale: false, sold: false }, 'connected'), false);
 assert.equal(h5.isDangerousActionDisabled({ ctaDisabled: false, stale: true, sold: false }, 'connected'), true);

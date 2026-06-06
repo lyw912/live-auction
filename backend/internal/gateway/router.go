@@ -101,6 +101,8 @@ func NewRouterWithRealtimeAndLedger(cfg config.Config, deps *storage.Dependencie
 		engine = redisengine.New(deps.Postgres, deps.Redis, ledger).
 			WithResponseDurability(cfg.BidEngineResponseDurability)
 	}
+	aiRepo := aicap.NewRepository(deps.Postgres)
+	aiGen := aicap.DeterministicGenerator{}
 	auctionHandler := AuctionHandler{
 		Config: cfg,
 		Deps:   deps,
@@ -111,13 +113,15 @@ func NewRouterWithRealtimeAndLedger(cfg config.Config, deps *storage.Dependencie
 		Lanes:  newBidLaneManager(cfg, deps.Postgres),
 		Guard:  newRedisGuard(cfg, deps.Postgres, deps.Redis),
 		Engine: engine,
+		AIRepo: aiRepo,
+		AIGen:  aiGen,
 	}
 	authHandler := AuthHandler{Config: cfg, DB: deps.Postgres, Redis: deps.Redis}
 	monitorHandler := MonitorHandler{Deps: deps}
 	hostPrompterHandler := HostPrompterHandler{Deps: deps}
 	heatSummaryHandler := HeatSummaryHandler{Deps: deps}
 	maxBidSummaryHandler := MaxBidSummaryHandler{Deps: deps}
-	aiHandler := AIHandler{Repo: aicap.NewRepository(deps.Postgres), Gen: aicap.DeterministicGenerator{}, RoomACL: newRoomACL(deps.Postgres, deps.Redis)}
+	aiHandler := AIHandler{Repo: aiRepo, Gen: aiGen, RoomACL: newRoomACL(deps.Postgres, deps.Redis)}
 	r.Route("/api", func(r chi.Router) {
 		r.Post("/auth/login", authHandler.Login)
 		r.Post("/auth/logout", authHandler.Logout)

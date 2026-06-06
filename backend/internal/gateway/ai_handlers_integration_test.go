@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	aicap "live-auction/backend/internal/ai"
 	"live-auction/backend/internal/auction"
 	"live-auction/backend/internal/storage"
 )
@@ -106,6 +107,28 @@ func TestAICommentarySystemMessagesSentinelRecapAndProductQA(t *testing.T) {
 	}
 	if commentary.Message.Body == "" || commentary.Message.SourceSeq == nil || commentary.Message.Safety["no_hidden_max_bid"] != true {
 		t.Fatalf("bad commentary payload: %#v", commentary.Message)
+	}
+	aiRepo := aicap.NewRepository(db)
+	auto, _, err := aiRepo.CreateAutoCommentary(context.Background(), aicap.DeterministicGenerator{}, aicap.CommentaryRequest{
+		AuctionID:         row.ID,
+		SourceSeq:         42,
+		EventType:         "auction_sold",
+		CurrentPriceCents: 25000,
+	})
+	if err != nil {
+		t.Fatalf("auto commentary: %v", err)
+	}
+	replay, _, err := aiRepo.CreateAutoCommentary(context.Background(), aicap.DeterministicGenerator{}, aicap.CommentaryRequest{
+		AuctionID:         row.ID,
+		SourceSeq:         42,
+		EventType:         "auction_sold",
+		CurrentPriceCents: 25000,
+	})
+	if err != nil {
+		t.Fatalf("auto commentary replay: %v", err)
+	}
+	if auto.ID != replay.ID || auto.Source != "SYSTEM_AI" || auto.Safety["auto_generated"] != true {
+		t.Fatalf("auto commentary not idempotent/safe: auto=%#v replay=%#v", auto, replay)
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/api/rooms/"+row.RoomID+"/system-messages", nil)

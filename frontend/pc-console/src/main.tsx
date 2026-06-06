@@ -36,6 +36,7 @@ function App() {
   const [systemMessages, setSystemMessages] = useState<SystemMessage[]>([]);
   const [sentinelAlerts, setSentinelAlerts] = useState<SentinelAlert[]>([]);
   const [latestRecap, setLatestRecap] = useState<AuctionRecap | undefined>();
+  const [autoCommentaryVisible, setAutoCommentaryVisible] = useState(() => localStorage.getItem('pc-auto-commentary-visible') !== '0');
   const [monitorFilter, setMonitorFilter] = useState({ type: '', auctionID: '', userID: '', traceID: '' });
   const [loading, setLoading] = useState(false);
   const [savingRule, setSavingRule] = useState(false);
@@ -568,6 +569,15 @@ function App() {
     }
   };
 
+  const toggleAutoCommentaryVisible = () => {
+    setAutoCommentaryVisible((value) => {
+      const next = !value;
+      localStorage.setItem('pc-auto-commentary-visible', next ? '1' : '0');
+      Message.info(next ? '自动解说消息已显示' : '自动解说消息已在本控制台隐藏');
+      return next;
+    });
+  };
+
   return (
     <Layout className="console-shell">
       <Layout.Sider className="sider" width={224}>
@@ -677,13 +687,15 @@ function App() {
                 onBuildRecap={buildRecap}
                 onCreateCommentary={createAICommentary}
                 onEvaluateSentinel={evaluateSentinel}
+                autoCommentaryVisible={autoCommentaryVisible}
+                onToggleAutoCommentaryVisible={toggleAutoCommentaryVisible}
                 onOpenFlightRecorder={openFlightRecorder}
                 prompts={hostPrompts}
                 promptsLoading={promptsLoading}
                 recentEvents={recentEvents}
                 selectedAuction={selectedAuction}
                 sentinelAlerts={sentinelAlerts}
-                systemMessages={systemMessages}
+                systemMessages={autoCommentaryVisible ? systemMessages : systemMessages.filter((row) => row.safety_json?.auto_generated !== true)}
                 onDismissPrompt={(promptID) => setDismissedPromptIDs((current) => Array.from(new Set([...current, promptID])))}
                 onDriveDemoBid={driveDemoBid}
               />

@@ -467,6 +467,7 @@ export function AuctionControlSummary({
 }
 
 export function LiveAssistRail({
+  autoCommentaryVisible,
   dismissedPromptIDs,
   heatLoading,
   heatSummary,
@@ -477,6 +478,7 @@ export function LiveAssistRail({
   onBuildRecap,
   onCreateCommentary,
   onEvaluateSentinel,
+  onToggleAutoCommentaryVisible,
   onOpenFlightRecorder,
   prompts,
   promptsLoading,
@@ -487,6 +489,7 @@ export function LiveAssistRail({
   onDismissPrompt,
   onDriveDemoBid
 }: {
+  autoCommentaryVisible: boolean;
   dismissedPromptIDs: string[];
   heatLoading: boolean;
   heatSummary?: HeatSummary;
@@ -497,6 +500,7 @@ export function LiveAssistRail({
   onBuildRecap: () => void;
   onCreateCommentary: (eventType: string) => void;
   onEvaluateSentinel: () => void;
+  onToggleAutoCommentaryVisible: () => void;
   onOpenFlightRecorder: (auctionID: string) => void;
   prompts: HostPrompt[];
   promptsLoading: boolean;
@@ -559,14 +563,15 @@ export function LiveAssistRail({
       <div className="ai-live-panel" data-testid="ai-live-panel">
         <div className="heat-summary-head">
           <span>AI 场控</span>
-          <strong>事实锚定</strong>
+          <strong>{autoCommentaryVisible ? '自动展示' : '已隐藏自动'}</strong>
         </div>
         <div className="demo-driver-grid">
           <Button size="mini" icon={<Bot size={13} />} onClick={() => onCreateCommentary('bid_accepted')}>生成解说</Button>
           <Button size="mini" icon={<ShieldCheck size={13} />} onClick={onEvaluateSentinel}>检查风控</Button>
           <Button size="mini" icon={<ClipboardList size={13} />} onClick={onBuildRecap}>生成复盘</Button>
+          <Button size="mini" onClick={onToggleAutoCommentaryVisible}>{autoCommentaryVisible ? '隐藏自动' : '显示自动'}</Button>
         </div>
-        <small>AI 只基于已发生的竞拍事实生成内容，不决定价格、赢家或订单。</small>
+        <small>AI 只基于已发生的竞拍事实生成内容，不决定价格、赢家或订单；自动解说为旁路消息。</small>
         {systemMessages.length ? (
           <div className="system-message-list">
             {systemMessages.slice(0, 3).map((message) => (

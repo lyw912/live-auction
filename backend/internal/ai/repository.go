@@ -221,6 +221,77 @@ func (r *Repository) CreateCommentary(ctx context.Context, hostID string, gen Ge
 	return msg, job, err
 }
 
+func (r *Repository) CreateAutoCommentary(ctx context.Context, gen Generator, req CommentaryRequest) (SystemMessage, Job, error) {
+	if req.AuctionID == "" {
+		return SystemMessage{}, Job{}, apierrors.New(apierrors.CodeInvalidArgument, "auction_id is required", http.StatusBadRequest)
+	}
+	state, err := r.auctionState(ctx, req.AuctionID)
+	if err != nil {
+		return SystemMessage{}, Job{}, err
+	}
+	req.RoomID = firstNonEmpty(req.RoomID, state.RoomID)
+	req.ItemTitle = firstNonEmpty(req.ItemTitle, state.ItemTitle)
+	if req.CurrentPriceCents <= 0 {
+		req.CurrentPriceCents = state.CurrentPriceCents
+	}
+	if req.CurrentWinnerMasked == "" {
+		req.CurrentWinnerMasked = maskUserID(state.CurrentWinnerID)
+	}
+	if req.SourceSeq <= 0 {
+		req.SourceSeq = time.Now().UnixMilli()
+	}
+	inputMap := structToMap(req)
+	result, err := gen.GenerateStructured(ctx, StructuredRequest{
+		Kind:          "auction_commentary",
+		PromptVersion: PromptVersionCommentary,
+		SchemaName:    "auction_commentary",
+		Input:         inputMap,
+		Timeout:       2 * time.Second,
+	})
+	status := "SUCCEEDED"
+	if err != nil {
+		status = "FAILED"
+		body, style, safety := BuildCommentary(req)
+		result = StructuredResult{
+			Provider: "deterministic",
+			Model:    "fallback-template",
+			Output: map[string]any{
+				"auction_id":  req.AuctionID,
+				"source_seq":  req.SourceSeq,
+				"style":       style,
+				"body":        body,
+				"auto_source": true,
+			},
+			Safety: safety,
+		}
+	}
+	body := cleanText(stringValue(result.Output["body"]), 40)
+	style := cleanText(firstNonEmpty(stringValue(result.Output["style"]), "steady"), 20)
+	if body == "" {
+		body, style, result.Safety = BuildCommentary(req)
+	}
+	result.Safety["auto_generated"] = true
+	msg, err := r.InsertSystemMessage(ctx, req.RoomID, req.AuctionID, "SYSTEM_AI", req.SourceSeq, style, body, inputMap, result.Safety)
+	if err != nil {
+		return SystemMessage{}, Job{}, err
+	}
+	job, err := r.insertJob(ctx, Job{
+		ID:            "aijob_" + uuid.NewString(),
+		RoomID:        req.RoomID,
+		AuctionID:     req.AuctionID,
+		Kind:          "auction_commentary",
+		Status:        status,
+		InputHash:     InputHash(inputMap),
+		PromptVersion: PromptVersionCommentary,
+		Provider:      result.Provider,
+		Model:         result.Model,
+		Input:         inputMap,
+		Output:        result.Output,
+		Safety:        result.Safety,
+	})
+	return msg, job, err
+}
+
 func (r *Repository) InsertSystemMessage(ctx context.Context, roomID string, auctionID string, source string, sourceSeq int64, style string, body string, facts map[string]any, safety map[string]any) (SystemMessage, error) {
 	factsRaw, _ := json.Marshal(facts)
 	safetyRaw, _ := json.Marshal(safety)
