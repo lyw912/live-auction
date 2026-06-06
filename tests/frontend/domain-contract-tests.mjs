@@ -49,6 +49,8 @@ assert.equal(h5.deriveCountdown('', 0, Date.now(), 0, false, true, false), '剩�
 }
 assert.equal(h5.rankBadgeLabel(1), '榜一');
 assert.equal(h5.rankBadgeLabel(4), '第 4 名');
+assert.equal(typeof h5.loadAuctionSoundPack, 'function');
+assert.equal(typeof h5.playAuctionSound, 'function');
 {
   const recap = h5.buildResultRecap({
     itemTitle: '青瓷茶盏',

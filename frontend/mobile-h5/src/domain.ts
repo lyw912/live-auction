@@ -49,6 +49,8 @@ export type BottomSheetKey = 'products' | 'details' | 'maxBid' | 'leaderboard' |
 export type AuctionOverlayMode = 'feed' | 'bid';
 export type ResultSheetKind = 'winner' | 'loser' | 'unsold';
 export type SoundCapability = 'ready' | 'unavailable' | 'blocked';
+export type AuctionSoundKey = 'heartbeat_bed' | 'rank_whoosh' | 'coin_leading' | 'hammer_hit' | 'system_chime';
+export type AuctionSoundPack = Partial<Record<AuctionSoundKey, AudioBuffer>>;
 export type MaxBidPhase = 'idle' | 'pending' | 'canceling' | 'error';
 export type CountdownPhase = 'normal' | 'hot' | 'critical' | 'hammer' | 'syncing' | 'stale' | 'terminal';
 export type CountdownPhaseState = { phase: CountdownPhase; remainingMS: number | null; beat: string };
@@ -518,6 +520,38 @@ export function createAudioContext() {
   return new AudioContextCtor();
 }
 
+const auctionSoundURLs: Record<AuctionSoundKey, string> = {
+  heartbeat_bed: '/audio/auction/heartbeat-bed.wav',
+  rank_whoosh: '/audio/auction/whoosh-rank.wav',
+  coin_leading: '/audio/auction/coin-leading.wav',
+  hammer_hit: '/audio/auction/hammer-hit.wav',
+  system_chime: '/audio/auction/system-chime.wav'
+};
+
+export async function loadAuctionSoundPack(ctx: AudioContext): Promise<AuctionSoundPack> {
+  const entries = await Promise.all(Object.entries(auctionSoundURLs).map(async ([key, url]) => {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`sound asset ${url} failed`);
+    const buffer = await response.arrayBuffer();
+    return [key, await ctx.decodeAudioData(buffer)] as const;
+  }));
+  return Object.fromEntries(entries) as AuctionSoundPack;
+}
+
+export function playAuctionSound(ctx: AudioContext, pack: AuctionSoundPack | null, key: AuctionSoundKey, gainValue = 0.8, loop = false) {
+  const buffer = pack?.[key];
+  if (!buffer || document.visibilityState === 'hidden') return null;
+  const source = ctx.createBufferSource();
+  const gain = ctx.createGain();
+  source.buffer = buffer;
+  source.loop = loop;
+  gain.gain.setValueAtTime(gainValue, ctx.currentTime);
+  source.connect(gain);
+  gain.connect(ctx.destination);
+  source.start();
+  return { source, gain };
+}
+
 export function isReducedMotionPreferred() {
   return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
 }
@@ -535,7 +569,15 @@ export function vibratePattern(kind: AtmosphereCue['kind']) {
   navigator.vibrate?.(pattern[kind]);
 }
 
-export function playCueTone(ctx: AudioContext, kind: AtmosphereCue['kind']) {
+export function playCueTone(ctx: AudioContext, kind: AtmosphereCue['kind'], pack?: AuctionSoundPack | null) {
+  const assetKey: Partial<Record<AtmosphereCue['kind'], AuctionSoundKey>> = {
+    leading: 'coin_leading',
+    outbid: 'rank_whoosh',
+    extended: 'rank_whoosh',
+    sold: 'hammer_hit',
+    social: 'system_chime'
+  };
+  if (assetKey[kind] && playAuctionSound(ctx, pack ?? null, assetKey[kind]!, kind === 'sold' ? 0.86 : 0.68)) return;
   if (document.visibilityState === 'hidden') return;
   const oscillator = ctx.createOscillator();
   const gain = ctx.createGain();
@@ -558,7 +600,8 @@ export function playCueTone(ctx: AudioContext, kind: AtmosphereCue['kind']) {
   oscillator.stop(ctx.currentTime + 0.18);
 }
 
-export function playCountdownTone(ctx: AudioContext, phase: CountdownPhase, beat = '') {
+export function playCountdownTone(ctx: AudioContext, phase: CountdownPhase, beat = '', pack?: AuctionSoundPack | null) {
+  if (phase === 'hammer' && beat.includes('最后') && playAuctionSound(ctx, pack ?? null, 'hammer_hit', 0.72)) return;
   if (document.visibilityState === 'hidden') return;
   if (!['critical', 'hammer'].includes(phase)) return;
   const oscillator = ctx.createOscillator();
@@ -576,7 +619,13 @@ export function playCountdownTone(ctx: AudioContext, phase: CountdownPhase, beat
   oscillator.stop(ctx.currentTime + (phase === 'hammer' ? 0.24 : 0.14));
 }
 
-export function playLayeredCue(ctx: AudioContext, kind: 'system_message' | 'rank_change' | 'result') {
+export function playLayeredCue(ctx: AudioContext, kind: 'system_message' | 'rank_change' | 'result', pack?: AuctionSoundPack | null) {
+  const assetKey: Record<typeof kind, AuctionSoundKey> = {
+    system_message: 'system_chime',
+    rank_change: 'rank_whoosh',
+    result: 'hammer_hit'
+  };
+  if (playAuctionSound(ctx, pack ?? null, assetKey[kind], kind === 'result' ? 0.84 : 0.62)) return;
   if (document.visibilityState === 'hidden') return;
   const now = ctx.currentTime;
   const master = ctx.createGain();

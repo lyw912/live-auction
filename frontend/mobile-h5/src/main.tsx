@@ -4,8 +4,8 @@ import { createRoot } from 'react-dom/client';
 import { CheckCircle2, ChevronUp, Radio, RefreshCw } from 'lucide-react';
 import type { AtmosphereCue, AtmosphereInput } from './atmosphere';
 import { AuctionStatePanel, BottomSheet, ChatComposer, ChatPanel, LeaderboardPanel, LiveOpsPanel, LiveStage, ResultSheet, StateMatrixTabs } from './components';
-import type { AuctionItem, AuctionOverlayMode, AuctionRealtimeEvent, AuctionState, AuctionSummary, AuthUser, BidderRequirement, BidPhase, BidResponse, BottomSheetKey, ChatMessage, ConnectionPhase, HistoryRow, LeaderboardPayload, MaxBidIntent, MaxBidPhase, OrderRow, PaymentPhase, PendingBidRequest, ProductQAAnswer, ProductQATurn, RecoveryPhase, ResultSheetKind, Scenario, SnapshotResponse, SoundCapability, SystemMessage, WSTicketResponse } from './domain';
-import { createAudioContext, createClientBidID, demoProductImageURL, demoUserID, deriveCountdown, deriveCountdownPhase, ensureDemoSession, extensionCopyFromEvent, formatCents, heatSnapshot, isBidConfirmationPending, isCountdownExpired, isDangerousActionDisabled, isEngineRejected, isTestMatrixEnabled, maxBidErrorCopy, maxBidStatusCopy, playCountdownTone, playCueTone, playLayeredCue, readJSON, rejectCopy, responseServerTimeMS, retryAfterMS, retryAfterMSFromHeaders, roomIDFromPath, scenarios, selectEntryAuction, speakSystemMessage, vibrateCountdownPhase, vibratePattern, visibleRoomAuctions } from './domain';
+import type { AuctionItem, AuctionOverlayMode, AuctionRealtimeEvent, AuctionState, AuctionSummary, AuctionSoundPack, AuthUser, BidderRequirement, BidPhase, BidResponse, BottomSheetKey, ChatMessage, ConnectionPhase, HistoryRow, LeaderboardPayload, MaxBidIntent, MaxBidPhase, OrderRow, PaymentPhase, PendingBidRequest, ProductQAAnswer, ProductQATurn, RecoveryPhase, ResultSheetKind, Scenario, SnapshotResponse, SoundCapability, SystemMessage, WSTicketResponse } from './domain';
+import { createAudioContext, createClientBidID, demoProductImageURL, demoUserID, deriveCountdown, deriveCountdownPhase, ensureDemoSession, extensionCopyFromEvent, formatCents, heatSnapshot, isBidConfirmationPending, isCountdownExpired, isDangerousActionDisabled, isEngineRejected, isTestMatrixEnabled, loadAuctionSoundPack, maxBidErrorCopy, maxBidStatusCopy, playAuctionSound, playCountdownTone, playCueTone, playLayeredCue, readJSON, rejectCopy, responseServerTimeMS, retryAfterMS, retryAfterMSFromHeaders, roomIDFromPath, scenarios, selectEntryAuction, speakSystemMessage, vibrateCountdownPhase, vibratePattern, visibleRoomAuctions } from './domain';
 import { normalizeAtmosphere } from './atmosphere';
 import { reconnectDelayMS } from './realtime';
 import './styles.css';
@@ -100,6 +100,8 @@ function App() {
   const currentUserIDRef = useRef(currentUserID);
   const soundEnabledRef = useRef(soundEnabled);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const soundPackRef = useRef<AuctionSoundPack | null>(null);
+  const heartbeatRef = useRef<{ source: AudioBufferSourceNode; gain: GainNode } | null>(null);
   const soundCapabilityRef = useRef<SoundCapability>('ready');
   const leaderboardRef = useRef<LeaderboardPayload | null>(leaderboard);
   const atmosphereSeenRef = useRef<Set<string>>(new Set());
@@ -222,14 +224,25 @@ function App() {
     activeCueRef.current = cue;
     setAtmosphereCue(cue);
     if (soundEnabledRef.current && audioContextRef.current && soundCapabilityRef.current === 'ready') {
-      playCueTone(audioContextRef.current, cue.kind);
+      playCueTone(audioContextRef.current, cue.kind, soundPackRef.current);
       vibratePattern(cue.kind);
+    }
+  };
+
+  const stopHeartbeat = () => {
+    try {
+      heartbeatRef.current?.source.stop();
+    } catch {
+      // Source may already be stopped when React tears down effects in quick succession.
     }
   };
 
   const toggleSound = async () => {
     if (soundEnabledRef.current) {
       setSoundEnabled(false);
+      stopHeartbeat();
+      heartbeatRef.current = null;
+      soundPackRef.current = null;
       audioContextRef.current?.close?.().catch?.(() => undefined);
       audioContextRef.current = null;
       return;
@@ -243,6 +256,7 @@ function App() {
     try {
       if (ctx.state === 'suspended') await ctx.resume();
       audioContextRef.current = ctx;
+      soundPackRef.current = await loadAuctionSoundPack(ctx);
       setSoundCapability('ready');
       setSoundEnabled(true);
     } catch {
@@ -254,6 +268,9 @@ function App() {
 
   useEffect(() => {
     return () => {
+      stopHeartbeat();
+      heartbeatRef.current = null;
+      soundPackRef.current = null;
       audioContextRef.current?.close?.().catch?.(() => undefined);
       audioContextRef.current = null;
     };
@@ -273,7 +290,7 @@ function App() {
     if (!latest || latest.id <= spokenSystemMessageRef.current) return;
     spokenSystemMessageRef.current = latest.id;
     if (!soundEnabledRef.current || soundCapabilityRef.current !== 'ready') return;
-    if (audioContextRef.current) playLayeredCue(audioContextRef.current, 'system_message');
+    if (audioContextRef.current) playLayeredCue(audioContextRef.current, 'system_message', soundPackRef.current);
     speakSystemMessage(latest.body);
   }, [systemMessages]);
 
@@ -284,10 +301,30 @@ function App() {
     if (countdownPhase.phase !== 'critical' && countdownPhase.phase !== 'hammer') return;
     if (connectionPhase !== 'connected' || recoveryPhase !== 'idle' || selected !== 'active_bids') return;
     if (soundEnabledRef.current && audioContextRef.current && soundCapabilityRef.current === 'ready') {
-      playCountdownTone(audioContextRef.current, countdownPhase.phase, countdownPhase.beat);
+      playCountdownTone(audioContextRef.current, countdownPhase.phase, countdownPhase.beat, soundPackRef.current);
     }
     vibrateCountdownPhase(countdownPhase.phase, countdownPhase.beat);
   }, [activeAuctionID, connectionPhase, countdownPhase.beat, countdownPhase.phase, recoveryPhase, selected]);
+
+  useEffect(() => {
+    const shouldPlayBed = soundEnabled &&
+      soundCapability === 'ready' &&
+      audioContextRef.current &&
+      (countdownPhase.phase === 'critical' || countdownPhase.phase === 'hammer') &&
+      connectionPhase === 'connected' &&
+      recoveryPhase === 'idle' &&
+      selected === 'active_bids';
+    if (!shouldPlayBed) {
+      stopHeartbeat();
+      heartbeatRef.current = null;
+      return;
+    }
+    if (!heartbeatRef.current && audioContextRef.current) {
+      heartbeatRef.current = playAuctionSound(audioContextRef.current, soundPackRef.current, 'heartbeat_bed', countdownPhase.phase === 'hammer' ? 0.32 : 0.22, true);
+    } else if (heartbeatRef.current) {
+      heartbeatRef.current.gain.gain.setTargetAtTime(countdownPhase.phase === 'hammer' ? 0.32 : 0.22, audioContextRef.current!.currentTime, 0.08);
+    }
+  }, [connectionPhase, countdownPhase.phase, recoveryPhase, selected, soundCapability, soundEnabled]);
 
   useEffect(() => {
     let cancelled = false;
