@@ -2621,6 +2621,31 @@ button {
   background: transparent;
 }
 
+.qa-thread {
+  display: grid;
+  gap: 10px;
+  max-height: min(38vh, 360px);
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.qa-turn {
+  display: grid;
+  gap: 6px;
+}
+
+.qa-question {
+  justify-self: end;
+  max-width: 82%;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px 8px 2px 8px;
+  background: rgba(255, 210, 75, 0.18);
+  color: #fff6d6;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .qa-answer {
   display: grid;
   gap: 6px;
@@ -2641,4 +2666,25 @@ button {
   color: rgba(255, 255, 255, 0.72);
   font-size: 12px;
   font-style: normal;
+}
+
+.qa-prompts {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.qa-prompts button {
+  flex: 0 0 auto;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.86);
+  font-size: 12px;
+  padding: 7px 10px;
+}
+
+.qa-prompts button:disabled {
+  opacity: 0.55;
 }

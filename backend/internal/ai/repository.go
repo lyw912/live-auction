@@ -669,6 +669,7 @@ func (r *Repository) BuildAuctionRecap(ctx context.Context, hostID string, aucti
 }
 
 func (r *Repository) AnswerProductQuestion(ctx context.Context, roomID string, gen Generator, req ProductQARequest) (ProductQAAnswer, Job, error) {
+	req.ThreadID = cleanText(req.ThreadID, 80)
 	req.Question = cleanText(req.Question, 120)
 	if req.AuctionID == "" || req.Question == "" {
 		return ProductQAAnswer{}, Job{}, apierrors.New(apierrors.CodeInvalidArgument, "auction_id and question are required", http.StatusBadRequest)
@@ -703,12 +704,20 @@ func (r *Repository) AnswerProductQuestion(ctx context.Context, roomID string, g
 	for key := range facts {
 		allowedFacts[key] = key
 	}
+	contextTurns, err := r.productQAContext(ctx, state.RoomID, req.AuctionID, req.ThreadID, req.History)
+	if err != nil {
+		return ProductQAAnswer{}, Job{}, err
+	}
 	fallback := AnswerFromFacts(req.AuctionID, req.Question, state.ItemTitle, state.ItemDescription, rules)
+	fallback.ThreadID = req.ThreadID
+	fallback.ContextTurnCount = len(contextTurns)
 	inputMap := map[string]any{
-		"room_id":    state.RoomID,
-		"auction_id": req.AuctionID,
-		"question":   req.Question,
-		"facts":      facts,
+		"room_id":      state.RoomID,
+		"auction_id":   req.AuctionID,
+		"thread_id":    req.ThreadID,
+		"question":     req.Question,
+		"recent_turns": contextTurns,
+		"facts":        facts,
 	}
 	result, err := gen.GenerateStructured(ctx, StructuredRequest{
 		Kind:          "product_qa",
@@ -740,6 +749,7 @@ func (r *Repository) AnswerProductQuestion(ctx context.Context, roomID string, g
 	result.Safety["approved_facts_only"] = true
 	result.Safety["no_private_bid_data"] = true
 	result.Safety["no_authenticity_claims"] = true
+	result.Safety["context_turn_count"] = len(contextTurns)
 	job, err := r.insertJob(ctx, Job{
 		ID:            "aijob_" + uuid.NewString(),
 		RoomID:        state.RoomID,
@@ -759,6 +769,81 @@ func (r *Repository) AnswerProductQuestion(ctx context.Context, roomID string, g
 		return ProductQAAnswer{}, Job{}, err
 	}
 	return answer, job, nil
+}
+
+func (r *Repository) productQAContext(ctx context.Context, roomID string, auctionID string, threadID string, clientHistory []ProductQATurn) ([]ProductQATurn, error) {
+	turns := normalizeProductQATurns(clientHistory)
+	if len(turns) >= 4 {
+		return turns, nil
+	}
+	rows, err := r.db.Query(ctx, `
+		SELECT input_json, output_json
+		FROM ai_generation_jobs
+		WHERE room_id = $1
+		  AND auction_id = $2
+		  AND kind = 'product_qa'
+		  AND status = 'SUCCEEDED'
+		  AND ($3 = '' OR input_json->>'thread_id' = $3)
+		ORDER BY created_at DESC
+		LIMIT 4
+	`, roomID, auctionID, threadID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	persisted := []ProductQATurn{}
+	for rows.Next() {
+		var inputRaw, outputRaw []byte
+		if err := rows.Scan(&inputRaw, &outputRaw); err != nil {
+			return nil, err
+		}
+		var inputMap map[string]any
+		var outputMap map[string]any
+		_ = json.Unmarshal(inputRaw, &inputMap)
+		_ = json.Unmarshal(outputRaw, &outputMap)
+		turn := ProductQATurn{
+			Question:  cleanText(stringValue(inputMap["question"]), 120),
+			Answer:    cleanText(stringValue(outputMap["answer"]), 180),
+			FactsUsed: limitStrings(stringSlice(outputMap["facts_used"]), 8, 64),
+		}
+		if turn.Question != "" && turn.Answer != "" {
+			persisted = append(persisted, turn)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i := len(persisted) - 1; i >= 0 && len(turns) < 4; i-- {
+		turns = append(turns, persisted[i])
+	}
+	return normalizeProductQATurns(turns), nil
+}
+
+func normalizeProductQATurns(turns []ProductQATurn) []ProductQATurn {
+	out := []ProductQATurn{}
+	seen := map[string]bool{}
+	start := 0
+	if len(turns) > 4 {
+		start = len(turns) - 4
+	}
+	for _, turn := range turns[start:] {
+		question := cleanText(turn.Question, 120)
+		answer := cleanText(turn.Answer, 180)
+		if question == "" || answer == "" {
+			continue
+		}
+		key := question + "\n" + answer
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, ProductQATurn{
+			Question:  question,
+			Answer:    answer,
+			FactsUsed: limitStrings(turn.FactsUsed, 8, 64),
+		})
+	}
+	return out
 }
 
 type auctionState struct {

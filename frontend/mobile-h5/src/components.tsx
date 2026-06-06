@@ -659,6 +659,7 @@ export function BottomSheet({
   nextBidCents,
   orderHistory,
   qaAnswer,
+  qaHistory,
   qaDraft,
   qaLoading,
   scenario,
@@ -673,6 +674,7 @@ export function BottomSheet({
   onRefreshLeaderboard,
   onRefreshMaxBid,
   onAskQA,
+  onAskQAPrompt,
   onQADraftChange,
   onSubmitMaxBid,
   onToggleFollow,
@@ -695,6 +697,7 @@ export function BottomSheet({
   nextBidCents: number;
   orderHistory: HistoryRow[];
   qaAnswer?: ProductQAAnswer;
+  qaHistory: ProductQAAnswer[];
   qaDraft: string;
   qaLoading: boolean;
   scenario: Scenario;
@@ -709,6 +712,7 @@ export function BottomSheet({
   onRefreshLeaderboard: () => void;
   onRefreshMaxBid: () => void;
   onAskQA: () => void;
+  onAskQAPrompt: (prompt: string) => void;
   onQADraftChange: (draft: string) => void;
   onSubmitMaxBid: () => void;
   onToggleFollow: () => void;
@@ -803,9 +807,11 @@ export function BottomSheet({
           {activeSheet === 'qa' && (
             <ProductQASheet
               answer={qaAnswer}
+              history={qaHistory}
               draft={qaDraft}
               loading={qaLoading}
               onAsk={onAskQA}
+              onAskPrompt={onAskQAPrompt}
               onDraftChange={onQADraftChange}
             />
           )}
@@ -1277,17 +1283,23 @@ export function ChatPanel({
 
 export function ProductQASheet({
   answer,
+  history,
   draft,
   loading,
   onAsk,
+  onAskPrompt,
   onDraftChange
 }: {
   answer?: ProductQAAnswer;
+  history: ProductQAAnswer[];
   draft: string;
   loading: boolean;
   onAsk: () => void;
+  onAskPrompt: (prompt: string) => void;
   onDraftChange: (draft: string) => void;
 }) {
+  const turns = history.length ? history : answer ? [answer] : [];
+  const prompts = (answer?.follow_up_prompts ?? []).filter(Boolean).slice(0, 3);
   return (
     <section className="product-qa-sheet" data-testid="product-qa-sheet">
       <div className="sheet-action-row">
@@ -1309,13 +1321,29 @@ export function ProductQASheet({
           <Send size={15} />
         </button>
       </div>
-      {answer ? (
-        <div className="qa-answer">
-          <strong>{answer.answer}</strong>
-          <span>{answer.safety_note}</span>
-          {answer.facts_used.length ? <em>依据 {answer.facts_used.join(', ')}</em> : <em>未找到已提供事实</em>}
+      {turns.length ? (
+        <div className="qa-thread" aria-label="product-qa-thread">
+          {turns.map((turn, index) => (
+            <div className="qa-turn" key={`${turn.question ?? 'q'}-${index}`}>
+              {turn.question ? <p className="qa-question">{turn.question}</p> : null}
+              <div className="qa-answer">
+                <strong>{turn.answer}</strong>
+                <span>{turn.safety_note}</span>
+                {turn.facts_used.length ? <em>来自已展示信息</em> : <em>未找到已提供信息</em>}
+              </div>
+            </div>
+          ))}
         </div>
       ) : <div className="heat-unavailable">未提供的信息会明确回答“未提供”。</div>}
+      {prompts.length ? (
+        <div className="qa-prompts" aria-label="product-qa-follow-ups">
+          {prompts.map((prompt) => (
+            <button type="button" key={prompt} disabled={loading} onClick={() => onAskPrompt(prompt)}>
+              {prompt}
+            </button>
+          ))}
+        </div>
+      ) : null}
     </section>
   );
 }

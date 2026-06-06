@@ -209,11 +209,12 @@ func schemaForRequest(req StructuredRequest) (strictSchema, error) {
 		return strictSchema{name: "product_qa", body: map[string]any{
 			"type":                 "object",
 			"additionalProperties": false,
-			"required":             []string{"answer", "facts_used", "safety_note"},
+			"required":             []string{"answer", "facts_used", "safety_note", "follow_up_prompts"},
 			"properties": map[string]any{
-				"answer":      stringSchema(1, 160),
-				"facts_used":  stringArraySchema(1, 8),
-				"safety_note": stringSchema(1, 80),
+				"answer":            stringSchema(1, 180),
+				"facts_used":        stringArraySchema(1, 8),
+				"safety_note":       stringSchema(1, 80),
+				"follow_up_prompts": stringArraySchema(0, 3),
 			},
 		}}, nil
 	default:
@@ -234,7 +235,7 @@ func chatMessagesForRequest(req StructuredRequest) []map[string]any {
 		userText = "为主播风控台生成告警解释。只能在 candidates 中已有风险类型内改写解释、建议和分数；不得新增风险类型，不得指控真实身份，不得自动封禁。"
 	}
 	if req.Kind == "product_qa" {
-		userText = "回答买家关于拍品和竞拍规则的问题。只能使用 facts 字段里的已审核事实；没有事实就回答未提供；不得承诺真伪、升值收益、隐藏最高价或平台外交易。"
+		userText = "回答买家关于拍品和竞拍规则的问题。可参考 recent_turns 理解追问，但只能使用 facts 字段里的已审核事实；没有事实就回答未提供；不得承诺真伪、升值收益、隐藏最高价或平台外交易。follow_up_prompts 给出最多3个买家自然追问。"
 	}
 	content := []map[string]any{{"type": "text", "text": userText + "\n输入 JSON:\n" + mustJSON(req.Input)}}
 	if req.Kind == "listing_draft" {

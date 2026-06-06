@@ -304,9 +304,10 @@ func TestSentinelAndProductQAUseProviderWithFactGuards(t *testing.T) {
 			Provider: "test-provider",
 			Model:    "qa-model",
 			Output: map[string]any{
-				"answer":      "起拍价为 ¥100.00，每次加价 ¥10.00。",
-				"facts_used":  []any{"auction.start_price_display", "auction.increment_display"},
-				"safety_note": "只基于本场已审核规则回答。",
+				"answer":            "起拍价为 ¥100.00，每次加价 ¥10.00。",
+				"facts_used":        []any{"auction.start_price_display", "auction.increment_display"},
+				"safety_note":       "只基于本场已审核规则回答。",
+				"follow_up_prompts": []any{"有瑕疵说明吗？", "封顶价是多少？"},
 			},
 			Safety: map[string]any{"provider_mode": "test"},
 		},
@@ -329,9 +330,39 @@ func TestSentinelAndProductQAUseProviderWithFactGuards(t *testing.T) {
 		Provider: "test-provider",
 		Model:    "qa-model",
 		Output: map[string]any{
-			"answer":      "这件一定保真并且未来会升值。",
-			"facts_used":  []any{"unapproved.certification"},
-			"safety_note": "unsafe",
+			"answer":            "封顶价是 ¥500.00。",
+			"facts_used":        []any{"auction.cap_price_display"},
+			"safety_note":       "只基于本场已审核规则回答。",
+			"follow_up_prompts": []any{"有瑕疵说明吗？"},
+		},
+		Safety: map[string]any{"provider_mode": "test"},
+	}
+	followUp, followUpJob, err := aiRepo.AnswerProductQuestion(context.Background(), row.RoomID, gen, aicap.ProductQARequest{
+		AuctionID: row.ID,
+		ThreadID:  "buyer-thread-1",
+		Question:  "那封顶呢",
+		History: []aicap.ProductQATurn{{
+			Question:  "起拍价和加价是多少",
+			Answer:    answer.Answer,
+			FactsUsed: answer.FactsUsed,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("provider qa follow-up: %v", err)
+	}
+	lastCall := gen.calls[len(gen.calls)-1]
+	recentTurns, _ := lastCall.Input["recent_turns"].([]aicap.ProductQATurn)
+	if followUp.ThreadID != "buyer-thread-1" || followUp.ContextTurnCount == 0 || len(recentTurns) == 0 || followUpJob.Safety["context_turn_count"] == nil {
+		t.Fatalf("qa follow-up did not carry context: answer=%#v job=%#v input=%#v", followUp, followUpJob, lastCall.Input)
+	}
+	gen.results["product_qa"] = aicap.StructuredResult{
+		Provider: "test-provider",
+		Model:    "qa-model",
+		Output: map[string]any{
+			"answer":            "这件一定保真并且未来会升值。",
+			"facts_used":        []any{"unapproved.certification"},
+			"safety_note":       "unsafe",
+			"follow_up_prompts": []any{"能提现收益吗？"},
 		},
 	}
 	guarded, guardedJob, err := aiRepo.AnswerProductQuestion(context.Background(), row.RoomID, gen, aicap.ProductQARequest{AuctionID: row.ID, Question: "能保真升值吗"})

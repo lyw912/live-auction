@@ -155,9 +155,10 @@ Current 2026-06-06 evidence:
 Current 2026-06-06 evidence:
 
 - `TestAICommentarySystemMessagesSentinelRecapAndProductQA` verifies recap generation and product Q&A from auction facts.
-- `TestSentinelAndProductQAUseProviderWithFactGuards` verifies provider-backed product Q&A uses only approved fact keys, persists a `product_qa` job, and falls back when the provider returns unsafe authenticity/investment claims or unapproved fact references.
+- `TestSentinelAndProductQAUseProviderWithFactGuards` verifies provider-backed product Q&A uses only approved fact keys, persists a `product_qa` job, carries `thread_id` and `recent_turns` for follow-up questions, records `context_turn_count`, and falls back when the provider returns unsafe authenticity/investment claims or unapproved fact references.
 - H5 Playwright MCP opened the real `问答` sheet and asked `起拍价是多少`; response was `起拍价 ¥100.00` with fact provenance and no hidden-bid leakage.
 - Real browser check on 2026-06-06 clicked H5 `问拍品`, asked `起拍价和加价是多少`, and verified the visible answer `起拍价是¥100.00，加价幅度是¥50.00。` with `auction.start_price_display` and `auction.increment_display` provenance. The backend returned a `SUCCEEDED` `product_qa` job from `chat_completions_adapter`.
+- Real Chromium check on 2026-06-06 opened H5 at `5298`, clicked `问拍品`, asked `起拍价和加价是多少`, clicked the generated follow-up `有封顶价吗？`, and verified 2 visible Q&A turns. The second backend response carried `recent_turns` with the first question/answer, `context_turn_count: 1`, and a provider-backed `chat_completions_adapter` `product_qa` job. Screenshot evidence: `docs/atmosphere-ai-implementation-2026-06-06/evidence/h5-multiturn-product-qa-2026-06-06.png`.
 - H5 now renders a buyer-safe result recap/share card from public state facts only. It does not call host-only recap APIs and does not expose buyer identity or private max-bid data.
 
 ## H5 Atmosphere Interaction Evidence

@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { CheckCircle2, ChevronUp, Radio, RefreshCw } from 'lucide-react';
 import type { AtmosphereCue, AtmosphereInput } from './atmosphere';
 import { AuctionStatePanel, BottomSheet, ChatComposer, ChatPanel, LeaderboardPanel, LiveOpsPanel, LiveStage, ResultSheet, StateMatrixTabs } from './components';
-import type { AuctionItem, AuctionOverlayMode, AuctionRealtimeEvent, AuctionState, AuctionSummary, AuthUser, BidderRequirement, BidPhase, BidResponse, BottomSheetKey, ChatMessage, ConnectionPhase, HistoryRow, LeaderboardPayload, MaxBidIntent, MaxBidPhase, OrderRow, PaymentPhase, PendingBidRequest, ProductQAAnswer, RecoveryPhase, ResultSheetKind, Scenario, SnapshotResponse, SoundCapability, SystemMessage, WSTicketResponse } from './domain';
+import type { AuctionItem, AuctionOverlayMode, AuctionRealtimeEvent, AuctionState, AuctionSummary, AuthUser, BidderRequirement, BidPhase, BidResponse, BottomSheetKey, ChatMessage, ConnectionPhase, HistoryRow, LeaderboardPayload, MaxBidIntent, MaxBidPhase, OrderRow, PaymentPhase, PendingBidRequest, ProductQAAnswer, ProductQATurn, RecoveryPhase, ResultSheetKind, Scenario, SnapshotResponse, SoundCapability, SystemMessage, WSTicketResponse } from './domain';
 import { createAudioContext, createClientBidID, demoProductImageURL, demoUserID, deriveCountdown, deriveCountdownPhase, ensureDemoSession, extensionCopyFromEvent, formatCents, heatSnapshot, isBidConfirmationPending, isCountdownExpired, isDangerousActionDisabled, isEngineRejected, isTestMatrixEnabled, maxBidErrorCopy, maxBidStatusCopy, playCountdownTone, playCueTone, playLayeredCue, readJSON, rejectCopy, responseServerTimeMS, retryAfterMS, retryAfterMSFromHeaders, roomIDFromPath, scenarios, selectEntryAuction, speakSystemMessage, vibrateCountdownPhase, vibratePattern, visibleRoomAuctions } from './domain';
 import { normalizeAtmosphere } from './atmosphere';
 import { reconnectDelayMS } from './realtime';
@@ -41,6 +41,8 @@ function App() {
   const [systemMessages, setSystemMessages] = useState<SystemMessage[]>([]);
   const [qaDraft, setQADraft] = useState('');
   const [qaAnswer, setQAAnswer] = useState<ProductQAAnswer | undefined>();
+  const [qaThreadID, setQAThreadID] = useState('');
+  const [qaHistory, setQAHistory] = useState<ProductQAAnswer[]>([]);
   const [qaLoading, setQALoading] = useState(false);
   const [leaderboard, setLeaderboard] = useState<LeaderboardPayload | null>(null);
   const [atmosphereCue, setAtmosphereCue] = useState<AtmosphereCue | null>(null);
@@ -120,6 +122,13 @@ function App() {
 
   useEffect(() => {
     activeAuctionIDRef.current = activeAuctionID;
+  }, [activeAuctionID]);
+
+  useEffect(() => {
+    setQADraft('');
+    setQAAnswer(undefined);
+    setQAHistory([]);
+    setQAThreadID(activeAuctionID ? `qa_${activeAuctionID}_${Date.now().toString(36)}` : '');
   }, [activeAuctionID]);
 
   useEffect(() => {
@@ -1487,29 +1496,48 @@ function App() {
     }
   };
 
-  const askProductQA = async () => {
-    const question = qaDraft.trim();
+  const askProductQA = async (prompt?: string) => {
+    const question = (prompt ?? qaDraft).trim();
     if (!question || qaLoading || !activeAuctionID) return;
     setQALoading(true);
+    const threadID = qaThreadID || `qa_${activeAuctionID}_${Date.now().toString(36)}`;
+    if (!qaThreadID) setQAThreadID(threadID);
+    const history: ProductQATurn[] = qaHistory.slice(-4).map((turn) => ({
+      question: turn.question || '',
+      answer: turn.answer,
+      facts_used: turn.facts_used
+    })).filter((turn) => turn.question && turn.answer);
     try {
       const response = await fetch(`/api/rooms/${roomID}/product-qa`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ auction_id: activeAuctionID, question })
+        body: JSON.stringify({ auction_id: activeAuctionID, thread_id: threadID, question, history })
       });
       const payload = await readJSON<ProductQAAnswer | { answer?: ProductQAAnswer }>(response);
       const answer = payload && 'answer' in payload && typeof payload.answer === 'object' ? payload.answer : payload as ProductQAAnswer | undefined;
       if (response.ok && answer) {
-        setQAAnswer(answer);
+        const nextAnswer = { ...answer, thread_id: answer.thread_id || threadID, question: answer.question || question };
+        setQAAnswer(nextAnswer);
+        setQAHistory((current) => [...current, nextAnswer].slice(-8));
+        setQADraft('');
         setWarmupTasks((current) => ({ ...current, asked: true }));
       } else {
-        setQAAnswer({ auction_id: activeAuctionID, answer: '未提供', facts_used: [], safety_note: '问答暂不可用，请稍后重试。' });
+        const failedAnswer = { auction_id: activeAuctionID, thread_id: threadID, question, answer: '未提供', facts_used: [], safety_note: '问答暂不可用，请稍后重试。' };
+        setQAAnswer(failedAnswer);
+        setQAHistory((current) => [...current, failedAnswer].slice(-8));
       }
     } catch {
-      setQAAnswer({ auction_id: activeAuctionID, answer: '未提供', facts_used: [], safety_note: '问答暂不可用，请稍后重试。' });
+      const failedAnswer = { auction_id: activeAuctionID, thread_id: threadID, question, answer: '未提供', facts_used: [], safety_note: '问答暂不可用，请稍后重试。' };
+      setQAAnswer(failedAnswer);
+      setQAHistory((current) => [...current, failedAnswer].slice(-8));
     } finally {
       setQALoading(false);
     }
+  };
+
+  const askProductQAPrompt = (prompt: string) => {
+    setQADraft(prompt);
+    void askProductQA(prompt);
   };
 
   const toggleFollow = () => {
@@ -1648,6 +1676,7 @@ function App() {
           nextBidCents={nextBidCents}
           orderHistory={orderHistory}
           qaAnswer={qaAnswer}
+          qaHistory={qaHistory}
           qaDraft={qaDraft}
           qaLoading={qaLoading}
           scenario={scenario}
@@ -1662,7 +1691,8 @@ function App() {
           onRefreshHistory={loadHistory}
           onRefreshLeaderboard={() => void loadLeaderboard()}
           onRefreshMaxBid={() => void loadMaxBidIntent()}
-          onAskQA={askProductQA}
+          onAskQA={() => void askProductQA()}
+          onAskQAPrompt={askProductQAPrompt}
           onQADraftChange={setQADraft}
           onSubmitMaxBid={submitMaxBidIntent}
           onToggleFollow={toggleFollow}

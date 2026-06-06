@@ -206,9 +206,18 @@ export type SystemMessage = {
 };
 export type ProductQAAnswer = {
   auction_id: string;
+  thread_id?: string;
+  question?: string;
   answer: string;
   facts_used: string[];
   safety_note: string;
+  follow_up_prompts?: string[];
+  context_turn_count?: number;
+};
+export type ProductQATurn = {
+  question: string;
+  answer: string;
+  facts_used?: string[];
 };
 export type OrderRow = {
   order_id?: string;

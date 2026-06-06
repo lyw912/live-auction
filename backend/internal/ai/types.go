@@ -141,15 +141,27 @@ type AuctionRecap struct {
 }
 
 type ProductQARequest struct {
-	AuctionID string `json:"auction_id"`
-	Question  string `json:"question"`
+	AuctionID string          `json:"auction_id"`
+	ThreadID  string          `json:"thread_id,omitempty"`
+	Question  string          `json:"question"`
+	History   []ProductQATurn `json:"history,omitempty"`
 }
 
 type ProductQAAnswer struct {
-	AuctionID  string   `json:"auction_id"`
-	Answer     string   `json:"answer"`
-	FactsUsed  []string `json:"facts_used"`
-	SafetyNote string   `json:"safety_note"`
+	AuctionID        string   `json:"auction_id"`
+	ThreadID         string   `json:"thread_id,omitempty"`
+	Question         string   `json:"question,omitempty"`
+	Answer           string   `json:"answer"`
+	FactsUsed        []string `json:"facts_used"`
+	SafetyNote       string   `json:"safety_note"`
+	FollowUpPrompts  []string `json:"follow_up_prompts,omitempty"`
+	ContextTurnCount int      `json:"context_turn_count,omitempty"`
+}
+
+type ProductQATurn struct {
+	Question  string   `json:"question"`
+	Answer    string   `json:"answer"`
+	FactsUsed []string `json:"facts_used,omitempty"`
 }
 
 type AuctionAISettings struct {
@@ -293,10 +305,14 @@ func NormalizeSentinelAlerts(raw map[string]any, input SentinelEvaluationInput) 
 
 func NormalizeProductQAAnswer(raw map[string]any, fallback ProductQAAnswer, allowedFacts map[string]string) ProductQAAnswer {
 	answer := ProductQAAnswer{
-		AuctionID:  fallback.AuctionID,
-		Answer:     cleanText(stringValue(raw["answer"]), 160),
-		FactsUsed:  limitStrings(stringSlice(raw["facts_used"]), 8, 64),
-		SafetyNote: cleanText(firstNonEmpty(stringValue(raw["safety_note"]), "只回答已审核拍品和规则信息。"), 80),
+		AuctionID:        fallback.AuctionID,
+		ThreadID:         fallback.ThreadID,
+		Question:         fallback.Question,
+		Answer:           cleanText(stringValue(raw["answer"]), 180),
+		FactsUsed:        limitStrings(stringSlice(raw["facts_used"]), 8, 64),
+		SafetyNote:       cleanText(firstNonEmpty(stringValue(raw["safety_note"]), "只回答已审核拍品和规则信息。"), 80),
+		FollowUpPrompts:  limitStrings(stringSlice(raw["follow_up_prompts"]), 3, 28),
+		ContextTurnCount: fallback.ContextTurnCount,
 	}
 	if answer.Answer == "" {
 		return fallback
@@ -316,6 +332,9 @@ func NormalizeProductQAAnswer(raw map[string]any, fallback ProductQAAnswer, allo
 	answer.FactsUsed = validFacts
 	if strings.TrimSpace(answer.SafetyNote) == "" {
 		answer.SafetyNote = "不提供真伪、投资收益或隐藏出价信息。"
+	}
+	if len(answer.FollowUpPrompts) == 0 {
+		answer.FollowUpPrompts = fallback.FollowUpPrompts
 	}
 	return answer
 }
@@ -374,10 +393,21 @@ func AnswerFromFacts(auctionID string, question string, itemTitle string, descri
 		}
 	}
 	if len(answers) == 0 {
-		return ProductQAAnswer{AuctionID: auctionID, Answer: "未提供", FactsUsed: []string{}, SafetyNote: "只回答已审核拍品和规则信息。"}
+		return ProductQAAnswer{AuctionID: auctionID, Question: cleanText(question, 120), Answer: "未提供", FactsUsed: []string{}, SafetyNote: "只回答已审核拍品和规则信息。", FollowUpPrompts: defaultProductQAFollowUps(description, rules)}
 	}
-	answer := cleanText(strings.Join(answers, "；"), 160)
-	return ProductQAAnswer{AuctionID: auctionID, Answer: answer, FactsUsed: facts, SafetyNote: "不提供真伪、投资收益或隐藏出价信息。"}
+	answer := cleanText(strings.Join(answers, "；"), 180)
+	return ProductQAAnswer{AuctionID: auctionID, Question: cleanText(question, 120), Answer: answer, FactsUsed: facts, SafetyNote: "不提供真伪、投资收益或隐藏出价信息。", FollowUpPrompts: defaultProductQAFollowUps(description, rules)}
+}
+
+func defaultProductQAFollowUps(description string, rules map[string]any) []string {
+	prompts := []string{"起拍价和加价是多少？"}
+	if strings.TrimSpace(description) != "" {
+		prompts = append(prompts, "有瑕疵或来源说明吗？")
+	}
+	if int64Value(rules["cap_price_cents"]) > 0 {
+		prompts = append(prompts, "封顶价是多少？")
+	}
+	return limitStrings(prompts, 3, 28)
 }
 
 func normalizeSeverity(value string) string {
