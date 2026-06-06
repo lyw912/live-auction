@@ -52,6 +52,20 @@ Sources used to calibrate this plan. Re-check time-sensitive API/model details w
 - web.dev, high-performance animations: `https://web.dev/articles/animations-guide`
   Key points: prefer transform and opacity for smooth animations.
 
+## Live Commerce And Mobile UX Structure
+
+- Nielsen Norman Group, "Livestream Ecommerce: 7 Tips for Good UX": `https://www.nngroup.com/articles/livestream-ecommerce/`
+  Key points: livestream commerce needs persistent product context, clear buying paths, and a balance between entertainment/chat and product decision information.
+
+- Nielsen Norman Group, "The Mobile Checkout Experience": `https://www.nngroup.com/articles/mobile-checkout-ux/`
+  Key points: mobile checkout is constrained by small screens, interruption, and error-prone input; core order/price clarity and low-friction next steps matter.
+
+- Corefy, "Mobile Checkout UI: Principles & Best Practices": `https://corefy.com/blog/mobile-checkout-ui`
+  Key points: persistent order summaries and expandable bottom sheets reduce anxiety and keep price/summary visible without crowding the full flow.
+
+- Invesp, "12 Mobile Checkout Best Practices For e-Commerce Websites": `https://www.invespcro.com/blog/mobile-checkout`
+  Key points: reduce mobile distractions, use clear action buttons for next steps, and keep product/order review easy before purchase.
+
 ## Infrastructure References That Remain Background
 
 These sources support current architecture reasoning but are not the focus of this phase:

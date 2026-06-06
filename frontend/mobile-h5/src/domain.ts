@@ -45,7 +45,7 @@ export type BidPhase = 'idle' | 'pending' | 'engine_pending' | 'engine_sold_pend
 export type PaymentPhase = 'idle' | 'pending' | 'paid' | 'failed' | 'expired';
 export type RecoveryPhase = 'idle' | 'recovering';
 export type ConnectionPhase = 'connecting' | 'connected' | 'recovering' | 'disconnected';
-export type BottomSheetKey = 'products' | 'details' | 'maxBid' | 'leaderboard' | 'history' | 'orders' | 'qa' | 'more';
+export type BottomSheetKey = 'products' | 'details' | 'maxBid' | 'leaderboard' | 'history' | 'orders' | 'qa' | 'liveops' | 'more';
 export type AuctionOverlayMode = 'feed' | 'bid';
 export type ResultSheetKind = 'winner' | 'loser' | 'unsold';
 export type SoundCapability = 'ready' | 'unavailable' | 'blocked';
@@ -493,28 +493,71 @@ export function leaderboardActionCopy(payload: LeaderboardPayload | null, fallba
     return {
       headline: '等待首个有效出价',
       action: `下一口 ${formatCents(nextBid)}`,
-      freshness: '榜单等待服务端事件'
+      freshness: '榜单等待实时更新'
     };
   }
   if (payload.my_rank === 1 || payload.state === 'LEADING') {
     return {
       headline: '第 1 名 · 正在领先',
       action: `守住领先 · 下一口 ${formatCents(nextBid)}`,
-      freshness: `seq ${payload.seq ?? '-'} · ${payload.accepted_bidder_count} 人入局`
+      freshness: `刚刚更新 · ${payload.accepted_bidder_count} 人入局`
     };
   }
   if (payload.my_rank && payload.gap_to_next_rank_cents != null) {
     return {
       headline: `第 ${payload.my_rank} 名 · 差 ${formatCents(payload.gap_to_next_rank_cents)}`,
       action: `下一口 ${formatCents(nextBid)}`,
-      freshness: `seq ${payload.seq ?? '-'} · 近30秒 ${payload.accepted_bids_30s ?? 0} 次`
+      freshness: `刚刚更新 · 近30秒 ${payload.accepted_bids_30s ?? 0} 口`
     };
   }
   return {
     headline: `${payload.accepted_bidder_count} 人已有效出价`,
     action: `一步入局 ${formatCents(nextBid)}`,
-    freshness: `seq ${payload.seq ?? '-'} · 榜单已同步`
+    freshness: '榜单已更新'
   };
+}
+
+export function auctionStatusLabel(status?: string) {
+  switch (status) {
+    case 'ACTIVE':
+      return '竞拍中';
+    case 'SCHEDULED':
+      return '即将开拍';
+    case 'DRAFT':
+      return '待排期';
+    case 'SOLD':
+      return '已成交';
+    case 'ENDED':
+      return '已结束';
+    case 'CANCELLED':
+      return '已取消';
+    case 'PAID':
+      return '已支付';
+    case 'ORDER_EXPIRED':
+      return '订单超时';
+    case 'RECOVERING':
+      return '同步中';
+    case 'DISCONNECTED':
+      return '重连中';
+    case 'THROTTLED':
+      return '稍后再试';
+    case 'UNCERTAIN':
+      return '确认中';
+    case 'ENGINE_PENDING':
+      return '确认中';
+    case 'ENGINE_SOLD_PENDING':
+      return '成交确认中';
+    default:
+      return status || '排队中';
+  }
+}
+
+export function connectionSyncCopy(phase: ConnectionPhase, stale?: boolean, staleCopy?: string) {
+  if (stale) return staleCopy ?? '正在重新同步';
+  if (phase === 'connected') return '已同步';
+  if (phase === 'recovering') return '正在同步';
+  if (phase === 'connecting') return '连接中';
+  return '正在重连';
 }
 
 export function rankBadgeLabel(rank: number) {
@@ -896,12 +939,12 @@ export function riskActionCopy(code?: string | null) {
 
 export function maxBidStatusCopy(intent: MaxBidIntent) {
   if (intent.status === 'ACTIVE') {
-    const applied = intent.last_applied_seq ? ` · 已代出价 seq ${intent.last_applied_seq}` : '';
-    return `Max Bid 已生效${applied}`;
+    const applied = intent.last_applied_seq ? ' · 已为你跟过一次价' : '';
+    return `自动加价已生效${applied}`;
   }
-  if (intent.status === 'EXHAUSTED') return 'Max Bid 已被超越';
-  if (intent.status === 'CANCELLED') return 'Max Bid 已取消';
-  return '本场已结束，Max Bid 不再执行';
+  if (intent.status === 'EXHAUSTED') return '自动加价已被超越';
+  if (intent.status === 'CANCELLED') return '自动加价已取消';
+  return '本场已结束，自动加价不再执行';
 }
 
 export function maxBidErrorCopy(code?: string | null) {
@@ -913,11 +956,11 @@ export function maxBidErrorCopy(code?: string | null) {
     case 'MAX_BID_ABOVE_CAP':
       return '最高价超过本场封顶价';
     case 'PROCESSING_RETRY_LATER':
-      return '上一笔 Max Bid 仍在确认';
+      return '上一笔自动加价仍在确认';
     case 'AUCTION_NOT_ACTIVE':
-      return '当前拍品暂不能设置 Max Bid';
+      return '当前拍品暂不能设置自动加价';
     default:
-      return 'Max Bid 未确认，请重试';
+      return '自动加价未确认，请重试';
   }
 }
 

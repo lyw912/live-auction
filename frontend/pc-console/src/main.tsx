@@ -5,7 +5,7 @@ import '@arco-design/web-react/dist/css/arco.css';
 
 import { AICopilotDrawer, AuctionCommandPanel, AuctionControlSummary, AuctionQueue, ConsoleNav, DiagnosticsPanel, EventTimeline, FlightRecorderDrawer, HealthRibbon, InventoryLotsPanel, ItemCreatePanel, LiveAssistRail, LiveHealthPanel, OrderDetailDrawer, OrdersPanel, RuleEditor } from './components';
 import type { Auction, AuctionAISettings, AuctionRecap, AuthUser, FlightRecorderPayload, HeatSummary, HighlightAsset, HostPrompt, HostPromptsPayload, Item, ListingDraftJob, MaxBidSummary, MonitorPayload, Order, RedisEngineMonitorPayload, Room, RuleAPIError, RuleDraft, SentinelAlert, SignalRequest, SystemMessage } from './domain';
-import { activeAuction, createRuleDraft, defaultRoomID, depositPreview, ensureDemoSession, liveHealthSummary, monitorQuery, narratingAuction, readJSON, rulePayload, signalCopy, sortedAuctions, validateRule } from './domain';
+import { activeAuction, auctionStatusLabel, createRuleDraft, defaultRoomID, depositPreview, ensureDemoSession, liveHealthSummary, monitorQuery, narratingAuction, readJSON, rulePayload, signalCopy, sortedAuctions, validateRule } from './domain';
 import './styles.css';
 
 function App() {
@@ -72,7 +72,7 @@ function App() {
       if (!response.ok) throw new Error('flight recorder query failed');
       setFlightRecorder(payload);
     } catch {
-      Message.error('Flight recorder 读取失败');
+      Message.error('事件回放读取失败');
       setFlightRecorder(undefined);
     } finally {
       setFlightRecorderLoading(false);
@@ -442,7 +442,7 @@ function App() {
 
   const driveDemoBid = async (mode: 'reject' | 'outbid' | 'extend' | 'sold') => {
     if (!selectedAuction || selectedAuction.status !== 'ACTIVE') {
-      Message.warning('请选择 ACTIVE 竞拍后再驱动演示');
+      Message.warning('请选择开拍中的拍品后再演示');
       return;
     }
     const price = selectedAuction.current_price_cents;
@@ -486,7 +486,7 @@ function App() {
         if (copilotImageFile.size <= 2_000_000) {
           imageDataURL = await fileToDataURL(copilotImageFile);
         } else {
-          Message.warning('图片超过 2MB，已保存到表单，AI 将按文字备注生成草稿');
+          Message.warning('图片超过 2MB，已保存到表单，智能草稿将按文字备注生成');
         }
         imageURL = await uploadItemImage(copilotImageFile) || imageURL;
         setCopilotImageURL(imageURL);
@@ -508,16 +508,16 @@ function App() {
       });
       const payload = await readJSON<ListingDraftJob & { message?: string }>(response);
       if (!response.ok) {
-        Message.error(payload.message ?? 'AI 草稿生成失败');
+        Message.error(payload.message ?? '智能草稿生成失败');
         return;
       }
       setListingDraftJob(payload);
       if (imageURL && providerImageURLs.length === 0 && providerImageDataURLs.length === 0) {
-        Message.warning('图片已保存到拍品表单；AI 未读取大图，请在备注里补充关键信息');
+        Message.warning('图片已保存到拍品表单；智能草稿未读取大图，请在备注里补充关键信息');
       }
-      Message.success('AI 草稿已生成，需人工确认后应用');
+      Message.success('智能草稿已生成，需人工确认后应用');
     } catch {
-      Message.error('AI 草稿生成失败');
+      Message.error('智能草稿生成失败');
     } finally {
       setListingDraftLoading(false);
     }
@@ -573,13 +573,13 @@ function App() {
       });
       const payload = await readJSON<{ message?: SystemMessage; code?: string }>(response);
       if (!response.ok) {
-        Message.error(payload.code ?? 'AI 解说生成失败');
+        Message.error(payload.code ?? '智能解说生成失败');
         return;
       }
       if (payload.message) setSystemMessages((current) => [payload.message!, ...current.filter((row) => row.id !== payload.message!.id)].slice(0, 10));
       Message.success('系统解说已生成');
     } catch {
-      Message.error('AI 解说生成失败');
+      Message.error('智能解说生成失败');
     }
   };
 
@@ -706,7 +706,7 @@ function App() {
                 <h1>竞拍控场</h1>
                 <p>选择队列中的拍品，执行排期、开拍、取消、讲解和实时氛围演示。</p>
               </div>
-              <span>{pinnedActiveAuction ? `ACTIVE ${pinnedActiveAuction.id}` : '当前无 ACTIVE'}</span>
+              <span>{pinnedActiveAuction ? `${auctionStatusLabel(pinnedActiveAuction.status)} ${pinnedActiveAuction.id}` : '当前无开拍中拍品'}</span>
             </div>
             <div className="command-center" data-testid="pc-command-center">
               <AuctionQueue

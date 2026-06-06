@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { CheckCircle2, ChevronUp, Radio, RefreshCw } from 'lucide-react';
 import type { AtmosphereCue, AtmosphereInput } from './atmosphere';
-import { AuctionStatePanel, BottomSheet, ChatComposer, ChatPanel, LeaderboardPanel, LiveOpsPanel, LiveStage, ResultSheet, StateMatrixTabs } from './components';
+import { AuctionStatePanel, BottomSheet, ChatComposer, ChatPanel, LeaderboardPanel, LiveStage, ResultSheet, StateMatrixTabs } from './components';
 import type { AuctionItem, AuctionOverlayMode, AuctionRealtimeEvent, AuctionState, AuctionSummary, AuctionSoundPack, AuthUser, BidderRequirement, BidPhase, BidResponse, BottomSheetKey, ChatMessage, ConnectionPhase, HistoryRow, LeaderboardPayload, LiveOpsCampaign, MaxBidIntent, MaxBidPhase, OrderRow, PaymentPhase, PendingBidRequest, ProductQAAnswer, ProductQATurn, RecoveryPhase, ResultSheetKind, Scenario, SnapshotResponse, SoundCapability, SystemMessage, WSTicketResponse } from './domain';
 import { createAudioContext, createClientBidID, demoProductImageURL, demoUserID, deriveCountdown, deriveCountdownPhase, ensureDemoSession, extensionCopyFromEvent, formatCents, heatSnapshot, isBidConfirmationPending, isCountdownExpired, isDangerousActionDisabled, isEngineRejected, isTestMatrixEnabled, loadAuctionSoundPack, maxBidErrorCopy, maxBidStatusCopy, playAuctionSound, playCountdownTone, playCueTone, playLayeredCue, readJSON, rejectCopy, responseServerTimeMS, retryAfterMS, retryAfterMSFromHeaders, roomIDFromPath, scenarios, selectEntryAuction, speakSystemMessage, vibrateCountdownPhase, vibratePattern, visibleRoomAuctions } from './domain';
 import { normalizeAtmosphere } from './atmosphere';
@@ -391,7 +391,7 @@ function App() {
           status: 'SOLD',
           price: soldPrice,
           leader: '你已拍中',
-          feedback: '等待服务端确认支付',
+          feedback: '等待支付确认',
           countdown: '支付确认中',
           cta: '支付中',
           ctaDisabled: true,
@@ -588,8 +588,8 @@ function App() {
         title: '结算中',
         status: 'ENGINE_PENDING',
         price: formatCents(currentPriceCents),
-        leader: leaderMasked ? `${leaderMasked} 领先` : '热引擎已接收',
-        feedback: bidFeedback || `等待账本结算 seq ${lastSeq}`,
+        leader: leaderMasked ? `${leaderMasked} 领先` : '出价已接收',
+        feedback: bidFeedback || '出价已提交，正在确认',
         countdown: countdownCopy,
         cta: '结算中',
         ctaDisabled: true,
@@ -602,7 +602,7 @@ function App() {
         title: '落锤结算中',
         status: 'ENGINE_SOLD_PENDING',
         price: formatCents(currentPriceCents),
-        leader: leaderMasked ? `${leaderMasked} 拍中` : '热引擎已落锤',
+        leader: leaderMasked ? `${leaderMasked} 拍中` : '正在确认成交',
         feedback: bidFeedback || '等待订单结算确认',
         countdown: '订单同步中',
         cta: '等待订单',
@@ -644,7 +644,7 @@ function App() {
         status: 'ACTIVE',
         price: formatCents(currentPriceCents),
         leader: '你已领先',
-        feedback: bidFeedback || `已结算 seq ${lastSeq}`,
+        feedback: bidFeedback || '出价已确认',
         countdown: countdownCopy,
         cta: '已领先',
         ctaDisabled: true
@@ -708,12 +708,12 @@ function App() {
       || payload.durability_status === 'KAFKA_UNKNOWN';
     if (isPendingDurability) {
       setRiskCode('BID_CONFIRMATION_PENDING');
-      setBidFeedback(`出价已进入确认队列，等待账本确认 seq ${payload.engine_seq ?? payload.seq ?? lastSeq}`);
+      setBidFeedback('出价已提交，正在确认');
       setBidPhase('engine_pending');
       showAtmosphere({
         kind: 'leading',
         title: '出价确认中',
-        detail: '等待竞拍账本确认',
+        detail: '等待最终确认',
         auction_id: payload.auction_id ?? activeAuctionIDRef.current,
         cause_seq: payload.engine_seq ?? payload.seq ?? lastSeqRef.current,
         event_type: payload.result ?? 'BID_CONFIRMATION_PENDING',
@@ -723,7 +723,7 @@ function App() {
     }
     if (payload.result === 'RECONCILING' || payload.decision_status === 'RECONCILING' || payload.durability_status === 'KAFKA_FAILED') {
       setRiskCode('RECONCILING');
-      setBidFeedback('竞拍账本正在恢复，暂不能确认本次出价结果');
+      setBidFeedback('竞拍状态正在恢复，暂不能确认本次出价结果');
       setBidPhase('uncertain');
       pendingBidRef.current = pendingBidRef.current ?? null;
       return;
@@ -731,7 +731,7 @@ function App() {
     if (isEngineRejected(payload)) {
       const code = payload.reject_reason ?? 'ENGINE_REJECTED';
       setRiskCode(code);
-      setBidFeedback(`${rejectCopy(code)}，热引擎已裁决 seq ${payload.engine_seq ?? payload.seq ?? lastSeq}`);
+      setBidFeedback(`${rejectCopy(code)}，请按当前价格重新确认`);
       setBidPhase('rejected');
       pendingBidRef.current = null;
       void loadLeaderboard(payload.auction_id ?? activeAuctionIDRef.current);
@@ -751,13 +751,13 @@ function App() {
     if (payload.server_time_ms) syncServerTimeMS(payload.server_time_ms);
     if (isEnginePending || isEngineSoldPending) {
       setBidFeedback(isEngineSoldPending
-        ? `热引擎已落锤，等待订单结算 seq ${payload.engine_seq ?? payload.seq ?? lastSeq}`
-        : `热引擎已接收，等待账本结算 seq ${payload.engine_seq ?? payload.seq ?? lastSeq}`);
+        ? '已到成交确认，等待订单生成'
+        : '出价已提交，正在确认');
       setBidPhase(isEngineSoldPending ? 'engine_sold_pending' : 'engine_pending');
       showAtmosphere({
         kind: 'leading',
-        title: isEngineSoldPending ? '落锤结算中' : '出价已接收',
-        detail: isEngineSoldPending ? '等待订单结算' : '等待竞拍账本结算',
+        title: isEngineSoldPending ? '成交确认中' : '出价已接收',
+        detail: isEngineSoldPending ? '等待订单生成' : '等待最终确认',
         auction_id: payload.auction_id ?? activeAuctionIDRef.current,
         cause_seq: payload.engine_seq ?? payload.seq ?? lastSeqRef.current,
         event_type: payload.result ?? 'ENGINE_ACCEPTED',
@@ -768,7 +768,7 @@ function App() {
     }
     if (payload.result === 'ACCEPTED_EXTENDED') {
       setExtensionNotice('服务端已延时');
-      setBidFeedback(`服务端已延时 seq ${payload.seq ?? lastSeq}`);
+      setBidFeedback('最后时刻有出价，竞拍已延时');
       showAtmosphere({
         kind: 'extended',
         title: '已延时',
@@ -802,7 +802,7 @@ function App() {
       return;
     }
     if (acceptedWinnerID === currentUserID) {
-      setBidFeedback(`服务端确认 seq ${payload.seq ?? lastSeq}`);
+      setBidFeedback('出价已确认');
       showAtmosphere({
         kind: 'leading',
         title: '领先！',
@@ -866,7 +866,7 @@ function App() {
     }
     setLastSeq(snapshot.seq);
     setLeaderMasked(snapshot.payload?.leader_user_masked ?? leaderMasked);
-    setBidFeedback(`snapshot ${snapshot.source ?? 'db'} seq ${snapshot.seq}`);
+      setBidFeedback('已同步最新竞拍状态');
     setBidPhase('idle');
     const status = snapshot.payload?.status ?? snapshot.status;
     const winnerID = snapshot.payload?.current_winner_id ?? snapshot.current_winner_id;
@@ -902,7 +902,7 @@ function App() {
       const response = await fetch(`/api/auctions/${auctionID}`);
       const snapshot = await readJSON<SnapshotResponse>(response);
       if (!response.ok || !snapshot || snapshot.stale) {
-        setBidFeedback('snapshot stale，继续同步');
+        setBidFeedback('状态较旧，正在继续同步');
         return;
       }
       if (!snapshot.server_time_ms && !snapshot.payload?.server_time_ms) {
@@ -912,7 +912,7 @@ function App() {
       setRecoveryPhase('idle');
       setConnectionPhase('connected');
     } catch {
-      setBidFeedback('snapshot unavailable，继续同步');
+      setBidFeedback('暂未取到最新状态，正在继续同步');
     } finally {
       recoveryInFlightRef.current = false;
     }
@@ -937,7 +937,7 @@ function App() {
       return;
     }
     if (detail.event_type === 'redis_engine_paused' || detail.event_type === 'redis_engine_reconciling') {
-      setBidFeedback(detail.event_type === 'redis_engine_paused' ? '拍卖引擎已暂停，等待结算恢复' : '拍卖引擎对账中');
+      setBidFeedback(detail.event_type === 'redis_engine_paused' ? '竞拍确认暂停，等待恢复' : '竞拍状态校对中');
       setConnectionPhase('recovering');
       return;
     }
@@ -960,7 +960,7 @@ function App() {
     const wasExtended = Boolean(nextEndAt && previousEndAt && Date.parse(nextEndAt) > Date.parse(previousEndAt));
     if (wasExtended && nextEndAt) {
       setExtensionNotice(extensionCopyFromEvent(detail, previousEndAt, nextEndAt));
-      setBidFeedback(`服务端已延时 seq ${detail.seq}`);
+      setBidFeedback('最后时刻有出价，竞拍已延时');
       showAtmosphere({
         kind: 'extended',
         title: '已延时',
@@ -971,7 +971,7 @@ function App() {
         user_scope: 'global'
       });
     } else {
-      setBidFeedback(`event seq ${detail.seq}`);
+      setBidFeedback('竞拍状态已更新');
     }
     if (detail.event_type === 'auction_sold') {
       setTerminalPriceCents(price);
@@ -1017,7 +1017,7 @@ function App() {
       setBidFeedback('订单已超时');
     } else if (winnerID === currentUserIDRef.current || detail.payload?.current_winner_id === currentUserIDRef.current) {
       setBidPhase('accepted');
-      setBidFeedback(`已结算 seq ${detail.seq}`);
+      setBidFeedback('出价已确认');
       showAtmosphere({
         kind: 'leading',
         title: '领先！',
@@ -1075,7 +1075,7 @@ function App() {
         setLastSeq(selectedAuction.seq ?? lastSeqRef.current);
         setAuctionEndAt(selectedAuction.end_at ?? '');
         syncServerTimeMS(selectedAuction.server_time_ms ?? 0);
-        setBidFeedback(`auction ${selectedAuction.id}`);
+        setBidFeedback('已进入当前拍品');
         void loadLeaderboard(selectedAuction.id);
         try {
           const snapshotResponse = await fetch(`/api/auctions/${selectedAuction.id}`);
@@ -1087,10 +1087,10 @@ function App() {
             applySnapshot(snapshot);
           }
         } catch {
-          setBidFeedback(`auction ${selectedAuction.id}`);
+          setBidFeedback('已进入当前拍品');
         }
       } catch {
-        setBidFeedback('auction list unavailable');
+        setBidFeedback('拍品列表暂不可用');
       }
     };
     void loadActiveAuction();
@@ -1423,7 +1423,7 @@ function App() {
       setMaxBidAmountCents(Math.max(payload.max_amount_cents, minimumNextBidCents));
       setMaxBidFeedback(maxBidStatusCopy(payload));
     } catch {
-      setMaxBidFeedback('Max Bid 状态读取失败');
+      setMaxBidFeedback('自动加价状态读取失败');
     }
   };
 
@@ -1432,7 +1432,7 @@ function App() {
     if (!auctionID || (maxBidPhase !== 'idle' && maxBidPhase !== 'error') || isDangerousActionDisabled(scenario, connectionPhase)) return;
     const amount = Math.max(maxBidAmountCentsRef.current || 0, minimumNextBidCents);
     setMaxBidPhase('pending');
-    setMaxBidFeedback('等待服务端确认 Max Bid');
+    setMaxBidFeedback('正在确认自动加价');
     try {
       const key = createClientBidID();
       const response = await fetch(`/api/auctions/${auctionID}/max-bid-intent`, {
@@ -1459,7 +1459,7 @@ function App() {
       setMaxBidPhase('idle');
     } catch {
       setMaxBidPhase('error');
-      setMaxBidFeedback('网络异常，Max Bid 未确认');
+      setMaxBidFeedback('网络异常，自动加价未确认');
     }
   };
 
@@ -1467,7 +1467,7 @@ function App() {
     const auctionID = activeAuctionIDRef.current;
     if (!auctionID || !maxBidIntent || maxBidPhase !== 'idle' || isDangerousActionDisabled(scenario, connectionPhase)) return;
     setMaxBidPhase('canceling');
-    setMaxBidFeedback('等待服务端取消 Max Bid');
+    setMaxBidFeedback('正在取消自动加价');
     try {
       const key = createClientBidID();
       const response = await fetch(`/api/auctions/${auctionID}/max-bid-intent`, {
@@ -1485,7 +1485,7 @@ function App() {
       setMaxBidPhase('idle');
     } catch {
       setMaxBidPhase('error');
-      setMaxBidFeedback('网络异常，Max Bid 未取消');
+      setMaxBidFeedback('网络异常，自动加价未取消');
     }
   };
 
@@ -1758,32 +1758,13 @@ function App() {
         currentPriceCents={currentPriceCents}
         nextBidCents={nextBidCents}
         onLike={() => setLikeCount((count) => count + 1)}
+        onOpenLiveOps={() => setActiveSheet('liveops')}
         onOpenMore={() => setActiveSheet('more')}
         onOpenProducts={() => openWarmupSheet('products', 'watch')}
         onOpenBid={openBidOverlay}
         onToggleFollow={toggleFollow}
         onToggleSound={() => void toggleSound()}
       />
-      {!showStateMatrix && (
-        <LiveOpsPanel
-          activeTeam={activeBuyerTeam}
-          followed={followed}
-          heat={heat}
-          leaderboard={leaderboard}
-          liveOpsCampaign={liveOpsCampaign}
-          liveOpsBusy={liveOpsBusy}
-          liveOpsError={liveOpsError}
-          likeCount={likeCount}
-          scenario={scenario}
-          onOpenProducts={() => openWarmupSheet('products', 'watch')}
-          onOpenQA={() => setActiveSheet('qa')}
-          onOpenLeaderboard={() => openWarmupSheet('leaderboard', 'leaderboard')}
-          onEnterLuckyDraw={() => void enterLuckyDraw()}
-          onOpenLuckyDraw={() => void openLuckyDraw()}
-          onSelectTeam={(team) => void selectBuyerTeam(team)}
-          onToggleFollow={toggleFollow}
-        />
-      )}
       {overlayMode === 'bid' && (
         <AuctionStatePanel
           atmosphereCue={atmosphereCue}
@@ -1864,8 +1845,14 @@ function App() {
           qaDraft={qaDraft}
           qaLoading={qaLoading}
           scenario={scenario}
+          activeTeam={activeBuyerTeam}
           connectionPhase={connectionPhase}
           followed={followed}
+          heat={heat}
+          likeCount={likeCount}
+          liveOpsBusy={liveOpsBusy}
+          liveOpsCampaign={liveOpsCampaign}
+          liveOpsError={liveOpsError}
           soundEnabled={soundEnabled}
           onClose={() => setActiveSheet(null)}
           onCancelMaxBid={cancelMaxBidIntent}
@@ -1877,7 +1864,10 @@ function App() {
           onRefreshMaxBid={() => void loadMaxBidIntent()}
           onAskQA={() => void askProductQA()}
           onAskQAPrompt={askProductQAPrompt}
+          onEnterLuckyDraw={() => void enterLuckyDraw()}
+          onOpenLuckyDraw={() => void openLuckyDraw()}
           onQADraftChange={setQADraft}
+          onSelectTeam={(team) => void selectBuyerTeam(team)}
           onSubmitMaxBid={submitMaxBidIntent}
           onToggleFollow={toggleFollow}
           onToggleSound={() => void toggleSound()}

@@ -215,7 +215,7 @@ button {
 }
 
 .host-profile button.is-followed {
-  background: rgba(255, 255, 255, .92);
+  background: rgba(255, 255, 255, .96);
   color: #2d3440;
 }
 
@@ -479,7 +479,7 @@ button {
   align-items: center;
   border-radius: 999px;
   padding: 0 12px;
-  background: #ff2d55;
+  background: linear-gradient(90deg, #ff2d55, #ff7a1a);
   color: #fff;
   font-size: 12px;
   font-weight: 900;
@@ -575,7 +575,7 @@ button {
 }
 
 .video-stage[data-atmosphere-kind="sold"] .effect-hammer-mark::before {
-  content: "SOLD";
+  content: "成交";
 }
 
 .video-stage[data-countdown-phase="hot"],
@@ -792,17 +792,14 @@ button {
   position: relative;
   z-index: var(--z-content);
   display: grid;
-  gap: 8px;
-  padding: 10px 12px 0;
+  gap: 10px;
 }
 
 .warmup-card,
 .lucky-draw-card,
 .buyer-pk-card,
 .entry-effect-card {
-  border: 1px solid var(--color-line);
   border-radius: var(--radius-md);
-  background: var(--color-surface-0);
   box-shadow: 0 10px 24px rgba(15, 23, 42, .08);
 }
 
@@ -812,6 +809,16 @@ button {
   display: grid;
   gap: 8px;
   padding: 10px;
+}
+
+.warmup-card {
+  border: 1px solid rgba(42, 157, 143, .2);
+  background: linear-gradient(135deg, #f2fbf9, #ffffff);
+}
+
+.buyer-pk-card {
+  border: 1px solid rgba(91, 140, 255, .22);
+  background: linear-gradient(135deg, #f5f8ff, #ffffff);
 }
 
 .warmup-card > div:first-child,
@@ -1000,6 +1007,8 @@ button {
   min-height: 52px;
   padding: 10px;
   text-align: left;
+  border: 1px solid rgba(255, 209, 102, .32);
+  background: linear-gradient(135deg, #fff8e6, #ffffff);
 }
 
 .entry-effect-card.is-followed {
@@ -1057,7 +1066,7 @@ button {
 .auction-panel {
   margin-top: -28px;
   border-radius: var(--radius-md) var(--radius-md) 0 0;
-  background: #fff;
+  background: #fbfcfe;
   padding: 18px;
   box-shadow: var(--shadow-panel);
 }
@@ -1215,7 +1224,7 @@ button {
   margin-top: 6px;
   border: 1px solid rgba(255, 45, 85, .16);
   border-radius: var(--radius-md);
-  background: #fff5f8;
+  background: linear-gradient(135deg, #fff5f8, #fff);
   contain: layout paint;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1547,7 +1556,7 @@ button {
   margin-top: 8px;
   border: 0;
   border-radius: var(--radius-md);
-  background: linear-gradient(90deg, #ff5a6a, #ff0f55);
+  background: linear-gradient(90deg, #ff2d55, #ff6b2b);
   color: white;
   font-weight: 800;
   display: inline-flex;
@@ -1904,7 +1913,7 @@ button {
   max-height: min(74vh, 620px);
   min-height: 42vh;
   border-radius: 18px 18px 0 0;
-  background: var(--color-surface-0);
+  background: #f6f8fb;
   padding: 8px 14px calc(12px + var(--safe-area-bottom));
   box-shadow: 0 -20px 42px rgba(15, 23, 42, .24);
   display: flex;
@@ -2328,13 +2337,16 @@ button {
 
 .sheet-tabs {
   margin-top: 10px;
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  display: flex;
   gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
 }
 
 .sheet-tabs button {
+  flex: 0 0 auto;
   min-height: 34px;
+  min-width: 58px;
   border: 1px solid var(--color-line);
   border-radius: var(--radius-sm);
   background: #fff;
@@ -2353,6 +2365,7 @@ button {
   min-height: 0;
   margin-top: 10px;
   overflow: auto;
+  padding-bottom: 2px;
 }
 
 .product-card-list,
@@ -2365,9 +2378,9 @@ button {
 
 .max-bid-status {
   min-height: 72px;
-  border: 1px solid rgba(255, 45, 85, .16);
+  border: 1px solid rgba(44, 123, 229, .18);
   border-radius: var(--radius-md);
-  background: var(--color-bid-red-soft);
+  background: linear-gradient(135deg, #eef5ff, #ffffff);
   padding: 10px;
   display: grid;
   gap: 4px;
@@ -2383,7 +2396,7 @@ button {
 }
 
 .max-bid-status strong {
-  color: #b90035;
+  color: #1d4ed8;
   font-family: var(--font-auction-tabular);
   font-size: 20px;
   font-variant-numeric: tabular-nums;
@@ -2451,7 +2464,7 @@ button {
 
 .max-bid-actions button:first-child {
   border: 0;
-  background: linear-gradient(90deg, #ff5a6a, #ff0f55);
+  background: linear-gradient(90deg, #1d4ed8, #2a9d8f);
   color: #fff;
 }
 
@@ -2463,9 +2476,9 @@ button {
 
 .product-card {
   min-height: 64px;
-  border: 1px solid var(--color-line);
+  border: 1px solid rgba(15, 23, 42, .08);
   border-radius: var(--radius-md);
-  background: #fff;
+  background: linear-gradient(135deg, #ffffff, #f7fafc);
   padding: 10px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -2548,9 +2561,9 @@ button {
 
 .trust-proof-grid span {
   min-height: 52px;
-  border: 1px solid var(--color-line);
+  border: 1px solid rgba(42, 157, 143, .18);
   border-radius: var(--radius-md);
-  background: #fff;
+  background: #f5fbf9;
   padding: 8px;
   color: var(--color-muted);
   font-size: 12px;
@@ -2570,9 +2583,9 @@ button {
 }
 
 .trust-rule-list article {
-  border: 1px solid var(--color-line);
+  border: 1px solid rgba(15, 23, 42, .08);
   border-radius: var(--radius-md);
-  background: #fff;
+  background: linear-gradient(135deg, #ffffff, #f9fafb);
   padding: 10px;
 }
 

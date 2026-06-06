@@ -2,7 +2,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 're
 import { AlertTriangle, BadgeCheck, Bell, BellOff, CheckCircle2, ChevronUp, Clock3, Copy, CreditCard, Download, Flame, Heart, History, Info, MessageCircle, MoreHorizontal, PackageCheck, RefreshCw, Send, ShieldCheck, ShoppingCart, Sparkles, Truck, Trophy, Users, Wifi, WifiOff, X } from 'lucide-react';
 import type { AtmosphereCue } from './atmosphere';
 import type { AuctionItem, AuctionState, AuctionSummary, BottomSheetKey, ChatMessage, ConnectionPhase, CountdownPhase, CountdownPhaseState, HeatSnapshot, HistoryRow, LeaderboardPayload, LiveOpsCampaign, MaxBidIntent, MaxBidPhase, PaymentPhase, ProductQAAnswer, ResultRecap, ResultSheetKind, Scenario, SoundCapability, SystemMessage } from './domain';
-import { buildHighlightCard, buildResultRecap, demoLiveVideoURL, demoProductImageURL, formatCents, formatClockTime, isDangerousActionDisabled, leaderboardActionCopy, rankBadgeLabel, riskActionCopy, scenarios } from './domain';
+import { auctionStatusLabel, buildHighlightCard, buildResultRecap, connectionSyncCopy, demoLiveVideoURL, demoProductImageURL, formatCents, formatClockTime, isDangerousActionDisabled, leaderboardActionCopy, rankBadgeLabel, riskActionCopy, scenarios } from './domain';
 
 export function LiveStage({
   activeAuctionID,
@@ -26,6 +26,7 @@ export function LiveStage({
   soundCapability,
   systemMessages,
   onOpenBid,
+  onOpenLiveOps,
   onOpenMore,
   onOpenProducts,
   onToggleFollow,
@@ -53,6 +54,7 @@ export function LiveStage({
   soundCapability: SoundCapability;
   systemMessages: SystemMessage[];
   onOpenBid: () => void;
+  onOpenLiveOps: () => void;
   onOpenMore: () => void;
   onOpenProducts: () => void;
   onToggleFollow: () => void;
@@ -69,7 +71,7 @@ export function LiveStage({
   if (item.shipping) proofChips.push({ icon: <Truck size={13} />, label: item.shipping });
   const visibleSystem = systemMessages.slice(0, 2).map((message) => ({
     id: `sys-${message.id}`,
-    user: 'AI',
+    user: '助手',
     body: message.body
   }));
   const visibleChat = [
@@ -125,7 +127,7 @@ export function LiveStage({
       <div className="video-topbar">
         <div className="host-profile">
           <span className="host-avatar">{roomID.slice(0, 1).toUpperCase()}</span>
-          <span><strong>竞拍直播间</strong><em>{roomID}</em></span>
+          <span><strong>竞拍直播间</strong><em>本场直播</em></span>
           <button type="button" className={followed ? 'is-followed' : ''} onClick={onToggleFollow}>{followed ? '已关注' : '关注'}</button>
         </div>
         <span className="viewer-count avatar-stack" title="真实竞价热度，不展示虚构观看人数"><Users size={13} /> 近30秒 {heat.activeBidders30s} 人</span>
@@ -143,7 +145,7 @@ export function LiveStage({
       </div>
       <div className="stage-safe-zone">
         <div className="live-topic-row" aria-label="live-topic">
-          <span>{scenario.status}</span>
+          <span>{auctionStatusLabel(scenario.status)}</span>
           <span>{heat.source === 'leaderboard' ? `有效出价 ${heat.acceptedBidderCount} 人` : '热度同步中'}</span>
         </div>
         {proofChips.length > 0 && <div className="proof-chip-row" aria-label="product-proof">
@@ -163,14 +165,14 @@ export function LiveStage({
         </div>
         <div className="focus-copy">
           <h1>{lotTitle}</h1>
-          <p>{activeAuctionID || '当前拍品'} · {scenario.countdown ?? countdownCopy}</p>
+          <p>确认价格和时间后再出价 · {scenario.countdown ?? countdownCopy}</p>
         </div>
       </div>
       {countdownPhase.phase === 'hammer' && countdownPhase.beat && !scenario.stale && !scenario.sold ? (
         <div className="hammer-beat-layer" data-testid="hammer-beat-layer" aria-live="polite">
           <span>{countdownPhase.beat}</span>
           <strong>{countdownPhase.beat === '最后一次' ? '落锤前最后确认' : '有效出价仍会延时'}</strong>
-          <em>以服务端结果为准</em>
+          <em>以最终成交结果为准</em>
         </div>
       ) : null}
       <HeatMeter heat={heat} countdownPhase={countdownPhase.phase} />
@@ -181,15 +183,16 @@ export function LiveStage({
         <span className="floating-product-copy">
           <strong>{activeAuction?.item?.title ?? lotTitle}</strong>
           <span className="floating-auction-meta">
-            <em data-testid="floating-auction-price">{scenario.status === 'ACTIVE' ? `当前最高价 ${formatCents(currentPriceCents)}` : `${scenario.status} · ${scenario.price}`}</em>
+            <em data-testid="floating-auction-price">{scenario.status === 'ACTIVE' ? `当前最高价 ${formatCents(currentPriceCents)}` : `${auctionStatusLabel(scenario.status)} · ${scenario.price}`}</em>
             <small data-testid="floating-auction-countdown"><Clock3 size={12} />{scenario.countdown ?? countdownCopy}</small>
-            <small data-testid="floating-auction-status">{scenario.status} · {connectionCopy}</small>
+            <small data-testid="floating-auction-status">{auctionStatusLabel(scenario.status)} · {connectionCopy}</small>
           </span>
         </span>
         <span className="floating-product-action">{scenario.ctaDisabled && !scenario.winner ? '看详情' : `出价 ${formatCents(nextBidCents)}`}</span>
       </button>
       <div className="live-action-rail" aria-label="live-actions">
         <button type="button" onClick={onOpenProducts} aria-label="商品列表"><ShoppingCart size={20} /><span>{queuedCount + 1}</span></button>
+        <button type="button" onClick={onOpenLiveOps} aria-label="直播互动"><Sparkles size={20} /></button>
         <button type="button" onClick={onLike} aria-label="点赞"><Heart size={20} /><span>{likeCount}</span></button>
         <button type="button" onClick={onOpenMore} aria-label="更多"><MoreHorizontal size={20} /></button>
       </div>
@@ -208,7 +211,7 @@ function BarrageLayer({ messages }: { messages: SystemMessage[] }) {
           key={message.id}
           style={{ '--barrage-lane': index, '--barrage-delay': `${index * 260}ms` } as React.CSSProperties}
         >
-          <strong>AI</strong>
+          <strong>助手</strong>
           {message.body}
         </span>
       ))}
@@ -349,7 +352,7 @@ export function LiveOpsPanel({
       <div className="buyer-pk-card" data-testid="buyer-pk-card">
         <div className="pk-title">
           <span><Flame size={13} /> 买家阵营</span>
-          <strong>{scenario.status === 'ACTIVE' ? '竞价中' : scenario.status}</strong>
+          <strong>{auctionStatusLabel(scenario.status)}</strong>
         </div>
         <div className="pk-bars" style={{ '--craft-score': `${craftScore}%`, '--story-score': `${storyScore}%` } as React.CSSProperties}>
           <button type="button" className={activeTeam === 'craft' ? 'active' : ''} onClick={() => onSelectTeam('craft')}>
@@ -492,7 +495,7 @@ export function AuctionStatePanel({
         </div>
       </div>
       <div className="dock-rank-row">
-        <span className="status-chip" data-state={scenario.status}>{scenario.status}</span>
+        <span className="status-chip" data-state={scenario.status}>{auctionStatusLabel(scenario.status)}</span>
         <span>{scenario.leader}</span>
         <strong>{rankCopy} · {gapCopy}</strong>
       </div>
@@ -503,7 +506,7 @@ export function AuctionStatePanel({
       </div>
       <div className="signal-row">
         {scenario.stale || connectionPhase === 'disconnected' ? <WifiOff size={16} /> : <Wifi size={16} />}
-        <span>{scenario.stale ? scenario.staleCopy ?? '状态可能已过期' : connectionPhase === 'connected' ? 'WebSocket 已连接 · 状态来自服务端事件' : 'WebSocket 连接中 · 状态来自服务端事件'}</span>
+        <span>{connectionSyncCopy(connectionPhase, scenario.stale, scenario.staleCopy)}</span>
       </div>
       <div className="dock-feedback" aria-live={scenario.rejected || scenario.stale ? 'assertive' : 'polite'}>
         <span>{scenario.feedback} · <strong data-testid="bid-hint">{bidHint}</strong></span>
@@ -533,7 +536,7 @@ export function AuctionStatePanel({
       />
       <div className="bid-stepper">
         <button type="button" aria-label="decrease" onClick={onDecreaseBid}>-</button>
-        <span>{scenario.sold ? 'ORDER' : formatCents(nextBidCents)}</span>
+        <span>{scenario.sold ? '查看订单' : formatCents(nextBidCents)}</span>
         <button type="button" aria-label="increase" onClick={onIncreaseBid}><ChevronUp size={18} /></button>
       </div>
       <button className="primary-cta" data-testid="bid-cta" disabled={primaryDisabled} onClick={onPrimaryAction}>
@@ -543,7 +546,7 @@ export function AuctionStatePanel({
       <div className="dock-shortcuts" aria-label="bid-dock-shortcuts">
         <button type="button" onClick={() => onOpenSheet('products')}>商品</button>
         <button type="button" onClick={() => onOpenSheet('details')}>规则</button>
-        <button type="button" onClick={() => onOpenSheet('maxBid')}>Max</button>
+        <button type="button" onClick={() => onOpenSheet('maxBid')}>自动加价</button>
         <button type="button" onClick={() => onOpenSheet('leaderboard')}>榜单</button>
         <button type="button" onClick={() => onOpenSheet('history')}>历史</button>
         <button type="button" onClick={() => onOpenSheet('orders')}>订单</button>
@@ -761,7 +764,13 @@ export function BottomSheet({
   qaDraft,
   qaLoading,
   scenario,
+  activeTeam,
   followed,
+  heat,
+  likeCount,
+  liveOpsBusy,
+  liveOpsCampaign,
+  liveOpsError,
   soundEnabled,
   onCancelMaxBid,
   onClose,
@@ -773,7 +782,10 @@ export function BottomSheet({
   onRefreshMaxBid,
   onAskQA,
   onAskQAPrompt,
+  onEnterLuckyDraw,
+  onOpenLuckyDraw,
   onQADraftChange,
+  onSelectTeam,
   onSubmitMaxBid,
   onToggleFollow,
   onToggleSound
@@ -799,7 +811,13 @@ export function BottomSheet({
   qaDraft: string;
   qaLoading: boolean;
   scenario: Scenario;
+  activeTeam: 'craft' | 'story';
   followed: boolean;
+  heat: HeatSnapshot;
+  likeCount: number;
+  liveOpsBusy: string;
+  liveOpsCampaign: LiveOpsCampaign | null;
+  liveOpsError: string;
   soundEnabled: boolean;
   onCancelMaxBid: () => void;
   onClose: () => void;
@@ -811,7 +829,10 @@ export function BottomSheet({
   onRefreshMaxBid: () => void;
   onAskQA: () => void;
   onAskQAPrompt: (prompt: string) => void;
+  onEnterLuckyDraw: () => void;
+  onOpenLuckyDraw: () => void;
   onQADraftChange: (draft: string) => void;
+  onSelectTeam: (team: 'craft' | 'story') => void;
   onSubmitMaxBid: () => void;
   onToggleFollow: () => void;
   onToggleSound: () => void;
@@ -819,11 +840,12 @@ export function BottomSheet({
   const titleMap: Record<BottomSheetKey, string> = {
     products: '本场商品',
     details: '商品与规则',
-    maxBid: 'Max Bid',
+    maxBid: '自动加价',
     leaderboard: '实时榜单',
     history: '我的出价',
     orders: '我的订单',
     qa: '拍品问答',
+    liveops: '互动福利',
     more: '直播设置'
   };
   useEffect(() => {
@@ -848,11 +870,12 @@ export function BottomSheet({
           {([
             ['products', '商品'],
             ['details', '规则'],
-            ['maxBid', 'Max'],
+            ['maxBid', '自动'],
             ['leaderboard', '榜单'],
             ['history', '历史'],
             ['orders', '订单'],
             ['qa', '问答'],
+            ['liveops', '互动'],
             ['more', '更多']
           ] as Array<[BottomSheetKey, string]>).map(([key, label]) => (
             <button type="button" role="tab" aria-selected={activeSheet === key} key={key} onClick={() => onOpenSheet(key)}>{label}</button>
@@ -911,6 +934,26 @@ export function BottomSheet({
               onAsk={onAskQA}
               onAskPrompt={onAskQAPrompt}
               onDraftChange={onQADraftChange}
+            />
+          )}
+          {activeSheet === 'liveops' && (
+            <LiveOpsPanel
+              activeTeam={activeTeam}
+              followed={followed}
+              heat={heat}
+              leaderboard={leaderboard}
+              liveOpsCampaign={liveOpsCampaign}
+              liveOpsBusy={liveOpsBusy}
+              liveOpsError={liveOpsError}
+              likeCount={likeCount}
+              scenario={scenario}
+              onOpenProducts={() => onOpenSheet('products')}
+              onOpenQA={() => onOpenSheet('qa')}
+              onOpenLeaderboard={() => onOpenSheet('leaderboard')}
+              onEnterLuckyDraw={onEnterLuckyDraw}
+              onOpenLuckyDraw={onOpenLuckyDraw}
+              onSelectTeam={onSelectTeam}
+              onToggleFollow={onToggleFollow}
             />
           )}
           {activeSheet === 'more' && (
@@ -1058,8 +1101,8 @@ export function MaxBidSheet({
   return (
     <div className="max-bid-sheet" data-testid="max-bid-sheet">
       <div className="max-bid-status">
-        <span>私密意图</span>
-        <strong>{active ? `${formatCents(intent.max_amount_cents)} · ${intent.source}` : '未启用'}</strong>
+        <span>自动加价上限</span>
+        <strong>{active ? `${formatCents(intent.max_amount_cents)} · 仅自己可见` : '未启用'}</strong>
         <em>{feedback}</em>
       </div>
       <div className="max-bid-stepper" aria-label="max-bid-amount">
@@ -1069,12 +1112,12 @@ export function MaxBidSheet({
       </div>
       <div className="max-bid-rules">
         <span>仅当前账号可见，不进入公开榜单或房间消息。</span>
-        <span>服务端只会按当前加价阶梯代出价，不会直接公开你的最高价。</span>
-        <span>弱网、恢复中、提交中或终局状态会暂停设置和取消。</span>
+        <span>系统只按当前加价阶梯帮你跟价，不会公开你的最高价。</span>
+        <span>网络恢复、提交中或本场结束时会暂停设置和取消。</span>
       </div>
       <div className="max-bid-actions">
         <button type="button" onClick={onSubmit} disabled={disabled || Math.max(amountCents, minimumNextBidCents) < minimumNextBidCents}>
-          {phase === 'pending' ? '提交中' : active ? '更新 Max Bid' : '设置 Max Bid'}
+          {phase === 'pending' ? '提交中' : active ? '更新自动加价' : '设置自动加价'}
         </button>
         <button type="button" onClick={onCancel} disabled={disabled || !active}>
           {phase === 'canceling' ? '取消中' : '取消'}
@@ -1350,7 +1393,7 @@ export function ChatPanel({
       <div className="chat-list">
         {systemMessages.slice(0, 3).map((message) => (
           <div className="chat-row system" key={`sys-${message.id}`}>
-            <strong>AI</strong>
+            <strong>助手</strong>
             <span>{message.body}</span>
           </div>
         ))}

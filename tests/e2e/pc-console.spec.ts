@@ -337,12 +337,12 @@ test('PC console renders live API auctions, orders, and expanded diagnostic pane
   await expect(page.getByTestId('prompter-cards').getByText('最后窗口')).toBeVisible();
   await expect(page.getByTestId('prompter-cards').getByText(/参考下一口 ¥500.00/)).toBeVisible();
   await expect(page.getByTestId('talk-points').getByText('封顶/保证金')).toBeVisible();
-  await expect(page.getByTestId('heat-summary').getByText('Active bidders')).toBeVisible();
-  await expect(page.getByTestId('heat-summary').getByText('Accepted bids')).toBeVisible();
-  await expect(page.getByTestId('heat-summary').getByText('Rejected bids')).toBeVisible();
-  await expect(page.getByTestId('heat-summary').getByText('Watchers')).toBeVisible();
-  await expect(page.getByTestId('heat-summary').getByText('unavailable')).toBeVisible();
-  await expect(page.getByTestId('max-bid-summary').getByText('Max Bid readiness')).toBeVisible();
+  await expect(page.getByTestId('heat-summary').getByText('参与买家')).toBeVisible();
+  await expect(page.getByTestId('heat-summary').getByText('有效出价')).toBeVisible();
+  await expect(page.getByTestId('heat-summary').getByText('无效出价')).toBeVisible();
+  await expect(page.getByTestId('heat-summary').getByText('观看数据')).toBeVisible();
+  await expect(page.getByTestId('heat-summary').getByText('暂不可用')).toBeVisible();
+  await expect(page.getByTestId('max-bid-summary').getByText('自动加价概况')).toBeVisible();
   await expect(page.getByTestId('max-bid-summary').getByText('Active intents')).toBeVisible();
   await expect(page.getByTestId('max-bid-summary').getByText('Auto applied')).toBeVisible();
   await expect(page.getByTestId('max-bid-summary')).not.toContainText('max_amount_cents');
@@ -353,7 +353,7 @@ test('PC console renders live API auctions, orders, and expanded diagnostic pane
   await expect(page.getByTestId('risk-queue').getByText('user_activity_events')).toBeVisible();
   await expect(page.getByTestId('system-chat-disabled').getByRole('button', { name: '发送模板' })).toBeDisabled();
   await expect(page.getByTestId('recent-events').getByText('bid_accepted')).toBeVisible();
-  await expect(page.getByRole('button', { name: /Flight recorder/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /事件回放/ })).toBeVisible();
 
   await page.getByRole('button', { name: '诊断', exact: true }).click();
   await page.getByRole('tab', { name: 'Rejects' }).click();
@@ -406,31 +406,31 @@ test('PC host live assist renders API prompts and dismisses locally without muta
 test('PC host live assist renders real heat summary and labels watcher count unavailable', async ({ page }) => {
   await page.goto('/');
   const heat = page.getByTestId('heat-summary');
-  await expect(heat.getByText('Heat 30s')).toBeVisible();
-  await expect(heat.getByText('postgres:bids,chat_messages,user_activity_events')).toBeVisible();
-  await expect(heat.getByText('Active bidders')).toBeVisible();
-  await expect(heat.getByText('Accepted bids')).toBeVisible();
-  await expect(heat.getByText('Rejected bids')).toBeVisible();
-  await expect(heat.getByText('Chat', { exact: true })).toBeVisible();
-  await expect(heat.getByText('Recovery')).toBeVisible();
-  await expect(heat.getByText('Watchers')).toBeVisible();
-  await expect(heat.getByText('unavailable')).toBeVisible();
-  await expect(heat.locator('.heat-grid div').filter({ hasText: 'Active bidders' }).getByText('2')).toBeVisible();
-  await expect(heat.locator('.heat-grid div').filter({ hasText: 'Accepted bids' }).getByText('3')).toBeVisible();
-  await expect(heat.locator('.heat-grid div').filter({ hasText: 'Rejected bids' }).getByText('1')).toBeVisible();
-  await expect(heat.locator('.heat-grid div').filter({ hasText: 'Chat' }).getByText('4')).toBeVisible();
+  await expect(heat.getByText('近30秒热度')).toBeVisible();
+  await expect(heat.getByText('已更新')).toBeVisible();
+  await expect(heat.getByText('参与买家')).toBeVisible();
+  await expect(heat.getByText('有效出价')).toBeVisible();
+  await expect(heat.getByText('无效出价')).toBeVisible();
+  await expect(heat.getByText('弹幕', { exact: true })).toBeVisible();
+  await expect(heat.getByText('恢复事件')).toBeVisible();
+  await expect(heat.getByText('观看数据')).toBeVisible();
+  await expect(heat.getByText('暂不可用')).toBeVisible();
+  await expect(heat.locator('.heat-grid div').filter({ hasText: '参与买家' }).getByText('2')).toBeVisible();
+  await expect(heat.locator('.heat-grid div').filter({ hasText: '有效出价' }).getByText('3')).toBeVisible();
+  await expect(heat.locator('.heat-grid div').filter({ hasText: '无效出价' }).getByText('1')).toBeVisible();
+  await expect(heat.locator('.heat-grid div').filter({ hasText: '弹幕' }).getByText('4')).toBeVisible();
 });
 
-test('PC host live assist renders private Max Bid readiness without exposing ceilings', async ({ page }) => {
+test('PC host live assist renders private automatic bidding readiness without exposing ceilings', async ({ page }) => {
   await page.goto('/');
   const summary = page.getByTestId('max-bid-summary');
-  await expect(summary.getByText('Max Bid readiness')).toBeVisible();
-  await expect(summary.getByText('postgres:max_bid_intents')).toBeVisible();
-  await expect(summary.locator('.heat-grid div').filter({ hasText: 'Active intents' }).getByText('3')).toBeVisible();
-  await expect(summary.locator('.heat-grid div').filter({ hasText: 'Pre-bids' }).getByText('1')).toBeVisible();
-  await expect(summary.locator('.heat-grid div').filter({ hasText: 'Max bids' }).getByText('2')).toBeVisible();
-  await expect(summary.locator('.heat-grid div').filter({ hasText: 'Auto applied' }).getByText('1')).toBeVisible();
-  await expect(summary.getByText(/主播只看聚合计数/)).toBeVisible();
+  await expect(summary.getByText('自动加价概况')).toBeVisible();
+  await expect(summary.getByText('已更新')).toBeVisible();
+  await expect(summary.locator('.heat-grid div').filter({ hasText: '启用中' }).getByText('3')).toBeVisible();
+  await expect(summary.locator('.heat-grid div').filter({ hasText: '预先设置' }).getByText('1')).toBeVisible();
+  await expect(summary.locator('.heat-grid div').filter({ hasText: '自动加价' }).getByText('2')).toBeVisible();
+  await expect(summary.locator('.heat-grid div').filter({ hasText: '已跟价' }).getByText('1')).toBeVisible();
+  await expect(summary.getByText(/主播只看汇总/)).toBeVisible();
   await expect(summary).not.toContainText('max_amount_cents');
   await expect(summary).not.toContainText('90000');
   await summary.getByRole('button', { name: /审计自动出价/ }).click();
@@ -460,15 +460,15 @@ test('PC diagnostics row opens flight recorder drawer with real timeline impact 
 
 test('PC auction queue pins active auction and explains active and narrating constraints', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByTestId('queue-group-active-pinned').getByText('Pinned current live auction')).toBeVisible();
+  await expect(page.getByTestId('queue-group-active').getByText('当前直播主拍品')).toBeVisible();
   await page.getByTestId('auction-queue').getByText('银壶').click();
   await expect(page.getByTestId('auction-control-summary').getByRole('button', { name: '开拍' })).toBeDisabled();
-  await expect(page.getByText(/房间已有 ACTIVE auc_live/)).toBeVisible();
-  await expect(page.getByTestId('queue-group-scheduled').getByText(/ACTIVE locked by auc_live/)).toBeVisible();
+  await expect(page.getByText(/房间已有开拍中的拍品 auc_live/)).toBeVisible();
+  await expect(page.getByTestId('queue-group-scheduled').getByText(/需先处理开拍中拍品 auc_live/)).toBeVisible();
   await page.getByTestId('auction-queue').getByText('紫砂壶').click();
   await expect(page.getByTestId('auction-control-summary').getByRole('button', { name: '开始讲解' })).toBeDisabled();
-  await expect(page.getByText(/讲解中拍品为 auc_live/)).toBeVisible();
-  await expect(page.getByTestId('queue-group-draft').getByText(/Narrating locked by auc_live/)).toBeVisible();
+  await expect(page.getByTestId('auction-control-summary').getByText(/讲解中拍品为 auc_live/)).toBeVisible();
+  await expect(page.getByTestId('queue-group-draft').getByText(/讲解中拍品为 auc_live/)).toBeVisible();
 });
 
 test('PC creates item and auction through backend upload and create APIs', async ({ page }) => {
@@ -555,8 +555,8 @@ test('PC rule save targets selected draft auction and includes all money/rule fi
 test('PC rule wizard explains frozen rules for non-draft auctions', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: '拍品', exact: true }).click();
-  await expect(page.getByTestId('rule-freeze-reason')).toContainText('ACTIVE');
-  await expect(page.getByTestId('rule-freeze-reason')).toContainText('仅 DRAFT');
+  await expect(page.getByTestId('rule-freeze-reason')).toContainText('开拍中');
+  await expect(page.getByTestId('rule-freeze-reason')).toContainText('仅待完善拍品');
   await expect(page.getByRole('button', { name: '保存规则' })).toBeDisabled();
   await expect(page.getByTestId('h5-rule-preview').getByText(/延时 10s \+10s/)).toBeVisible();
 });

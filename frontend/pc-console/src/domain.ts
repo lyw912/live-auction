@@ -26,6 +26,42 @@ export type RuleDraft = {
   depositCapCents: number;
 };
 
+export function auctionStatusLabel(status?: string) {
+  switch (status) {
+    case 'DRAFT':
+      return '待完善';
+    case 'SCHEDULED':
+      return '已排期';
+    case 'ACTIVE':
+      return '开拍中';
+    case 'SOLD':
+      return '已成交';
+    case 'ENDED':
+      return '已结束';
+    case 'CANCELLED':
+      return '已取消';
+    default:
+      return status || '未知';
+  }
+}
+
+export function orderStatusLabel(status?: string) {
+  switch (status) {
+    case 'ORDER_PENDING':
+      return '待支付';
+    case 'PAYMENT_INITIATED':
+      return '支付中';
+    case 'PAID':
+      return '已支付';
+    case 'ORDER_EXPIRED':
+      return '已超时';
+    case 'FAILED':
+      return '支付失败';
+    default:
+      return status || '未知';
+  }
+}
+
 export type Auction = {
   id: string;
   room_id: string;
