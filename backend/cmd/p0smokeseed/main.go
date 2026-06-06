@@ -55,6 +55,14 @@ func seed(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client) error {
 		WHERE outbox_id IN (SELECT id FROM outbox_events WHERE auction_id IN ('auc_live', 'auc_side'));
 		DELETE FROM outbox_events WHERE auction_id IN ('auc_live', 'auc_side');
 		DELETE FROM auction_events WHERE auction_id IN ('auc_live', 'auc_side');
+		DELETE FROM auction_highlight_assets WHERE auction_id IN ('auc_live', 'auc_side');
+		DELETE FROM ai_generation_jobs WHERE auction_id IN ('auc_live', 'auc_side') OR room_id IN ('room_main', 'room_side');
+		DELETE FROM auction_risk_alerts WHERE auction_id IN ('auc_live', 'auc_side');
+		DELETE FROM auction_system_messages WHERE auction_id IN ('auc_live', 'auc_side') OR room_id IN ('room_main', 'room_side');
+		DELETE FROM liveops_lucky_draw_entries WHERE room_id IN ('room_main', 'room_side');
+		DELETE FROM liveops_team_choices WHERE room_id IN ('room_main', 'room_side');
+		DELETE FROM liveops_task_progress WHERE room_id IN ('room_main', 'room_side');
+		DELETE FROM liveops_campaigns WHERE room_id IN ('room_main', 'room_side');
 		DELETE FROM payment_events
 		WHERE order_id IN (SELECT id FROM orders WHERE auction_id IN ('auc_live', 'auc_side'));
 		DELETE FROM orders WHERE auction_id IN ('auc_live', 'auc_side');
