@@ -44,6 +44,8 @@ func realtimeOptions(cfg config.Config) realtime.Options {
 		StreamEpochTTL:       cfg.RealtimeStreamEpochTTL,
 		HeartbeatInterval:    cfg.WSHeartbeatInterval,
 		HeartbeatTimeout:     cfg.WSHeartbeatTimeout,
+		LeaderboardQueueSize: cfg.LeaderboardQueueSize,
+		LeaderboardWorkers:   cfg.LeaderboardWorkers,
 	}
 }
 
@@ -82,6 +84,8 @@ func NewRouterWithRealtimeAndLedger(cfg config.Config, deps *storage.Dependencie
 		WSSnapshotRebuildMax:         cfg.WSSnapshotRebuildMax,
 		WSHeartbeatInterval:          cfg.WSHeartbeatInterval,
 		WSHeartbeatTimeout:           cfg.WSHeartbeatTimeout,
+		LeaderboardQueueSize:         cfg.LeaderboardQueueSize,
+		LeaderboardWorkers:           cfg.LeaderboardWorkers,
 		RedisEngineSettlementWorkers: cfg.RedisEngineSettlementWorkers,
 	})
 

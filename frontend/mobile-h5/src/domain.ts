@@ -315,6 +315,7 @@ export type LeaderboardPayload = {
   accepted_bids_30s?: number;
   price_velocity_cents_per_min?: number;
   entries?: LeaderboardEntry[];
+  burst_mode?: boolean;
   projection?: {
     source?: string;
     top_limit?: number;

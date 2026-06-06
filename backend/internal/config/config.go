@@ -61,6 +61,8 @@ type Config struct {
 	AIRelayTimeout               time.Duration
 	AIRelayMaxTokens             int
 	AICommentaryBackfillLookback time.Duration
+	AICommentaryBatchSize        int
+	AICommentaryTaskTimeout      time.Duration
 
 	AdmissionEnabled       bool
 	WSTicketMaxInFlight    int
@@ -72,6 +74,8 @@ type Config struct {
 	WSSnapshotRebuildMax   int
 	WSHeartbeatInterval    time.Duration
 	WSHeartbeatTimeout     time.Duration
+	LeaderboardQueueSize   int
+	LeaderboardWorkers     int
 	RealtimeHistoryTTL     time.Duration
 	RealtimeSnapshotTTL    time.Duration
 	RealtimeStreamEpochTTL time.Duration
@@ -139,6 +143,8 @@ func Load() Config {
 		AIRelayTimeout:               getEnvDuration("AI_RELAY_TIMEOUT", getEnvMillisDuration("AI_RELAY_TIMEOUT_MS", 45*time.Second)),
 		AIRelayMaxTokens:             getEnvInt("AI_RELAY_MAX_TOKENS", 2048),
 		AICommentaryBackfillLookback: getEnvDuration("AI_COMMENTARY_BACKFILL_LOOKBACK", 24*time.Hour),
+		AICommentaryBatchSize:        getEnvInt("AI_COMMENTARY_BATCH_SIZE", 4),
+		AICommentaryTaskTimeout:      getEnvDuration("AI_COMMENTARY_TASK_TIMEOUT", 20*time.Second),
 
 		AdmissionEnabled:       getEnvBool("ADMISSION_ENABLED", true),
 		WSTicketMaxInFlight:    getEnvInt("WS_TICKET_MAX_IN_FLIGHT", 256),
@@ -150,6 +156,8 @@ func Load() Config {
 		WSSnapshotRebuildMax:   getEnvInt("WS_SNAPSHOT_REBUILD_MAX_IN_FLIGHT", 4),
 		WSHeartbeatInterval:    getEnvDuration("WS_HEARTBEAT_INTERVAL", 20*time.Second),
 		WSHeartbeatTimeout:     getEnvDuration("WS_HEARTBEAT_TIMEOUT", 5*time.Second),
+		LeaderboardQueueSize:   getEnvInt("LEADERBOARD_PROJECTION_QUEUE_SIZE", 1024),
+		LeaderboardWorkers:     getEnvInt("LEADERBOARD_PROJECTION_WORKERS", 1),
 		RealtimeHistoryTTL:     getEnvDuration("REALTIME_HISTORY_TTL", 30*time.Minute),
 		RealtimeSnapshotTTL:    getEnvDuration("REALTIME_SNAPSHOT_TTL", 30*time.Minute),
 		RealtimeStreamEpochTTL: getEnvDuration("REALTIME_STREAM_EPOCH_TTL", 24*time.Hour),
@@ -164,6 +172,15 @@ func Load() Config {
 	}
 	if cfg.RedisEngineSettlementWorkers < 1 {
 		cfg.RedisEngineSettlementWorkers = 1
+	}
+	if cfg.AICommentaryBatchSize < 1 {
+		cfg.AICommentaryBatchSize = 1
+	}
+	if cfg.LeaderboardQueueSize < 1 {
+		cfg.LeaderboardQueueSize = 1
+	}
+	if cfg.LeaderboardWorkers < 1 {
+		cfg.LeaderboardWorkers = 1
 	}
 	return cfg
 }

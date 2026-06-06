@@ -49,11 +49,11 @@ func (s *Server) PublishAuctionEvent(ctx context.Context, auctionID string, payl
 	if stats.Subscribers > 0 {
 		observePublishStats("auction_event", stats)
 	}
-	s.publishLeaderboardDeltaBestEffort(ctx, auctionID, payload)
+	s.enqueueLeaderboardDeltaBestEffort(auctionID, payload)
 }
 
-func (s *Server) publishLeaderboardDeltaBestEffort(ctx context.Context, auctionID string, eventPayload []byte) {
-	if s == nil || s.db == nil {
+func (s *Server) enqueueLeaderboardDeltaBestEffort(auctionID string, eventPayload []byte) {
+	if s == nil || s.db == nil || s.leaderboardQueue == nil {
 		return
 	}
 	var envelope struct {
@@ -68,10 +68,34 @@ func (s *Server) publishLeaderboardDeltaBestEffort(ctx context.Context, auctionI
 	default:
 		return
 	}
+	event := leaderboardProjectionEvent{
+		auctionID:    auctionID,
+		eventType:    envelope.EventType,
+		seq:          envelope.Seq,
+		enqueuedTime: time.Now(),
+	}
+	select {
+	case s.leaderboardQueue <- event:
+		observability.Inc("auction_leaderboard_delta_enqueue_total", map[string]string{"result": "ok"})
+	default:
+		observability.Inc("auction_leaderboard_delta_enqueue_total", map[string]string{"result": "dropped_queue_full"})
+	}
+}
+
+func (s *Server) runLeaderboardProjectionWorker() {
+	for event := range s.leaderboardQueue {
+		s.publishLeaderboardDeltaBestEffort(context.Background(), event)
+	}
+}
+
+func (s *Server) publishLeaderboardDeltaBestEffort(ctx context.Context, event leaderboardProjectionEvent) {
+	if s == nil || s.db == nil {
+		return
+	}
 	projectionCtx, cancel := context.WithTimeout(ctx, 80*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	delta, err := s.buildLeaderboardDelta(projectionCtx, auctionID, envelope.EventType, envelope.Seq)
+	delta, err := s.buildLeaderboardDelta(projectionCtx, event.auctionID, event.eventType, event.seq)
 	if err != nil {
 		observability.Inc("auction_leaderboard_delta_build_total", map[string]string{"result": "error"})
 		return
@@ -81,9 +105,10 @@ func (s *Server) publishLeaderboardDeltaBestEffort(ctx context.Context, auctionI
 		observability.Inc("auction_leaderboard_delta_build_total", map[string]string{"result": "marshal_error"})
 		return
 	}
-	stats := s.hub.Publish(ctx, auctionID, data)
+	stats := s.hub.Publish(ctx, event.auctionID, data)
 	observability.Inc("auction_leaderboard_delta_build_total", map[string]string{"result": "ok"})
 	observability.Observe("auction_leaderboard_delta_build_seconds", time.Since(start).Seconds(), nil, observability.DefaultLatencyBuckets)
+	observability.Observe("auction_leaderboard_delta_queue_lag_seconds", start.Sub(event.enqueuedTime).Seconds(), nil, observability.DefaultLatencyBuckets)
 	if stats.Subscribers > 0 {
 		observePublishStats("leaderboard_delta", stats)
 	}

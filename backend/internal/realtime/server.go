@@ -30,6 +30,7 @@ type Server struct {
 	snapshotGroup     *snapshotGroup
 	rebuildSnapshotFn func(context.Context, string) ([]byte, error)
 	activityQueue     chan wsActivityEvent
+	leaderboardQueue  chan leaderboardProjectionEvent
 }
 
 type wsActivityEvent struct {
@@ -38,6 +39,13 @@ type wsActivityEvent struct {
 	userID    string
 	eventType string
 	payload   map[string]any
+}
+
+type leaderboardProjectionEvent struct {
+	auctionID    string
+	eventType    string
+	seq          int64
+	enqueuedTime time.Time
 }
 
 type Options struct {
@@ -51,6 +59,8 @@ type Options struct {
 	RecoveryReadChunkSize int64
 	HeartbeatInterval     time.Duration
 	HeartbeatTimeout      time.Duration
+	LeaderboardQueueSize  int
+	LeaderboardWorkers    int
 }
 
 func defaultOptions() Options {
@@ -65,6 +75,8 @@ func defaultOptions() Options {
 		RecoveryReadChunkSize: 256,
 		HeartbeatInterval:     20 * time.Second,
 		HeartbeatTimeout:      5 * time.Second,
+		LeaderboardQueueSize:  1024,
+		LeaderboardWorkers:    1,
 	}
 }
 
@@ -98,10 +110,14 @@ func newServer(db *pgxpool.Pool, redisClient *redis.Client, hub *Hub, options Op
 		snapshotSemaphore: make(chan struct{}, options.SnapshotRebuildLimit),
 		snapshotGroup:     newSnapshotGroup(),
 		activityQueue:     make(chan wsActivityEvent, 8192),
+		leaderboardQueue:  make(chan leaderboardProjectionEvent, options.LeaderboardQueueSize),
 	}
 	server.rebuildSnapshotFn = server.rebuildSnapshotFromDB
 	if db != nil {
 		go server.runActivityWriter()
+		for i := 0; i < options.LeaderboardWorkers; i++ {
+			go server.runLeaderboardProjectionWorker()
+		}
 	}
 	return server
 }
@@ -140,6 +156,12 @@ func normalizeOptions(options Options) Options {
 	}
 	if options.HeartbeatTimeout <= 0 {
 		options.HeartbeatTimeout = defaults.HeartbeatTimeout
+	}
+	if options.LeaderboardQueueSize <= 0 {
+		options.LeaderboardQueueSize = defaults.LeaderboardQueueSize
+	}
+	if options.LeaderboardWorkers <= 0 {
+		options.LeaderboardWorkers = defaults.LeaderboardWorkers
 	}
 	return options
 }

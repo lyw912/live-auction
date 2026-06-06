@@ -544,6 +544,52 @@ test('H5 applies WebSocket leaderboard delta without polling leaderboard', async
   expect(leaderboardReads).toBe(readsAfterInitialLoad);
 });
 
+test('H5 coalesces burst leaderboard deltas to the latest visible rank state', async ({ page }) => {
+  let leaderboardReads = 0;
+  await page.route('/api/auctions/auc_live/leaderboard?limit=5', async (route) => {
+    leaderboardReads += 1;
+    await route.fallback();
+  });
+
+  await page.goto('/?stateMatrix=1');
+  await expect(page.getByText('已同步')).toBeVisible();
+  await expect.poll(async () => page.evaluate(() => {
+    return ((window as typeof window & { __auctionWS?: Array<{ url: string }> }).__auctionWS ?? [])
+      .some(({ url }) => url.includes('/ws?'));
+  })).toBe(true);
+  const readsAfterInitialLoad = leaderboardReads;
+
+  await page.evaluate(() => {
+    const [entry] = ((window as typeof window & { __auctionWS?: Array<{ url: string; socket: { dispatchServerMessage: (payload: unknown) => void } }> }).__auctionWS ?? [])
+      .filter(({ url }) => url.includes('/ws?'));
+    for (const payload of [
+      { seq: 44, current_price_cents: 52000, user: '张**', bids: 4 },
+      { seq: 45, current_price_cents: 57000, user: '陈**', bids: 5 },
+      { seq: 46, current_price_cents: 62000, user: '我**', bids: 6 }
+    ]) {
+      entry.socket.dispatchServerMessage({
+        auction_id: 'auc_live',
+        event_type: 'leaderboard_delta',
+        seq: payload.seq,
+        current_price_cents: payload.current_price_cents,
+        next_valid_bid_cents: payload.current_price_cents + 5000,
+        current_winner_id: 'user_1',
+        leader_amount_cents: payload.current_price_cents,
+        accepted_bidder_count: 3,
+        entries: [
+          { rank: 1, user_id: 'user_1', user_masked: payload.user, amount_cents: payload.current_price_cents, bid_count: payload.bids },
+          { rank: 2, user_id: 'user_2', user_masked: '陈**', amount_cents: payload.current_price_cents - 5000, bid_count: 3 }
+        ]
+      });
+    }
+  });
+
+  await expect(page.getByLabel('auction-state').locator('h2')).toHaveText('¥620.00');
+  await expect(page.getByTestId('leaderboard-panel')).toContainText('6 口');
+  await expect(page.getByTestId('leaderboard-panel')).not.toContainText('4 口');
+  expect(leaderboardReads).toBe(readsAfterInitialLoad);
+});
+
 test('H5 keeps recovery snapshot quiet while WebSocket is healthy', async ({ page }) => {
   let snapshotReads = 0;
   await page.route('/api/auctions/auc_live', async (route) => {

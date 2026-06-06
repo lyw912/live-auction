@@ -56,6 +56,8 @@ type AdmissionConfig struct {
 	WSSnapshotRebuildMax         int
 	WSHeartbeatInterval          time.Duration
 	WSHeartbeatTimeout           time.Duration
+	LeaderboardQueueSize         int
+	LeaderboardWorkers           int
 	RedisEngineSettlementWorkers int
 }
 
@@ -125,6 +127,8 @@ func SetAdmissionConfig(cfg AdmissionConfig) {
 	Set("auction_realtime_config_limit", float64(cfg.WSSnapshotRebuildMax), map[string]string{"kind": "ws_snapshot_rebuild_max_in_flight"})
 	Set("auction_realtime_config_limit", cfg.WSHeartbeatInterval.Seconds(), map[string]string{"kind": "ws_heartbeat_interval_seconds"})
 	Set("auction_realtime_config_limit", cfg.WSHeartbeatTimeout.Seconds(), map[string]string{"kind": "ws_heartbeat_timeout_seconds"})
+	Set("auction_realtime_config_limit", float64(cfg.LeaderboardQueueSize), map[string]string{"kind": "leaderboard_projection_queue_size"})
+	Set("auction_realtime_config_limit", float64(cfg.LeaderboardWorkers), map[string]string{"kind": "leaderboard_projection_workers"})
 }
 
 func (r *Registry) ServeHTTP(w http.ResponseWriter, req *http.Request) {

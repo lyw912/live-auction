@@ -64,8 +64,9 @@ func main() {
 		go aicap.NewRepository(deps.Postgres).RunAutoCommentaryWorker(ctx, gateway.BuildAIGenerator(cfg), aicap.AutoCommentaryWorkerOptions{
 			WorkerID:         aiWorkerID,
 			PollInterval:     500 * time.Millisecond,
-			BatchSize:        4,
+			BatchSize:        cfg.AICommentaryBatchSize,
 			Lease:            30 * time.Second,
+			TaskTimeout:      cfg.AICommentaryTaskTimeout,
 			BackfillLookback: cfg.AICommentaryBackfillLookback,
 		})
 		log.Info("embedded ai commentary worker started", slog.String("worker_id", aiWorkerID))
@@ -127,6 +128,8 @@ func realtimeOptions(cfg config.Config) realtime.Options {
 		StreamEpochTTL:       cfg.RealtimeStreamEpochTTL,
 		HeartbeatInterval:    cfg.WSHeartbeatInterval,
 		HeartbeatTimeout:     cfg.WSHeartbeatTimeout,
+		LeaderboardQueueSize: cfg.LeaderboardQueueSize,
+		LeaderboardWorkers:   cfg.LeaderboardWorkers,
 	}
 }
 

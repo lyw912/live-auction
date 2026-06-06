@@ -1207,26 +1207,31 @@ export function LeaderboardPanel({
         {(leaderboard?.entries ?? []).length === 0 ? (
           <p>暂无有效出价</p>
         ) : (
-          <LeaderboardRows entries={leaderboard?.entries ?? []} />
+          <LeaderboardRows entries={leaderboard?.entries ?? []} burstMode={Boolean(leaderboard?.burst_mode)} />
         )}
       </div>
     </section>
   );
 }
 
-function LeaderboardRows({ entries }: { entries: NonNullable<LeaderboardPayload['entries']> }) {
+function LeaderboardRows({ entries, burstMode = false }: { entries: NonNullable<LeaderboardPayload['entries']>; burstMode?: boolean }) {
   const rowRefs = useRef(new Map<string, HTMLDivElement>());
   const previousRectsRef = useRef(new Map<string, DOMRect>());
+  const lastAnimatedAtRef = useRef(0);
   const listKey = useMemo(() => entries.map((entry) => `${entry.user_id}:${entry.rank}:${entry.amount_cents}:${entry.bid_count}`).join('|'), [entries]);
 
   useLayoutEffect(() => {
     const previousRects = previousRectsRef.current;
     const nextRects = new Map<string, DOMRect>();
+    const now = performance.now();
+    const coalescing = burstMode || now - lastAnimatedAtRef.current < 180;
+    lastAnimatedAtRef.current = now;
     rowRefs.current.forEach((node, key) => {
       const next = node.getBoundingClientRect();
       nextRects.set(key, next);
       const previous = previousRects.get(key);
       if (!previous) {
+        if (coalescing) return;
         node.animate([
           { opacity: 0, transform: 'translate3d(10px, 0, 0)' },
           { opacity: 1, transform: 'translate3d(0, 0, 0)' }
@@ -1238,11 +1243,11 @@ function LeaderboardRows({ entries }: { entries: NonNullable<LeaderboardPayload[
         node.animate([
           { transform: `translate3d(0, ${deltaY}px, 0)` },
           { transform: 'translate3d(0, 0, 0)' }
-        ], { duration: 260, easing: 'cubic-bezier(.2,.8,.2,1)' });
+        ], { duration: coalescing ? 120 : 260, easing: 'cubic-bezier(.2,.8,.2,1)' });
       }
     });
     previousRectsRef.current = nextRects;
-  }, [listKey]);
+  }, [listKey, burstMode]);
 
   return (
     <>

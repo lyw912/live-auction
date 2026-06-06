@@ -106,6 +106,9 @@ function App() {
   const heartbeatRef = useRef<{ source: AudioBufferSourceNode; gain: GainNode } | null>(null);
   const soundCapabilityRef = useRef<SoundCapability>('ready');
   const leaderboardRef = useRef<LeaderboardPayload | null>(leaderboard);
+  const pendingLeaderboardDeltaRef = useRef<LeaderboardPayload | null>(null);
+  const leaderboardFrameRef = useRef<number | null>(null);
+  const leaderboardBurstUntilRef = useRef(0);
   const atmosphereSeenRef = useRef<Set<string>>(new Set());
   const recoveringRef = useRef(false);
   const activeCueRef = useRef<AtmosphereCue | null>(null);
@@ -231,10 +234,11 @@ function App() {
     }
   };
 
-  const applyLeaderboardDelta = (delta: LeaderboardPayload) => {
+  const commitLeaderboardDelta = (delta: LeaderboardPayload) => {
     if (!delta || delta.auction_id !== activeAuctionIDRef.current) return;
     const currentSeq = leaderboardRef.current?.seq ?? lastSeqRef.current;
     if (delta.seq != null && currentSeq != null && delta.seq < currentSeq) return;
+    const previous = leaderboardRef.current;
     const entries = (delta.entries ?? []).map((entry) => ({
       ...entry,
       is_current: entry.user_id === currentUserIDRef.current
@@ -244,7 +248,7 @@ function App() {
     const leaderAmount = delta.leader_amount_cents || leader?.amount_cents || delta.current_price_cents;
     const myBestAmount = mine?.amount_cents;
     const gapToLeader = myBestAmount != null ? Math.max(0, leaderAmount - myBestAmount) : undefined;
-    setLeaderboard((previous) => ({
+    const nextLeaderboard: LeaderboardPayload = {
       ...previous,
       ...delta,
       entries,
@@ -253,15 +257,36 @@ function App() {
       my_best_amount_cents: myBestAmount ?? (previous?.auction_id === delta.auction_id ? previous.my_best_amount_cents : undefined),
       gap_to_leader_cents: gapToLeader ?? (previous?.auction_id === delta.auction_id ? previous.gap_to_leader_cents : undefined),
       state: mine?.rank === 1 ? 'LEADING' : mine ? 'OUTBID' : 'NOT_BID'
-    }));
+    };
+    leaderboardRef.current = nextLeaderboard;
+    setLeaderboard(nextLeaderboard);
     setCurrentPriceCents(delta.current_price_cents);
     setMinimumNextBidCents(delta.next_valid_bid_cents ?? delta.current_price_cents + activeIncrementCentsRef.current);
     setNextBidCents((prepared) => Math.max(delta.next_valid_bid_cents ?? delta.current_price_cents + activeIncrementCentsRef.current, prepared));
     if (delta.server_time_ms) syncServerTimeMS(delta.server_time_ms);
     if (leader?.user_masked) setLeaderMasked(leader.user_masked);
-    if (soundEnabledRef.current && audioContextRef.current && soundCapabilityRef.current === 'ready') {
+    if (!delta.burst_mode && soundEnabledRef.current && audioContextRef.current && soundCapabilityRef.current === 'ready') {
       playLayeredCue(audioContextRef.current, 'rank_change', soundPackRef.current);
     }
+  };
+
+  const applyLeaderboardDelta = (delta: LeaderboardPayload) => {
+    if (!delta || delta.auction_id !== activeAuctionIDRef.current) return;
+    const currentSeq = pendingLeaderboardDeltaRef.current?.seq ?? leaderboardRef.current?.seq ?? lastSeqRef.current;
+    if (delta.seq != null && currentSeq != null && delta.seq < currentSeq) return;
+    const now = Date.now();
+    const nextDelta = pendingLeaderboardDeltaRef.current && now < leaderboardBurstUntilRef.current
+      ? ({ ...delta, burst_mode: true } as LeaderboardPayload)
+      : delta;
+    leaderboardBurstUntilRef.current = now + 180;
+    pendingLeaderboardDeltaRef.current = nextDelta;
+    if (leaderboardFrameRef.current != null) return;
+    leaderboardFrameRef.current = window.requestAnimationFrame(() => {
+      leaderboardFrameRef.current = null;
+      const next = pendingLeaderboardDeltaRef.current;
+      pendingLeaderboardDeltaRef.current = null;
+      if (next) commitLeaderboardDelta(next);
+    });
   };
 
   const stopHeartbeat = () => {
@@ -1522,7 +1547,14 @@ function App() {
       const response = await fetch(`/api/auctions/${auctionID}/leaderboard?limit=5`);
       const payload = await readJSON<LeaderboardPayload>(response);
       if (response.ok && payload) {
-        setLeaderboard(payload);
+        setLeaderboard((previous) => {
+          const current = leaderboardRef.current ?? previous;
+          if (payload.auction_id === current?.auction_id && payload.seq != null && current.seq != null && payload.seq < current.seq) {
+            return previous;
+          }
+          leaderboardRef.current = payload;
+          return payload;
+        });
       }
     } catch {
       setLeaderboard(null);

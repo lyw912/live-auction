@@ -22,11 +22,21 @@ import (
 type fakeStructuredGenerator struct {
 	results map[string]aicap.StructuredResult
 	errs    map[string]error
+	delays  map[string]time.Duration
 	calls   []aicap.StructuredRequest
 }
 
-func (g *fakeStructuredGenerator) GenerateStructured(_ context.Context, req aicap.StructuredRequest) (aicap.StructuredResult, error) {
+func (g *fakeStructuredGenerator) GenerateStructured(ctx context.Context, req aicap.StructuredRequest) (aicap.StructuredResult, error) {
 	g.calls = append(g.calls, req)
+	if delay := g.delays[req.Kind]; delay > 0 {
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return aicap.StructuredResult{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
 	if err := g.errs[req.Kind]; err != nil {
 		return aicap.StructuredResult{}, err
 	}
@@ -284,6 +294,20 @@ func TestAICommentarySystemMessagesSentinelRecapAndProductQA(t *testing.T) {
 	if storedAssets == 0 {
 		t.Fatalf("expected persisted highlight asset")
 	}
+	_, _, reusedAsset, err := aiRepo.BuildAuctionRecap(context.Background(), "host_1", row.ID)
+	if err != nil {
+		t.Fatalf("reuse recap asset: %v", err)
+	}
+	if reusedAsset.ID != recapPayload.HighlightAsset.ID || reusedAsset.MediaType != "video/webm" {
+		t.Fatalf("expected recent webm asset reuse, got %#v", reusedAsset)
+	}
+	var storedAssetsAfterReuse int
+	if err := db.QueryRow(context.Background(), `SELECT count(*) FROM auction_highlight_assets WHERE auction_id = $1 AND render_profile = 'server-webm-reel-v1' AND media_type = 'video/webm'`, row.ID).Scan(&storedAssetsAfterReuse); err != nil {
+		t.Fatalf("count highlight assets after reuse: %v", err)
+	}
+	if storedAssetsAfterReuse != storedAssets {
+		t.Fatalf("expected highlight reuse without extra render, before=%d after=%d", storedAssets, storedAssetsAfterReuse)
+	}
 	qaBody := bytes.NewBufferString(`{"auction_id":"` + row.ID + `","question":"起拍价是多少"}`)
 	req = httptest.NewRequest(http.MethodPost, "/api/rooms/"+row.RoomID+"/product-qa", qaBody)
 	for key, values := range userHeaders("user_1", "user") {
@@ -411,6 +435,38 @@ func TestAutoCommentaryWorkerQueuePersistsAndBackfillsEvents(t *testing.T) {
 	}
 	if len(gen.calls) < 2 || gen.calls[len(gen.calls)-1].Input["current_price_cents"] != float64(31_000) {
 		t.Fatalf("backfill should use event payload facts, calls=%#v", gen.calls)
+	}
+
+	slowGen := &fakeStructuredGenerator{delays: map[string]time.Duration{"auction_commentary": 200 * time.Millisecond}}
+	_, inserted, err = aiRepo.EnqueueAutoCommentary(context.Background(), aicap.CommentaryRequest{
+		AuctionID:         row.ID,
+		SourceSeq:         72,
+		EventType:         "bid_accepted",
+		CurrentPriceCents: 32_000,
+	})
+	if err != nil || !inserted {
+		t.Fatalf("enqueue slow auto commentary: inserted=%v err=%v", inserted, err)
+	}
+	timeoutOpts := opts
+	timeoutOpts.BatchSize = 1
+	timeoutOpts.TaskTimeout = 20 * time.Millisecond
+	timeoutOpts.BackfillLookback = time.Nanosecond
+	stats, err = aiRepo.ProcessAutoCommentaryQueue(context.Background(), slowGen, timeoutOpts)
+	if err != nil {
+		t.Fatalf("process timeout commentary queue: %v", err)
+	}
+	if stats.Failed != 1 || stats.Processed != 0 {
+		t.Fatalf("timeout commentary should fail one job without processing: %#v", stats)
+	}
+	if err := db.QueryRow(context.Background(), `
+		SELECT count(*)
+		FROM auction_system_messages
+		WHERE auction_id = $1 AND source = 'SYSTEM_AI' AND source_seq = 72
+	`, row.ID).Scan(&messages); err != nil {
+		t.Fatalf("count timeout system messages: %v", err)
+	}
+	if messages != 0 {
+		t.Fatalf("timeout job must not publish a system message, got %d", messages)
 	}
 }
 

@@ -25,6 +25,10 @@ type Repository struct {
 	db *pgxpool.Pool
 }
 
+var highlightRenderSlots = make(chan struct{}, 1)
+
+const highlightAssetReuseWindow = 10 * time.Minute
+
 type Job struct {
 	ID            string         `json:"id"`
 	RoomID        string         `json:"room_id,omitempty"`
@@ -432,6 +436,9 @@ func (r *Repository) RunAutoCommentaryWorker(ctx context.Context, gen Generator,
 	if opts.Lease <= 0 {
 		opts.Lease = 30 * time.Second
 	}
+	if opts.TaskTimeout <= 0 {
+		opts.TaskTimeout = 20 * time.Second
+	}
 	if opts.BackfillLookback <= 0 {
 		opts.BackfillLookback = 24 * time.Hour
 	}
@@ -463,6 +470,9 @@ func (r *Repository) ProcessAutoCommentaryQueue(ctx context.Context, gen Generat
 	if opts.Lease <= 0 {
 		opts.Lease = 30 * time.Second
 	}
+	if opts.TaskTimeout <= 0 {
+		opts.TaskTimeout = 20 * time.Second
+	}
 	if opts.BackfillLookback <= 0 {
 		opts.BackfillLookback = 24 * time.Hour
 	}
@@ -487,7 +497,9 @@ func (r *Repository) ProcessAutoCommentaryQueue(ctx context.Context, gen Generat
 			_ = r.failAutoCommentaryQueueJob(ctx, job.ID, opts.WorkerID, err, false)
 			continue
 		}
-		_, doneJob, err := r.CreateAutoCommentary(ctx, gen, req)
+		taskCtx, cancel := context.WithTimeout(ctx, opts.TaskTimeout)
+		_, doneJob, err := r.CreateAutoCommentary(taskCtx, gen, req)
+		cancel()
 		if err != nil {
 			stats.Failed++
 			_ = r.failAutoCommentaryQueueJob(ctx, job.ID, opts.WorkerID, err, true)
@@ -862,8 +874,38 @@ func (r *Repository) BuildAuctionRecap(ctx context.Context, hostID string, aucti
 	if err != nil {
 		return AuctionRecap{}, Job{}, HighlightAsset{}, err
 	}
+	if asset, ok, err := r.latestReusableHighlightAsset(ctx, auctionID); err != nil {
+		return AuctionRecap{}, Job{}, HighlightAsset{}, err
+	} else if ok {
+		return recap, job, asset, nil
+	}
 	asset, err := r.createHighlightAsset(ctx, recap, job)
 	return recap, job, asset, err
+}
+
+func (r *Repository) latestReusableHighlightAsset(ctx context.Context, auctionID string) (HighlightAsset, bool, error) {
+	asset := HighlightAsset{}
+	err := r.db.QueryRow(ctx, `
+		SELECT id, auction_id, room_id, job_id, status, media_type, title, asset_url,
+		       render_profile, duration_ms, facts_json, risk_json, created_at, updated_at
+		FROM auction_highlight_assets
+		WHERE auction_id = $1
+		  AND status = 'RENDERED'
+		  AND media_type = 'video/webm'
+		  AND render_profile = 'server-webm-reel-v1'
+		  AND created_at >= now() - ($2::double precision * interval '1 second')
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, auctionID, highlightAssetReuseWindow.Seconds()).
+		Scan(&asset.ID, &asset.AuctionID, &asset.RoomID, &asset.JobID, &asset.Status, &asset.MediaType, &asset.Title,
+			&asset.AssetURL, &asset.RenderProfile, &asset.DurationMS, &asset.Facts, &asset.Risk, &asset.CreatedAt, &asset.UpdatedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return HighlightAsset{}, false, nil
+		}
+		return HighlightAsset{}, false, err
+	}
+	return asset, true, nil
 }
 
 func (r *Repository) createHighlightAsset(ctx context.Context, recap AuctionRecap, job Job) (HighlightAsset, error) {
@@ -921,6 +963,12 @@ func renderHighlightWebM(ctx context.Context, recap AuctionRecap) ([]byte, error
 	ffmpegPath, err := exec.LookPath("ffmpeg")
 	if err != nil {
 		return nil, fmt.Errorf("ffmpeg not found for highlight video: %w", err)
+	}
+	select {
+	case highlightRenderSlots <- struct{}{}:
+		defer func() { <-highlightRenderSlots }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 	dir, err := os.MkdirTemp("", "live-auction-highlight-*")
 	if err != nil {

@@ -387,7 +387,12 @@ func TestPublishAuctionEventAlsoPublishesLeaderboardDelta(t *testing.T) {
 	if !strings.Contains(string(first.data), `"event_type":"bid_accepted"`) {
 		t.Fatalf("first message = %s, want original auction event", string(first.data))
 	}
-	second := <-sub.Messages()
+	var second queuedMessage
+	select {
+	case second = <-sub.Messages():
+	case <-time.After(time.Second):
+		t.Fatalf("leaderboard delta was not published")
+	}
 	sub.Ack(second)
 	var delta struct {
 		EventType           string `json:"event_type"`
@@ -413,6 +418,44 @@ func TestPublishAuctionEventAlsoPublishesLeaderboardDelta(t *testing.T) {
 	}
 	if got := delta.Entries[0]; got.Rank != 1 || got.UserID != "user_1" || got.AmountCents != 15_000 || got.BidCount != 1 {
 		t.Fatalf("unexpected top entry: %#v", got)
+	}
+}
+
+func TestPublishAuctionEventDropsLeaderboardProjectionWhenQueueFull(t *testing.T) {
+	db := openDBForRealtime(t)
+	rdb := openRedisForRealtime(t)
+	repo := auction.NewRepository(db)
+	auctionRow := createActiveAuctionForRealtime(t, repo, db)
+	rt := NewServerWithOptions(db, rdb, Options{
+		LeaderboardQueueSize: 1,
+		LeaderboardWorkers:   1,
+	})
+	rt.leaderboardQueue = make(chan leaderboardProjectionEvent, 1)
+	rt.leaderboardQueue <- leaderboardProjectionEvent{
+		auctionID:    auctionRow.ID,
+		eventType:    "bid_accepted",
+		seq:          1,
+		enqueuedTime: time.Now(),
+	}
+
+	sub := rt.hub.Subscribe(auctionRow.ID, nil)
+	defer rt.hub.Unsubscribe(auctionRow.ID, sub)
+	data := []byte(`{"auction_id":"` + auctionRow.ID + `","event_type":"bid_accepted","seq":2}`)
+	start := time.Now()
+	rt.PublishAuctionEvent(context.Background(), auctionRow.ID, data)
+	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
+		t.Fatalf("PublishAuctionEvent blocked on full leaderboard queue for %s", elapsed)
+	}
+
+	first := <-sub.Messages()
+	sub.Ack(first)
+	if !strings.Contains(string(first.data), `"event_type":"bid_accepted"`) {
+		t.Fatalf("first message = %s, want original auction event", string(first.data))
+	}
+	select {
+	case extra := <-sub.Messages():
+		t.Fatalf("unexpected leaderboard message while queue was full: %s", string(extra.data))
+	default:
 	}
 }
 

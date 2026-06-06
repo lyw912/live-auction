@@ -100,6 +100,7 @@ type AutoCommentaryWorkerOptions struct {
 	PollInterval     time.Duration
 	BatchSize        int
 	Lease            time.Duration
+	TaskTimeout      time.Duration
 	BackfillLookback time.Duration
 }
 
