@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { AlertTriangle, BadgeCheck, Bell, BellOff, CheckCircle2, ChevronUp, Clock3, CreditCard, Heart, History, Info, MessageCircle, MoreHorizontal, PackageCheck, RefreshCw, Send, ShieldCheck, ShoppingCart, Sparkles, Truck, Trophy, Users, Wifi, WifiOff, X } from 'lucide-react';
+import { AlertTriangle, BadgeCheck, Bell, BellOff, CheckCircle2, ChevronUp, Clock3, CreditCard, Flame, Heart, History, Info, MessageCircle, MoreHorizontal, PackageCheck, RefreshCw, Send, ShieldCheck, ShoppingCart, Sparkles, Truck, Trophy, Users, Wifi, WifiOff, X } from 'lucide-react';
 import type { AtmosphereCue } from './atmosphere';
 import type { AuctionItem, AuctionState, AuctionSummary, BottomSheetKey, ChatMessage, ConnectionPhase, CountdownPhase, CountdownPhaseState, HeatSnapshot, HistoryRow, LeaderboardPayload, MaxBidIntent, MaxBidPhase, PaymentPhase, ProductQAAnswer, ResultRecap, ResultSheetKind, Scenario, SoundCapability, SystemMessage } from './domain';
 import { buildResultRecap, demoLiveVideoURL, demoProductImageURL, formatCents, formatClockTime, isDangerousActionDisabled, leaderboardActionCopy, rankBadgeLabel, riskActionCopy, scenarios } from './domain';
@@ -225,6 +225,89 @@ export function HeatMeter({ countdownPhase, heat }: { countdownPhase: CountdownP
       <strong>{hasHeat ? `近30秒 ${heat.activeBidders30s} 人 · ${heat.acceptedBids30s} 口` : '等待有效出价'}</strong>
       <em>{heat.priceVelocityCentsPerMin > 0 ? `${formatCents(heat.priceVelocityCentsPerMin)}/分` : heat.totalAcceptedBids != null ? `累计 ${heat.totalAcceptedBids} 口` : '真实数据同步中'}</em>
     </div>
+  );
+}
+
+export function LiveOpsPanel({
+  activeTeam,
+  followed,
+  heat,
+  leaderboard,
+  likeCount,
+  qaAsked,
+  scenario,
+  warmupTasks,
+  onOpenProducts,
+  onOpenQA,
+  onOpenLeaderboard,
+  onSelectTeam,
+  onToggleFollow
+}: {
+  activeTeam: 'craft' | 'story';
+  followed: boolean;
+  heat: HeatSnapshot;
+  leaderboard: LeaderboardPayload | null;
+  likeCount: number;
+  qaAsked: boolean;
+  scenario: Scenario;
+  warmupTasks: { watched: boolean; followed: boolean; asked: boolean; ready: boolean };
+  onOpenProducts: () => void;
+  onOpenQA: () => void;
+  onOpenLeaderboard: () => void;
+  onSelectTeam: (team: 'craft' | 'story') => void;
+  onToggleFollow: () => void;
+}) {
+  const finishedTasks = [
+    warmupTasks.watched,
+    followed || warmupTasks.followed,
+    qaAsked || warmupTasks.asked,
+    warmupTasks.ready
+  ].filter(Boolean).length;
+  const heatTotal = Math.max(1, heat.acceptedBids30s + heat.activeBidders30s + likeCount);
+  const craftScore = Math.min(100, Math.max(12, Math.round(((heat.acceptedBids30s * 2 + likeCount) / (heatTotal + 3)) * 100)));
+  const storyScore = Math.max(0, 100 - craftScore);
+  const topEntry = leaderboard?.entries?.[0];
+  const leaderIsMe = topEntry?.is_current === true || leaderboard?.my_rank === 1;
+  const entryCopy = leaderIsMe
+    ? '榜一特效已点亮'
+    : followed
+      ? '欢迎回来，已关注'
+      : '关注后点亮入场牌';
+  return (
+    <section className="live-ops-panel" data-testid="live-ops-panel" aria-label="live-ops-panel">
+      <div className="warmup-card" data-testid="warmup-card">
+        <div>
+          <span><Sparkles size={13} /> 暖场任务</span>
+          <strong>{finishedTasks}/4 已完成</strong>
+        </div>
+        <div className="warmup-task-grid">
+          <button type="button" className={warmupTasks.watched ? 'done' : ''} onClick={onOpenProducts}>看拍品</button>
+          <button type="button" className={(followed || warmupTasks.followed) ? 'done' : ''} onClick={onToggleFollow}>{followed ? '已关注' : '关注'}</button>
+          <button type="button" className={(qaAsked || warmupTasks.asked) ? 'done' : ''} onClick={onOpenQA}>问拍品</button>
+          <button type="button" className={warmupTasks.ready ? 'done' : ''} onClick={onOpenLeaderboard}>看榜单</button>
+        </div>
+        <small>只记录互动准备，不抽奖、不承诺中奖或优惠。</small>
+      </div>
+      <div className="buyer-pk-card" data-testid="buyer-pk-card">
+        <div className="pk-title">
+          <span><Flame size={13} /> 买家阵营</span>
+          <strong>{scenario.status === 'ACTIVE' ? '竞价中' : scenario.status}</strong>
+        </div>
+        <div className="pk-bars" style={{ '--craft-score': `${craftScore}%`, '--story-score': `${storyScore}%` } as React.CSSProperties}>
+          <button type="button" className={activeTeam === 'craft' ? 'active' : ''} onClick={() => onSelectTeam('craft')}>
+            <span>工艺派</span><strong>{craftScore}%</strong>
+          </button>
+          <button type="button" className={activeTeam === 'story' ? 'active' : ''} onClick={() => onSelectTeam('story')}>
+            <span>故事派</span><strong>{storyScore}%</strong>
+          </button>
+        </div>
+        <small>进度来自真实出价热度和本机互动，不影响价格和成交。</small>
+      </div>
+      <button type="button" className={`entry-effect-card ${leaderIsMe ? 'is-leader' : followed ? 'is-followed' : ''}`} data-testid="entry-effect-card" onClick={leaderIsMe || followed ? onOpenLeaderboard : onToggleFollow}>
+        <span>{leaderIsMe ? <Trophy size={15} /> : <ShieldCheck size={15} />} {entryCopy}</span>
+        <strong>{leaderIsMe ? `${topEntry?.user_masked ?? '我'} · ${formatCents(topEntry?.amount_cents ?? 0)}` : followed ? '入场牌已显示' : '点亮入场牌'}</strong>
+      </button>
+    </section>
   );
 }
 

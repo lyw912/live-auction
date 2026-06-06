@@ -143,9 +143,17 @@ func (h AuctionHandler) CreateUploadURL(w http.ResponseWriter, r *http.Request) 
 		"bucket":       h.Deps.Bucket,
 		"object_name":  req.ObjectName,
 		"upload_url":   url.String(),
-		"public_url":   "http://" + h.Config.MinIOEndpoint + "/" + h.Deps.Bucket + "/" + req.ObjectName,
+		"public_url":   publicObjectURL(h.Config.S3UseSSL, h.Config.MinIOEndpoint, h.Deps.Bucket, req.ObjectName),
 		"expires_in_s": 900,
 	})
+}
+
+func publicObjectURL(useSSL bool, endpoint string, bucket string, objectName string) string {
+	scheme := "http"
+	if useSSL {
+		scheme = "https"
+	}
+	return scheme + "://" + endpoint + "/" + bucket + "/" + objectName
 }
 
 func (h AuctionHandler) CreateItem(w http.ResponseWriter, r *http.Request) {

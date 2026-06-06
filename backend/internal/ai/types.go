@@ -143,6 +143,13 @@ type ProductQAAnswer struct {
 	SafetyNote string   `json:"safety_note"`
 }
 
+type AuctionAISettings struct {
+	AuctionID             string    `json:"auction_id"`
+	AutoCommentaryEnabled bool      `json:"auto_commentary_enabled"`
+	UpdatedBy             string    `json:"updated_by,omitempty"`
+	UpdatedAt             time.Time `json:"updated_at"`
+}
+
 func InputHash(v any) string {
 	raw, _ := json.Marshal(v)
 	sum := sha256.Sum256(raw)

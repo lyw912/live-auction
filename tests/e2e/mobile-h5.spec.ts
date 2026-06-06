@@ -251,10 +251,23 @@ test('H5 renders honest heat and all visible live actions are interactive', asyn
   await expect(page.getByText('古玩榜第 8 名')).toHaveCount(0);
   await expect(page.getByText('保证金锁定')).toHaveCount(0);
 
-  await page.getByRole('button', { name: '关注' }).click();
-  await expect(page.getByRole('button', { name: '已关注' })).toBeVisible();
+  await page.getByTestId('live-stage').getByRole('button', { name: '关注' }).click();
+  await expect(page.getByTestId('live-stage').getByRole('button', { name: '已关注' })).toBeVisible();
   await page.getByRole('button', { name: '点赞' }).click();
   await expect(page.getByRole('button', { name: '点赞' })).toContainText('1');
+  await expect(page.getByTestId('live-ops-panel')).toBeVisible();
+  await expect(page.getByTestId('warmup-card')).toContainText('暖场任务');
+  await page.getByTestId('warmup-card').getByRole('button', { name: '看拍品' }).click();
+  await expect(page.getByTestId('bottom-sheet')).toContainText('本场商品');
+  await page.getByTestId('bottom-sheet').getByRole('button', { name: '关闭' }).click();
+  await expect(page.getByTestId('warmup-card')).toContainText('2/4 已完成');
+  await expect(page.getByTestId('buyer-pk-card')).toContainText('买家阵营');
+  await page.getByTestId('buyer-pk-card').getByRole('button', { name: /故事派/ }).click();
+  await expect(page.getByTestId('buyer-pk-card').getByRole('button', { name: /故事派/ })).toHaveClass(/active/);
+  await page.getByTestId('entry-effect-card').click();
+  await expect(page.getByTestId('leaderboard-sheet')).toBeVisible();
+  await page.getByTestId('bottom-sheet').getByRole('button', { name: '关闭' }).click();
+  await expect(page.getByTestId('live-stage').getByRole('button', { name: '已关注' })).toBeVisible();
   await page.getByRole('button', { name: '更多' }).click();
   await expect(page.getByTestId('more-sheet')).toBeVisible();
   await page.getByTestId('more-sheet').getByRole('button', { name: '关闭' }).click();

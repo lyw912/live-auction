@@ -85,6 +85,7 @@ func (r *Repository) CreateListingDraft(ctx context.Context, hostID string, gen 
 	}
 	draft := NormalizeListingDraft(result.Output, req)
 	result.Output = structToMap(draft)
+	result.Safety = ensureMap(result.Safety)
 	result.Safety["human_review_required"] = true
 	result.Safety["no_auto_publish"] = true
 	return r.insertJob(ctx, Job{
@@ -163,6 +164,67 @@ func (r *Repository) MarkJobApplied(ctx context.Context, hostID string, jobID st
 	return r.GetJob(ctx, hostID, jobID)
 }
 
+func (r *Repository) GetAuctionAISettings(ctx context.Context, hostID string, auctionID string) (AuctionAISettings, error) {
+	state, err := r.auctionState(ctx, auctionID)
+	if err != nil {
+		return AuctionAISettings{}, err
+	}
+	if hostID != "" {
+		if err := r.ensureHostRoom(ctx, hostID, state.RoomID); err != nil {
+			return AuctionAISettings{}, err
+		}
+	}
+	settings := AuctionAISettings{
+		AuctionID:             auctionID,
+		AutoCommentaryEnabled: true,
+	}
+	var updatedBy *string
+	err = r.db.QueryRow(ctx, `
+		SELECT auto_commentary_enabled, updated_by, updated_at
+		FROM auction_ai_settings
+		WHERE auction_id = $1
+	`, auctionID).Scan(&settings.AutoCommentaryEnabled, &updatedBy, &settings.UpdatedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			settings.UpdatedAt = time.Now().UTC()
+			return settings, nil
+		}
+		return AuctionAISettings{}, err
+	}
+	if updatedBy != nil {
+		settings.UpdatedBy = *updatedBy
+	}
+	return settings, nil
+}
+
+func (r *Repository) UpdateAuctionAISettings(ctx context.Context, hostID string, auctionID string, autoCommentaryEnabled bool) (AuctionAISettings, error) {
+	state, err := r.auctionState(ctx, auctionID)
+	if err != nil {
+		return AuctionAISettings{}, err
+	}
+	if err := r.ensureHostRoom(ctx, hostID, state.RoomID); err != nil {
+		return AuctionAISettings{}, err
+	}
+	settings := AuctionAISettings{AuctionID: auctionID}
+	var updatedBy *string
+	err = r.db.QueryRow(ctx, `
+		INSERT INTO auction_ai_settings (auction_id, auto_commentary_enabled, updated_by)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (auction_id)
+		DO UPDATE SET auto_commentary_enabled = EXCLUDED.auto_commentary_enabled,
+		              updated_by = EXCLUDED.updated_by,
+		              updated_at = now()
+		RETURNING auto_commentary_enabled, updated_by, updated_at
+	`, auctionID, autoCommentaryEnabled, hostID).Scan(&settings.AutoCommentaryEnabled, &updatedBy, &settings.UpdatedAt)
+	if err != nil {
+		return AuctionAISettings{}, err
+	}
+	if updatedBy != nil {
+		settings.UpdatedBy = *updatedBy
+	}
+	return settings, nil
+}
+
 func (r *Repository) CreateCommentary(ctx context.Context, hostID string, gen Generator, req CommentaryRequest) (SystemMessage, Job, error) {
 	if req.AuctionID == "" || req.RoomID == "" {
 		return SystemMessage{}, Job{}, apierrors.New(apierrors.CodeInvalidArgument, "auction_id and room_id are required", http.StatusBadRequest)
@@ -199,6 +261,7 @@ func (r *Repository) CreateCommentary(ctx context.Context, hostID string, gen Ge
 	if body == "" {
 		body, style, result.Safety = BuildCommentary(req)
 	}
+	result.Safety = ensureMap(result.Safety)
 	msg, err := r.InsertSystemMessage(ctx, req.RoomID, req.AuctionID, "SYSTEM_AI", req.SourceSeq, style, body, inputMap, result.Safety)
 	if err != nil {
 		return SystemMessage{}, Job{}, err
@@ -231,6 +294,13 @@ func (r *Repository) CreateAutoCommentary(ctx context.Context, gen Generator, re
 	}
 	req.RoomID = firstNonEmpty(req.RoomID, state.RoomID)
 	req.ItemTitle = firstNonEmpty(req.ItemTitle, state.ItemTitle)
+	settings, err := r.GetAuctionAISettings(ctx, "", req.AuctionID)
+	if err != nil {
+		return SystemMessage{}, Job{}, err
+	}
+	if !settings.AutoCommentaryEnabled {
+		return SystemMessage{}, Job{}, apierrors.New(apierrors.CodeInvalidArgument, "auto commentary disabled for auction", http.StatusConflict)
+	}
 	if req.CurrentPriceCents <= 0 {
 		req.CurrentPriceCents = state.CurrentPriceCents
 	}
@@ -270,6 +340,7 @@ func (r *Repository) CreateAutoCommentary(ctx context.Context, gen Generator, re
 	if body == "" {
 		body, style, result.Safety = BuildCommentary(req)
 	}
+	result.Safety = ensureMap(result.Safety)
 	result.Safety["auto_generated"] = true
 	msg, err := r.InsertSystemMessage(ctx, req.RoomID, req.AuctionID, "SYSTEM_AI", req.SourceSeq, style, body, inputMap, result.Safety)
 	if err != nil {
@@ -672,6 +743,13 @@ func nullableString(value string) any {
 func nullableSeq(value int64) any {
 	if value <= 0 {
 		return nil
+	}
+	return value
+}
+
+func ensureMap(value map[string]any) map[string]any {
+	if value == nil {
+		return map[string]any{}
 	}
 	return value
 }

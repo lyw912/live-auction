@@ -63,6 +63,45 @@ func (h AIHandler) ApplyListingDraft(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, job)
 }
 
+func (h AIHandler) GetAuctionAISettings(w http.ResponseWriter, r *http.Request) {
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	settings, err := h.Repo.GetAuctionAISettings(r.Context(), user.ID, chi.URLParam(r, "id"))
+	if err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, settings)
+}
+
+func (h AIHandler) UpdateAuctionAISettings(w http.ResponseWriter, r *http.Request) {
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	var req struct {
+		AutoCommentaryEnabled *bool `json:"auto_commentary_enabled"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "invalid json body", http.StatusBadRequest))
+		return
+	}
+	if req.AutoCommentaryEnabled == nil {
+		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "auto_commentary_enabled is required", http.StatusBadRequest))
+		return
+	}
+	settings, err := h.Repo.UpdateAuctionAISettings(r.Context(), user.ID, chi.URLParam(r, "id"), *req.AutoCommentaryEnabled)
+	if err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, settings)
+}
+
 func (h AIHandler) CreateCommentary(w http.ResponseWriter, r *http.Request) {
 	user, ok := currentUser(r)
 	if !ok {

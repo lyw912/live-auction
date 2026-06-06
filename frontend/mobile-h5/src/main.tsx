@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { CheckCircle2, ChevronUp, Radio, RefreshCw } from 'lucide-react';
 import type { AtmosphereCue, AtmosphereInput } from './atmosphere';
-import { AuctionStatePanel, BottomSheet, ChatComposer, ChatPanel, LeaderboardPanel, LiveStage, ResultSheet, StateMatrixTabs } from './components';
+import { AuctionStatePanel, BottomSheet, ChatComposer, ChatPanel, LeaderboardPanel, LiveOpsPanel, LiveStage, ResultSheet, StateMatrixTabs } from './components';
 import type { AuctionItem, AuctionOverlayMode, AuctionRealtimeEvent, AuctionState, AuctionSummary, AuthUser, BidderRequirement, BidPhase, BidResponse, BottomSheetKey, ChatMessage, ConnectionPhase, HistoryRow, LeaderboardPayload, MaxBidIntent, MaxBidPhase, OrderRow, PaymentPhase, PendingBidRequest, ProductQAAnswer, RecoveryPhase, ResultSheetKind, Scenario, SnapshotResponse, SoundCapability, SystemMessage, WSTicketResponse } from './domain';
 import { createAudioContext, createClientBidID, demoProductImageURL, demoUserID, deriveCountdown, deriveCountdownPhase, ensureDemoSession, extensionCopyFromEvent, formatCents, heatSnapshot, isBidConfirmationPending, isCountdownExpired, isDangerousActionDisabled, isEngineRejected, isTestMatrixEnabled, maxBidErrorCopy, maxBidStatusCopy, playCountdownTone, playCueTone, readJSON, rejectCopy, responseServerTimeMS, retryAfterMS, retryAfterMSFromHeaders, roomIDFromPath, scenarios, selectEntryAuction, vibrateCountdownPhase, vibratePattern, visibleRoomAuctions } from './domain';
 import { normalizeAtmosphere } from './atmosphere';
@@ -66,6 +66,8 @@ function App() {
   const [overlayMode, setOverlayMode] = useState<AuctionOverlayMode>(() => showStateMatrix ? 'bid' : 'feed');
   const [followed, setFollowed] = useState(false);
   const [likeCount, setLikeCount] = useState(0);
+  const [activeBuyerTeam, setActiveBuyerTeam] = useState<'craft' | 'story'>('craft');
+  const [warmupTasks, setWarmupTasks] = useState({ watched: false, followed: false, asked: false, ready: false });
   const [stageItem, setStageItem] = useState<AuctionItem>({
     title: '青瓷手作茶盏',
     image_url: demoProductImageURL,
@@ -1488,6 +1490,7 @@ function App() {
       const payload = await readJSON<ProductQAAnswer>(response);
       if (response.ok && payload) {
         setQAAnswer(payload);
+        setWarmupTasks((current) => ({ ...current, asked: true }));
       } else {
         setQAAnswer({ auction_id: activeAuctionID, answer: '未提供', facts_used: [], safety_note: '问答暂不可用，请稍后重试。' });
       }
@@ -1496,6 +1499,19 @@ function App() {
     } finally {
       setQALoading(false);
     }
+  };
+
+  const toggleFollow = () => {
+    setFollowed((value) => {
+      const next = !value;
+      if (next) setWarmupTasks((current) => ({ ...current, followed: true }));
+      return next;
+    });
+  };
+
+  const openWarmupSheet = (sheet: BottomSheetKey, task: keyof typeof warmupTasks) => {
+    setWarmupTasks((current) => ({ ...current, [task]: true }));
+    setActiveSheet(sheet);
   };
 
   return (
@@ -1523,11 +1539,28 @@ function App() {
         nextBidCents={nextBidCents}
         onLike={() => setLikeCount((count) => count + 1)}
         onOpenMore={() => setActiveSheet('more')}
-        onOpenProducts={() => setActiveSheet('products')}
+        onOpenProducts={() => openWarmupSheet('products', 'watched')}
         onOpenBid={openBidOverlay}
-        onToggleFollow={() => setFollowed((value) => !value)}
+        onToggleFollow={toggleFollow}
         onToggleSound={() => void toggleSound()}
       />
+      {!showStateMatrix && (
+        <LiveOpsPanel
+          activeTeam={activeBuyerTeam}
+          followed={followed}
+          heat={heat}
+          leaderboard={leaderboard}
+          likeCount={likeCount}
+          qaAsked={Boolean(qaAnswer)}
+          scenario={scenario}
+          warmupTasks={warmupTasks}
+          onOpenProducts={() => openWarmupSheet('products', 'watched')}
+          onOpenQA={() => openWarmupSheet('qa', 'asked')}
+          onOpenLeaderboard={() => openWarmupSheet('leaderboard', 'ready')}
+          onSelectTeam={setActiveBuyerTeam}
+          onToggleFollow={toggleFollow}
+        />
+      )}
       {overlayMode === 'bid' && (
         <AuctionStatePanel
           atmosphereCue={atmosphereCue}
@@ -1621,7 +1654,7 @@ function App() {
           onAskQA={askProductQA}
           onQADraftChange={setQADraft}
           onSubmitMaxBid={submitMaxBidIntent}
-          onToggleFollow={() => setFollowed((value) => !value)}
+          onToggleFollow={toggleFollow}
           onToggleSound={() => void toggleSound()}
         />
       )}

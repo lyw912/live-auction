@@ -51,6 +51,13 @@ type Config struct {
 	RedisEngineSettlementWorkers int
 	FakePaymentWebhookSecret     string
 
+	AIProviderMode   string
+	AIRelayBaseURL   string
+	AIRelayModel     string
+	AIRelayAPIKey    string
+	AIRelayTimeout   time.Duration
+	AIRelayMaxTokens int
+
 	AdmissionEnabled       bool
 	WSTicketMaxInFlight    int
 	WSConnectMaxInFlight   int
@@ -119,6 +126,13 @@ func Load() Config {
 		BidRedisGuardTimeout:         getEnvDuration("BID_REDIS_GUARD_TIMEOUT", 30*time.Millisecond),
 		RedisEngineSettlementWorkers: getEnvInt("REDIS_ENGINE_SETTLEMENT_WORKERS", 1),
 		FakePaymentWebhookSecret:     getEnv("FAKE_PAYMENT_WEBHOOK_SECRET", "local_fake_payment_secret"),
+
+		AIProviderMode:   getEnv("AI_PROVIDER_MODE", "auto"),
+		AIRelayBaseURL:   getEnv("AI_RELAY_BASE_URL", "https://api.gptgod.online/v1"),
+		AIRelayModel:     getEnv("AI_RELAY_MODEL", "gemini-3.1-flash-image-preview"),
+		AIRelayAPIKey:    getEnv("AI_RELAY_API_KEY", ""),
+		AIRelayTimeout:   getEnvDuration("AI_RELAY_TIMEOUT", getEnvMillisDuration("AI_RELAY_TIMEOUT_MS", 45*time.Second)),
+		AIRelayMaxTokens: getEnvInt("AI_RELAY_MAX_TOKENS", 2048),
 
 		AdmissionEnabled:       getEnvBool("ADMISSION_ENABLED", true),
 		WSTicketMaxInFlight:    getEnvInt("WS_TICKET_MAX_IN_FLIGHT", 256),
@@ -202,4 +216,16 @@ func getEnvDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return parsed
+}
+
+func getEnvMillisDuration(key string, fallback time.Duration) time.Duration {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return time.Duration(parsed) * time.Millisecond
 }

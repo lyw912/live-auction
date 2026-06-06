@@ -109,6 +109,20 @@ func TestAICommentarySystemMessagesSentinelRecapAndProductQA(t *testing.T) {
 		t.Fatalf("bad commentary payload: %#v", commentary.Message)
 	}
 	aiRepo := aicap.NewRepository(db)
+	assertAPIStatus(t, router, http.MethodGet, "/api/host/auctions/"+row.ID+"/ai-settings", nil, userHeaders("host_1", "host"), http.StatusOK)
+	settingsBody := bytes.NewBufferString(`{"auto_commentary_enabled":false}`)
+	assertAPIStatus(t, router, http.MethodPatch, "/api/host/auctions/"+row.ID+"/ai-settings", settingsBody, userHeaders("host_1", "host"), http.StatusOK)
+	_, _, err := aiRepo.CreateAutoCommentary(context.Background(), aicap.DeterministicGenerator{}, aicap.CommentaryRequest{
+		AuctionID:         row.ID,
+		SourceSeq:         41,
+		EventType:         "auction_sold",
+		CurrentPriceCents: 25000,
+	})
+	if err == nil {
+		t.Fatalf("auto commentary should stop when auction AI settings disable it")
+	}
+	settingsBody = bytes.NewBufferString(`{"auto_commentary_enabled":true}`)
+	assertAPIStatus(t, router, http.MethodPatch, "/api/host/auctions/"+row.ID+"/ai-settings", settingsBody, userHeaders("host_1", "host"), http.StatusOK)
 	auto, _, err := aiRepo.CreateAutoCommentary(context.Background(), aicap.DeterministicGenerator{}, aicap.CommentaryRequest{
 		AuctionID:         row.ID,
 		SourceSeq:         42,

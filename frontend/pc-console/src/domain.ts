@@ -239,6 +239,13 @@ export type ListingDraftJob = {
   applied_at?: string;
 };
 
+export type AuctionAISettings = {
+  auction_id: string;
+  auto_commentary_enabled: boolean;
+  updated_by?: string;
+  updated_at: string;
+};
+
 export type SystemMessage = {
   id: number;
   room_id: string;

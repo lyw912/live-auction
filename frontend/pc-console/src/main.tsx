@@ -4,7 +4,7 @@ import { Layout, Message } from '@arco-design/web-react';
 import '@arco-design/web-react/dist/css/arco.css';
 
 import { AICopilotDrawer, AuctionCommandPanel, AuctionControlSummary, AuctionQueue, ConsoleNav, DiagnosticsPanel, EventTimeline, FlightRecorderDrawer, HealthRibbon, InventoryLotsPanel, ItemCreatePanel, LiveAssistRail, LiveHealthPanel, OrderDetailDrawer, OrdersPanel, RuleEditor } from './components';
-import type { Auction, AuctionRecap, AuthUser, FlightRecorderPayload, HeatSummary, HostPrompt, HostPromptsPayload, Item, ListingDraftJob, MaxBidSummary, MonitorPayload, Order, RedisEngineMonitorPayload, Room, RuleAPIError, RuleDraft, SentinelAlert, SignalRequest, SystemMessage } from './domain';
+import type { Auction, AuctionAISettings, AuctionRecap, AuthUser, FlightRecorderPayload, HeatSummary, HostPrompt, HostPromptsPayload, Item, ListingDraftJob, MaxBidSummary, MonitorPayload, Order, RedisEngineMonitorPayload, Room, RuleAPIError, RuleDraft, SentinelAlert, SignalRequest, SystemMessage } from './domain';
 import { activeAuction, createRuleDraft, defaultRoomID, depositPreview, ensureDemoSession, liveHealthSummary, monitorQuery, narratingAuction, readJSON, rulePayload, signalCopy, sortedAuctions, validateRule } from './domain';
 import './styles.css';
 
@@ -33,10 +33,12 @@ function App() {
   const [listingCategory, setListingCategory] = useState('collectibles');
   const [listingDraftJob, setListingDraftJob] = useState<ListingDraftJob | undefined>();
   const [listingDraftLoading, setListingDraftLoading] = useState(false);
+  const [copilotImageFile, setCopilotImageFile] = useState<File | null>(null);
+  const [copilotImageURL, setCopilotImageURL] = useState('');
   const [systemMessages, setSystemMessages] = useState<SystemMessage[]>([]);
   const [sentinelAlerts, setSentinelAlerts] = useState<SentinelAlert[]>([]);
   const [latestRecap, setLatestRecap] = useState<AuctionRecap | undefined>();
-  const [autoCommentaryVisible, setAutoCommentaryVisible] = useState(() => localStorage.getItem('pc-auto-commentary-visible') !== '0');
+  const [auctionAISettings, setAuctionAISettings] = useState<AuctionAISettings | undefined>();
   const [monitorFilter, setMonitorFilter] = useState({ type: '', auctionID: '', userID: '', traceID: '' });
   const [loading, setLoading] = useState(false);
   const [savingRule, setSavingRule] = useState(false);
@@ -291,6 +293,27 @@ function App() {
     };
   }, [sessionReady, roomID, selectedAuction?.seq, loading]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const loadAISettings = async () => {
+      if (!sessionReady || !selectedAuction) {
+        setAuctionAISettings(undefined);
+        return;
+      }
+      try {
+        const response = await fetch(`/api/host/auctions/${selectedAuction.id}/ai-settings`);
+        const payload = await readJSON<AuctionAISettings>(response);
+        if (!cancelled && response.ok) setAuctionAISettings(payload);
+      } catch {
+        if (!cancelled) setAuctionAISettings(undefined);
+      }
+    };
+    void loadAISettings();
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionReady, selectedAuction?.id, loading]);
+
   const updateRule = (patch: Partial<RuleDraft>) => {
     setRule((current) => ({ ...current, ...patch }));
     setRuleSaveState('idle');
@@ -298,28 +321,32 @@ function App() {
     setBackendSuggestions([]);
   };
 
+  const uploadItemImage = async (file: File) => {
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-');
+    const objectName = `items/${Date.now()}-${safeName}`;
+    const upload = await fetch('/api/items/upload-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ object_name: objectName, content_type: file.type || 'application/octet-stream' })
+    });
+    if (!upload.ok) throw new Error('create upload url failed');
+    const payload = await upload.json() as { upload_url?: string; public_url?: string };
+    if (!payload.upload_url) throw new Error('missing upload url');
+    const put = await fetch(payload.upload_url, {
+      method: 'PUT',
+      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      body: file
+    });
+    if (!put.ok) throw new Error('upload failed');
+    return payload.public_url ?? '';
+  };
+
   const createItemAndAuction = async () => {
     setCreating(true);
     try {
       let imageURL = itemDraft.imageURL.trim();
       if (itemImageFile) {
-        const safeName = itemImageFile.name.replace(/[^a-zA-Z0-9._-]/g, '-');
-        const objectName = `items/${Date.now()}-${safeName}`;
-        const upload = await fetch('/api/items/upload-url', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ object_name: objectName, content_type: itemImageFile.type || 'application/octet-stream' })
-        });
-        if (!upload.ok) throw new Error('create upload url failed');
-        const payload = await upload.json() as { upload_url?: string; public_url?: string };
-        if (!payload.upload_url) throw new Error('missing upload url');
-        const put = await fetch(payload.upload_url, {
-          method: 'PUT',
-          headers: { 'Content-Type': itemImageFile.type || 'application/octet-stream' },
-          body: itemImageFile
-        });
-        if (!put.ok) throw new Error('upload failed');
-        imageURL = payload.public_url ?? imageURL;
+        imageURL = await uploadItemImage(itemImageFile) || imageURL;
       }
       const itemResponse = await fetch('/api/items', {
         method: 'POST',
@@ -453,12 +480,20 @@ function App() {
   const generateListingDraft = async () => {
     setListingDraftLoading(true);
     try {
+      let imageURL = copilotImageURL.trim() || itemDraft.imageURL.trim();
+      if (copilotImageFile) {
+        imageURL = await uploadItemImage(copilotImageFile) || imageURL;
+        setCopilotImageURL(imageURL);
+        setCopilotImageFile(null);
+        setItemDraft((current) => ({ ...current, imageURL: imageURL || current.imageURL }));
+      }
+      const providerImageURLs = imageURL.startsWith('https://') ? [imageURL] : [];
       const response = await fetch('/api/host/ai/listing-drafts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           room_id: roomID,
-          image_urls: itemDraft.imageURL.trim() ? [itemDraft.imageURL.trim()] : [],
+          image_urls: providerImageURLs,
           seller_notes: listingNotes.trim(),
           target_category: listingCategory.trim()
         })
@@ -469,6 +504,9 @@ function App() {
         return;
       }
       setListingDraftJob(payload);
+      if (imageURL && providerImageURLs.length === 0) {
+        Message.warning('图片已保存到拍品表单；当前地址不是 HTTPS，AI 将按文字备注生成草稿');
+      }
       Message.success('AI 草稿已生成，需人工确认后应用');
     } catch {
       Message.error('AI 草稿生成失败');
@@ -569,13 +607,26 @@ function App() {
     }
   };
 
-  const toggleAutoCommentaryVisible = () => {
-    setAutoCommentaryVisible((value) => {
-      const next = !value;
-      localStorage.setItem('pc-auto-commentary-visible', next ? '1' : '0');
-      Message.info(next ? '自动解说消息已显示' : '自动解说消息已在本控制台隐藏');
-      return next;
-    });
+  const toggleAutoCommentaryEnabled = async () => {
+    if (!selectedAuction) return;
+    const current = auctionAISettings?.auto_commentary_enabled ?? true;
+    const next = !current;
+    try {
+      const response = await fetch(`/api/host/auctions/${selectedAuction.id}/ai-settings`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ auto_commentary_enabled: next })
+      });
+      const payload = await readJSON<AuctionAISettings>(response);
+      if (!response.ok) {
+        Message.error('自动解说开关保存失败');
+        return;
+      }
+      setAuctionAISettings(payload);
+      Message.success(next ? '已开启本场自动解说' : '已关闭本场自动解说');
+    } catch {
+      Message.error('自动解说开关保存失败');
+    }
   };
 
   return (
@@ -687,15 +738,15 @@ function App() {
                 onBuildRecap={buildRecap}
                 onCreateCommentary={createAICommentary}
                 onEvaluateSentinel={evaluateSentinel}
-                autoCommentaryVisible={autoCommentaryVisible}
-                onToggleAutoCommentaryVisible={toggleAutoCommentaryVisible}
+                autoCommentaryEnabled={auctionAISettings?.auto_commentary_enabled ?? true}
+                onToggleAutoCommentaryEnabled={toggleAutoCommentaryEnabled}
                 onOpenFlightRecorder={openFlightRecorder}
                 prompts={hostPrompts}
                 promptsLoading={promptsLoading}
                 recentEvents={recentEvents}
                 selectedAuction={selectedAuction}
                 sentinelAlerts={sentinelAlerts}
-                systemMessages={autoCommentaryVisible ? systemMessages : systemMessages.filter((row) => row.safety_json?.auto_generated !== true)}
+                systemMessages={(auctionAISettings?.auto_commentary_enabled ?? true) ? systemMessages : systemMessages.filter((row) => row.safety_json?.auto_generated !== true)}
                 onDismissPrompt={(promptID) => setDismissedPromptIDs((current) => Array.from(new Set([...current, promptID])))}
                 onDriveDemoBid={driveDemoBid}
               />
@@ -749,6 +800,8 @@ function App() {
         />
         <AICopilotDrawer
           category={listingCategory}
+          imageFile={copilotImageFile}
+          imageURL={copilotImageURL || itemDraft.imageURL}
           draft={listingDraftJob}
           loading={listingDraftLoading}
           notes={listingNotes}
@@ -757,6 +810,8 @@ function App() {
           onCategoryChange={setListingCategory}
           onClose={() => setListingCopilotOpen(false)}
           onGenerate={generateListingDraft}
+          onImageFileChange={setCopilotImageFile}
+          onImageURLChange={setCopilotImageURL}
           onNotesChange={setListingNotes}
         />
       </Layout.Content>

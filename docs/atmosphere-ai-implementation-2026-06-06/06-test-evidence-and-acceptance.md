@@ -80,8 +80,9 @@ Evidence:
 
 Current 2026-06-06 evidence:
 
+- `go test ./internal/ai` passed for the relay Chat Completions adapter request shape, strict `json_schema`, HTTPS-only image forwarding, and malformed-content rejection.
 - `TestAIListingDraftIsHostOnlyStructuredAndApplyIsAuditOnly` passed against local PostgreSQL/Redis after migration.
-- PC Playwright MCP generated a real deterministic/local-template draft through `/api/host/ai/listing-drafts`; drawer showed `SUCCEEDED`, provider/model, title candidates, description, rule suggestion, and evidence flags.
+- PC drawer now accepts merchant notes, category, and product-image upload. Uploaded images are sent to the provider only when the resulting object URL is HTTPS/provider-fetchable; local HTTP MinIO URLs remain visible in the form and generate a text-only draft warning.
 - UI apply fills the local create/rule form only; publishing still requires existing create/save actions and backend validation.
 
 ## AI Commentator Tests
@@ -109,9 +110,20 @@ Current 2026-06-06 evidence:
 
 - `TestAICommentarySystemMessagesSentinelRecapAndProductQA` passed for commentary creation and system-message readback.
 - The same test now verifies automatic commentary creation through `CreateAutoCommentary`, including source-seq dedupe and `auto_generated` safety marking.
+- The same test now verifies host-only `GET/PATCH /api/host/auctions/{id}/ai-settings`; disabling `auto_commentary_enabled` stops `CreateAutoCommentary`, while manual host commentary remains available.
 - PC Playwright MCP clicked `生成解说`; Live Assist showed a generated message with source seq and factual price.
 - H5 Playwright MCP displayed that AI system message in the live chat overlay.
-- Bid gateway auto-commentary remains non-blocking: accepted/sold bid responses are written first, then a bounded background task writes a system message. This is deterministic/local-template in the current runtime.
+- Bid gateway auto-commentary remains non-blocking: accepted/sold bid responses are written first, then a bounded background task writes a system message. Relay-backed generation is used only when `AI_RELAY_API_KEY` is configured; deterministic fallback remains explicit.
+
+## Compliant Live-Ops Tests
+
+Current 2026-06-06 evidence:
+
+- `pnpm --filter mobile-h5 build` passed after adding `LiveOpsPanel`.
+- Browser test subset passed: `/bin/bash -lc "H5_PORT=5288 PC_PORT=5289 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 pnpm exec playwright test tests/e2e/mobile-h5.spec.ts --project=mobile-h5 --reporter=line -g 'honest heat|leaderboard sheet|realtime leaderboard'"`.
+- The H5 test clicks warm-up task buttons, buyer-team PK controls, and entry/leader effect card. Each opens an existing real sheet or changes visible local state; no button is decorative.
+- The live-ops copy states that warm-up has no lottery/promised reward and buyer PK does not affect price or winner.
+- Real-browser testing exposed and fixed two UX defects: entry effect was initially hidden behind the fixed chat composer, and clicking an already-followed entry card toggled follow off instead of opening leaderboard.
 
 ## Sentinel Tests
 

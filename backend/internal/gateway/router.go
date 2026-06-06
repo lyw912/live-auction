@@ -102,7 +102,7 @@ func NewRouterWithRealtimeAndLedger(cfg config.Config, deps *storage.Dependencie
 			WithResponseDurability(cfg.BidEngineResponseDurability)
 	}
 	aiRepo := aicap.NewRepository(deps.Postgres)
-	aiGen := aicap.DeterministicGenerator{}
+	aiGen := buildAIGenerator(cfg)
 	auctionHandler := AuctionHandler{
 		Config: cfg,
 		Deps:   deps,
@@ -162,6 +162,8 @@ func NewRouterWithRealtimeAndLedger(cfg config.Config, deps *storage.Dependencie
 			r.With(requireHost).Post("/host/ai/listing-drafts", aiHandler.CreateListingDraft)
 			r.With(requireHost).Get("/host/ai/listing-drafts/{job_id}", aiHandler.GetListingDraft)
 			r.With(requireHost).Post("/host/ai/listing-drafts/{job_id}/apply", aiHandler.ApplyListingDraft)
+			r.With(requireHost).Get("/host/auctions/{id}/ai-settings", aiHandler.GetAuctionAISettings)
+			r.With(requireHost).Patch("/host/auctions/{id}/ai-settings", aiHandler.UpdateAuctionAISettings)
 			r.With(requireHost).Post("/host/auctions/{id}/commentary", aiHandler.CreateCommentary)
 			r.With(requireHost).Get("/host/auctions/{id}/sentinel-alerts", aiHandler.ListSentinelAlerts)
 			r.With(requireHost).Post("/host/auctions/{id}/sentinel-evaluate", aiHandler.EvaluateSentinel)
@@ -191,6 +193,39 @@ func NewRouterWithRealtimeAndLedger(cfg config.Config, deps *storage.Dependencie
 	r.Get("/ws", rt.ServeWS)
 
 	return r
+}
+
+func buildAIGenerator(cfg config.Config) aicap.Generator {
+	mode := cfg.AIProviderMode
+	if mode == "" || mode == "auto" {
+		if cfg.AIRelayAPIKey == "" {
+			return aicap.DeterministicGenerator{}
+		}
+		mode = "relay"
+	}
+	switch mode {
+	case "disabled":
+		return aicap.DisabledGenerator{}
+	case "deterministic":
+		return aicap.DeterministicGenerator{}
+	case "relay", "chat_completions_adapter":
+		gen, err := aicap.NewChatCompletionsGenerator(aicap.ChatProviderConfig{
+			BaseURL:   cfg.AIRelayBaseURL,
+			Model:     cfg.AIRelayModel,
+			APIKey:    cfg.AIRelayAPIKey,
+			Timeout:   cfg.AIRelayTimeout,
+			MaxTokens: cfg.AIRelayMaxTokens,
+		})
+		if err == nil {
+			return gen
+		}
+		if cfg.AIProviderMode == "auto" {
+			return aicap.DeterministicGenerator{}
+		}
+		return aicap.DisabledGenerator{}
+	default:
+		return aicap.DeterministicGenerator{}
+	}
 }
 
 func requestLogMiddleware(log *slog.Logger) func(http.Handler) http.Handler {

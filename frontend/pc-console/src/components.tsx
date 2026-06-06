@@ -467,7 +467,7 @@ export function AuctionControlSummary({
 }
 
 export function LiveAssistRail({
-  autoCommentaryVisible,
+  autoCommentaryEnabled,
   dismissedPromptIDs,
   heatLoading,
   heatSummary,
@@ -478,7 +478,7 @@ export function LiveAssistRail({
   onBuildRecap,
   onCreateCommentary,
   onEvaluateSentinel,
-  onToggleAutoCommentaryVisible,
+  onToggleAutoCommentaryEnabled,
   onOpenFlightRecorder,
   prompts,
   promptsLoading,
@@ -489,7 +489,7 @@ export function LiveAssistRail({
   onDismissPrompt,
   onDriveDemoBid
 }: {
-  autoCommentaryVisible: boolean;
+  autoCommentaryEnabled: boolean;
   dismissedPromptIDs: string[];
   heatLoading: boolean;
   heatSummary?: HeatSummary;
@@ -500,7 +500,7 @@ export function LiveAssistRail({
   onBuildRecap: () => void;
   onCreateCommentary: (eventType: string) => void;
   onEvaluateSentinel: () => void;
-  onToggleAutoCommentaryVisible: () => void;
+  onToggleAutoCommentaryEnabled: () => void;
   onOpenFlightRecorder: (auctionID: string) => void;
   prompts: HostPrompt[];
   promptsLoading: boolean;
@@ -563,13 +563,13 @@ export function LiveAssistRail({
       <div className="ai-live-panel" data-testid="ai-live-panel">
         <div className="heat-summary-head">
           <span>AI 场控</span>
-          <strong>{autoCommentaryVisible ? '自动展示' : '已隐藏自动'}</strong>
+          <strong>{autoCommentaryEnabled ? '自动开启' : '自动关闭'}</strong>
         </div>
         <div className="demo-driver-grid">
           <Button size="mini" icon={<Bot size={13} />} onClick={() => onCreateCommentary('bid_accepted')}>生成解说</Button>
           <Button size="mini" icon={<ShieldCheck size={13} />} onClick={onEvaluateSentinel}>检查风控</Button>
           <Button size="mini" icon={<ClipboardList size={13} />} onClick={onBuildRecap}>生成复盘</Button>
-          <Button size="mini" onClick={onToggleAutoCommentaryVisible}>{autoCommentaryVisible ? '隐藏自动' : '显示自动'}</Button>
+          <Button size="mini" onClick={onToggleAutoCommentaryEnabled}>{autoCommentaryEnabled ? '关闭自动' : '开启自动'}</Button>
         </div>
         <small>AI 只基于已发生的竞拍事实生成内容，不决定价格、赢家或订单；自动解说为旁路消息。</small>
         {systemMessages.length ? (
@@ -725,6 +725,8 @@ export function EventTimeline({
 
 export function AICopilotDrawer({
   draft,
+  imageFile,
+  imageURL,
   loading,
   notes,
   category,
@@ -733,9 +735,13 @@ export function AICopilotDrawer({
   onCategoryChange,
   onClose,
   onGenerate,
+  onImageFileChange,
+  onImageURLChange,
   onNotesChange
 }: {
   draft?: ListingDraftJob;
+  imageFile: File | null;
+  imageURL: string;
   loading: boolean;
   notes: string;
   category: string;
@@ -744,9 +750,12 @@ export function AICopilotDrawer({
   onCategoryChange: (category: string) => void;
   onClose: () => void;
   onGenerate: () => void;
+  onImageFileChange: (file: File | null) => void;
+  onImageURLChange: (url: string) => void;
   onNotesChange: (notes: string) => void;
 }) {
   const output = draft?.output_json;
+  const imageCanReachProvider = imageURL.trim().startsWith('https://');
   return (
     <Drawer
       className="ai-copilot-drawer"
@@ -762,6 +771,32 @@ export function AICopilotDrawer({
           <span>生成内容只进入草稿；发布和规则保存仍走现有后端校验。</span>
         </div>
         <Form layout="vertical">
+          <Form.Item label="拍品图片">
+            <div className="ai-image-input">
+              <label className="ai-image-drop">
+                <Upload size={18} />
+                <span>{imageFile ? imageFile.name : imageURL ? '更换图片' : '上传图片'}</span>
+                <input
+                  aria-label="listing-copilot-image-file"
+                  type="file"
+                  accept="image/*"
+                  onChange={(event) => onImageFileChange(event.currentTarget.files?.[0] ?? null)}
+                />
+              </label>
+              {imageURL ? (
+                <div className="ai-image-preview">
+                  <img src={imageURL} alt="" />
+                  <Tag color={imageCanReachProvider ? 'green' : 'gold'}>{imageCanReachProvider ? '可用于多模态' : '仅用于表单'}</Tag>
+                </div>
+              ) : null}
+            </div>
+            <Input
+              aria-label="listing-copilot-image-url"
+              value={imageURL}
+              onChange={onImageURLChange}
+              placeholder="上传后自动填入；HTTPS 对象地址才会发送给 AI"
+            />
+          </Form.Item>
           <Form.Item label="商家备注">
             <Input.TextArea
               aria-label="listing-copilot-notes"
