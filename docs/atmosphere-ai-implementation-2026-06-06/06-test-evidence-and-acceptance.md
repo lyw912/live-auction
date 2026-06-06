@@ -167,6 +167,8 @@ Current 2026-06-06 evidence:
 - Real browser check on 2026-06-06 loaded H5 at `5298`, found the `.system-barrage-layer`, and saved screenshot evidence to `docs/atmosphere-ai-implementation-2026-06-06/evidence/h5-barrage-flip-2026-06-06.png`.
 - The barrage layer renders actual `auction_system_messages` content only; it does not synthesize fake heat, fake viewers, or decorative inactive controls.
 - FLIP row animation uses measured DOM positions and Web Animations; `prefers-reduced-motion` disables barrage animation and leaderboard row transitions.
+- Real browser check on 2026-06-06 closed the bid panel, selected the `成交` terminal state, and verified the feed-mode result ceremony covers the full 393x851 H5 viewport. Screenshot evidence: `docs/atmosphere-ai-implementation-2026-06-06/evidence/h5-cinematic-result-2026-06-06.png`.
+- Hammer countdown copy now renders `第一次/第二次/最后一次` plus server-authority copy; local countdown zero still enters syncing rather than creating a terminal result.
 
 ## Commands Run On 2026-06-06
 

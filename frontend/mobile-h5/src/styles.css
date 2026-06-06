@@ -968,6 +968,13 @@ button {
   font-size: 11px;
 }
 
+.hammer-beat-layer em {
+  color: rgba(255, 255, 255, .82);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+}
+
 .auction-panel {
   margin-top: -28px;
   border-radius: var(--radius-md) var(--radius-md) 0 0;
@@ -1827,26 +1834,42 @@ button {
 
 .result-sheet {
   position: fixed;
+  inset: 0;
   left: 50%;
-  right: auto;
-  width: calc(min(100%, var(--h5-shell-width)) - 24px);
+  width: min(100%, var(--h5-shell-width));
+  min-height: 100vh;
+  min-height: 100dvh;
   transform: translateX(-50%);
-  bottom: calc(112px + var(--safe-area-bottom));
   z-index: calc(var(--z-sheet) + 4);
-  border: 1px solid var(--color-line);
-  border-radius: var(--radius-lg);
-  background: var(--color-surface-0);
-  box-shadow: 0 -16px 36px rgba(15, 23, 42, .22);
-  padding: 12px;
+  border: 0;
+  border-radius: 0;
+  background:
+    linear-gradient(180deg, rgba(7, 9, 12, .28), rgba(7, 9, 12, .92)),
+    #101116;
+  color: #fff;
+  padding: calc(72px + var(--safe-area-top)) 18px calc(22px + var(--safe-area-bottom));
   display: grid;
-  grid-template-columns: 40px minmax(0, 1fr);
-  gap: 10px;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: center;
+  gap: 14px;
   overflow: hidden;
+}
+
+.result-cinematic-bg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 50% 20%, rgba(255, 209, 102, .24), transparent 34%),
+    linear-gradient(135deg, rgba(255, 90, 106, .2), transparent 44%),
+    linear-gradient(220deg, rgba(42, 157, 143, .2), transparent 46%);
+  animation: result-cinematic-glow 1800ms ease-out both;
 }
 
 .result-sheet.is-compact {
   position: static;
   width: 100%;
+  min-height: 0;
   transform: none;
   bottom: auto;
   z-index: auto;
@@ -1854,6 +1877,10 @@ button {
   padding: 10px;
   box-shadow: none;
   background: var(--color-surface-1);
+  color: var(--color-ink-900);
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  align-content: initial;
 }
 
 .result-sheet.is-compact .result-actions {
@@ -1896,13 +1923,23 @@ button {
 .result-confetti span:nth-child(5) { left: 86%; background: #ff8a3d; animation-delay: 90ms; }
 
 .result-sheet-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: var(--radius-md);
+  width: 58px;
+  height: 58px;
+  justify-self: center;
+  border-radius: 18px;
   display: grid;
   place-items: center;
-  background: var(--color-surface-1);
-  color: var(--color-muted-strong);
+  background: rgba(255, 255, 255, .16);
+  color: #fff;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, .28);
+}
+
+.result-sheet.is-compact .result-sheet-icon {
+  width: 40px;
+  height: 40px;
+  justify-self: auto;
+  border-radius: var(--radius-md);
+  box-shadow: none;
 }
 
 .result-sheet.winner .result-sheet-icon {
@@ -1922,30 +1959,53 @@ button {
 
 .result-sheet-copy {
   min-width: 0;
+  text-align: center;
+}
+
+.result-sheet.is-compact .result-sheet-copy {
+  text-align: left;
 }
 
 .result-eyebrow {
   margin: 0 0 4px;
-  color: var(--color-muted);
+  color: rgba(255, 255, 255, .72);
   font-size: 12px;
   font-weight: 700;
 }
 
+.result-sheet.is-compact .result-eyebrow {
+  color: var(--color-muted);
+}
+
 .result-sheet h2 {
+  margin: 0 0 8px;
+  font-size: 30px;
+  letter-spacing: 0;
+}
+
+.result-sheet.is-compact h2 {
   margin: 0 0 4px;
   font-size: 18px;
 }
 
 .result-sheet p {
-  margin: 0 0 5px;
-  color: var(--color-muted);
-  font-size: 12px;
-  line-height: 1.38;
+  margin: 0 auto 6px;
+  max-width: 340px;
+  color: rgba(255, 255, 255, .78);
+  font-size: 13px;
+  line-height: 1.48;
   overflow-wrap: anywhere;
 }
 
+.result-sheet.is-compact p {
+  margin: 0 0 5px;
+  max-width: none;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.38;
+}
+
 .result-actions {
-  grid-column: 1 / -1;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 8px;
@@ -1963,37 +2023,53 @@ button {
 
 .result-actions button + button,
 .result-actions button:disabled {
+  border: 1px solid rgba(255, 255, 255, .28);
+  background: rgba(255, 255, 255, .1);
+  color: #fff;
+}
+
+.result-sheet.is-compact .result-actions button + button,
+.result-sheet.is-compact .result-actions button:disabled {
   border: 1px solid var(--color-line);
   background: var(--color-surface-0);
   color: var(--color-muted-strong);
 }
 
 .result-actions span {
-  color: var(--color-muted-strong);
+  color: rgba(255, 255, 255, .74);
   font-size: 12px;
   font-weight: 800;
   overflow-wrap: anywhere;
 }
 
 .result-recap-card {
+  border: 1px solid rgba(255, 255, 255, .22);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, .12);
+  padding: 12px;
+  display: grid;
+  gap: 5px;
+  backdrop-filter: blur(16px);
+}
+
+.result-sheet.is-compact .result-recap-card {
   grid-column: 1 / -1;
   border: 1px solid rgba(212, 149, 34, .28);
   border-radius: var(--radius-md);
   background: linear-gradient(135deg, #fffaf0, #f5fbf8);
   padding: 10px;
-  display: grid;
-  gap: 5px;
+  backdrop-filter: none;
 }
 
 .result-recap-card span,
 .result-recap-card small {
-  color: var(--color-muted);
+  color: rgba(255, 255, 255, .72);
   font-size: 11px;
   font-weight: 800;
 }
 
 .result-recap-card strong {
-  font-size: 15px;
+  font-size: 17px;
   overflow-wrap: anywhere;
 }
 
@@ -2006,7 +2082,7 @@ button {
 .result-recap-card em {
   border-radius: 999px;
   padding: 4px 8px;
-  background: #fff;
+  background: rgba(255, 255, 255, .9);
   color: #b90035;
   font-size: 12px;
   font-style: normal;
@@ -2018,13 +2094,21 @@ button {
 }
 
 .next-auction-card {
-  grid-column: 1 / -1;
   display: grid;
   gap: 3px;
+  border: 1px solid rgba(255, 255, 255, .2);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, .1);
+  padding: 10px;
+  backdrop-filter: blur(14px);
+}
+
+.result-sheet.is-compact .next-auction-card {
+  grid-column: 1 / -1;
   border: 1px solid var(--color-line);
   border-radius: var(--radius-md);
   background: var(--color-surface-1);
-  padding: 9px;
+  backdrop-filter: none;
 }
 
 @keyframes result-confetti-fall {
@@ -2038,6 +2122,17 @@ button {
   100% {
     opacity: 0;
     transform: translate3d(18px, 180px, 0) rotate(220deg);
+  }
+}
+
+@keyframes result-cinematic-glow {
+  from {
+    opacity: 0;
+    transform: scale(1.06);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
   }
 }
 

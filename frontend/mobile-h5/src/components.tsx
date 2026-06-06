@@ -169,7 +169,8 @@ export function LiveStage({
       {countdownPhase.phase === 'hammer' && countdownPhase.beat && !scenario.stale && !scenario.sold ? (
         <div className="hammer-beat-layer" data-testid="hammer-beat-layer" aria-live="polite">
           <span>{countdownPhase.beat}</span>
-          <strong>等待服务端落锤</strong>
+          <strong>{countdownPhase.beat === '最后一次' ? '落锤前最后确认' : '有效出价仍会延时'}</strong>
+          <em>以服务端结果为准</em>
         </div>
       ) : null}
       <HeatMeter heat={heat} countdownPhase={countdownPhase.phase} />
@@ -574,6 +575,7 @@ export function ResultSheet({
 
   return (
     <section className={`result-sheet ${kind} ${compact ? 'is-compact' : ''}`} data-testid="result-sheet" aria-label={title}>
+      {!compact ? <div className="result-cinematic-bg" aria-hidden="true" /> : null}
       {!compact ? <div className="result-confetti" aria-hidden="true"><span /><span /><span /><span /><span /></div> : null}
       <div className="result-sheet-icon" aria-hidden="true">
         {kind === 'winner' ? <Trophy size={22} /> : kind === 'loser' ? <Clock3 size={22} /> : <AlertTriangle size={22} />}
