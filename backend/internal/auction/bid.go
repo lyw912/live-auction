@@ -1384,16 +1384,32 @@ func ensurePaymentConvergenceReady(ctx context.Context, tx pgx.Tx, auctionID str
 }
 
 func (r *Repository) ListOrders(ctx context.Context, userID string, role string) ([]Order, error) {
-	query := `
-		SELECT id, auction_id, winner_id, amount_cents, status, deposit_cents, deposit_status, expire_at, paid_at, provider_payment_id, created_at
-		FROM orders
-	`
-	args := []any{}
-	if role != "host" {
-		query += ` WHERE winner_id = $1`
-		args = append(args, userID)
+	var query string
+	var args []any
+	if role == "host" {
+		// Scope to rooms owned by this host to prevent cross-tenant order leakage.
+		query = `
+			SELECT o.id, o.auction_id, o.winner_id, o.amount_cents, o.status,
+			       o.deposit_cents, o.deposit_status, o.expire_at, o.paid_at,
+			       o.provider_payment_id, o.created_at
+			FROM orders o
+			JOIN auctions a ON a.id = o.auction_id
+			JOIN rooms rm ON rm.id = a.room_id
+			WHERE rm.host_id = $1
+			ORDER BY o.created_at DESC
+		`
+		args = []any{userID}
+	} else {
+		query = `
+			SELECT id, auction_id, winner_id, amount_cents, status,
+			       deposit_cents, deposit_status, expire_at, paid_at,
+			       provider_payment_id, created_at
+			FROM orders
+			WHERE winner_id = $1
+			ORDER BY created_at DESC
+		`
+		args = []any{userID}
 	}
-	query += ` ORDER BY created_at DESC`
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
