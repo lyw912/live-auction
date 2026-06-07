@@ -101,7 +101,7 @@ export function LiveStage({
   const floatingActionCopy = scenario.sold
     ? '查看结果'
     : scenario.status === 'ACTIVE' && !scenario.ctaDisabled
-      ? `出价 ${formatCents(nextBidCents)}`
+      ? `出一手 ${formatCents(nextBidCents)}`
       : '看拍品信息';
 
   return (
@@ -290,11 +290,22 @@ export function ChatComposer({
 
 export function HeatMeter({ countdownPhase, heat }: { countdownPhase: CountdownPhase; heat: HeatSnapshot }) {
   const hasHeat = heat.activeBidders30s > 0 || heat.acceptedBids30s > 0 || heat.priceVelocityCentsPerMin > 0;
+  const totalBids = Math.max(0, heat.totalAcceptedBids ?? 0);
+  const primaryCopy = hasHeat
+    ? `近30秒 ${heat.activeBidders30s} 人 · ${heat.acceptedBids30s} 次出价`
+    : totalBids > 0
+      ? `累计 ${totalBids} 次出价`
+      : h5Copy.noBids;
+  const secondaryCopy = heat.priceVelocityCentsPerMin > 0
+    ? `${formatCents(heat.priceVelocityCentsPerMin)}/分钟`
+    : totalBids > 0
+      ? '最新状态已确认'
+      : '等待第一手';
   return (
     <div className="heat-meter" data-testid="heat-meter" data-countdown-phase={countdownPhase}>
       <span><Sparkles size={13} /> 竞价热度</span>
-      <strong>{hasHeat ? `近30秒 ${heat.activeBidders30s} 人 · ${heat.acceptedBids30s} 次出价` : h5Copy.noBids}</strong>
-      <em>{heat.priceVelocityCentsPerMin > 0 ? `${formatCents(heat.priceVelocityCentsPerMin)}/分钟` : heat.totalAcceptedBids != null ? `累计 ${heat.totalAcceptedBids} 次出价` : h5Copy.refreshing}</em>
+      <strong>{primaryCopy}</strong>
+      <em>{secondaryCopy}</em>
     </div>
   );
 }
@@ -1079,7 +1090,7 @@ export function ProductRuleSheet({ auction, item, scenario }: { auction?: Auctio
         <div>
           <p className="eyebrow">商品信任详情</p>
           <h3>{item.title ?? scenario.title}</h3>
-          <p>{item.description ?? '主播讲解与证据材料会随当前拍品同步，出价前请确认品相、保证金和延时规则。'}</p>
+          <p>{item.description ?? '主播讲解与证据材料会随当前拍品更新，出价前请确认品相、保证金和延时规则。'}</p>
         </div>
       </div>
       <div className="trust-proof-grid" aria-label="product-trust-proof">

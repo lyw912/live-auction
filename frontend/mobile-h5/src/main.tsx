@@ -478,8 +478,8 @@ function App() {
         price: soldPrice,
         leader: '你已拍中',
         feedback: payableOrderID ? '订单待支付' : '订单生成中',
-        countdown: payableOrderID ? '支付倒计时以订单为准' : '订单同步中',
-        cta: payableOrderID ? '去支付' : '同步订单中',
+        countdown: payableOrderID ? '支付倒计时以订单为准' : '订单生成中',
+        cta: payableOrderID ? '去支付' : '等待订单',
         ctaDisabled: !payableOrderID,
         winner: true,
         sold: true
@@ -631,7 +631,7 @@ function App() {
         price: formatCents(currentPriceCents),
         leader: leaderMasked ? `${leaderMasked} 拍中` : '正在确认成交',
         feedback: bidFeedback || '等待订单结算确认',
-        countdown: '订单同步中',
+        countdown: '订单生成中',
         cta: '等待订单',
         ctaDisabled: true,
         pending: true
@@ -684,9 +684,9 @@ function App() {
         status: 'ACTIVE',
         price: formatCents(currentPriceCents),
         leader: `${leaderMasked} 领先`,
-        feedback: countdownExpired ? '到点同步服务端结果' : bidFeedback,
+        feedback: countdownExpired ? '到点确认服务端结果' : bidFeedback,
         countdown: countdownCopy,
-        cta: countdownExpired ? h5Copy.loading : `出价 ${formatCents(nextBidCents)}`,
+        cta: countdownExpired ? h5Copy.loading : `出一手 ${formatCents(nextBidCents)}`,
         ctaDisabled: countdownExpired,
         rejected: true
       };
@@ -711,9 +711,9 @@ function App() {
       status: 'ACTIVE',
       price: formatCents(currentPriceCents),
       leader: `${leaderMasked} 领先`,
-      feedback: countdownExpired ? '到点同步服务端结果' : bidFeedback,
+      feedback: countdownExpired ? '到点确认服务端结果' : bidFeedback,
       countdown: countdownCopy,
-      cta: countdownExpired ? h5Copy.loading : `出价 ${formatCents(nextBidCents)}`,
+      cta: countdownExpired ? h5Copy.loading : `出一手 ${formatCents(nextBidCents)}`,
       ctaDisabled: countdownExpired
     };
   }, [activeAuctionID, bidCooldownRemainingMS, bidFeedback, bidderRequirement, bidPhase, confirmAmountCents, connectionPhase, countdownCopy, countdownExpired, currentPriceCents, lastSeq, leaderMasked, minimumNextBidCents, nextBidCents, payableOrderAmountCents, payableOrderID, paymentPhase, recoveryPhase, selected, terminalPriceCents, terminalWinnerID]);
@@ -939,7 +939,7 @@ function App() {
       setRecoveryPhase('idle');
       setConnectionPhase('connected');
     } catch {
-      setBidFeedback('暂未取到最新状态，正在继续同步');
+      setBidFeedback('暂未取到最新状态，正在继续确认');
     } finally {
       recoveryInFlightRef.current = false;
     }
@@ -1034,7 +1034,7 @@ function App() {
         setSelected('sold_winner');
         if (detail.payload?.order_id) setPayableOrderID(detail.payload.order_id);
       }
-      setBidFeedback('订单状态已同步');
+      setBidFeedback('订单状态已更新');
     } else if (detail.event_type === 'order_expired') {
       if (detail.payload?.user_id === currentUserID) {
         setPaymentPhase('expired');
@@ -1048,7 +1048,7 @@ function App() {
       showAtmosphere({
         kind: 'leading',
         title: '领先！',
-        detail: `${formatCents(price)} 已同步`,
+        detail: `${formatCents(price)} 已确认`,
         auction_id: detail.auction_id,
         cause_seq: detail.seq,
         event_type: detail.event_type,

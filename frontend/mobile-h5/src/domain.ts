@@ -360,15 +360,15 @@ export const demoProductImageURL = '/demo/jade-pendant.jpg';
 
 export const scenarios: Scenario[] = [
   { key: 'scheduled', title: '即将开拍', status: 'SCHEDULED', price: '¥100.00', leader: '暂无领先', feedback: '19:58 开始', countdown: '距开拍 12:00', cta: '等待开拍', ctaDisabled: true },
-  { key: 'active_empty', title: '首拍', status: 'ACTIVE', price: '¥100.00', leader: '暂无领先', feedback: '最低 ¥150.00', countdown: '剩余 10:00', cta: '出价 ¥150.00', ctaDisabled: false },
-  { key: 'active_bids', title: '竞价中', status: 'ACTIVE', price: '¥350.00', leader: '张** 领先', feedback: '下一口 ¥400.00', countdown: '剩余 02:34', cta: '出价 ¥400.00', ctaDisabled: false },
+  { key: 'active_empty', title: '首拍', status: 'ACTIVE', price: '¥100.00', leader: '暂无领先', feedback: '最低 ¥150.00', countdown: '剩余 10:00', cta: '出一手 ¥150.00', ctaDisabled: false },
+  { key: 'active_bids', title: '竞价中', status: 'ACTIVE', price: '¥350.00', leader: '张** 领先', feedback: '下一口 ¥400.00', countdown: '剩余 02:34', cta: '出一手 ¥400.00', ctaDisabled: false },
   { key: 'self_leading', title: '领先中', status: 'ACTIVE', price: '¥400.00', leader: '你已领先', feedback: '等待其他用户出价', countdown: '剩余 01:18', cta: '已领先', ctaDisabled: true },
   { key: 'pending', title: '提交中', status: 'ACTIVE', price: '¥400.00', leader: '李** 领先', feedback: '等待服务端确认', countdown: '剩余 01:08', cta: '确认中', ctaDisabled: true, pending: true },
-  { key: 'rejected', title: '被拒绝', status: 'ACTIVE', price: '¥400.00', leader: '李** 领先', feedback: '请按加价幅度出价', countdown: '剩余 00:58', cta: '出价 ¥450.00', ctaDisabled: false, rejected: true },
-  { key: 'extended', title: '已延时', status: 'ACTIVE', price: '¥450.00', leader: '王** 领先', feedback: '已延时 10 秒', countdown: '延时后 00:20', cta: '出价 ¥500.00', ctaDisabled: false },
+  { key: 'rejected', title: '被拒绝', status: 'ACTIVE', price: '¥400.00', leader: '李** 领先', feedback: '请按加价幅度出价', countdown: '剩余 00:58', cta: '出一手 ¥450.00', ctaDisabled: false, rejected: true },
+  { key: 'extended', title: '已延时', status: 'ACTIVE', price: '¥450.00', leader: '王** 领先', feedback: '已延时 10 秒', countdown: '延时后 00:20', cta: '出一手 ¥500.00', ctaDisabled: false },
   { key: 'recovering', title: '恢复中', status: 'RECOVERING', price: '¥450.00', leader: '加载中', feedback: h5Copy.refreshing, countdown: '剩余时间确认中', cta: h5Copy.loading, ctaDisabled: true, stale: true },
   { key: 'disconnected', title: '已断开', status: 'DISCONNECTED', price: '¥450.00', leader: '离线', feedback: '重连中', countdown: '剩余时间已过期', cta: '重连中', ctaDisabled: true, stale: true },
-  { key: 'sold_winner', title: '成交', status: 'SOLD', price: '¥600.00', leader: '你已拍中', feedback: '订单待支付', countdown: '支付倒计时同步中', cta: '去支付', ctaDisabled: false, winner: true, sold: true },
+  { key: 'sold_winner', title: '成交', status: 'SOLD', price: '¥600.00', leader: '你已拍中', feedback: '订单待支付', countdown: '正在生成支付倒计时', cta: '去支付', ctaDisabled: false, winner: true, sold: true },
   { key: 'sold_loser', title: '已成交', status: 'SOLD', price: '¥600.00', leader: '赵** 拍中', feedback: '本场已结束', countdown: '已落锤', cta: '已结束', ctaDisabled: true, sold: true },
   { key: 'ended', title: '流拍', status: 'ENDED', price: '¥100.00', leader: '无成交', feedback: '无人出价', countdown: '已结束', cta: '已结束', ctaDisabled: true },
   { key: 'cancelled', title: '已取消', status: 'CANCELLED', price: '¥350.00', leader: '取消前价格', feedback: '主播已取消', countdown: '已取消', cta: '已取消', ctaDisabled: true }
@@ -556,7 +556,7 @@ export function auctionStatusLabel(status?: string) {
 
 export function connectionSyncCopy(phase: ConnectionPhase, stale?: boolean, staleCopy?: string) {
   if (stale) return staleCopy ?? h5Copy.refreshing;
-  if (phase === 'connected') return '已同步';
+  if (phase === 'connected') return '已连接';
   if (phase === 'recovering') return h5Copy.loading;
   if (phase === 'connecting') return '连接中';
   return '正在重连';

@@ -4,7 +4,7 @@ export const h5Copy = {
   settling: '到点结算中...',
   noBids: '还没有人出价，等你第一手',
   noBidShort: '暂无出价',
-  latestConfirmed: '已刷新最新竞拍状态',
+  latestConfirmed: '最新状态已确认',
   confirmingPrice: '正在确认最新价格...',
   selfLeading: '你已领先，暂无需加价',
   merchantTodo: '待商家完善',
