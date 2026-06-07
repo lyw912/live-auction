@@ -1284,6 +1284,220 @@ func TestRedisLedgerHotProxyAutoOutbidsThroughSameCAS(t *testing.T) {
 	}
 }
 
+func TestRedisLedgerHotProxyBatchReplayAfterWorkerCrashIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+	repo := auction.NewRepository(db)
+	if _, err := repo.UpsertMaxBidIntent(ctx, auctionID, "user_2", auction.MaxBidIntentInput{
+		MaxAmountCents: 30_000,
+		Source:         auction.MaxBidIntentSourceMaxBid,
+	}); err != nil {
+		t.Fatalf("UpsertMaxBidIntent: %v", err)
+	}
+
+	resp, err := engine.PlaceBid(ctx, auctionID, "user_1", "proxy-replay-manual", auction.BidInput{
+		ClientBidID:   "proxy-replay-manual",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_proxy_batch_replay")
+	if err != nil {
+		t.Fatalf("PlaceBid: %v", err)
+	}
+	if resp.Result != auction.BidResultEngineAccepted || resp.EngineSeq != 2 || resp.CurrentWinnerID == nil || *resp.CurrentWinnerID != "user_2" {
+		t.Fatalf("proxy response = %#v, want final seq 2 winner user_2", resp)
+	}
+	ensureLedgerMessages(t, ctx, worker, 2)
+	first := memoryLedgerMessage(t, ctx, worker, 0)
+	second := memoryLedgerMessage(t, ctx, worker, 1)
+	if first.ID == second.ID || first.Offset+1 != second.Offset {
+		t.Fatalf("proxy ledger messages not contiguous: first=%#v second=%#v", first, second)
+	}
+
+	processed, err := worker.ProcessKafka(ctx, 10)
+	if err != nil {
+		t.Fatalf("initial settlement: %v", err)
+	}
+	if processed != 2 {
+		t.Fatalf("initial processed=%d, want 2", processed)
+	}
+	assertAuctionEngineSeq(t, db, auctionID, 2, 20_000, "ACTIVE")
+
+	// Simulate a settlement worker crash after DB commit but before Kafka offset commit:
+	// the same contiguous accepted batch is fetched again by a fresh worker.
+	replayLedger := &staticBatchLedger{messages: []LedgerMessage{first, second}}
+	replayWorker := NewWorker(db, rdb, replayLedger, "test-"+uuid.NewString())
+	replayed, err := replayWorker.ProcessKafka(ctx, 10)
+	if err != nil {
+		t.Fatalf("replay settlement after crash: %v", err)
+	}
+	if replayed != 2 {
+		t.Fatalf("replayed=%d, want 2 duplicate messages committed", replayed)
+	}
+
+	var settlements, bids, events, nonTerminal, duplicateSeqs int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM redis_engine_settlements WHERE auction_id = $1`, auctionID).Scan(&settlements); err != nil {
+		t.Fatalf("count settlements: %v", err)
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM bids WHERE auction_id = $1`, auctionID).Scan(&bids); err != nil {
+		t.Fatalf("count bids: %v", err)
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM auction_events WHERE auction_id = $1 AND type = 'bid_accepted'`, auctionID).Scan(&events); err != nil {
+		t.Fatalf("count events: %v", err)
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM redis_engine_settlements WHERE auction_id = $1 AND status <> 'SETTLED'`, auctionID).Scan(&nonTerminal); err != nil {
+		t.Fatalf("count non-terminal settlements: %v", err)
+	}
+	if err := db.QueryRow(ctx, `
+		SELECT count(*)
+		FROM (
+		  SELECT engine_seq
+		  FROM redis_engine_settlements
+		  WHERE auction_id = $1
+		  GROUP BY engine_seq
+		  HAVING count(*) > 1
+		) dup
+	`, auctionID).Scan(&duplicateSeqs); err != nil {
+		t.Fatalf("count duplicate settlement seqs: %v", err)
+	}
+	if settlements != 2 || bids != 2 || events != 2 || nonTerminal != 0 || duplicateSeqs != 0 {
+		t.Fatalf("after replay settlements=%d bids=%d events=%d nonTerminal=%d duplicateSeqs=%d, want 2/2/2/0/0", settlements, bids, events, nonTerminal, duplicateSeqs)
+	}
+	assertAuctionEngineSeq(t, db, auctionID, 2, 20_000, "ACTIVE")
+}
+
+func TestRedisLedgerRichRulesPressureSmoke(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+	if _, err := db.Exec(ctx, `
+		UPDATE auction_rules
+		SET fat_finger_threshold_cents = 5000
+		WHERE auction_id = $1
+	`, auctionID); err != nil {
+		t.Fatalf("enable fat-finger: %v", err)
+	}
+	repo := auction.NewRepository(db)
+	if _, err := repo.UpsertMaxBidIntent(ctx, auctionID, "user_2", auction.MaxBidIntentInput{
+		MaxAmountCents: 400_000,
+		Source:         auction.MaxBidIntentSourceMaxBid,
+	}); err != nil {
+		t.Fatalf("UpsertMaxBidIntent: %v", err)
+	}
+
+	totalDecisions := 0
+	expectedPrice := int64(10_000)
+	expectedWinner := ""
+	for i := 0; i < 24; i++ {
+		if i%4 == 0 {
+			clientBidID := fmt.Sprintf("rich-pressure-ff-%02d", i)
+			amount := expectedPrice + 20_000
+			pending, err := engine.PlaceBid(ctx, auctionID, "user_1", clientBidID, auction.BidInput{
+				ClientBidID:   clientBidID,
+				AmountCents:   amount,
+				ClientSeenSeq: int64(totalDecisions),
+			}, "tr_rich_pressure_ff")
+			if err != nil {
+				t.Fatalf("fat-finger PlaceBid %d: %v", i, err)
+			}
+			if pending.Result != string(apierrors.CodeFatFingerConfirmRequired) || pending.ConfirmToken == "" {
+				t.Fatalf("fat-finger pending %d = %#v, want confirm-required", i, pending)
+			}
+			confirmed, err := engine.ConfirmBid(ctx, auctionID, "user_1", clientBidID, auction.ConfirmBidInput{
+				ConfirmToken:   pending.ConfirmToken,
+				IdempotencyKey: clientBidID,
+			}, "tr_rich_pressure_ff_confirm")
+			if err != nil {
+				t.Fatalf("fat-finger ConfirmBid %d: %v", i, err)
+			}
+			if confirmed.Result != auction.BidResultEngineAccepted || confirmed.CurrentWinnerID == nil || *confirmed.CurrentWinnerID != "user_1" {
+				t.Fatalf("fat-finger confirmed %d = %#v, want user_1 accepted", i, confirmed)
+			}
+			totalDecisions++
+			expectedPrice = amount
+			expectedWinner = "user_1"
+			settleAllLedgerMessages(t, ctx, worker, 1, true)
+			continue
+		}
+
+		clientBidID := fmt.Sprintf("rich-pressure-proxy-%02d", i)
+		amount := expectedPrice + 5_000
+		resp, err := engine.PlaceBid(ctx, auctionID, "user_3", clientBidID, auction.BidInput{
+			ClientBidID:   clientBidID,
+			AmountCents:   amount,
+			ClientSeenSeq: int64(totalDecisions),
+		}, "tr_rich_pressure_proxy")
+		if err != nil {
+			t.Fatalf("proxy PlaceBid %d: %v", i, err)
+		}
+		if resp.Result != auction.BidResultEngineAccepted || resp.CurrentWinnerID == nil || *resp.CurrentWinnerID != "user_2" {
+			t.Fatalf("proxy response %d = %#v, want user_2 auto winner", i, resp)
+		}
+		totalDecisions += 2
+		expectedPrice = amount + 5_000
+		expectedWinner = "user_2"
+		settleAllLedgerMessages(t, ctx, worker, 2, true)
+	}
+
+	var winner string
+	var price int64
+	var engineSeq int64
+	var paused bool
+	if err := db.QueryRow(ctx, `
+		SELECT current_winner_id, current_price_cents, engine_seq, engine_paused
+		FROM auctions
+		WHERE id = $1
+	`, auctionID).Scan(&winner, &price, &engineSeq, &paused); err != nil {
+		t.Fatalf("load final auction: %v", err)
+	}
+	if winner != expectedWinner || price != expectedPrice || engineSeq != int64(totalDecisions) || paused {
+		t.Fatalf("final winner=%s price=%d seq=%d paused=%v, want %s/%d/%d/false", winner, price, engineSeq, paused, expectedWinner, expectedPrice, totalDecisions)
+	}
+	var settlements, bids, nonTerminal, duplicateSeqs, proxyBids, fatFingerUserBids int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM redis_engine_settlements WHERE auction_id = $1`, auctionID).Scan(&settlements); err != nil {
+		t.Fatalf("count settlements: %v", err)
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM bids WHERE auction_id = $1`, auctionID).Scan(&bids); err != nil {
+		t.Fatalf("count bids: %v", err)
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM redis_engine_settlements WHERE auction_id = $1 AND status <> 'SETTLED'`, auctionID).Scan(&nonTerminal); err != nil {
+		t.Fatalf("count non-terminal settlements: %v", err)
+	}
+	if err := db.QueryRow(ctx, `
+		SELECT count(*)
+		FROM (
+		  SELECT engine_seq
+		  FROM redis_engine_settlements
+		  WHERE auction_id = $1
+		  GROUP BY engine_seq
+		  HAVING count(*) > 1
+		) dup
+	`, auctionID).Scan(&duplicateSeqs); err != nil {
+		t.Fatalf("count duplicate settlement seqs: %v", err)
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM bids WHERE auction_id = $1 AND source = $2`, auctionID, auction.BidSourceAutoMaxBid).Scan(&proxyBids); err != nil {
+		t.Fatalf("count proxy bids: %v", err)
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM bids WHERE auction_id = $1 AND user_id = 'user_1'`, auctionID).Scan(&fatFingerUserBids); err != nil {
+		t.Fatalf("count fat-finger confirmed bids: %v", err)
+	}
+	if settlements != totalDecisions || bids != totalDecisions || nonTerminal != 0 || duplicateSeqs != 0 {
+		t.Fatalf("settlements=%d bids=%d nonTerminal=%d duplicateSeqs=%d, want %d/%d/0/0", settlements, bids, nonTerminal, duplicateSeqs, totalDecisions, totalDecisions)
+	}
+	if proxyBids != 18 || fatFingerUserBids != 6 {
+		t.Fatalf("proxyBids=%d fatFingerUserBids=%d, want 18/6", proxyBids, fatFingerUserBids)
+	}
+	assertMaxBidIntentForUser(t, db, auctionID, "user_2", auction.MaxBidIntentStatusActive, int64Ptr(int64(totalDecisions)))
+}
+
 func TestRedisLedgerHotProxyIgnoresCancelledIntent(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
@@ -3483,6 +3697,51 @@ func (failingLedger) Commit(context.Context, LedgerMessage) error          { ret
 func (failingLedger) WriteDLQ(context.Context, LedgerMessage, error) error { return nil }
 func (failingLedger) Close() error                                         { return nil }
 
+type staticBatchLedger struct {
+	messages  []LedgerMessage
+	fetched   bool
+	committed int
+}
+
+func (l *staticBatchLedger) Append(context.Context, engineResult) (LedgerMessage, error) {
+	return LedgerMessage{}, errors.New("static batch ledger is read-only")
+}
+
+func (l *staticBatchLedger) AppendBatch(context.Context, []engineResult) ([]LedgerMessage, error) {
+	return nil, errors.New("static batch ledger is read-only")
+}
+
+func (l *staticBatchLedger) Fetch(ctx context.Context) (LedgerMessage, error) {
+	messages, err := l.FetchBatch(ctx, 1)
+	if err != nil {
+		return LedgerMessage{}, err
+	}
+	if len(messages) == 0 {
+		return LedgerMessage{}, context.Canceled
+	}
+	return messages[0], nil
+}
+
+func (l *staticBatchLedger) FetchBatch(context.Context, int) ([]LedgerMessage, error) {
+	if l.fetched {
+		return nil, context.Canceled
+	}
+	l.fetched = true
+	return append([]LedgerMessage(nil), l.messages...), nil
+}
+
+func (l *staticBatchLedger) Commit(context.Context, LedgerMessage) error {
+	return l.CommitBatch(context.Background(), []LedgerMessage{{}})
+}
+
+func (l *staticBatchLedger) CommitBatch(_ context.Context, messages []LedgerMessage) error {
+	l.committed += len(messages)
+	return nil
+}
+
+func (l *staticBatchLedger) WriteDLQ(context.Context, LedgerMessage, error) error { return nil }
+func (l *staticBatchLedger) Close() error                                         { return nil }
+
 func assertAPIErrorCode(t *testing.T, err error, want apierrors.Code) {
 	t.Helper()
 	var apiErr apierrors.APIError
@@ -3608,6 +3867,9 @@ func createEngineAuction(t *testing.T, db *pgxpool.Pool, capCents int64) string 
 	if _, err := db.Exec(ctx, `INSERT INTO users (id, role, display_name) VALUES ('user_2', 'user', 'Engine User 2') ON CONFLICT DO NOTHING`); err != nil {
 		t.Fatalf("insert user2: %v", err)
 	}
+	if _, err := db.Exec(ctx, `INSERT INTO users (id, role, display_name) VALUES ('user_3', 'user', 'Engine User 3') ON CONFLICT DO NOTHING`); err != nil {
+		t.Fatalf("insert user3: %v", err)
+	}
 	if _, err := db.Exec(ctx, `INSERT INTO rooms (id, host_id, status) VALUES ($1, 'host_1', 'OPEN')`, roomID); err != nil {
 		t.Fatalf("insert room: %v", err)
 	}
@@ -3642,7 +3904,7 @@ func createEngineAuction(t *testing.T, db *pgxpool.Pool, capCents int64) string 
 	}
 	if _, err := db.Exec(ctx, `
 		INSERT INTO room_memberships (room_id, user_id, role, status)
-		VALUES ($1, 'user_1', 'viewer', 'ACTIVE'), ($1, 'user_2', 'viewer', 'ACTIVE')
+		VALUES ($1, 'user_1', 'viewer', 'ACTIVE'), ($1, 'user_2', 'viewer', 'ACTIVE'), ($1, 'user_3', 'viewer', 'ACTIVE')
 		ON CONFLICT (room_id, user_id) DO UPDATE SET status = 'ACTIVE'
 	`, roomID); err != nil {
 		t.Fatalf("insert memberships: %v", err)
@@ -3686,6 +3948,21 @@ func assertMaxBidIntentState(t *testing.T, db *pgxpool.Pool, intentID string, wa
 	if lastApplied == nil || *lastApplied != *wantLastApplied {
 		t.Fatalf("max bid intent last_applied_seq = %v, want %d", lastApplied, *wantLastApplied)
 	}
+}
+
+func assertMaxBidIntentForUser(t *testing.T, db *pgxpool.Pool, auctionID string, userID string, wantStatus auction.MaxBidIntentStatus, wantLastApplied *int64) {
+	t.Helper()
+	var intentID string
+	if err := db.QueryRow(context.Background(), `
+		SELECT id
+		FROM max_bid_intents
+		WHERE auction_id = $1 AND user_id = $2
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, auctionID, userID).Scan(&intentID); err != nil {
+		t.Fatalf("load max bid intent for %s: %v", userID, err)
+	}
+	assertMaxBidIntentState(t, db, intentID, wantStatus, wantLastApplied)
 }
 
 func assertAuctionPublicSeq(t *testing.T, db *pgxpool.Pool, auctionID string, wantSeq int64) {
