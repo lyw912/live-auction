@@ -136,7 +136,7 @@ func Load() Config {
 		RedisEngineSettlementWorkers: getEnvInt("REDIS_ENGINE_SETTLEMENT_WORKERS", 1),
 		FakePaymentWebhookSecret:     getEnv("FAKE_PAYMENT_WEBHOOK_SECRET", "local_fake_payment_secret"),
 
-		AIProviderMode:               getEnv("AI_PROVIDER_MODE", "auto"),
+		AIProviderMode:               getEnv("AI_PROVIDER_MODE", "provider"),
 		AIRelayBaseURL:               getEnv("AI_RELAY_BASE_URL", "https://api.gptgod.online/v1"),
 		AIRelayModel:                 getEnv("AI_RELAY_MODEL", "gemini-3.1-flash-image-preview"),
 		AIAPIKey:                     getEnv("API_KEY", ""),

@@ -1804,7 +1804,7 @@ export function ProductQASheet({
   return (
     <section className="product-qa-sheet" data-testid="product-qa-sheet">
       <div className="sheet-action-row">
-        <span>只回答拍品和规则已提供的信息</span>
+        <span>可问拍品详情、竞拍规则和履约保障</span>
         <button type="button" disabled={!draft.trim() || loading} onClick={onAsk}>{loading ? '查询中' : '提问'}</button>
       </div>
       <div className="chat-input-row">

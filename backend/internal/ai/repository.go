@@ -257,8 +257,10 @@ func (r *Repository) CreateCommentary(ctx context.Context, hostID string, gen Ge
 		Timeout:       3 * time.Second,
 	})
 	status := "SUCCEEDED"
+	errorMessage := ""
 	if err != nil {
 		status = "FAILED"
+		errorMessage = cleanText(err.Error(), 240)
 		body, style, safety := BuildCommentary(req)
 		result = StructuredResult{
 			Provider: "deterministic",
@@ -274,10 +276,32 @@ func (r *Repository) CreateCommentary(ctx context.Context, hostID string, gen Ge
 	}
 	body := cleanText(stringValue(result.Output["body"]), 40)
 	style := cleanText(firstNonEmpty(stringValue(result.Output["style"]), "steady"), 20)
+	if unsafeCommentaryBody(body) {
+		status = "FAILED"
+		errorMessage = firstNonEmpty(errorMessage, "AI provider returned unsafe commentary body")
+		body = ""
+	}
 	if body == "" {
+		status = "FAILED"
+		errorMessage = firstNonEmpty(errorMessage, "AI provider returned empty commentary body")
 		body, style, result.Safety = BuildCommentary(req)
+		result.Provider = "deterministic"
+		result.Model = "fallback-template"
 	}
 	result.Safety = ensureMap(result.Safety)
+	factsUsed := normalizeCommentaryFacts(result.Output["facts_used"])
+	if len(factsUsed) == 0 {
+		_, _, fallbackSafety := BuildCommentary(req)
+		factsUsed = stringSlice(fallbackSafety["facts_used"])
+	}
+	result.Output = normalizedCommentaryOutput(req, body, style, factsUsed, result.Output["safety_labels"])
+	result.Safety["facts_used"] = factsUsed
+	if result.Provider == "deterministic" || result.Model == "fallback-template" || status == "FAILED" {
+		result.Safety["fallback"] = true
+	}
+	result.Safety["provider"] = result.Provider
+	result.Safety["model"] = result.Model
+	result.Safety["generation_status"] = status
 	msg, err := r.InsertSystemMessage(ctx, req.RoomID, req.AuctionID, "SYSTEM_AI", req.SourceSeq, style, body, inputMap, result.Safety)
 	if err != nil {
 		return SystemMessage{}, Job{}, err
@@ -295,6 +319,7 @@ func (r *Repository) CreateCommentary(ctx context.Context, hostID string, gen Ge
 		Input:         inputMap,
 		Output:        result.Output,
 		Safety:        result.Safety,
+		ErrorMessage:  errorMessage,
 		ReviewedBy:    hostID,
 	})
 	return msg, job, err
@@ -335,8 +360,10 @@ func (r *Repository) CreateAutoCommentary(ctx context.Context, gen Generator, re
 		Timeout:       6 * time.Second,
 	})
 	status := "SUCCEEDED"
+	errorMessage := ""
 	if err != nil {
 		status = "FAILED"
+		errorMessage = cleanText(err.Error(), 240)
 		body, style, safety := BuildCommentary(req)
 		result = StructuredResult{
 			Provider: "deterministic",
@@ -353,11 +380,33 @@ func (r *Repository) CreateAutoCommentary(ctx context.Context, gen Generator, re
 	}
 	body := cleanText(stringValue(result.Output["body"]), 40)
 	style := cleanText(firstNonEmpty(stringValue(result.Output["style"]), "steady"), 20)
+	if unsafeCommentaryBody(body) {
+		status = "FAILED"
+		errorMessage = firstNonEmpty(errorMessage, "AI provider returned unsafe commentary body")
+		body = ""
+	}
 	if body == "" {
+		status = "FAILED"
+		errorMessage = firstNonEmpty(errorMessage, "AI provider returned empty commentary body")
 		body, style, result.Safety = BuildCommentary(req)
+		result.Provider = "deterministic"
+		result.Model = "fallback-template"
 	}
 	result.Safety = ensureMap(result.Safety)
+	factsUsed := normalizeCommentaryFacts(result.Output["facts_used"])
+	if len(factsUsed) == 0 {
+		_, _, fallbackSafety := BuildCommentary(req)
+		factsUsed = stringSlice(fallbackSafety["facts_used"])
+	}
+	result.Output = normalizedCommentaryOutput(req, body, style, factsUsed, result.Output["safety_labels"])
+	result.Safety["facts_used"] = factsUsed
+	if result.Provider == "deterministic" || result.Model == "fallback-template" || status == "FAILED" {
+		result.Safety["fallback"] = true
+	}
 	result.Safety["auto_generated"] = true
+	result.Safety["provider"] = result.Provider
+	result.Safety["model"] = result.Model
+	result.Safety["generation_status"] = status
 	msg, err := r.InsertSystemMessage(ctx, req.RoomID, req.AuctionID, "SYSTEM_AI", req.SourceSeq, style, body, inputMap, result.Safety)
 	if err != nil {
 		return SystemMessage{}, Job{}, err
@@ -375,8 +424,49 @@ func (r *Repository) CreateAutoCommentary(ctx context.Context, gen Generator, re
 		Input:         inputMap,
 		Output:        result.Output,
 		Safety:        result.Safety,
+		ErrorMessage:  errorMessage,
 	})
 	return msg, job, err
+}
+
+func normalizedCommentaryOutput(req CommentaryRequest, body string, style string, factsUsed []string, safetyLabels any) map[string]any {
+	return map[string]any{
+		"auction_id":    req.AuctionID,
+		"source_seq":    req.SourceSeq,
+		"style":         style,
+		"body":          body,
+		"facts_used":    factsUsed,
+		"safety_labels": limitStrings(stringSlice(safetyLabels), 8, 48),
+	}
+}
+
+func normalizeCommentaryFacts(value any) []string {
+	allowed := map[string]bool{
+		"auction_id":            true,
+		"source_seq":            true,
+		"event_type":            true,
+		"item_title":            true,
+		"current_price_cents":   true,
+		"current_winner_masked": true,
+		"active_bidders_30s":    true,
+		"accepted_bids_30s":     true,
+	}
+	out := []string{}
+	for _, fact := range limitStrings(stringSlice(value), 8, 64) {
+		if allowed[fact] {
+			out = append(out, fact)
+		}
+	}
+	return out
+}
+
+func unsafeCommentaryBody(body string) bool {
+	for _, token := range []string{"保真", "升值", "稳赚", "隐藏", "最高价", "观众", "观看人数", "库存", "秒杀"} {
+		if strings.Contains(body, token) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Repository) EnqueueAutoCommentary(ctx context.Context, req CommentaryRequest) (Job, bool, error) {

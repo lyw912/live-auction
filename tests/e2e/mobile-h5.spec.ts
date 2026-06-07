@@ -428,6 +428,7 @@ test('H5 product QA completes liveops ask task only after a real answer', async 
   await openLiveOpsPanel(page);
   await page.getByTestId('warmup-card').getByRole('button', { name: '问拍品' }).click();
   await expect(page.getByTestId('product-qa-sheet')).toBeVisible();
+  await expect(page.getByTestId('product-qa-sheet')).toContainText('可问拍品详情、竞拍规则和履约保障');
   await page.getByLabel('product-qa-input').fill('起拍价是多少？');
   await page.getByLabel('ask-product-qa').click();
 

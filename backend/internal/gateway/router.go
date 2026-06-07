@@ -201,7 +201,11 @@ func NewRouterWithRealtimeAndLedger(cfg config.Config, deps *storage.Dependencie
 
 func BuildAIGenerator(cfg config.Config) aicap.Generator {
 	mode := cfg.AIProviderMode
-	if mode == "" || mode == "auto" {
+	if mode == "" {
+		mode = "auto"
+	}
+	originalMode := mode
+	if mode == "auto" {
 		if cfg.AIAPIKey == "" {
 			return aicap.DeterministicGenerator{}
 		}
@@ -223,7 +227,7 @@ func BuildAIGenerator(cfg config.Config) aicap.Generator {
 		if err == nil {
 			return gen
 		}
-		if cfg.AIProviderMode == "auto" {
+		if originalMode == "auto" {
 			return aicap.DeterministicGenerator{}
 		}
 		return aicap.DisabledGenerator{}

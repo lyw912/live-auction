@@ -208,6 +208,8 @@ export type SystemMessage = {
   source_seq?: number;
   style: string;
   body: string;
+  facts_json?: Record<string, unknown>;
+  safety_json?: Record<string, unknown>;
   created_at: string;
 };
 export type ProductQAAnswer = {

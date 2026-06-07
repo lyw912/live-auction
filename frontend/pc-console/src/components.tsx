@@ -870,6 +870,20 @@ export function LiveAssistRail({
           <Button size="mini" onClick={onToggleAutoCommentaryEnabled}>{autoCommentaryEnabled ? '关闭自动' : '开启自动'}</Button>
         </div>
         <small>智能内容只基于已发生的竞拍事实生成，不决定价格、赢家或订单。</small>
+        <div className="ai-workflow-chain" data-testid="ai-workflow-chain">
+          <div>
+            <span>上架准备</span>
+            <strong>草稿、核验清单、规则建议</strong>
+          </div>
+          <div>
+            <span>直播中</span>
+            <strong>解说、买家问答、异常提醒</strong>
+          </div>
+          <div>
+            <span>落槌后</span>
+            <strong>复盘、高光、下一件承接</strong>
+          </div>
+        </div>
         {systemMessages.length ? (
           <div className="system-message-list">
             {systemMessages.slice(0, 3).map((message) => (
@@ -1093,7 +1107,7 @@ export function AICopilotDrawer({
       <div className="ai-copilot" data-testid="ai-copilot-drawer">
         <div className="ai-boundary-note">
           <Sparkles size={16} />
-          <span>生成内容只进入草稿；发布和规则保存仍走现有后端校验。</span>
+          <span>从图片和商家备注生成上架草稿、核验清单和竞拍规则建议；发布前仍由主播确认。</span>
         </div>
         <Form layout="vertical">
           <Form.Item label="拍品图片">

@@ -46,6 +46,46 @@ func (g *fakeStructuredGenerator) GenerateStructured(ctx context.Context, req ai
 	return aicap.DeterministicGenerator{}.GenerateStructured(context.Background(), req)
 }
 
+func int64FromAny(value any) int64 {
+	switch v := value.(type) {
+	case int64:
+		return v
+	case int:
+		return int64(v)
+	case float64:
+		return int64(v)
+	default:
+		return 0
+	}
+}
+
+func stringSliceFromAny(value any) []string {
+	raw, ok := value.([]string)
+	if ok {
+		return raw
+	}
+	items, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if text, ok := item.(string); ok {
+			out = append(out, text)
+		}
+	}
+	return out
+}
+
+func containsString(items []string, needle string) bool {
+	for _, item := range items {
+		if item == needle {
+			return true
+		}
+	}
+	return false
+}
+
 func TestAIListingDraftIsHostOnlyStructuredAndApplyIsAuditOnly(t *testing.T) {
 	db := openMonitorDB(t)
 	rdb := openMonitorRedis(t)
@@ -200,6 +240,36 @@ func TestAICommentarySystemMessagesSentinelRecapAndProductQA(t *testing.T) {
 	}
 	if providerJob.Provider != "test-provider" || providerAuto.Body != "成交价已刷新，按系统结果为准。" || providerAuto.Safety["auto_generated"] != true {
 		t.Fatalf("provider auto commentary not used: msg=%#v job=%#v", providerAuto, providerJob)
+	}
+	if providerJob.Output["auction_id"] != row.ID || int64FromAny(providerJob.Output["source_seq"]) != 43 || containsString(stringSliceFromAny(providerJob.Output["facts_used"]), "invented.viewer_count") {
+		t.Fatalf("provider commentary facts were not normalized to server facts: %#v", providerJob.Output)
+	}
+	unsafeGen := &fakeStructuredGenerator{results: map[string]aicap.StructuredResult{
+		"auction_commentary": {
+			Provider: "test-provider",
+			Model:    "commentary-model",
+			Output: map[string]any{
+				"auction_id":    "forged_auction",
+				"source_seq":    float64(999),
+				"style":         "heat",
+				"body":          "这件一定保真升值，隐藏最高价已接近。",
+				"facts_used":    []any{"invented.viewer_count", "hidden_max_bid"},
+				"safety_labels": []any{},
+			},
+			Safety: map[string]any{"provider_mode": "test"},
+		},
+	}}
+	guardedAuto, guardedJob, err := aiRepo.CreateAutoCommentary(context.Background(), unsafeGen, aicap.CommentaryRequest{
+		AuctionID:         row.ID,
+		SourceSeq:         44,
+		EventType:         "bid_accepted",
+		CurrentPriceCents: 27000,
+	})
+	if err != nil {
+		t.Fatalf("guarded unsafe provider auto commentary: %v", err)
+	}
+	if guardedAuto.Body == "这件一定保真升值，隐藏最高价已接近。" || guardedJob.Status != "FAILED" || guardedJob.Provider != "deterministic" || guardedJob.Output["auction_id"] != row.ID || int64FromAny(guardedJob.Output["source_seq"]) != 44 {
+		t.Fatalf("unsafe commentary was not guarded: msg=%#v job=%#v", guardedAuto, guardedJob)
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/api/rooms/"+row.RoomID+"/system-messages", nil)

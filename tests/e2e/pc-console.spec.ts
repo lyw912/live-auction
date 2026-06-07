@@ -410,6 +410,9 @@ test('PC console renders live API auctions, orders, and expanded diagnostic pane
   await expect(page.getByTestId('live-assist-rail').getByRole('button', { name: '生成解说' })).toBeEnabled();
   await expect(page.getByTestId('live-assist-rail').getByRole('button', { name: '检查风控' })).toBeEnabled();
   await expect(page.getByTestId('live-assist-rail').getByRole('button', { name: '生成复盘' })).toBeEnabled();
+  await expect(page.getByTestId('ai-workflow-chain')).toContainText('上架准备');
+  await expect(page.getByTestId('ai-workflow-chain')).toContainText('直播中');
+  await expect(page.getByTestId('ai-workflow-chain')).toContainText('落槌后');
   await expect(page.getByTestId('recent-events').getByText('出价已接受')).toBeVisible();
   await expect(page.getByRole('button', { name: /事件回放/ })).toBeVisible();
 
