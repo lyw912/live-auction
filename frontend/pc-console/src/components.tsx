@@ -708,12 +708,8 @@ export function AuctionControlSummary({
   return (
     <section className={`command-panel status-${selectedAuction.status.toLowerCase()}`} data-testid="auction-control-summary">
       <div className="command-hero">
-        <div className={`command-media ${selectedAuction.item?.image_url ? 'has-media' : ''}`} data-testid="pc-current-media">
-          {selectedAuction.item?.image_url ? <img src={selectedAuction.item.image_url} alt="" /> : <Gavel size={42} />}
-          <div className="command-video-preview" aria-label="直播视频预览">
-            <video src={demoLiveVideoURL} poster={selectedAuction.item?.image_url || undefined} muted loop playsInline autoPlay />
-            <span>直播视频预览</span>
-          </div>
+        <div className="command-media" data-testid="pc-current-media" aria-label="直播画面">
+          <video className="command-live-video" src={demoLiveVideoURL} poster={selectedAuction.item?.image_url || undefined} muted loop playsInline autoPlay />
         </div>
         <div className="command-copy">
           <div className="command-kicker">

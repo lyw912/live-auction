@@ -381,9 +381,13 @@ test('PC console renders live API auctions, orders, and expanded diagnostic pane
   await page.getByRole('button', { name: '开播中控', exact: true }).click();
   await expect(page.getByTestId('auction-control-summary')).toBeVisible();
   await expect(page.getByTestId('pc-current-media')).toBeVisible();
-  await expect(page.getByTestId('pc-current-media').getByText('直播视频预览')).toBeVisible();
-  await expect.poll(async () => page.getByTestId('pc-current-media').locator('img').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0);
-  await expect.poll(async () => page.getByTestId('pc-current-media').locator('video').evaluate((video: HTMLVideoElement) => video.readyState)).toBeGreaterThan(0);
+  await expect(page.getByTestId('pc-current-media')).not.toContainText('直播视频预览');
+  await expect(page.getByTestId('pc-current-media')).not.toContainText('拍品');
+  await expect(page.getByTestId('pc-current-media').locator('img')).toHaveCount(0);
+  await expect.poll(async () => page.getByTestId('pc-current-media').locator('video.command-live-video').evaluate((video: HTMLVideoElement) => video.readyState)).toBeGreaterThan(0);
+  if (process.env.PC_MEDIA_EVIDENCE_PATH) {
+    await page.getByTestId('pc-current-media').screenshot({ path: process.env.PC_MEDIA_EVIDENCE_PATH });
+  }
   await expect(page.getByTestId('auction-control-summary').getByText('当前价')).toBeVisible();
   await expect(page.getByTestId('auction-control-summary').getByText(/服务端倒计时/)).toBeVisible();
   await expect(page.getByTestId('auction-control-summary').getByText('延时次数')).toBeVisible();
