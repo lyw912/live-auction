@@ -2138,6 +2138,117 @@ test('H5 sound and haptic policy requires opt-in before cue playback', async ({ 
   await expect.poll(() => page.evaluate(() => (window as typeof window & { __vibrations?: unknown[] }).__vibrations?.length ?? 0)).toBe(1);
 });
 
+test('H5 sold climax plays hammer asset after sound opt-in', async ({ page }) => {
+  await page.addInitScript(() => {
+    const target = window as typeof window & {
+      __playedBuffers?: string[];
+      __decodedSoundURLs?: string[];
+    };
+    target.__playedBuffers = [];
+    target.__decodedSoundURLs = [];
+    const soundCodeByFile: Record<string, number> = {
+      'heartbeat-bed.wav': 1,
+      'whoosh-rank.wav': 2,
+      'coin-leading.wav': 3,
+      'hammer-hit.wav': 4,
+      'system-chime.wav': 5,
+      'lucky-open.wav': 6,
+      'entry-badge.wav': 7,
+      'pk-surge.wav': 8
+    };
+    const soundKeyByCode: Record<number, string> = {
+      1: 'heartbeat_bed',
+      2: 'rank_whoosh',
+      3: 'coin_leading',
+      4: 'hammer_hit',
+      5: 'system_chime',
+      6: 'lucky_open',
+      7: 'entry_badge',
+      8: 'pk_surge'
+    };
+    class MockGain {
+      gain = {
+        setValueAtTime: () => undefined,
+        setTargetAtTime: () => undefined,
+        exponentialRampToValueAtTime: () => undefined
+      };
+      connect() { return undefined; }
+    }
+    class MockBufferSource {
+      buffer: { key?: string } | null = null;
+      loop = false;
+      connect() { return undefined; }
+      start() { target.__playedBuffers?.push(this.buffer?.key ?? 'oscillator-fallback'); }
+      stop() { return undefined; }
+    }
+    class MockOscillator {
+      type = 'sine';
+      frequency = { value: 0, setValueAtTime: () => undefined };
+      connect() { return undefined; }
+      start() { target.__playedBuffers?.push('oscillator-fallback'); }
+      stop() { return undefined; }
+    }
+    class MockAudioContext {
+      currentTime = 0;
+      destination = {};
+      state = 'running';
+      createBufferSource() { return new MockBufferSource(); }
+      createOscillator() { return new MockOscillator(); }
+      createGain() { return new MockGain(); }
+      decodeAudioData(buffer: ArrayBuffer) {
+        const code = new Uint8Array(buffer)[0] ?? 0;
+        return Promise.resolve({ key: soundKeyByCode[code] ?? 'unknown' });
+      }
+      resume() { this.state = 'running'; return Promise.resolve(); }
+      close() { return Promise.resolve(); }
+    }
+    Object.defineProperty(window, 'AudioContext', { value: MockAudioContext, configurable: true });
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url;
+      if (url.includes('/audio/auction/')) {
+        target.__decodedSoundURLs?.push(url);
+        const file = url.split('/').pop() ?? '';
+        return Promise.resolve(new Response(new Uint8Array([soundCodeByFile[file] ?? 0]), { status: 200 }));
+      }
+      return originalFetch(input, init);
+    }) as typeof window.fetch;
+  });
+
+  await page.goto('/?stateMatrix=1');
+  await page.getByLabel('开启提示音').click();
+  await expect(page.getByLabel('关闭提示音')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (
+    (window as typeof window & { __decodedSoundURLs?: string[] }).__decodedSoundURLs ?? []
+  ).some((url) => url.includes('hammer-hit.wav')))).toBe(true);
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('auction:event', {
+      detail: {
+        auction_id: 'auc_live',
+        event_type: 'auction_sold',
+        seq: 42,
+        payload: {
+          current_price_cents: 60000,
+          current_winner_id: 'user_1',
+          leader_user_masked: '我',
+          order_id: 'ord_pending',
+          end_at: '2099-05-22T14:00:00Z',
+          server_time_ms: Date.parse('2099-05-22T13:59:52Z')
+        }
+      }
+    }));
+  });
+
+  await expect(page.getByTestId('climax-layer')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (
+    (window as typeof window & { __playedBuffers?: string[] }).__playedBuffers ?? []
+  ).includes('hammer_hit'))).toBe(true);
+  await expect(page.evaluate(() => (
+    (window as typeof window & { __playedBuffers?: string[] }).__playedBuffers ?? []
+  ).includes('oscillator-fallback'))).resolves.toBe(false);
+});
+
 test('H5 sound policy degrades for unsupported audio and reduced motion', async ({ page }) => {
   await page.addInitScript(() => {
     const target = window as typeof window & { __vibrations?: Array<number | number[]> };
