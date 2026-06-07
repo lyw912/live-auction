@@ -20,6 +20,9 @@ function displayChatUser(userID: string, currentUserID: string) {
   return '匿名买家';
 }
 
+const iconParkProofFill = ['#D4AF37', '#2c2c2c', '#EFBF04', '#F7E6CA'];
+const iconParkActionFill = ['#fff', '#fff', '#fff', '#fff'];
+
 export function LiveStage({
   activeAuctionID,
   atmosphereCue,
@@ -82,8 +85,8 @@ export function LiveStage({
   const activeAuction = auctions.find((auction) => auction.id === activeAuctionID);
   const queuedCount = auctions.filter((auction) => auction.id !== activeAuctionID).length;
   const proofChips: Array<{ icon: React.ReactNode; label: string }> = [];
-  if (item.certificate) proofChips.push({ icon: <CertificateIcon size={13} theme="multi-color" fill={['#D4AF37', '#2c2c2c', '#EFBF04', '#F7E6CA']} />, label: item.certificate });
-  if (item.condition) proofChips.push({ icon: <JewelryIcon size={13} theme="multi-color" fill={['#D4AF37', '#2c2c2c', '#EFBF04', '#F7E6CA']} />, label: item.condition });
+  if (item.certificate) proofChips.push({ icon: <CertificateIcon size={13} theme="multi-color" fill={iconParkProofFill} />, label: item.certificate });
+  if (item.condition) proofChips.push({ icon: <JewelryIcon size={13} theme="multi-color" fill={iconParkProofFill} />, label: item.condition });
   if (item.shipping) proofChips.push({ icon: <TruckIcon size={13} theme="multi-color" fill={['#00A870', '#2c2c2c', '#F7E6CA', '#D4AF37']} />, label: item.shipping });
   const visibleSystem = systemMessages.slice(0, 2).map((message) => ({
     id: `sys-${message.id}`,
@@ -169,7 +172,7 @@ export function LiveStage({
           disabled={soundCapability === 'unavailable'}
           onClick={onToggleSound}
         >
-          {soundEnabled ? <SoundIcon size={14} theme="multi-color" fill={['#FE2C55', '#2c2c2c', '#F7E6CA', '#D4AF37']} /> : <BellOff size={14} />}
+          {soundEnabled ? <SoundIcon size={14} theme="filled" fill="#fff" /> : <BellOff size={14} />}
         </button>
       </div>
       <div className="stage-safe-zone">
@@ -227,10 +230,10 @@ export function LiveStage({
         </span>
       </button>
       <div className="live-action-rail" aria-label="live-actions">
-        <button type="button" onClick={onOpenProducts} aria-label="商品列表"><ShoppingBagIcon size={20} theme="multi-color" fill={['#FE2C55', '#2c2c2c', '#F7E6CA', '#D4AF37']} /><span>{queuedCount + 1}</span></button>
-        <button type="button" onClick={onOpenLiveOps} aria-label="直播互动"><CommentIcon size={20} theme="multi-color" fill={['#D4AF37', '#2c2c2c', '#F7E6CA', '#FE2C55']} /></button>
-        <button type="button" onClick={onLike} aria-label="点赞"><HeartIcon size={20} theme="multi-color" fill={['#FE2C55', '#2c2c2c', '#F7E6CA', '#D4AF37']} /><span>{likeCount}</span></button>
-        <button type="button" onClick={onOpenMore} aria-label="更多"><MoreIcon size={20} theme="multi-color" fill={['#F7E6CA', '#2c2c2c', '#D4AF37', '#FE2C55']} /></button>
+        <button type="button" onClick={onOpenProducts} aria-label="商品列表"><ShoppingBagIcon className="action-rail-icon" size={26} theme="outline" fill={iconParkActionFill} strokeWidth={4} /><span className="live-action-badge">{queuedCount + 1}</span></button>
+        <button type="button" onClick={onOpenLiveOps} aria-label="直播互动"><CommentIcon className="action-rail-icon" size={26} theme="outline" fill={iconParkActionFill} strokeWidth={4} /></button>
+        <button type="button" onClick={onLike} aria-label="点赞"><HeartIcon className="action-rail-icon" size={26} theme="outline" fill={iconParkActionFill} strokeWidth={4} /><span className="live-action-badge">{likeCount}</span></button>
+        <button type="button" onClick={onOpenMore} aria-label="更多"><MoreIcon className="action-rail-icon" size={26} theme="outline" fill={iconParkActionFill} strokeWidth={4} /></button>
       </div>
     </section>
   );
@@ -541,6 +544,44 @@ export function AuctionStatePanel({
     if (nextBidCents > minimumNextBidCents) return `高于当前价 ${formatCents(nextBidCents - currentPriceCents)} · 高于最低下一口 ${formatCents(nextBidCents - minimumNextBidCents)}`;
     return `最低有效出价 ${formatCents(minimumNextBidCents)} · 按 ${formatCents(Math.max(0, nextBidCents - currentPriceCents))} 加价`;
   })();
+  const slideConfirmEnabled = !primaryDisabled && !scenario.sold && !scenario.winner;
+  const [slideProgress, setSlideProgress] = useState(0);
+  const [slideOffsetPx, setSlideOffsetPx] = useState(0);
+  const slideProgressRef = useRef(0);
+  const slideStartXRef = useRef<number | null>(null);
+  const slideTrackRef = useRef<HTMLButtonElement | null>(null);
+  const suppressSlideClickRef = useRef(false);
+  const resetSlide = () => {
+    slideProgressRef.current = 0;
+    setSlideProgress(0);
+    setSlideOffsetPx(0);
+  };
+  const updateSlide = (clientX: number) => {
+    const startX = slideStartXRef.current;
+    const track = slideTrackRef.current;
+    if (startX == null || !track) return;
+    const maxOffset = Math.max(1, track.getBoundingClientRect().width - 52);
+    const offset = Math.max(0, Math.min(maxOffset, clientX - startX));
+    const progress = (offset / maxOffset) * 100;
+    slideProgressRef.current = progress;
+    setSlideProgress(progress);
+    setSlideOffsetPx(offset);
+  };
+  const finishSlide = () => {
+    const confirmed = slideProgressRef.current >= 78;
+    resetSlide();
+    slideStartXRef.current = null;
+    if (confirmed) {
+      suppressSlideClickRef.current = true;
+      window.setTimeout(() => {
+        suppressSlideClickRef.current = false;
+      }, 0);
+      onPrimaryAction();
+    }
+  };
+  useEffect(() => {
+    resetSlide();
+  }, [scenario.cta, primaryDisabled]);
 
   return (
     <section
@@ -622,9 +663,51 @@ export function AuctionStatePanel({
         <span>{scenario.sold ? '查看订单' : formatCents(nextBidCents)}</span>
         <button type="button" aria-label="increase" onClick={onIncreaseBid}><ChevronUp size={18} /></button>
       </div>
-      <button className="primary-cta" data-testid="bid-cta" disabled={primaryDisabled} onClick={onPrimaryAction}>
+      <button
+        ref={slideTrackRef}
+        className={`primary-cta ${slideConfirmEnabled ? 'slide-confirm-cta' : ''}`}
+        data-testid="bid-cta"
+        data-slide-progress={Math.round(slideProgress)}
+        disabled={primaryDisabled}
+        onClick={() => {
+          if (slideConfirmEnabled && suppressSlideClickRef.current) return;
+          onPrimaryAction();
+        }}
+        onKeyDown={(event) => {
+          if (!slideConfirmEnabled) return;
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            onPrimaryAction();
+          }
+        }}
+        onPointerDown={(event) => {
+          if (!slideConfirmEnabled) return;
+          slideStartXRef.current = event.clientX;
+          setSlideProgress(8);
+          event.currentTarget.setPointerCapture(event.pointerId);
+        }}
+        onPointerMove={(event) => {
+          if (!slideConfirmEnabled) return;
+          updateSlide(event.clientX);
+        }}
+        onPointerUp={(event) => {
+          if (!slideConfirmEnabled) return;
+          event.currentTarget.releasePointerCapture(event.pointerId);
+          finishSlide();
+        }}
+        onPointerCancel={() => {
+          slideStartXRef.current = null;
+          resetSlide();
+        }}
+      >
+        {slideConfirmEnabled && (
+          <>
+            <span className="slide-confirm-fill" style={{ width: `${slideProgress}%` }} aria-hidden="true" />
+            <span className="slide-confirm-thumb" style={{ transform: `translateX(${slideOffsetPx}px)` }} aria-hidden="true">→</span>
+          </>
+        )}
         {scenario.winner ? <CreditCard size={18} /> : scenario.rejected ? <AlertTriangle size={18} /> : <CheckCircle2 size={18} />}
-        {scenario.cta}
+        <span>{slideConfirmEnabled ? `滑动${scenario.cta}` : scenario.cta}</span>
       </button>
       <div className="dock-shortcuts" aria-label="bid-dock-shortcuts">
         <button type="button" onClick={() => onOpenSheet('details')}>拍品与规则</button>
