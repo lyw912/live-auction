@@ -741,13 +741,14 @@ test('H5 local bid lock suppresses rapid duplicate clicks', async ({ page }) => 
   });
 
   await page.goto('/?stateMatrix=1');
-  await page.getByRole('button', { name: '竞价中' }).click();
+  await selectActiveBidsState(page);
   const bidCTA = page.getByTestId('bid-cta');
-  await Promise.all([
-    bidCTA.click({ force: true }),
-    bidCTA.click({ force: true }),
-    bidCTA.click({ force: true })
-  ]);
+  await expect(bidCTA).toBeEnabled();
+  const firstRequest = page.waitForRequest('/api/auctions/auc_live/bids');
+  await bidCTA.click();
+  await firstRequest;
+  await bidCTA.click({ force: true });
+  await bidCTA.click({ force: true });
   await expect(bidCTA).toBeDisabled();
   await page.waitForTimeout(100);
   expect(bidRequests).toBe(1);
@@ -2185,7 +2186,7 @@ test('H5 bottom sheet is dialog-labelled and keyboard dismissible without moving
 
 test('H5 extension and sold visual effects use bounded nonblocking motion layers', async ({ page }) => {
   await page.goto('/?stateMatrix=1');
-  await page.getByRole('button', { name: '竞价中' }).click();
+  await selectActiveBidsState(page);
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent('auction:event', {
       detail: {
@@ -2208,6 +2209,7 @@ test('H5 extension and sold visual effects use bounded nonblocking motion layers
   await expect(page.getByTestId('auction-countdown')).toHaveAttribute('data-effect', 'extension-stretch');
   await expect(page.getByTestId('auction-countdown')).toHaveCSS('animation-name', 'countdown-stretch');
 
+  await expect(page.getByTestId('live-stage')).toHaveAttribute('data-atmosphere-kind', 'none', { timeout: 3000 });
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent('auction:event', {
       detail: {
@@ -2217,7 +2219,9 @@ test('H5 extension and sold visual effects use bounded nonblocking motion layers
         payload: {
           current_price_cents: 40000,
           current_winner_id: 'user_2',
-          leader_user_masked: '张**'
+          leader_user_masked: '张**',
+          end_at: '2099-05-22T14:00:20Z',
+          server_time_ms: Date.parse('2099-05-22T13:59:52Z')
         }
       }
     }));
