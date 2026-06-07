@@ -314,19 +314,23 @@ test('PC console renders live API auctions, orders, and expanded diagnostic pane
   await expect(page.getByTestId('queue-group-scheduled').getByText('蜜蜡圆珠手串')).toBeVisible();
   await expect(page.getByTestId('queue-group-draft').getByText('和田玉福牌吊坠')).toBeVisible();
   await expect(page.getByTestId('live-assist-rail')).toBeVisible();
-  await expect(page.getByText(/单号 JP\d{8}-PENDING/)).toBeVisible();
+  await expect(page.getByText(/单号 JP\d{8}-PENDING/)).not.toBeVisible();
+  await page.getByRole('button', { name: '订单记录', exact: true }).click();
+  await expect(page.getByTestId('pc-orders-page')).toBeVisible();
+  await expect(page.getByRole('table', { name: '订单记录' })).toBeVisible();
+  await expect(page.getByText(/JP\d{8}-PENDING/)).toBeVisible();
   await expect(page.getByText('保证金已冻结')).toBeVisible();
-  await page.getByRole('button', { name: /单号 JP\d{8}-PENDING/ }).click();
+  await page.getByRole('button', { name: /JP\d{8}-PENDING/ }).click();
   const orderDrawer = page.getByTestId('order-detail-drawer');
   await expect(orderDrawer.getByText(/JP\d{8}-PENDING/)).toBeVisible();
   await expect(orderDrawer.getByText('保证金已冻结')).toBeVisible();
   await expect(orderDrawer.getByText('排查编号 ord_pending')).toBeVisible();
   await expect(orderDrawer).not.toContainText('HELD');
   await page.reload();
-  await page.getByRole('button', { name: '拍品', exact: true }).click();
+  await page.getByRole('button', { name: '拍品与规则', exact: true }).click();
   await expect(page.getByTestId('pc-inventory-page')).toBeVisible();
   await expect(page.getByTestId('pc-command-center')).not.toBeVisible();
-  await page.getByRole('button', { name: '诊断', exact: true }).click();
+  await page.getByRole('button', { name: '运行监控', exact: true }).click();
   await expect(page.getByTestId('pc-diagnostics-page')).toBeVisible();
   await expect(page.getByTestId('auction-queue')).not.toBeVisible();
   await expect(page.getByTestId('diagnostics')).toBeVisible();
@@ -334,7 +338,7 @@ test('PC console renders live API auctions, orders, and expanded diagnostic pane
   await expect(page.getByTestId('redis-engine-summary')).toContainText('写入结果 7/1/0');
   await expect(page.getByTestId('redis-engine-summary')).toContainText('ACKED · seq 42');
   await expect(page.getByLabel('monitor-anomaly-type')).toBeVisible();
-  await page.getByRole('button', { name: '竞拍', exact: true }).click();
+  await page.getByRole('button', { name: '开播中控', exact: true }).click();
   await expect(page.getByTestId('auction-control-summary')).toBeVisible();
   await expect(page.getByTestId('auction-control-summary').getByText('当前价')).toBeVisible();
   await expect(page.getByTestId('auction-control-summary').getByText(/服务端倒计时/)).toBeVisible();
@@ -355,17 +359,17 @@ test('PC console renders live API auctions, orders, and expanded diagnostic pane
   await expect(page.getByTestId('max-bid-summary').getByText('已跟价')).toBeVisible();
   await expect(page.getByTestId('max-bid-summary')).not.toContainText('max_amount_cents');
   await expect(page.getByTestId('max-bid-summary')).not.toContainText('95000');
-  await expect(page.getByTestId('risk-queue').getByText('Bid pressure throttle')).toBeVisible();
-  await expect(page.getByTestId('risk-queue').getByText(/2 recent reject rows/)).toBeVisible();
-  await expect(page.getByTestId('risk-queue').getByText('CLOCK_STEP_BACKWARD')).toBeVisible();
-  await expect(page.getByTestId('risk-queue').getByText('user_activity_events')).toBeVisible();
+  await expect(page.getByTestId('risk-queue').getByText('出价过于密集')).toBeVisible();
+  await expect(page.getByTestId('risk-queue').getByText(/2 条无效出价记录/)).toBeVisible();
+  await expect(page.getByTestId('risk-queue').getByText('系统异常待确认')).toBeVisible();
+  await expect(page.getByTestId('risk-queue').getByText('恢复记录')).toBeVisible();
   await expect(page.getByTestId('live-assist-rail').getByRole('button', { name: '生成解说' })).toBeEnabled();
   await expect(page.getByTestId('live-assist-rail').getByRole('button', { name: '检查风控' })).toBeEnabled();
   await expect(page.getByTestId('live-assist-rail').getByRole('button', { name: '生成复盘' })).toBeEnabled();
-  await expect(page.getByTestId('recent-events').getByText('bid_accepted')).toBeVisible();
+  await expect(page.getByTestId('recent-events').getByText('出价已接受')).toBeVisible();
   await expect(page.getByRole('button', { name: /事件回放/ })).toBeVisible();
 
-  await page.getByRole('button', { name: '诊断', exact: true }).click();
+  await page.getByRole('button', { name: '运行监控', exact: true }).click();
   await page.getByRole('tab', { name: '无效出价' }).click();
   await expect(page.getByText('低于当前可出价')).toBeVisible();
   await expect(page.getByText('tr_reject')).toBeVisible();
@@ -388,10 +392,10 @@ test('PC accessibility gate exposes live diagnostic state and named controls', a
   const riskQueue = page.getByTestId('risk-queue');
   await expect(riskQueue).toHaveAttribute('role', 'status');
   await expect(riskQueue).toHaveAttribute('aria-live', 'polite');
-  await expect(riskQueue.getByText('Bid pressure throttle')).toBeVisible();
-  await expect(riskQueue.locator('em').getByText('bids', { exact: true })).toBeVisible();
+  await expect(riskQueue.getByText('出价过于密集')).toBeVisible();
+  await expect(riskQueue.locator('em').getByText('出价记录', { exact: true })).toBeVisible();
 
-  await page.getByRole('button', { name: '诊断', exact: true }).click();
+  await page.getByRole('button', { name: '运行监控', exact: true }).click();
   await page.getByRole('tab', { name: '无效出价' }).click();
   await expect(page.getByLabel('无效出价').getByRole('button', { name: /tr_reject/ })).toBeVisible();
   await expect(page.getByLabel('monitor-auction-id')).toBeVisible();
@@ -403,7 +407,7 @@ test('PC respects reduced motion preference while keeping controls usable', asyn
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/');
   await expect(page.getByTestId('health-ribbon-status')).toBeVisible();
-  await expect(page.getByRole('button', { name: '诊断', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '运行监控', exact: true })).toBeVisible();
   await expect(page.evaluate(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches)).resolves.toBe(true);
 });
 
@@ -461,7 +465,7 @@ test('PC host live assist renders private automatic bidding readiness without ex
 
 test('PC diagnostics row opens flight recorder drawer with real timeline impact and next action', async ({ page }) => {
   await page.goto('/');
-  await page.getByRole('button', { name: '诊断', exact: true }).click();
+  await page.getByRole('button', { name: '运行监控', exact: true }).click();
   await page.getByRole('tab', { name: '无效出价' }).click();
   await page.getByLabel('无效出价').getByRole('button', { name: /tr_reject/ }).click();
   const drawer = page.getByTestId('flight-recorder-drawer');
@@ -518,7 +522,7 @@ test('PC creates item and auction through backend upload and create APIs', async
   });
 
   await page.goto('/');
-  await page.getByRole('button', { name: '拍品', exact: true }).click();
+  await page.getByRole('button', { name: '拍品与规则', exact: true }).click();
   await expect(page.getByTestId('wizard-product-step')).toBeVisible();
   await page.getByLabel('item-title').fill('白瓷杯');
   const chooser = page.waitForEvent('filechooser');
@@ -547,7 +551,7 @@ test('PC rule save targets selected draft auction and includes all money/rule fi
   });
 
   await page.goto('/');
-  await page.getByRole('button', { name: '拍品', exact: true }).click();
+  await page.getByRole('button', { name: '拍品与规则', exact: true }).click();
   await page.getByText('和田玉福牌吊坠').click();
   await expect(page.getByTestId('seller-rule-wizard')).toBeVisible();
   await expect(page.getByLabel('seller-rule-wizard-steps').getByText('拍品')).toBeVisible();
@@ -575,7 +579,7 @@ test('PC rule save targets selected draft auction and includes all money/rule fi
 
 test('PC rule wizard explains frozen rules for non-draft auctions', async ({ page }) => {
   await page.goto('/');
-  await page.getByRole('button', { name: '拍品', exact: true }).click();
+  await page.getByRole('button', { name: '拍品与规则', exact: true }).click();
   await expect(page.getByTestId('rule-freeze-reason')).toContainText('开拍中');
   await expect(page.getByTestId('rule-freeze-reason')).toContainText('仅待完善拍品');
   await expect(page.getByRole('button', { name: '保存规则' })).toBeDisabled();
@@ -595,7 +599,7 @@ test('PC lifecycle controls call selected auction APIs', async ({ page }) => {
   });
 
   await page.goto('/');
-  await page.getByRole('button', { name: '竞拍', exact: true }).click();
+  await page.getByRole('button', { name: '开播中控', exact: true }).click();
   await page.getByText('和田玉福牌吊坠').click();
   await page.getByPlaceholder('请选择日期').fill('2026-05-22 14:30');
   await page.keyboard.press('Enter');

@@ -3,26 +3,11 @@
 :root {
   font-family: var(--font-auction-sans);
   color: var(--color-ink-900);
-  background: #181818;
-  --bg-page: #181818;
-  --bg-card: #242424;
-  --bg-component: #393939;
-  --bg-elevated: #2c2c2c;
-  --mask: rgba(0,0,0,.40);
-  --text-1: rgba(255,255,255,.90);
-  --text-2: rgba(255,255,255,.55);
-  --text-3: rgba(255,255,255,.35);
-  --cta: #FE2C55;
-  --danger: #FF4D4F;
-  --success: #00A870;
-  --gold: #D4AF37;
-  --gold-bright: #EFBF04;
-  --champagne: #F7E6CA;
-  --radius-sheet: 16px;
-  --radius-card: 12px;
+  background: var(--bg-page);
   --h5-shell-width: 430px;
   --h5-shell-shadow: 0 0 0 1px rgba(255, 255, 255, .08), 0 24px 70px rgba(0, 0, 0, .48);
   --h5-bid-dock-reserved-height: calc(0px + var(--safe-area-bottom));
+  --radius-card: 12px;
 }
 
 .price,
@@ -422,7 +407,7 @@ button {
   right: 74px;
   bottom: calc(76px + var(--safe-area-bottom));
   z-index: 2;
-  min-height: 102px;
+  min-height: 118px;
   border: 1px solid rgba(255, 255, 255, .18);
   border-radius: 12px;
   background: rgba(255, 255, 255, .92);
@@ -500,15 +485,53 @@ button {
   white-space: nowrap;
 }
 
-.floating-product-action {
+.floating-bid-strip {
   grid-column: 1 / -1;
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(142px, 1.35fr);
+  align-items: center;
+  gap: 10px;
+  border-radius: 999px;
+  padding: 5px 6px 5px 13px;
+  background: #151822;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .12);
+}
+
+.floating-bid-strip > span:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.floating-bid-strip small {
+  color: rgba(255, 255, 255, .62);
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.floating-bid-strip strong {
+  color: var(--champagne);
+  font-family: var(--font-auction-tabular);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.floating-bid-strip > em {
+  color: rgba(255, 255, 255, .46);
+  font-style: normal;
+  font-weight: 900;
+}
+
+.floating-product-action {
   min-height: 34px;
   display: inline-flex;
   justify-content: center;
   align-items: center;
   border-radius: 999px;
   padding: 0 12px;
-  background: linear-gradient(90deg, #ff2d55, #ff7a1a);
+  background: linear-gradient(90deg, var(--cta), #ff7a1a);
   color: #fff;
   font-size: 12px;
   font-weight: 900;

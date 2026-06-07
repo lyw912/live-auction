@@ -33,6 +33,32 @@
   --color-danger-text: #9f2d1d;
   --color-success-text: #17613f;
 
+  --bg-page: #181818;
+  --bg-card: #242424;
+  --bg-component: #393939;
+  --bg-elevated: #2c2c2c;
+  --bg-layout: #f5f5f5;
+  --bg-container: #ffffff;
+  --bg-fill: rgba(0, 0, 0, .02);
+  --mask: rgba(0, 0, 0, .40);
+  --text-1: rgba(255, 255, 255, .90);
+  --text-2: rgba(255, 255, 255, .55);
+  --text-3: rgba(255, 255, 255, .35);
+  --text-disabled: rgba(255, 255, 255, .22);
+  --primary: #165DFF;
+  --cta: #FE2C55;
+  --danger: #FF4D4F;
+  --success: #00A870;
+  --warning: #E37318;
+  --gold: #D4AF37;
+  --gold-bright: #EFBF04;
+  --champagne: #F7E6CA;
+  --border-1: #e8e8e8;
+  --border-2: #dddddd;
+  --radius-sheet: 16px;
+  --radius-card: 8px;
+  --radius-chip: 999px;
+
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;

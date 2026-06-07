@@ -3,20 +3,11 @@
 :root {
   font-family: var(--font-auction-sans);
   color: var(--color-ink-800);
-  background: #f5f5f5;
-  --bg-layout: #f5f5f5;
-  --bg-container: #fff;
-  --bg-fill: rgba(0,0,0,.02);
+  background: var(--bg-layout);
   --text-1: rgba(0,0,0,.88);
   --text-2: rgba(0,0,0,.65);
   --text-3: rgba(0,0,0,.45);
-  --primary: #165DFF;
-  --success: #00A870;
-  --warning: #E37318;
-  --danger: #FF4D4F;
-  --border-1: #e8e8e8;
-  --border-2: #dddddd;
-  --radius-card: 8px;
+  --text-disabled: rgba(0,0,0,.25);
 }
 
 .price,
@@ -823,8 +814,26 @@ body {
   color: var(--color-success-text);
 }
 
+.order-table-panel {
+  overflow-x: auto;
+}
+
+.order-table {
+  min-width: 860px;
+  display: grid;
+  border: 1px solid var(--color-line-soft);
+  border-radius: var(--radius-card);
+  overflow: hidden;
+}
+
+.order-table-head,
 .order-line {
   min-height: 44px;
+  display: grid;
+  grid-template-columns: minmax(170px, 1.25fr) minmax(100px, .8fr) minmax(112px, .8fr) 88px minmax(150px, 1fr) minmax(112px, .9fr) minmax(116px, .9fr);
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px;
   border-bottom: 1px solid var(--color-line-soft);
 }
 
@@ -832,17 +841,29 @@ body {
   border-bottom: 0;
 }
 
-.order-line {
-  display: grid;
-  grid-template-columns: minmax(150px, 1fr) auto auto auto minmax(120px, auto) auto auto;
-  align-items: center;
-  gap: 10px;
+.order-table-head {
+  min-height: 38px;
+  background: var(--color-surface-1);
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 900;
 }
 
 .order-line span {
   color: var(--color-muted);
   font-size: 12px;
   font-weight: 800;
+}
+
+.order-amount {
+  justify-self: end;
+  color: var(--color-ink-950);
+}
+
+.order-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .order-id-link {

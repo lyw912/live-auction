@@ -666,8 +666,8 @@ function App() {
           <section className="workspace-page inventory-page" data-testid="pc-inventory-page">
             <div className="section-title">
               <div>
-                <h1>拍品管理</h1>
-                <p>上架拍品并配置冻结前竞拍规则；开拍和取消进入竞拍页处理。</p>
+                <h1>拍品与规则</h1>
+                <p>四组发布表单管理拍品信息、竞价规则、场次时间和履约保障；开拍后规则冻结。</p>
               </div>
               <span>{selectedAuction ? `当前选中「${auctionDisplayName(selectedAuction)}」` : '未选中竞拍'}</span>
             </div>
@@ -708,8 +708,8 @@ function App() {
           <section className="workspace-page auction-page" data-testid="pc-auction-page">
             <div className="section-title">
               <div>
-                <h1>竞拍控场</h1>
-                <p>选择队列中的拍品，执行排期、开拍、取消、讲解和实时氛围演示。</p>
+                <h1>开播中控</h1>
+                <p>队列、当前拍品、开拍控制和演示助手集中在这一屏；订单与诊断进入独立工作区。</p>
               </div>
               <span>{pinnedActiveAuction ? `${auctionStatusLabel(pinnedActiveAuction.status)}「${auctionDisplayName(pinnedActiveAuction)}」` : '当前无开拍中拍品'}</span>
             </div>
@@ -764,12 +764,24 @@ function App() {
                 onDriveDemoBid={driveDemoBid}
               />
             </div>
+          </section>
+        )}
+
+        {workspaceTab === 'orders' && (
+          <section className="workspace-page orders-page" data-testid="pc-orders-page">
+            <div className="section-title">
+              <div>
+                <h1>订单记录</h1>
+                <p>成交后自动生成，金额右对齐、买家脱敏，技术编号只在详情和事件回放中追溯。</p>
+              </div>
+              <span>{orders.length ? `${orders.length} 条订单` : '暂无订单'}</span>
+            </div>
             <OrdersPanel orders={orders} onOpenFlightRecorder={openFlightRecorder} onOpenOrder={setOrderDetailID} />
           </section>
         )}
 
-        {workspaceTab === 'health' && (
-          <section className="workspace-page live-health-page" data-testid="pc-live-health-page">
+        {workspaceTab === 'diagnostics' && (
+          <section className="workspace-page diagnostics-page" data-testid="pc-diagnostics-page">
             <LiveHealthPanel
               auctions={auctions}
               heatSummary={heatSummary}
@@ -782,11 +794,6 @@ function App() {
               onRefresh={loadAll}
               onSignal={createMonitorSignal}
             />
-          </section>
-        )}
-
-        {workspaceTab === 'diagnostics' && (
-          <section className="workspace-page diagnostics-page" data-testid="pc-diagnostics-page">
             <DiagnosticsPanel
               monitor={monitor}
               monitorFilter={monitorFilter}

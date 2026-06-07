@@ -98,9 +98,10 @@ try {
   const pc = await (await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'zh-CN' })).newPage();
   await pc.goto(PC, { waitUntil: 'domcontentloaded' }).catch(() => {});
   await pc.waitForTimeout(3500);
-  texts['pc-chrome'] = texts['pc-control'] = texts['pc-orders'] = await grab(pc);
-  if (await clickAny(pc, /^拍品$/)) { await pc.waitForTimeout(1500); texts['pc-rules'] = await grab(pc); }
-  if (await clickAny(pc, /^风险处理$/)) { await pc.waitForTimeout(1500); texts['pc-risk'] = await grab(pc); }
+  texts['pc-chrome'] = texts['pc-control'] = await grab(pc);
+  if (await clickAny(pc, /^订单记录$/)) { await pc.waitForTimeout(1500); texts['pc-orders'] = await grab(pc); }
+  if (await clickAny(pc, /^拍品与规则$/)) { await pc.waitForTimeout(1500); texts['pc-rules'] = await grab(pc); }
+  if (await clickAny(pc, /^运行监控$/)) { await pc.waitForTimeout(1500); texts['pc-risk'] = await grab(pc); }
 } finally {
   await browser.close();
 }

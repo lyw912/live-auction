@@ -1,5 +1,13 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, BadgeCheck, Bell, BellOff, CheckCircle2, ChevronUp, Clock3, CreditCard, Flame, Heart, History, Info, MessageCircle, MoreHorizontal, PackageCheck, RefreshCw, Send, ShieldCheck, ShoppingCart, Sparkles, Truck, Trophy, Users, Wifi, WifiOff, X } from 'lucide-react';
+import CertificateIcon from '@icon-park/react/es/icons/Certificate';
+import CommentIcon from '@icon-park/react/es/icons/CommentOne';
+import HeartIcon from '@icon-park/react/es/icons/Heart';
+import JewelryIcon from '@icon-park/react/es/icons/Jewelry';
+import MoreIcon from '@icon-park/react/es/icons/More';
+import ShoppingBagIcon from '@icon-park/react/es/icons/ShoppingBagOne';
+import SoundIcon from '@icon-park/react/es/icons/SoundOne';
+import TruckIcon from '@icon-park/react/es/icons/Truck';
 import type { AtmosphereCue } from './atmosphere';
 import type { AuctionItem, AuctionState, AuctionSummary, BottomSheetKey, ChatMessage, ConnectionPhase, CountdownPhase, CountdownPhaseState, HeatSnapshot, HistoryRow, LeaderboardPayload, LiveOpsCampaign, MaxBidIntent, MaxBidPhase, PaymentPhase, ProductQAAnswer, ResultSheetKind, Scenario, SoundCapability, SystemMessage } from './domain';
 import { auctionStatusLabel, connectionSyncCopy, demoLiveVideoURL, demoProductImageURL, formatCents, formatClockTime, isDangerousActionDisabled, leaderboardActionCopy, rankBadgeLabel, riskActionCopy, scenarios } from './domain';
@@ -74,9 +82,9 @@ export function LiveStage({
   const activeAuction = auctions.find((auction) => auction.id === activeAuctionID);
   const queuedCount = auctions.filter((auction) => auction.id !== activeAuctionID).length;
   const proofChips: Array<{ icon: React.ReactNode; label: string }> = [];
-  if (item.certificate) proofChips.push({ icon: <BadgeCheck size={13} />, label: item.certificate });
-  if (item.condition) proofChips.push({ icon: <PackageCheck size={13} />, label: item.condition });
-  if (item.shipping) proofChips.push({ icon: <Truck size={13} />, label: item.shipping });
+  if (item.certificate) proofChips.push({ icon: <CertificateIcon size={13} theme="multi-color" fill={['#D4AF37', '#2c2c2c', '#EFBF04', '#F7E6CA']} />, label: item.certificate });
+  if (item.condition) proofChips.push({ icon: <JewelryIcon size={13} theme="multi-color" fill={['#D4AF37', '#2c2c2c', '#EFBF04', '#F7E6CA']} />, label: item.condition });
+  if (item.shipping) proofChips.push({ icon: <TruckIcon size={13} theme="multi-color" fill={['#00A870', '#2c2c2c', '#F7E6CA', '#D4AF37']} />, label: item.shipping });
   const visibleSystem = systemMessages.slice(0, 2).map((message) => ({
     id: `sys-${message.id}`,
     user: '助手',
@@ -161,7 +169,7 @@ export function LiveStage({
           disabled={soundCapability === 'unavailable'}
           onClick={onToggleSound}
         >
-          {soundEnabled ? <Bell size={14} /> : <BellOff size={14} />}
+          {soundEnabled ? <SoundIcon size={14} theme="multi-color" fill={['#FE2C55', '#2c2c2c', '#F7E6CA', '#D4AF37']} /> : <BellOff size={14} />}
         </button>
       </div>
       <div className="stage-safe-zone">
@@ -199,7 +207,7 @@ export function LiveStage({
       <HeatMeter heat={heat} countdownPhase={countdownPhase.phase} />
       <button className="floating-product-card" type="button" onClick={onOpenBid} data-testid="floating-product-card" aria-label="进入竞拍面板">
         <span className={`floating-thumb ${mediaURL ? 'has-media' : ''}`} style={mediaURL ? { '--floating-media-url': `url("${mediaURL}")` } as React.CSSProperties : undefined}>
-          {!mediaURL && <ShoppingCart size={18} />}
+          {!mediaURL && <ShoppingBagIcon size={18} theme="multi-color" fill={['#FE2C55', '#2c2c2c', '#F7E6CA', '#D4AF37']} />}
         </span>
         <span className="floating-product-copy">
           <strong>{activeAuction?.item?.title ?? lotTitle}</strong>
@@ -209,13 +217,20 @@ export function LiveStage({
             <small data-testid="floating-auction-status">{auctionStatusLabel(scenario.status)} · {connectionCopy}</small>
           </span>
         </span>
-        <span className="floating-product-action">{floatingActionCopy}</span>
+        <span className="floating-bid-strip" data-testid="h5-sticky-bid-strip">
+          <span>
+            <small>{scenario.status === 'ACTIVE' ? '当前' : auctionStatusLabel(scenario.status)}</small>
+            <strong>{scenario.status === 'ACTIVE' ? formatCents(currentPriceCents) : scenario.price}</strong>
+          </span>
+          <em aria-hidden="true">→</em>
+          <span className="floating-product-action">{floatingActionCopy}</span>
+        </span>
       </button>
       <div className="live-action-rail" aria-label="live-actions">
-        <button type="button" onClick={onOpenProducts} aria-label="商品列表"><ShoppingCart size={20} /><span>{queuedCount + 1}</span></button>
-        <button type="button" onClick={onOpenLiveOps} aria-label="直播互动"><Sparkles size={20} /></button>
-        <button type="button" onClick={onLike} aria-label="点赞"><Heart size={20} /><span>{likeCount}</span></button>
-        <button type="button" onClick={onOpenMore} aria-label="更多"><MoreHorizontal size={20} /></button>
+        <button type="button" onClick={onOpenProducts} aria-label="商品列表"><ShoppingBagIcon size={20} theme="multi-color" fill={['#FE2C55', '#2c2c2c', '#F7E6CA', '#D4AF37']} /><span>{queuedCount + 1}</span></button>
+        <button type="button" onClick={onOpenLiveOps} aria-label="直播互动"><CommentIcon size={20} theme="multi-color" fill={['#D4AF37', '#2c2c2c', '#F7E6CA', '#FE2C55']} /></button>
+        <button type="button" onClick={onLike} aria-label="点赞"><HeartIcon size={20} theme="multi-color" fill={['#FE2C55', '#2c2c2c', '#F7E6CA', '#D4AF37']} /><span>{likeCount}</span></button>
+        <button type="button" onClick={onOpenMore} aria-label="更多"><MoreIcon size={20} theme="multi-color" fill={['#F7E6CA', '#2c2c2c', '#D4AF37', '#FE2C55']} /></button>
       </div>
     </section>
   );

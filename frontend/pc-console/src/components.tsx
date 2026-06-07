@@ -6,10 +6,10 @@ import { anomalyKey, anomalySeverity, auctionScopedRows, auctionStatusLabel, con
 
 export function ConsoleNav({ activeTab, onSelect }: { activeTab: string; onSelect: (tab: string) => void }) {
   const rows = [
-    { key: 'inventory', label: '拍品', icon: <ClipboardList size={16} /> },
-    { key: 'rules', label: '竞拍', icon: <RadioTower size={16} /> },
-    { key: 'health', label: '风险处理', icon: <ShieldCheck size={16} /> },
-    { key: 'diagnostics', label: '诊断', icon: <Activity size={16} /> }
+    { key: 'rules', label: '开播中控', icon: <RadioTower size={16} /> },
+    { key: 'inventory', label: '拍品与规则', icon: <ClipboardList size={16} /> },
+    { key: 'orders', label: '订单记录', icon: <Gavel size={16} /> },
+    { key: 'diagnostics', label: '运行监控', icon: <Activity size={16} /> }
   ];
   return (
     <>
@@ -52,6 +52,19 @@ function engineHealth(monitor: Record<string, MonitorPayload>) {
 function displayOrderNo(order: Order) {
   const compact = order.id.replace(/^ord[_-]?/i, '').replace(/[^a-z0-9]/gi, '').slice(-8).toUpperCase();
   return `JP${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${compact || '00000000'}`;
+}
+
+function formatOrderTime(value?: string) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '-';
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  });
 }
 
 function depositStatusLabel(status?: string) {
@@ -1278,11 +1291,11 @@ export function OrdersPanel({ orders, onOpenFlightRecorder, onOpenOrder }: { ord
   const visibleOrders = expanded ? orders : orders.slice(0, 8);
   const hiddenCount = Math.max(0, orders.length - visibleOrders.length);
   return (
-    <div className="rule-panel">
+    <div className="rule-panel order-table-panel">
       <div className="panel-heading order-heading">
         <div>
-          <h2>订单</h2>
-          <span>成交后自动生成，详情保留中标人、保证金、支付时效和审计入口</span>
+          <h2>订单表</h2>
+          <span>技术 ID 收进详情；主表只展示业务单号、脱敏买家和金额状态</span>
         </div>
         {orders.length > 8 ? (
           <Button size="mini" onClick={() => setExpanded((current) => !current)}>
@@ -1290,17 +1303,33 @@ export function OrdersPanel({ orders, onOpenFlightRecorder, onOpenOrder }: { ord
           </Button>
         ) : null}
       </div>
-      {orders.length === 0 ? <div className="empty-state">暂无订单</div> : visibleOrders.map((order) => (
-        <div className="order-line" key={order.id}>
-          <button type="button" className="order-id-link" onClick={() => onOpenOrder(order.id)}>单号 {displayOrderNo(order)}</button>
-          <Tag color={order.status === 'PAID' ? 'green' : 'orange'}>{orderStatusLabel(order.status)}</Tag>
-          <span>中标人 {maskUser(order.winner_id)}</span>
-          <span>{depositStatusLabel(order.deposit_status)}</span>
-          <span>{order.expire_at ? `支付截止 ${new Date(order.expire_at).toLocaleTimeString()}` : '无支付截止'}</span>
-          <strong>{formatCents(order.amount_cents)}</strong>
-          <Button size="mini" icon={<ExternalLink size={13} />} onClick={() => onOpenFlightRecorder(order.auction_id)}>审计</Button>
+      {orders.length === 0 ? <div className="empty-state">暂无订单</div> : (
+        <div className="order-table" role="table" aria-label="订单记录">
+          <div className="order-table-head" role="row">
+            <span role="columnheader">单号</span>
+            <span role="columnheader">买家</span>
+            <span role="columnheader">金额</span>
+            <span role="columnheader">状态</span>
+            <span role="columnheader">支付截止</span>
+            <span role="columnheader">保证金</span>
+            <span role="columnheader">操作</span>
+          </div>
+          {visibleOrders.map((order) => (
+            <div className="order-line" role="row" key={order.id}>
+              <button type="button" className="order-id-link" onClick={() => onOpenOrder(order.id)}>{displayOrderNo(order)}</button>
+              <span role="cell">买家 {maskUser(order.winner_id)}</span>
+              <strong role="cell" className="order-amount">{formatCents(order.amount_cents)}</strong>
+              <Tag role="cell" color={order.status === 'PAID' ? 'green' : 'orange'}>{orderStatusLabel(order.status)}</Tag>
+              <span role="cell">{formatOrderTime(order.expire_at)}</span>
+              <span role="cell">{depositStatusLabel(order.deposit_status)}</span>
+              <span role="cell" className="order-actions">
+                <Button size="mini" onClick={() => onOpenOrder(order.id)}>详情</Button>
+                <Button size="mini" icon={<ExternalLink size={13} />} onClick={() => onOpenFlightRecorder(order.auction_id)}>审计</Button>
+              </span>
+            </div>
+          ))}
         </div>
-      ))}
+      )}
       {hiddenCount > 0 ? (
         <div className="order-collapsed-note">已收起 {hiddenCount} 条历史订单；演示时默认只展示最近 8 条。</div>
       ) : null}
