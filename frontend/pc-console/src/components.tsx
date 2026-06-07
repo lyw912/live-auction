@@ -78,6 +78,156 @@ function formatLag(ms: number) {
   return `${Math.round(ms)} 毫秒`;
 }
 
+const monitorFieldLabels: Record<string, string> = {
+  id: '排查编号',
+  auction_id: '竞拍编号',
+  room_id: '直播间',
+  item_title: '拍品',
+  status: '状态',
+  current_price_cents: '当前价',
+  current_winner_id: '当前领先买家',
+  end_at: '结束时间',
+  accepted_bid_count: '有效出价',
+  extend_count: '延时次数',
+  last_event_at: '最近事件',
+  start_price_cents: '起拍价',
+  increment_cents: '加价幅度',
+  cap_price_cents: '封顶价',
+  amount_cents: '出价金额',
+  user_id: '用户',
+  trace_id: '排查编号',
+  reject_reason: '拒绝原因',
+  code: '异常类型',
+  engine_mode: '引擎模式',
+  engine_seq: '引擎序号',
+  db_engine_seq: '落库序号',
+  redis_pending_decisions: '待确认',
+  pending_settlements: '待入账',
+  failed_settlements: '结算失败',
+  settlement_lag_p99_ms: 'P99 结算延迟',
+  settlement_lag_max_ms: '最大结算延迟',
+  latest_append_status: '最近写入状态',
+  latest_append_engine_seq: '最近写入序号',
+  latest_append_topic: '最近写入 Topic',
+  latest_append_partition: '最近写入分区',
+  latest_append_offset: '最近写入位点',
+  append_success_count: '写入成功',
+  append_failure_count: '写入失败',
+  append_unknown_count: '写入待确认',
+  append_stats_last_status: '写入汇总',
+  last_recovery_rto_ms: '恢复耗时',
+  last_recovery_status: '恢复状态',
+  last_recovery_at: '恢复时间',
+  checkpoint_topic: '检查点 Topic',
+  checkpoint_partition: '检查点分区',
+  checkpoint_next_offset: '下一位点',
+  delivery_state: '推送状态',
+  delivery_message_id: '推送消息',
+  event_key: '事件键',
+  seq: '更新序号',
+  attempts: '重试次数',
+  max_attempts: '最多重试',
+  redelivery_count: '重投次数',
+  ack_pending_count: '待确认回执',
+  oldest_retry_age_ms: '最久重试等待',
+  slow_pending_bytes: '慢队列积压',
+  max_queue_bytes: '队列上限',
+  error_class: '错误类型',
+  reconnect_count_recent: '近期重连',
+  history_recovered: '历史补齐',
+  snapshot_recovered: '快照恢复',
+  snapshot_from_db: '数据库快照',
+  snapshot_stale: '快照过期',
+  slow_consumer_disconnects: '慢连接断开',
+  outbox_id: '推送编号',
+  shard_id: '分片',
+  request_id: '请求编号',
+  job_id: '任务编号',
+  target_id: '目标编号',
+  aggregate_id: '聚合编号',
+  signal_type: '控制类型',
+  created_at: '创建时间',
+  updated_at: '更新时间',
+  time: '发生时间'
+};
+
+const monitorStatusLabels: Record<string, string> = {
+  ACTIVE: '开拍中',
+  CANCELLED: '已取消',
+  DRAFT: '待完善',
+  SCHEDULED: '已排期',
+  SOLD: '已成交',
+  ENDED: '已结束',
+  PENDING: '待处理',
+  PUBLISHED: '已推送',
+  COMPLETED: '已完成',
+  FAILED: '失败',
+  REJECTED: '已拒绝',
+  ACKED: '已确认',
+  UNKNOWN: '待确认',
+  PAUSED: '已暂停',
+  RUNNING: '运行中',
+  SUCCESS: '成功'
+};
+
+const monitorReasonLabels: Record<string, string> = {
+  BID_TOO_LOW: '低于当前可出价',
+  BID_AUCTION_TOO_HOT: '出价过于密集',
+  RATE_LIMITED: '操作过于频繁',
+  ENGINE_PAUSED: '引擎暂停',
+  RECONCILING: '对账恢复中',
+  AUTH_SESSION_EXPIRED: '登录已过期',
+  ACL_FORBIDDEN: '无操作权限',
+  RATE_LIMIT_REDIS_DOWN: '限流服务异常',
+  PAYMENT_WEBHOOK_INVALID_SIGNATURE: '支付回调校验失败',
+  PAYMENT_RECONCILE_MISMATCH: '支付对账不一致'
+};
+
+function monitorFieldLabel(key: string) {
+  return monitorFieldLabels[key] ?? key.replace(/_/g, ' ');
+}
+
+function monitorStatusCopy(value?: string) {
+  if (!value) return '-';
+  return monitorStatusLabels[value.toUpperCase()] ?? monitorReasonLabels[value.toUpperCase()] ?? value;
+}
+
+function formatMonitorTime(value: unknown) {
+  const timestamp = Date.parse(String(value ?? ''));
+  if (!Number.isFinite(timestamp)) return String(value ?? '-');
+  return new Date(timestamp).toLocaleString('zh-CN', { hour12: false });
+}
+
+function isStressDiagnosticRow(row: Record<string, unknown>) {
+  const roomID = String(row.room_id ?? '');
+  if (roomID && roomID !== 'room_main' && roomID !== 'room_side') return true;
+  return ['auction_id', 'room_id', 'aggregate_id', 'target_id', 'item_id', 'item_title'].some((key) => {
+    const value = String(row[key] ?? '');
+    return /(^|[_-])(test|engine|demo)([_-]|$)/i.test(value) || /Engine Item|Smoke Item|Monitor Item|Admission Item|ACL Item/i.test(value);
+  });
+}
+
+function formatMonitorValue(key: string, value: unknown) {
+  if (value == null || value === '') return '-';
+  if (key === 'room_id') return roomDisplayName(String(value));
+  if (key === 'current_winner_id' || key === 'user_id') return maskUser(String(value));
+  if (key === 'status') return monitorStatusCopy(String(value));
+  if (key === 'reject_reason' || key === 'code' || key === 'error_class' || key.endsWith('_status')) {
+    return monitorStatusCopy(String(value));
+  }
+  if (key.endsWith('_cents')) return formatCents(Number(value));
+  if (key.endsWith('_ms')) return formatLag(Number(value));
+  if (key.endsWith('_at') || key === 'time' || key === 'created_at' || key === 'updated_at') return formatMonitorTime(value);
+  if (typeof value === 'boolean') return value ? '是' : '否';
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+function formatMonitorSourceValue(sourceKey: string, value: unknown) {
+  if (sourceKey === 'auction_id') return '事件回放';
+  return formatMonitorValue(sourceKey, value);
+}
+
 function promptMetricCopy(label?: string, value?: number) {
   if (!label) return '';
   if (label === 'seconds_since_last_bid') {
@@ -1555,8 +1705,17 @@ export function MonitorTable({ payload, empty, icon, sourceKey, onOpenFlightReco
   sourceKey: string;
   onOpenFlightRecorder: (auctionID: string) => void;
 }) {
-  const rows = payload?.items ?? [];
-  if (rows.length === 0) return <div className="empty-state">{icon}{empty}</div>;
+  const rawRows = payload?.items ?? [];
+  const rows = rawRows.filter((row) => !isStressDiagnosticRow(row));
+  const hiddenStressRows = rawRows.length - rows.length;
+  if (rows.length === 0) {
+    return (
+      <div className="empty-state">
+        {icon}{empty}
+        {hiddenStressRows > 0 && <span>已隐藏 {hiddenStressRows} 条压测/历史诊断记录</span>}
+      </div>
+    );
+  }
   const priorityKeys = [
     sourceKey,
     'engine_mode',
@@ -1601,37 +1760,41 @@ export function MonitorTable({ payload, empty, icon, sourceKey, onOpenFlightReco
     ...Object.keys(rows[0])
   ])).slice(0, 14);
   return (
-    <Table
-      rowKey={(record) => String(record.id ?? record.auction_id ?? record.outbox_id ?? record.job_id ?? record.room_id)}
-      data={rows}
-      pagination={false}
-      columns={[
-        {
-          title: 'source',
-          dataIndex: sourceKey,
-          render: (value, record) => {
-            const auctionID = rowAuctionID(record);
-            const sourceURL = rowSourceURL(sourceKey, record);
-            return auctionID ? (
-              <button type="button" className="source-link source-button" onClick={() => onOpenFlightRecorder(auctionID)}>
-                <Tag color="arcoblue">{String(value ?? '-')}</Tag>
-                <ExternalLink size={13} />
-              </button>
-            ) : sourceURL ? (
-              <a className="source-link" href={sourceURL} target="_blank" rel="noreferrer">
-                <Tag color="arcoblue">{String(value ?? '-')}</Tag>
-                <ExternalLink size={13} />
-              </a>
-            ) : <Tag color="arcoblue">{String(value ?? '-')}</Tag>;
-          }
-        },
-        ...keys.filter((key) => key !== sourceKey).map((key) => ({
-          title: key,
-          dataIndex: key,
-          render: (value: unknown) => String(value ?? '-')
-        }))
-      ]}
-    />
+    <div className="monitor-table-wrap">
+      {hiddenStressRows > 0 && <div className="monitor-hidden-note">已隐藏 {hiddenStressRows} 条压测/历史诊断记录，原始数据仍保留在后端用于排查。</div>}
+      <Table
+        rowKey={(record) => String(record.id ?? record.auction_id ?? record.outbox_id ?? record.job_id ?? record.room_id)}
+        data={rows}
+        pagination={false}
+        columns={[
+          {
+            title: '排查入口',
+            dataIndex: sourceKey,
+            render: (value, record) => {
+              const auctionID = rowAuctionID(record);
+              const sourceURL = rowSourceURL(sourceKey, record);
+              const displayValue = formatMonitorSourceValue(sourceKey, value);
+              return auctionID ? (
+                <button type="button" className="source-link source-button" onClick={() => onOpenFlightRecorder(auctionID)}>
+                  <Tag color="arcoblue">{displayValue}</Tag>
+                  <ExternalLink size={13} />
+                </button>
+              ) : sourceURL ? (
+                <a className="source-link" href={sourceURL} target="_blank" rel="noreferrer">
+                  <Tag color="arcoblue">{displayValue}</Tag>
+                  <ExternalLink size={13} />
+                </a>
+              ) : <Tag color="arcoblue">{displayValue}</Tag>;
+            }
+          },
+          ...keys.filter((key) => key !== sourceKey).map((key) => ({
+            title: monitorFieldLabel(key),
+            dataIndex: key,
+            render: (value: unknown) => formatMonitorValue(key, value)
+          }))
+        ]}
+      />
+    </div>
   );
 }
 

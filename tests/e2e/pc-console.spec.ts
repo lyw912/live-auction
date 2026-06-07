@@ -367,13 +367,13 @@ test('PC console renders live API auctions, orders, and expanded diagnostic pane
 
   await page.getByRole('button', { name: '诊断', exact: true }).click();
   await page.getByRole('tab', { name: '无效出价' }).click();
-  await expect(page.getByText('BID_TOO_LOW')).toBeVisible();
+  await expect(page.getByText('低于当前可出价')).toBeVisible();
   await expect(page.getByText('tr_reject')).toBeVisible();
   await expect(page.getByLabel('无效出价').getByRole('button', { name: /tr_reject/ })).toBeVisible();
 
   await page.getByRole('tab', { name: '恢复记录' }).click();
-  await expect(page.getByLabel('恢复记录').getByText('room_main')).toBeVisible();
-  await expect(page.getByText('snapshot_from_db')).toBeVisible();
+  await expect(page.getByLabel('恢复记录').getByText('主直播间')).toBeVisible();
+  await expect(page.getByText('数据库快照')).toBeVisible();
 });
 
 test('PC accessibility gate exposes live diagnostic state and named controls', async ({ page }) => {

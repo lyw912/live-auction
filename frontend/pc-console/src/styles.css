@@ -1653,6 +1653,20 @@ body {
   border: 0;
 }
 
+.monitor-table-wrap {
+  display: grid;
+  gap: 10px;
+}
+
+.monitor-hidden-note {
+  padding: 8px 10px;
+  border: 1px solid #f1dfb7;
+  border-radius: var(--radius-sm);
+  background: #fff8e8;
+  color: #72510d;
+  font-size: 12px;
+}
+
 .monitor-filter {
   display: grid;
   grid-template-columns: minmax(180px, .9fr) repeat(3, minmax(0, 1fr));

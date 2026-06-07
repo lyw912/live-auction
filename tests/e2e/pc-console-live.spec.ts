@@ -41,7 +41,11 @@ test('PC console covers live backend host workflow and diagnostics', async ({ pa
 
   await page.getByRole('button', { name: '诊断', exact: true }).click();
   await page.getByRole('tab', { name: '竞拍状态' }).click();
-  await expect(page.getByLabel('竞拍状态').getByRole('row', { name: new RegExp(`ACTIVE room_side 冰种翡翠戒面 ${suffix}`) })).toBeVisible();
+  const auctionStatusPane = page.getByLabel('竞拍状态');
+  await expect(auctionStatusPane.getByRole('row', { name: new RegExp(`开拍中.*副直播间.*冰种翡翠戒面 ${suffix}`) })).toBeVisible();
+  await expect(auctionStatusPane).not.toContainText('ACTIVE');
+  await expect(auctionStatusPane).not.toContainText('Engine Item');
+  await expect(auctionStatusPane).not.toContainText('auc_engine');
   await page.getByRole('tab', { name: '推送队列' }).click();
   await expect(page.getByLabel('推送队列').getByText(/outbox:\d+/).first()).toBeVisible();
 
