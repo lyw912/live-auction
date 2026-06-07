@@ -61,6 +61,7 @@ function App() {
   const [terminalPriceCents, setTerminalPriceCents] = useState(0);
   const [terminalWinnerID, setTerminalWinnerID] = useState('');
   const [terminalWinnerMasked, setTerminalWinnerMasked] = useState('');
+  const [terminalSeq, setTerminalSeq] = useState(0);
   const [auctionEndAt, setAuctionEndAt] = useState('');
   const [serverTimeMS, setServerTimeMS] = useState(0);
   const [nowMS, setNowMS] = useState(Date.now());
@@ -1081,6 +1082,7 @@ function App() {
       setTerminalPriceCents(price);
       setTerminalWinnerID(winnerID);
       setTerminalWinnerMasked(detail.payload?.leader_user_masked ?? leaderMaskedRef.current);
+      setTerminalSeq(detail.seq ?? lastSeqRef.current);
       if (detail.payload?.order_id && winnerID === currentUserID) {
         setPayableOrderID(detail.payload.order_id);
         setPayableOrderAmountCents(price);
@@ -1903,6 +1905,7 @@ function App() {
           orderID={payableOrderID}
           paymentPhase={paymentPhase}
           resultSheetKind={resultSheetKind}
+          settlementSeq={terminalSeq || lastSeq}
           terminalPriceCents={terminalPriceCents || currentPriceCents}
           terminalWinnerID={terminalWinnerID}
           terminalWinnerMasked={terminalWinnerMasked}
@@ -1930,9 +1933,11 @@ function App() {
           orderID={payableOrderID}
           paymentPhase={paymentPhase}
           scenario={scenario}
+          settlementSeq={terminalSeq || lastSeq}
           terminalPriceCents={terminalPriceCents || currentPriceCents}
           terminalWinnerID={terminalWinnerID}
           terminalWinnerMasked={terminalWinnerMasked}
+          leaderboard={leaderboard}
           userBestCents={leaderboard?.my_best_amount_cents ?? 0}
           onOpenOrders={() => setActiveSheet(resultSheetKind === 'winner' ? 'orders' : 'history')}
           onPay={payOrder}

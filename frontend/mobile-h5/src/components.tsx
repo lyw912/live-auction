@@ -803,6 +803,7 @@ export function AuctionStatePanel({
   riskCode,
   resultSheetKind,
   scenario,
+  settlementSeq,
   terminalPriceCents,
   terminalWinnerID,
   terminalWinnerMasked,
@@ -832,6 +833,7 @@ export function AuctionStatePanel({
   riskCode: string;
   resultSheetKind: ResultSheetKind | null;
   scenario: Scenario;
+  settlementSeq?: number;
   terminalPriceCents: number;
   terminalWinnerID: string;
   terminalWinnerMasked: string;
@@ -991,9 +993,11 @@ export function AuctionStatePanel({
         nextAuction={nextAuction}
         paymentPhase={paymentPhase}
         scenario={scenario}
+        settlementSeq={settlementSeq}
         terminalPriceCents={terminalPriceCents || currentPriceCents}
         terminalWinnerID={terminalWinnerID}
         terminalWinnerMasked={terminalWinnerMasked}
+        leaderboard={leaderboard}
         userBestCents={leaderboard?.my_best_amount_cents ?? 0}
         orderID={orderID}
         orderAmountCents={orderAmountCents}

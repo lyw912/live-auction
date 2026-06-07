@@ -786,6 +786,7 @@ export function buildResultRecap(input: {
   terminalWinnerMasked?: string;
   heat: HeatSnapshot;
   extendCount?: number;
+  sourceFacts?: string[];
   nextTitle?: string;
 }): ResultRecap {
   const price = formatCents(input.terminalPriceCents);
@@ -799,7 +800,8 @@ export function buildResultRecap(input: {
     input.heat.acceptedBidderCount > 0 ? `${input.heat.acceptedBidderCount} 人有效出价` : '',
     input.heat.totalAcceptedBids != null ? `${input.heat.totalAcceptedBids} 次出价` : '',
     input.extendCount && input.extendCount > 0 ? `末段延时 ${input.extendCount} 次` : '',
-    input.heat.priceVelocityCentsPerMin > 0 ? `${formatCents(input.heat.priceVelocityCentsPerMin)}/分` : ''
+    input.heat.priceVelocityCentsPerMin > 0 ? `${formatCents(input.heat.priceVelocityCentsPerMin)}/分` : '',
+    ...(input.sourceFacts ?? [])
   ].filter(Boolean);
   const nextAction = input.kind === 'winner'
     ? '完成订单支付'

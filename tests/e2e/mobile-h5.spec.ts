@@ -1250,6 +1250,10 @@ test('H5 winner result sheet locks order and shares the single payment path', as
   await expect(sheet.getByTestId('result-climax-card')).toContainText('¥600.00');
   await expect(sheet.getByTestId('result-climax-card')).toContainText('2 人有效出价');
   await expect(sheet.getByTestId('result-climax-card')).toContainText('3 次真实出价');
+  await expect(sheet.getByTestId('result-fact-chips')).toContainText('击败 1 位有效出价者');
+  await expect(sheet.getByTestId('result-fact-chips')).toContainText('成交回链 seq 42');
+  await expect(sheet.getByTestId('result-fact-chips')).toContainText(/订单回链 JP\d{8}-PENDING/);
+  await expect(sheet.getByTestId('result-fact-chips')).toContainText('榜单锁定 Top 2');
   await expect(sheet.getByTestId('result-climax-card')).toContainText('先确认成交事实再进入支付');
   await expect(page.getByTestId('rank-strip')).toContainText('已中拍 · 订单待支付');
   await expect(page.getByTestId('rank-strip')).toContainText('确认成交事实再支付');
@@ -1259,6 +1263,8 @@ test('H5 winner result sheet locks order and shares the single payment path', as
   await expect(page.getByTestId('bid-cta')).toHaveCount(1);
   await sheet.getByLabel('copy-result-recap').click();
   await expect(sheet.getByText('已复制')).toBeVisible();
+  await expect(sheet.getByTestId('h5-result-recap-card')).toContainText('成交回链 seq 42');
+  await expect(sheet.getByTestId('h5-result-recap-card')).toContainText(/订单回链 JP\d{8}-PENDING/);
   const downloadPromise = page.waitForEvent('download');
   await sheet.getByLabel('download-highlight-card').click();
   const highlight = await downloadPromise;

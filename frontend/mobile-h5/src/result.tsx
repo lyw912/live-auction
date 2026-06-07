@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { AlertTriangle, Clock3, Copy, Download, Trophy } from 'lucide-react';
-import type { AuctionItem, AuctionSummary, BottomSheetKey, HeatSnapshot, PaymentPhase, ResultRecap, ResultSheetKind, Scenario } from './domain';
+import type { AuctionItem, AuctionSummary, BottomSheetKey, HeatSnapshot, LeaderboardPayload, PaymentPhase, ResultRecap, ResultSheetKind, Scenario } from './domain';
 import { auctionStatusLabel, buildHighlightCard, buildResultRecap, formatCents } from './domain';
 
 function displayOrderNo(orderID: string) {
@@ -174,9 +174,11 @@ export function ResultSheet({
   orderID,
   paymentPhase,
   scenario,
+  settlementSeq,
   terminalPriceCents,
   terminalWinnerID,
   terminalWinnerMasked,
+  leaderboard,
   userBestCents,
   onOpenOrders,
   onPay
@@ -191,9 +193,11 @@ export function ResultSheet({
   orderID: string;
   paymentPhase: PaymentPhase;
   scenario: Scenario;
+  settlementSeq?: number;
   terminalPriceCents: number;
   terminalWinnerID: string;
   terminalWinnerMasked: string;
+  leaderboard?: LeaderboardPayload | null;
   userBestCents: number;
   onOpenOrders: () => void;
   onPay: () => void;
@@ -224,6 +228,14 @@ export function ResultSheet({
     totalAcceptedBids: 0,
     source: 'fallback'
   };
+  const defeatedBidders = kind === 'winner' ? Math.max(0, recapHeat.acceptedBidderCount - 1) : 0;
+  const knownLeaderboardEntries = Math.max(0, leaderboard?.entries?.length ?? 0);
+  const sourceFacts = [
+    defeatedBidders > 0 ? `击败 ${defeatedBidders} 位有效出价者` : '',
+    settlementSeq && settlementSeq > 0 ? `成交回链 seq ${settlementSeq}` : '',
+    orderID ? `订单回链 ${displayOrderNo(orderID)}` : '',
+    knownLeaderboardEntries > 0 ? `榜单锁定 Top ${knownLeaderboardEntries}` : ''
+  ].filter(Boolean);
   const recap: ResultRecap = buildResultRecap({
     itemTitle: item.title ?? scenario.title,
     kind,
@@ -231,6 +243,7 @@ export function ResultSheet({
     terminalWinnerID,
     terminalWinnerMasked: winnerDisplayName,
     heat: recapHeat,
+    sourceFacts,
     nextTitle: nextAuction?.item?.title
   });
   const copyRecap = async () => {
@@ -332,6 +345,11 @@ export function ResultSheet({
           <span>落槌高光</span>
           <strong>{soldPrice}</strong>
           <p>{Math.max(0, recapHeat.acceptedBidderCount)} 人有效出价 · {Math.max(0, recapHeat.totalAcceptedBids ?? recapHeat.acceptedBids30s)} 次真实出价</p>
+          {sourceFacts.length ? (
+            <div className="result-fact-chips" data-testid="result-fact-chips">
+              {sourceFacts.map((fact) => <small key={fact}>{fact}</small>)}
+            </div>
+          ) : null}
           <em>战绩卡已生成，先确认成交事实再进入支付</em>
         </div>
       ) : null}

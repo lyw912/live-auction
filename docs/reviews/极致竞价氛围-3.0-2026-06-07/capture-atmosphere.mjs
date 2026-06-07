@@ -224,10 +224,27 @@ async function capture(width, file, options = {}) {
       await browser.close();
       return;
     }
-    await page.getByRole('navigation', { name: 'state-matrix' }).getByRole('button', { name: '成交', exact: true }).click();
+    await page.evaluate(() => {
+      window.dispatchEvent(new CustomEvent('auction:event', {
+        detail: {
+          auction_id: 'auc_live',
+          event_type: 'auction_sold',
+          seq: 42,
+          payload: {
+            current_price_cents: 60000,
+            current_winner_id: 'user_1',
+            leader_user_masked: '我',
+            order_id: 'ord_pending',
+            end_at: '2099-05-22T14:00:00.000Z',
+            server_time_ms: Date.parse('2099-05-22T13:59:59.000Z')
+          }
+        }
+      }));
+    });
     await expect(page.getByTestId('result-climax-card')).toContainText('落槌高光');
     await expect(page.getByTestId('result-climax-card')).toContainText('2 人有效出价');
     await expect(page.getByTestId('result-climax-card')).toContainText('3 次真实出价');
+    await expect(page.getByTestId('result-fact-chips')).toContainText('成交回链 seq 42');
     await page.screenshot({ path: path.join(OUT, file), fullPage: false });
     await browser.close();
     return;
