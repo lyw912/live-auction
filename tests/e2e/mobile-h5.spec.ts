@@ -2324,7 +2324,47 @@ test('H5 extension and sold visual effects use bounded nonblocking motion layers
 
   await expect(page.getByTestId('live-stage')).toHaveAttribute('data-atmosphere-kind', 'sold');
   await expect(page.getByTestId('atmosphere-cue')).toHaveAttribute('data-event-type', 'auction_sold');
+  await expect(page.getByTestId('climax-layer')).toBeVisible();
+  await expect(page.getByTestId('climax-layer')).toHaveAttribute('data-motion', 'on');
+  await expect(page.getByTestId('climax-confetti-canvas')).toBeVisible();
+  await expect(page.getByTestId('climax-stage-card')).toContainText('本场落槌');
+  await expect(page.getByTestId('climax-stage-card')).toContainText('¥600.00');
+  await expect(page.getByTestId('climax-stage-card')).toContainText('2 人有效出价');
+  await expect(page.getByTestId('climax-stage-card')).toContainText('3 次真实出价');
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
+});
+
+test('H5 sold climax keeps facts but disables motion under reduced-motion', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/?stateMatrix=1');
+  await selectActiveBidsState(page);
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('auction:event', {
+      detail: {
+        auction_id: 'auc_live',
+        event_type: 'auction_sold',
+        seq: 42,
+        payload: {
+          current_price_cents: 60000,
+          current_winner_id: 'user_1',
+          leader_user_masked: '我',
+          order_id: 'ord_pending',
+          end_at: '2099-05-22T14:00:00Z',
+          server_time_ms: Date.parse('2099-05-22T13:59:52Z')
+        }
+      }
+    }));
+  });
+
+  await expect(page.getByTestId('live-stage')).toHaveAttribute('data-atmosphere-gated', 'true');
+  await expect(page.getByTestId('climax-layer')).toBeVisible();
+  await expect(page.getByTestId('climax-layer')).toHaveAttribute('data-motion', 'off');
+  await expect(page.getByTestId('climax-confetti-canvas')).toHaveCount(0);
+  await expect(page.getByTestId('climax-stage-card')).toContainText('落槌高光');
+  await expect(page.getByTestId('climax-stage-card')).toContainText('中拍！');
+  await expect(page.getByTestId('climax-stage-card')).toContainText('¥600.00');
+  await expect(page.getByTestId('climax-stage-card')).toContainText('2 人有效出价');
+  await expect(page.getByTestId('result-climax-card')).toContainText('先确认成交事实再进入支付');
 });
 
 test('H5 countdown shows stable tenths and authoritative extension explanation', async ({ page }) => {

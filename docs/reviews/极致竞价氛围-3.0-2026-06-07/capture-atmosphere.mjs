@@ -166,10 +166,10 @@ async function capture(width, file, options = {}) {
   });
   const page = await context.newPage();
   await installRoutes(page, options);
-  await page.goto(options.winner ? `${H5_URL}?stateMatrix=1` : H5_URL);
+  await page.goto((options.winner || options.climax) ? `${H5_URL}?stateMatrix=1` : H5_URL);
   await expect(page.getByTestId('race-board')).toBeVisible();
   await expect.poll(async () => page.evaluate(() => Boolean(window.__auctionWS?.some(({ url }) => url.includes('/ws?'))))).toBe(true);
-  if (options.winner) {
+  if (options.winner || options.climax) {
     await page.getByRole('button', { name: '竞价中' }).click();
     await expect(page.getByLabel('auction-state')).toBeVisible();
     await expect.poll(async () => page.evaluate(() => Boolean(window.__auctionWS?.some(({ url }) => url.includes('/ws?'))))).toBe(true);
@@ -195,6 +195,33 @@ async function capture(width, file, options = {}) {
     });
     await expect(page.getByTestId('race-board')).toContainText('我 ¥600.00');
     await expect(page.getByTestId('heat-meter')).toContainText('近30秒 2 人 · 3 次出价');
+    if (options.climax) {
+      await page.evaluate(() => {
+        window.dispatchEvent(new CustomEvent('auction:event', {
+          detail: {
+            auction_id: 'auc_live',
+            event_type: 'auction_sold',
+            seq: 42,
+            payload: {
+              current_price_cents: 60000,
+              current_winner_id: 'user_1',
+              leader_user_masked: '我',
+              order_id: 'ord_pending',
+              end_at: '2099-05-22T14:00:00.000Z',
+              server_time_ms: Date.parse('2099-05-22T13:59:59.000Z')
+            }
+          }
+        }));
+      });
+      await expect(page.getByTestId('climax-layer')).toBeVisible();
+      await expect(page.getByTestId('climax-layer')).toHaveAttribute('data-motion', 'on');
+      await expect(page.getByTestId('climax-stage-card')).toContainText('落槌高光');
+      await expect(page.getByTestId('climax-stage-card')).toContainText('2 人有效出价');
+      await expect(page.getByTestId('climax-stage-card')).toContainText('3 次真实出价');
+      await page.getByTestId('live-stage').screenshot({ path: path.join(OUT, file) });
+      await browser.close();
+      return;
+    }
     await page.getByRole('navigation', { name: 'state-matrix' }).getByRole('button', { name: '成交', exact: true }).click();
     await expect(page.getByTestId('result-climax-card')).toContainText('落槌高光');
     await expect(page.getByTestId('result-climax-card')).toContainText('2 人有效出价');
@@ -283,4 +310,5 @@ await capture(360, '09-race-board-waterfall-ai-360.png');
 await capture(360, '10-final-seconds-layer-360.png', { finalSeconds: true });
 await capture(390, '11-winner-climax-card-390.png', { winner: true });
 await capture(360, '12-soft-close-plus20-360.png', { softClose: true });
+await capture(390, '13-climax-layer-390.png', { climax: true });
 console.log(JSON.stringify({ ok: true, out: OUT }, null, 2));

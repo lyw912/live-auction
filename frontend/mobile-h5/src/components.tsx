@@ -54,6 +54,7 @@ export function LiveStage({
   soundEnabled,
   soundCapability,
   systemMessages,
+  terminalPriceCents,
   waterfallChips,
   raceBoardExpanded,
   atmosphereIntensity,
@@ -87,6 +88,7 @@ export function LiveStage({
   soundEnabled: boolean;
   soundCapability: SoundCapability;
   systemMessages: SystemMessage[];
+  terminalPriceCents: number;
   waterfallChips: WaterfallChip[];
   raceBoardExpanded: boolean;
   atmosphereIntensity: AtmosphereIntensity;
@@ -180,6 +182,13 @@ export function LiveStage({
         </div>
       )}
       <BidWaterfall chips={atmosphereGated ? [] : waterfallChips} intensity={atmosphereIntensity} />
+      <ClimaxLayer
+        atmosphereCue={atmosphereCue}
+        heat={heat}
+        scenario={scenario}
+        terminalPriceCents={terminalPriceCents || currentPriceCents}
+        motionEnabled={!atmosphereGated}
+      />
       <BarrageLayer messages={barrageMessages} />
       <div className="video-topbar">
         <div className="host-profile">
@@ -255,6 +264,110 @@ export function LiveStage({
         <button type="button" onClick={onOpenLiveOps} aria-label="直播互动"><CommentIcon className="action-rail-icon" size={26} theme="outline" fill={iconParkActionFill} strokeWidth={4} /></button>
         <button type="button" onClick={onLike} aria-label="点赞"><LikeIcon className="action-rail-icon" size={26} theme="outline" fill={iconParkActionFill} strokeWidth={4} /><span className="live-action-badge">{likeCount}</span></button>
         <button type="button" onClick={onOpenMore} aria-label="更多"><MoreIcon className="action-rail-icon" size={26} theme="outline" fill={iconParkActionFill} strokeWidth={4} /></button>
+      </div>
+    </section>
+  );
+}
+
+function ClimaxLayer({
+  atmosphereCue,
+  heat,
+  motionEnabled,
+  scenario,
+  terminalPriceCents
+}: {
+  atmosphereCue: AtmosphereCue | null;
+  heat: HeatSnapshot;
+  motionEnabled: boolean;
+  scenario: Scenario;
+  terminalPriceCents: number;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const active = scenario.sold && atmosphereCue?.kind === 'sold';
+  const isWinner = active && atmosphereCue?.user_scope === 'self';
+  const bidderCopy = heat.acceptedBidderCount > 0 ? `${heat.acceptedBidderCount} 人有效出价` : '真实竞拍记录已锁定';
+  const totalBidCopy = heat.totalAcceptedBids != null && heat.totalAcceptedBids > 0
+    ? `${heat.totalAcceptedBids} 次真实出价`
+    : heat.acceptedBids30s > 0
+      ? `近30秒 ${heat.acceptedBids30s} 次有效出价`
+      : '成交事实以服务端为准';
+
+  useEffect(() => {
+    if (!active || !motionEnabled) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    if (reduceMotion) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const startedAt = performance.now();
+    const colors = ['#ffd166', '#ff5a6a', '#2a9d8f', '#5b8cff', '#ff8a3d'];
+    const particles = Array.from({ length: 96 }, (_, index) => {
+      const spread = (index % 24) / 23 - 0.5;
+      const burst = Math.floor(index / 24);
+      return {
+        x: 0.5 + spread * 0.72,
+        y: 0.18 + burst * 0.025,
+        vx: spread * (0.8 + burst * 0.18),
+        vy: 0.54 + Math.random() * 0.36 + burst * 0.08,
+        size: 5 + Math.random() * 7,
+        rotation: Math.random() * Math.PI,
+        spin: (Math.random() - 0.5) * 9,
+        color: colors[index % colors.length]
+      };
+    });
+    let frame = 0;
+    const draw = (time: number) => {
+      const rect = canvas.getBoundingClientRect();
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const width = Math.max(1, Math.round(rect.width * dpr));
+      const height = Math.max(1, Math.round(rect.height * dpr));
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+      const elapsed = time - startedAt;
+      const progress = Math.min(1, elapsed / 2500);
+      ctx.clearRect(0, 0, width, height);
+      particles.forEach((particle) => {
+        const delay = (particle.size % 5) * 38;
+        const local = Math.max(0, elapsed - delay) / 2500;
+        if (local <= 0 || local > 1) return;
+        const fall = local * local;
+        const x = (particle.x + particle.vx * local * 0.34) * width;
+        const y = (particle.y + particle.vy * fall) * height;
+        const alpha = local < 0.14 ? local / 0.14 : Math.max(0, 1 - (local - 0.72) / 0.28);
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.translate(x, y);
+        ctx.rotate(particle.rotation + particle.spin * local);
+        ctx.fillStyle = particle.color;
+        ctx.fillRect(-particle.size * dpr / 2, -particle.size * dpr / 2, particle.size * dpr, particle.size * dpr * 0.62);
+        ctx.restore();
+      });
+      if (progress < 1) frame = window.requestAnimationFrame(draw);
+    };
+    frame = window.requestAnimationFrame(draw);
+    return () => window.cancelAnimationFrame(frame);
+  }, [active, motionEnabled, atmosphereCue?.id]);
+
+  if (!active) return null;
+  return (
+    <section
+      className={`climax-layer ${isWinner ? 'is-winner' : 'is-loser'} ${motionEnabled ? 'motion-on' : 'motion-off'}`}
+      data-testid="climax-layer"
+      data-motion={motionEnabled ? 'on' : 'off'}
+      aria-live="assertive"
+      aria-label="落槌高潮"
+    >
+      {motionEnabled ? <canvas ref={canvasRef} className="climax-confetti-canvas" data-testid="climax-confetti-canvas" aria-hidden="true" /> : null}
+      <div className="climax-spotlight" aria-hidden="true" />
+      <div className="climax-card" data-testid="climax-stage-card">
+        <span>{isWinner ? '落槌高光' : '本场落槌'}</span>
+        <strong>{isWinner ? '中拍！' : '已成交'}</strong>
+        <em>{formatCents(terminalPriceCents)}</em>
+        <p>{bidderCopy} · {totalBidCopy}</p>
+        <small>{isWinner ? '战绩卡先确认成交事实，再进入支付' : '成交事实已锁定，查看记录继续下一件'}</small>
       </div>
     </section>
   );

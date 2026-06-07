@@ -50,6 +50,7 @@ function App() {
   const [waterfallChips, setWaterfallChips] = useState<WaterfallChip[]>([]);
   const [raceBoardExpandedUntil, setRaceBoardExpandedUntil] = useState(0);
   const [atmosphereCue, setAtmosphereCue] = useState<AtmosphereCue | null>(null);
+  const [reducedMotion, setReducedMotion] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(false);
   const [soundCapability, setSoundCapability] = useState<SoundCapability>('ready');
   const [connectionPhase, setConnectionPhase] = useState<ConnectionPhase>('connecting');
@@ -384,6 +385,15 @@ function App() {
   };
 
   useEffect(() => {
+    const query = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+    if (!query) return;
+    const sync = () => setReducedMotion(query.matches);
+    sync();
+    query.addEventListener?.('change', sync);
+    return () => query.removeEventListener?.('change', sync);
+  }, []);
+
+  useEffect(() => {
     return () => {
       stopHeartbeat();
       heartbeatRef.current = null;
@@ -395,7 +405,7 @@ function App() {
 
   useEffect(() => {
     if (!atmosphereCue) return;
-    const timer = window.setTimeout(() => setAtmosphereCue(null), 1800);
+    const timer = window.setTimeout(() => setAtmosphereCue(null), atmosphereCue.kind === 'sold' ? 2700 : 1800);
     return () => {
       window.clearTimeout(timer);
       if (activeCueRef.current?.id === atmosphereCue.id) activeCueRef.current = null;
@@ -776,10 +786,10 @@ function App() {
     recovering: recoveryPhase !== 'idle' || connectionPhase === 'recovering',
     stale: scenario.stale || countdownPhase.phase === 'stale' || selected === 'recovering',
     disconnected: connectionPhase === 'disconnected' || selected === 'disconnected',
-    reducedMotion: false,
+    reducedMotion,
     lowPower: false,
     aiOff: false
-  }), [connectionPhase, countdownPhase.phase, recoveryPhase, scenario.stale, selected]);
+  }), [connectionPhase, countdownPhase.phase, recoveryPhase, reducedMotion, scenario.stale, selected]);
   const resultSheetKind: ResultSheetKind | null = selected === 'sold_winner'
     ? 'winner'
     : selected === 'sold_loser'
@@ -1856,6 +1866,7 @@ function App() {
         soundEnabled={soundEnabled}
         soundCapability={soundCapability}
         systemMessages={systemMessages}
+        terminalPriceCents={terminalPriceCents || currentPriceCents}
         waterfallChips={waterfallChips}
         raceBoardExpanded={raceBoardExpanded}
         atmosphereIntensity={atmosphereIntensity}
