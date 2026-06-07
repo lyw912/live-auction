@@ -276,8 +276,9 @@ function FinalSecondsLayer({
   const seconds = countdownPhase.remainingMS != null && countdownPhase.remainingMS > 0
     ? Math.max(1, Math.ceil(countdownPhase.remainingMS / 1000))
     : null;
+  const extendedCopy = atmosphereCue?.detail.match(/延时\s*\+\d+s/)?.[0] ?? '延时';
   const title = isExtended
-    ? '延时 +10s'
+    ? extendedCopy
     : countdownPhase.phase === 'hammer'
       ? countdownPhase.beat || '落槌窗口'
       : '最后 5 秒';

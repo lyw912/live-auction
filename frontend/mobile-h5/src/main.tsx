@@ -6,7 +6,7 @@ import type { AtmosphereCue, AtmosphereInput } from './atmosphere';
 import { AuctionStatePanel, BottomSheet, ChatComposer, ChatPanel, LeaderboardPanel, LiveStage, StateMatrixTabs, type WaterfallChip } from './components';
 import { ResultSheet } from './result';
 import type { AuctionItem, AuctionOverlayMode, AuctionRealtimeEvent, AuctionState, AuctionSummary, AuctionSoundPack, AuthUser, BidderRequirement, BidPhase, BidResponse, BottomSheetKey, ChatMessage, ConnectionPhase, HistoryRow, LeaderboardPayload, LiveOpsCampaign, MaxBidIntent, MaxBidPhase, OrderRow, PaymentPhase, PendingBidRequest, ProductQAAnswer, ProductQATurn, RecoveryPhase, ResultSheetKind, Scenario, SnapshotResponse, SoundCapability, SystemMessage, WSTicketResponse } from './domain';
-import { createAudioContext, createClientBidID, demoProductImageURL, demoUserID, deriveCountdown, deriveCountdownPhase, ensureDemoSession, extensionCopyFromEvent, formatCents, heatSnapshot, isBidConfirmationPending, isCountdownExpired, isDangerousActionDisabled, isEngineRejected, isTestMatrixEnabled, loadAuctionSoundPack, maxBidErrorCopy, maxBidStatusCopy, playAuctionSound, playCountdownTone, playCueTone, playLayeredCue, readJSON, rejectCopy, responseServerTimeMS, retryAfterMS, retryAfterMSFromHeaders, roomIDFromPath, scenarios, selectEntryAuction, speakSystemMessage, vibrateCountdownPhase, vibratePattern, visibleRoomAuctions } from './domain';
+import { createAudioContext, createClientBidID, demoProductImageURL, demoUserID, deriveCountdown, deriveCountdownPhase, ensureDemoSession, extendSecondsFromEvent, extensionCopyFromEvent, formatCents, heatSnapshot, isBidConfirmationPending, isCountdownExpired, isDangerousActionDisabled, isEngineRejected, isTestMatrixEnabled, loadAuctionSoundPack, maxBidErrorCopy, maxBidStatusCopy, playAuctionSound, playCountdownTone, playCueTone, playLayeredCue, readJSON, rejectCopy, responseServerTimeMS, retryAfterMS, retryAfterMSFromHeaders, roomIDFromPath, scenarios, selectEntryAuction, speakSystemMessage, vibrateCountdownPhase, vibratePattern, visibleRoomAuctions } from './domain';
 import { calculateAtmosphereIntensity, normalizeAtmosphere, shouldGateAtmosphere } from './atmosphere';
 import { reconnectDelayMS } from './realtime';
 import { h5Copy } from './copy';
@@ -1052,12 +1052,13 @@ function App() {
     setLeaderMasked(detail.payload?.leader_user_masked ?? leaderMaskedRef.current);
     const wasExtended = Boolean(nextEndAt && previousEndAt && Date.parse(nextEndAt) > Date.parse(previousEndAt));
     if (wasExtended && nextEndAt) {
+      const extendSeconds = extendSecondsFromEvent(detail, previousEndAt, nextEndAt);
       setExtensionNotice(extensionCopyFromEvent(detail, previousEndAt, nextEndAt));
       setBidFeedback('最后时刻有出价，竞拍已延时');
       showAtmosphere({
         kind: 'extended',
         title: '已延时',
-        detail: '最后窗口出价，竞拍继续',
+        detail: `${extendSeconds ? `延时 +${extendSeconds}s · ` : ''}最后窗口出价，竞拍继续`,
         auction_id: detail.auction_id,
         cause_seq: detail.seq,
         event_type: detail.event_type,

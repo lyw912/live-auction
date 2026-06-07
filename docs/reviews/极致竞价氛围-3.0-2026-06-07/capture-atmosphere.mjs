@@ -203,6 +203,30 @@ async function capture(width, file, options = {}) {
     await browser.close();
     return;
   }
+  if (options.softClose) {
+    await page.evaluate(() => {
+      window.dispatchEvent(new CustomEvent('auction:event', {
+        detail: {
+          auction_id: 'auc_live',
+          event_type: 'bid_accepted',
+          seq: 42,
+          payload: {
+            current_price_cents: 40000,
+            current_winner_id: 'user_2',
+            user_id: 'user_2',
+            leader_user_masked: '张**',
+            old_end_at: '2099-05-22T14:00:00.000Z',
+            end_at: '2099-05-22T14:00:20.000Z',
+            server_time_ms: Date.parse('2099-05-22T13:59:55.000Z')
+          }
+        }
+      }));
+    });
+    await expect(page.getByTestId('final-seconds-layer')).toContainText('延时 +20s');
+    await page.screenshot({ path: path.join(OUT, file), fullPage: false });
+    await browser.close();
+    return;
+  }
   if (options.finalSeconds) {
     await expect(page.getByTestId('final-seconds-layer')).toContainText('最后 5 秒');
     await page.screenshot({ path: path.join(OUT, file), fullPage: false });
@@ -258,4 +282,5 @@ await capture(390, '08-race-board-waterfall-ai-390.png');
 await capture(360, '09-race-board-waterfall-ai-360.png');
 await capture(360, '10-final-seconds-layer-360.png', { finalSeconds: true });
 await capture(390, '11-winner-climax-card-390.png', { winner: true });
+await capture(360, '12-soft-close-plus20-360.png', { softClose: true });
 console.log(JSON.stringify({ ok: true, out: OUT }, null, 2));

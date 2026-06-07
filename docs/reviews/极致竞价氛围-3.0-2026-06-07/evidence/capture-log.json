@@ -1,12 +1,13 @@
 {
-  "updated_at": "2026-06-08T00:20:48+08:00",
-  "round": "P0 atmosphere main-stage loop + winner climax card",
+  "updated_at": "2026-06-08T00:45:37+08:00",
+  "round": "P0 atmosphere main-stage loop + winner climax card + real soft-close seconds",
   "commands": [
     "npx playwright test tests/e2e/atmosphere-engine.spec.ts --reporter=line",
     "pnpm --filter mobile-h5 build",
     "npx playwright test tests/e2e/mobile-h5.spec.ts -g \"always-on race board|leaderboard delta\" --reporter=line",
     "npx playwright test tests/e2e/mobile-h5.spec.ts -g \"extension and sold visual|countdown shows stable\" --reporter=line",
     "npx playwright test tests/e2e/mobile-h5.spec.ts -g \"winner result sheet\" --reporter=line",
+    "npx playwright test tests/e2e/mobile-h5.spec.ts -g \"extension and sold visual\" --reporter=line",
     "node docs/reviews/极致竞价氛围-3.0-2026-06-07/capture-atmosphere.mjs"
   ],
   "live_backend_probe": {
@@ -27,7 +28,8 @@
       "evidence/08-race-board-waterfall-ai-390.png",
       "evidence/09-race-board-waterfall-ai-360.png",
       "evidence/10-final-seconds-layer-360.png",
-      "evidence/11-winner-climax-card-390.png"
+      "evidence/11-winner-climax-card-390.png",
+      "evidence/12-soft-close-plus20-360.png"
     ],
     "assertions": [
       "race-board visible in live-stage",
@@ -41,7 +43,9 @@
       "extended event renders final-seconds-layer with 延时 +10s",
       "winner climax card is captured after real leaderboard_delta heat facts and a real state-matrix click",
       "winner climax card contains non-zero factual heat: 2 人有效出价 and 3 次真实出价",
-      "sold state rank strip no longer displays next-bid or minimum-bid copy"
+      "sold state rank strip no longer displays next-bid or minimum-bid copy",
+      "soft-close layer derives 延时 +20s from event old/new end_at rather than a fixed +10s copy",
+      "soft-close screenshot keeps bottom product card, countdown, price and CTA readable"
     ]
   }
 }

@@ -2296,7 +2296,7 @@ test('H5 extension and sold visual effects use bounded nonblocking motion layers
   });
 
   await expect(page.getByTestId('live-stage')).toHaveAttribute('data-atmosphere-kind', 'extended');
-  await expect(page.getByTestId('final-seconds-layer')).toContainText('延时 +10s');
+  await expect(page.getByTestId('final-seconds-layer')).toContainText('延时 +20s');
   await expect(page.getByTestId('final-seconds-layer')).toContainText('最后窗口有真实出价');
   await expect(page.getByTestId('auction-countdown')).toHaveAttribute('data-effect', 'extension-stretch');
   await expect(page.getByTestId('auction-countdown')).toHaveCSS('animation-name', 'countdown-stretch');

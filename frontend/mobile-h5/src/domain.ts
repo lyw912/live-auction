@@ -129,6 +129,8 @@ export type AuctionRealtimeEvent = {
     amount_cents?: number;
     old_end_at?: string;
     end_at?: string;
+    extend_ms?: number;
+    extended_ms?: number;
     extend_count?: number;
     max_extend_count?: number;
     server_time_ms?: number;
@@ -449,6 +451,15 @@ export function extensionCopyFromEvent(detail: AuctionRealtimeEvent, oldEndAt: s
   const max = detail.payload?.max_extend_count;
   const countCopy = count != null && max != null ? ` · 第 ${count}/${max} 次` : count != null ? ` · 第 ${count} 次` : '';
   return `延时 ${oldCopy} -> ${nextCopy}${countCopy}`;
+}
+
+export function extendSecondsFromEvent(detail: AuctionRealtimeEvent, oldEndAt: string, nextEndAt: string) {
+  const explicitMS = Number(detail.payload?.extend_ms ?? detail.payload?.extended_ms ?? 0);
+  if (Number.isFinite(explicitMS) && explicitMS > 0) return Math.max(1, Math.round(explicitMS / 1000));
+  const previousEnd = Date.parse(detail.payload?.old_end_at ?? oldEndAt);
+  const nextEnd = Date.parse(nextEndAt);
+  if (!Number.isFinite(previousEnd) || !Number.isFinite(nextEnd) || nextEnd <= previousEnd) return null;
+  return Math.max(1, Math.round((nextEnd - previousEnd) / 1000));
 }
 
 export function isCountdownExpired(endAt: string, serverTimeMS: number, nowMS: number, serverTimeSyncedAt: number) {
