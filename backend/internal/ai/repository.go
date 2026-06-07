@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -851,6 +852,7 @@ func (r *Repository) BuildAuctionRecap(ctx context.Context, hostID string, aucti
 		AcceptedBids:    state.AcceptedBidCount,
 		AcceptedBidders: acceptedBidders,
 		ExtendCount:     state.ExtendCount,
+		RuleSuggestion:  recapRuleSuggestion(state, acceptedBidders),
 	})
 	input := structToMap(map[string]any{"auction_id": auctionID, "kind": "auction_recap"})
 	job, err := r.insertJob(ctx, Job{
@@ -1274,6 +1276,48 @@ type auctionState struct {
 	CapPriceCents     int64
 	AcceptedBidCount  int64
 	ExtendCount       int
+}
+
+func recapRuleSuggestion(state auctionState, acceptedBidders int64) *RecapRuleSuggestion {
+	if state.IncrementCents <= 0 || state.StartPriceCents < 0 {
+		return nil
+	}
+	start := state.StartPriceCents
+	if state.Status == "SOLD" && state.CurrentPriceCents > state.StartPriceCents && acceptedBidders >= 2 {
+		weighted := int64(math.Round(float64(state.StartPriceCents)*0.70 + float64(state.CurrentPriceCents)*0.30))
+		start = alignToIncrement(weighted, state.StartPriceCents, state.IncrementCents)
+	}
+	if start < state.StartPriceCents {
+		start = state.StartPriceCents
+	}
+	capPrice := state.CapPriceCents
+	minCap := start + state.IncrementCents*5
+	if state.Status == "SOLD" && state.CurrentPriceCents > capPrice {
+		capPrice = state.CurrentPriceCents
+	}
+	if capPrice < minCap {
+		capPrice = minCap
+	}
+	capPrice = alignToIncrement(capPrice, start, state.IncrementCents)
+	if capPrice < minCap {
+		capPrice += state.IncrementCents
+	}
+	return &RecapRuleSuggestion{
+		StartPriceCents:     start,
+		IncrementCents:      state.IncrementCents,
+		CapPriceCents:       capPrice,
+		Basis:               "基于本场起拍价、成交价、加价幅度、有效出价人数生成；仅供下一件人工采信",
+		Source:              "auction_recap:server_facts",
+		HumanReviewRequired: true,
+	}
+}
+
+func alignToIncrement(value int64, start int64, increment int64) int64 {
+	if increment <= 0 || value <= start {
+		return start
+	}
+	steps := (value - start + increment - 1) / increment
+	return start + steps*increment
 }
 
 func (r *Repository) auctionState(ctx context.Context, auctionID string) (auctionState, error) {

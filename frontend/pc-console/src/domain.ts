@@ -321,6 +321,14 @@ export type AuctionRecap = {
   extend_count: number;
   highlights: string[];
   next_actions: string[];
+  rule_suggestion?: {
+    start_price_cents: number;
+    increment_cents: number;
+    cap_price_cents: number;
+    basis: string;
+    source: string;
+    human_review_required: boolean;
+  };
   share_card?: Record<string, unknown>;
   generated_at: string;
   highlight_asset?: HighlightAsset;

@@ -142,19 +142,29 @@ type SentinelEvaluationInput struct {
 }
 
 type AuctionRecap struct {
-	AuctionID       string         `json:"auction_id"`
-	RoomID          string         `json:"room_id"`
-	ItemTitle       string         `json:"item_title"`
-	Status          string         `json:"status"`
-	FinalPriceCents int64          `json:"final_price_cents"`
-	WinnerMasked    string         `json:"winner_masked,omitempty"`
-	AcceptedBids    int64          `json:"accepted_bids"`
-	AcceptedBidders int64          `json:"accepted_bidders"`
-	ExtendCount     int            `json:"extend_count"`
-	Highlights      []string       `json:"highlights"`
-	NextActions     []string       `json:"next_actions"`
-	ShareCard       map[string]any `json:"share_card"`
-	GeneratedAt     time.Time      `json:"generated_at"`
+	AuctionID       string               `json:"auction_id"`
+	RoomID          string               `json:"room_id"`
+	ItemTitle       string               `json:"item_title"`
+	Status          string               `json:"status"`
+	FinalPriceCents int64                `json:"final_price_cents"`
+	WinnerMasked    string               `json:"winner_masked,omitempty"`
+	AcceptedBids    int64                `json:"accepted_bids"`
+	AcceptedBidders int64                `json:"accepted_bidders"`
+	ExtendCount     int                  `json:"extend_count"`
+	Highlights      []string             `json:"highlights"`
+	NextActions     []string             `json:"next_actions"`
+	RuleSuggestion  *RecapRuleSuggestion `json:"rule_suggestion,omitempty"`
+	ShareCard       map[string]any       `json:"share_card"`
+	GeneratedAt     time.Time            `json:"generated_at"`
+}
+
+type RecapRuleSuggestion struct {
+	StartPriceCents     int64  `json:"start_price_cents"`
+	IncrementCents      int64  `json:"increment_cents"`
+	CapPriceCents       int64  `json:"cap_price_cents"`
+	Basis               string `json:"basis"`
+	Source              string `json:"source"`
+	HumanReviewRequired bool   `json:"human_review_required"`
 }
 
 type HighlightAsset struct {
@@ -394,6 +404,7 @@ func BuildRecap(input AuctionRecap) AuctionRecap {
 		"status":            input.Status,
 		"final_price_cents": input.FinalPriceCents,
 		"accepted_bids":     input.AcceptedBids,
+		"rule_suggestion":   input.RuleSuggestion,
 		"privacy":           "buyer identities masked",
 	}
 	return input

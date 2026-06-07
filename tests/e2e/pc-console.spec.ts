@@ -224,6 +224,46 @@ test.beforeEach(async ({ page }) => {
       source: 'postgres:max_bid_intents'
     }
   }));
+  await page.route('/api/host/auctions/auc_live/recap', async (route) => route.fulfill({
+    json: {
+      recap: {
+        auction_id: 'auc_live',
+        room_id: 'room_main',
+        item_title: '天然翡翠A货平安扣吊坠',
+        status: 'SOLD',
+        final_price_cents: 60000,
+        winner_masked: '张**',
+        accepted_bids: 18,
+        accepted_bidders: 4,
+        extend_count: 1,
+        highlights: ['成交价 ¥600.00', '真实参与出价 4 人', '末段延时 1 次'],
+        next_actions: ['提醒赢家完成支付', '准备下一件承接热度'],
+        rule_suggestion: {
+          start_price_cents: 25000,
+          increment_cents: 5000,
+          cap_price_cents: 60000,
+          basis: '基于本场起拍价、成交价、加价幅度、有效出价人数生成；仅供下一件人工采信',
+          source: 'auction_recap:server_facts',
+          human_review_required: true
+        },
+        generated_at: '2026-05-22T14:01:00Z'
+      },
+      highlight_asset: {
+        id: 'asset_1',
+        auction_id: 'auc_live',
+        room_id: 'room_main',
+        job_id: 'aijob_1',
+        status: 'READY',
+        media_type: 'text/html',
+        title: '天然翡翠A货平安扣吊坠 高光复盘',
+        asset_url: '/api/host/highlight-assets/asset_1',
+        render_profile: 'html',
+        duration_ms: 0,
+        created_at: '2026-05-22T14:01:00Z',
+        updated_at: '2026-05-22T14:01:00Z'
+      }
+    }
+  }));
   await page.route('/api/monitor/auctions/auc_next/flight-recorder?limit=20&timeline_limit=20', async (route) => route.fulfill({
     json: { timeline: [] }
   }));
@@ -428,6 +468,32 @@ test('PC host live assist renders API prompts and dismisses locally without muta
   await expect(page.getByTestId('prompter-cards').getByText('最后窗口')).not.toBeVisible();
   await expect(page.getByTestId('prompter-cards').getByText('暂无主播提示')).toBeVisible();
   expect(mutationRequests).toEqual([]);
+});
+
+test('PC host recap shows next item start price suggestion as review-only', async ({ page }) => {
+  const recapRequests: string[] = [];
+  const ruleMutations: string[] = [];
+  page.on('request', (request) => {
+    if (request.url().includes('/api/host/auctions/auc_live/recap')) recapRequests.push(request.method());
+    if (request.method() !== 'GET' && request.url().includes('/api/auctions/auc_live/rules')) {
+      ruleMutations.push(`${request.method()} ${request.url()}`);
+    }
+  });
+
+  await page.goto('/');
+  await page.getByTestId('live-assist-rail').getByRole('button', { name: '生成复盘' }).click();
+
+  const recap = page.getByTestId('auction-recap-card');
+  await expect(recap).toContainText('天然翡翠A货平安扣吊坠');
+  await expect(recap).toContainText('¥600.00 · 18 次出价 · 已成交');
+  await expect(recap.getByTestId('recap-rule-suggestion')).toContainText('下一件建议起拍价');
+  await expect(recap.getByTestId('recap-rule-suggestion')).toContainText('¥250.00');
+  await expect(recap.getByTestId('recap-rule-suggestion')).toContainText('加价 ¥50.00 · 封顶 ¥600.00');
+  await expect(recap.getByTestId('recap-rule-suggestion')).toContainText('基于本场起拍价、成交价、加价幅度、有效出价人数生成');
+  await expect(recap.getByTestId('recap-rule-suggestion')).toContainText('需主播人工采信，不自动改规则');
+  await expect(recap.getByRole('link', { name: '打开高光' })).toBeVisible();
+  expect(recapRequests).toEqual(['POST']);
+  expect(ruleMutations).toEqual([]);
 });
 
 test('PC host live assist renders real heat summary and labels watcher count unavailable', async ({ page }) => {

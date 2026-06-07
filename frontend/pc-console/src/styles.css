@@ -1997,6 +1997,30 @@ body {
   font-style: normal;
 }
 
+.recap-rule-suggestion {
+  display: grid;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 9px;
+  border: 1px solid rgba(20, 184, 166, 0.28);
+  border-radius: 8px;
+  background: #f0fdfa;
+}
+
+.recap-rule-suggestion span,
+.recap-rule-suggestion small,
+.recap-rule-suggestion em,
+.recap-rule-suggestion b {
+  color: #0f766e;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.recap-rule-suggestion strong {
+  color: #134e4a;
+  font-size: 17px;
+}
+
 .recap-actions {
   display: flex;
   gap: 8px;

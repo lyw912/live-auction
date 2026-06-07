@@ -896,6 +896,19 @@ export function LiveAssistRail({
             <strong>{latestRecap.item_title}</strong>
             <span>{formatCents(latestRecap.final_price_cents)} · {latestRecap.accepted_bids} 次出价 · {auctionStatusLabel(latestRecap.status)}</span>
             <small>{latestRecap.next_actions?.[0] ?? '复盘已生成'}</small>
+            {latestRecap.rule_suggestion ? (
+              <div className="recap-rule-suggestion" data-testid="recap-rule-suggestion">
+                <span>下一件建议起拍价</span>
+                <strong>{formatCents(latestRecap.rule_suggestion.start_price_cents)}</strong>
+                <small>
+                  加价 {formatCents(latestRecap.rule_suggestion.increment_cents)}
+                  {' · '}
+                  封顶 {formatCents(latestRecap.rule_suggestion.cap_price_cents)}
+                </small>
+                <em>{latestRecap.rule_suggestion.basis}</em>
+                <b>{latestRecap.rule_suggestion.human_review_required ? '需主播人工采信，不自动改规则' : '可直接采信'}</b>
+              </div>
+            ) : null}
             {latestRecap.highlight_asset ? (
               <div className="recap-actions">
                 <a href={latestRecap.highlight_asset.asset_url} target="_blank" rel="noreferrer">打开高光</a>
