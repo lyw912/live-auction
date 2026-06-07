@@ -54,6 +54,23 @@ function displayOrderNo(order: Order) {
   return `JP${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${compact || '00000000'}`;
 }
 
+function depositStatusLabel(status?: string) {
+  switch (status) {
+    case 'HELD':
+      return '保证金已冻结';
+    case 'RELEASED':
+      return '保证金已释放';
+    case 'FORFEITED':
+      return '保证金已扣除';
+    case 'NONE':
+    case '':
+    case undefined:
+      return '无保证金';
+    default:
+      return '保证金待确认';
+  }
+}
+
 function formatLag(ms: number) {
   if (!Number.isFinite(ms) || ms <= 0) return '暂无延迟';
   if (ms >= 60_000) return `约 ${Math.round(ms / 60_000)} 分钟`;
@@ -1079,23 +1096,36 @@ export function RuleEditor({
 }
 
 export function OrdersPanel({ orders, onOpenFlightRecorder, onOpenOrder }: { orders: Order[]; onOpenFlightRecorder: (auctionID: string) => void; onOpenOrder: (orderID: string) => void }) {
+  const [expanded, setExpanded] = useState(false);
+  const visibleOrders = expanded ? orders : orders.slice(0, 8);
+  const hiddenCount = Math.max(0, orders.length - visibleOrders.length);
   return (
     <div className="rule-panel">
-      <div className="panel-heading">
-        <h2>订单</h2>
-        <span>成交后自动生成，详情保留中标人、保证金、支付时效和审计入口</span>
+      <div className="panel-heading order-heading">
+        <div>
+          <h2>订单</h2>
+          <span>成交后自动生成，详情保留中标人、保证金、支付时效和审计入口</span>
+        </div>
+        {orders.length > 8 ? (
+          <Button size="mini" onClick={() => setExpanded((current) => !current)}>
+            {expanded ? '收起历史订单' : `展开全部 ${orders.length} 条`}
+          </Button>
+        ) : null}
       </div>
-      {orders.length === 0 ? <div className="empty-state">暂无订单</div> : orders.map((order) => (
+      {orders.length === 0 ? <div className="empty-state">暂无订单</div> : visibleOrders.map((order) => (
         <div className="order-line" key={order.id}>
           <button type="button" className="order-id-link" onClick={() => onOpenOrder(order.id)}>单号 {displayOrderNo(order)}</button>
           <Tag color={order.status === 'PAID' ? 'green' : 'orange'}>{orderStatusLabel(order.status)}</Tag>
           <span>中标人 {maskUser(order.winner_id)}</span>
-          <span>{order.deposit_status}</span>
+          <span>{depositStatusLabel(order.deposit_status)}</span>
           <span>{order.expire_at ? `支付截止 ${new Date(order.expire_at).toLocaleTimeString()}` : '无支付截止'}</span>
           <strong>{formatCents(order.amount_cents)}</strong>
           <Button size="mini" icon={<ExternalLink size={13} />} onClick={() => onOpenFlightRecorder(order.auction_id)}>审计</Button>
         </div>
       ))}
+      {hiddenCount > 0 ? (
+        <div className="order-collapsed-note">已收起 {hiddenCount} 条历史订单；演示时默认只展示最近 8 条。</div>
+      ) : null}
     </div>
   );
 }

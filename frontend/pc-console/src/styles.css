@@ -340,6 +340,16 @@ body {
   font-size: 12px;
 }
 
+.order-heading {
+  align-items: flex-start;
+}
+
+.order-heading > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
 .queue-card {
   width: 100%;
   min-height: 150px;
@@ -838,6 +848,13 @@ body {
 
 .order-id-link:hover {
   color: var(--color-bid-red);
+}
+
+.order-collapsed-note {
+  padding: 10px 0 0;
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .order-detail {

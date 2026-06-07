@@ -801,10 +801,11 @@ export function rulePayload(rule: RuleDraft) {
 }
 
 export async function ensureDemoSession(account: 'host' | 'user') {
+  const expectedRole = account === 'host' ? 'host' : 'user';
   const me = await fetch('/api/auth/me');
   if (me.ok) {
     const payload = await readJSON<{ user?: AuthUser }>(me);
-    if (payload.user) return payload.user;
+    if (payload.user?.Role === expectedRole) return payload.user;
   }
   const login = await fetch('/api/auth/login', {
     method: 'POST',
@@ -817,6 +818,9 @@ export async function ensureDemoSession(account: 'host' | 'user') {
   const payload = await readJSON<{ user?: AuthUser }>(login);
   if (!payload.user) {
     throw new Error('login response missing user');
+  }
+  if (payload.user.Role !== expectedRole) {
+    throw new Error(`login role mismatch: ${payload.user.Role}`);
   }
   return payload.user;
 }
