@@ -283,6 +283,7 @@ function ClimaxLayer({
   terminalPriceCents: number;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [confettiEngine, setConfettiEngine] = useState<'idle' | 'loading' | 'canvas-confetti' | 'failed'>('idle');
   const active = scenario.sold && atmosphereCue?.kind === 'sold';
   const isWinner = active && atmosphereCue?.user_scope === 'self';
   const bidderCopy = heat.acceptedBidderCount > 0 ? `${heat.acceptedBidderCount} 人有效出价` : '真实竞拍记录已锁定';
@@ -298,57 +299,62 @@ function ClimaxLayer({
     if (!canvas) return;
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     if (reduceMotion) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    const startedAt = performance.now();
-    const colors = ['#ffd166', '#ff5a6a', '#2a9d8f', '#5b8cff', '#ff8a3d'];
-    const particles = Array.from({ length: 96 }, (_, index) => {
-      const spread = (index % 24) / 23 - 0.5;
-      const burst = Math.floor(index / 24);
-      return {
-        x: 0.5 + spread * 0.72,
-        y: 0.18 + burst * 0.025,
-        vx: spread * (0.8 + burst * 0.18),
-        vy: 0.54 + Math.random() * 0.36 + burst * 0.08,
-        size: 5 + Math.random() * 7,
-        rotation: Math.random() * Math.PI,
-        spin: (Math.random() - 0.5) * 9,
-        color: colors[index % colors.length]
-      };
-    });
-    let frame = 0;
-    const draw = (time: number) => {
-      const rect = canvas.getBoundingClientRect();
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const width = Math.max(1, Math.round(rect.width * dpr));
-      const height = Math.max(1, Math.round(rect.height * dpr));
-      if (canvas.width !== width || canvas.height !== height) {
-        canvas.width = width;
-        canvas.height = height;
-      }
-      const elapsed = time - startedAt;
-      const progress = Math.min(1, elapsed / 2500);
-      ctx.clearRect(0, 0, width, height);
-      particles.forEach((particle) => {
-        const delay = (particle.size % 5) * 38;
-        const local = Math.max(0, elapsed - delay) / 2500;
-        if (local <= 0 || local > 1) return;
-        const fall = local * local;
-        const x = (particle.x + particle.vx * local * 0.34) * width;
-        const y = (particle.y + particle.vy * fall) * height;
-        const alpha = local < 0.14 ? local / 0.14 : Math.max(0, 1 - (local - 0.72) / 0.28);
-        ctx.save();
-        ctx.globalAlpha = alpha;
-        ctx.translate(x, y);
-        ctx.rotate(particle.rotation + particle.spin * local);
-        ctx.fillStyle = particle.color;
-        ctx.fillRect(-particle.size * dpr / 2, -particle.size * dpr / 2, particle.size * dpr, particle.size * dpr * 0.62);
-        ctx.restore();
+    let cancelled = false;
+    setConfettiEngine('loading');
+    void import('canvas-confetti')
+      .then(({ default: confetti }) => {
+        if (cancelled) return;
+        const fire = confetti.create(canvas, {
+          resize: true,
+          useWorker: true,
+          disableForReducedMotion: true
+        });
+        setConfettiEngine('canvas-confetti');
+        void fire({
+          particleCount: 72,
+          spread: 64,
+          startVelocity: 42,
+          gravity: 1.05,
+          ticks: 180,
+          origin: { x: 0.5, y: 0.28 },
+          colors: ['#ffd166', '#ff5a6a', '#2a9d8f', '#5b8cff', '#ff8a3d'],
+          shapes: ['square'],
+          scalar: 0.92
+        });
+        window.setTimeout(() => {
+          if (cancelled) return;
+          void fire({
+            particleCount: 46,
+            angle: 72,
+            spread: 52,
+            startVelocity: 34,
+            gravity: 1.1,
+            ticks: 160,
+            origin: { x: 0.16, y: 0.4 },
+            colors: ['#ffd166', '#ff8a3d', '#2a9d8f'],
+            shapes: ['square'],
+            scalar: 0.82
+          });
+          void fire({
+            particleCount: 46,
+            angle: 108,
+            spread: 52,
+            startVelocity: 34,
+            gravity: 1.1,
+            ticks: 160,
+            origin: { x: 0.84, y: 0.4 },
+            colors: ['#ffd166', '#ff5a6a', '#5b8cff'],
+            shapes: ['square'],
+            scalar: 0.82
+          });
+        }, 170);
+      })
+      .catch(() => {
+        if (!cancelled) setConfettiEngine('failed');
       });
-      if (progress < 1) frame = window.requestAnimationFrame(draw);
+    return () => {
+      cancelled = true;
     };
-    frame = window.requestAnimationFrame(draw);
-    return () => window.cancelAnimationFrame(frame);
   }, [active, motionEnabled, atmosphereCue?.id]);
 
   if (!active) return null;
@@ -360,7 +366,16 @@ function ClimaxLayer({
       aria-live="assertive"
       aria-label="落槌高潮"
     >
-      {motionEnabled ? <canvas ref={canvasRef} className="climax-confetti-canvas" data-testid="climax-confetti-canvas" aria-hidden="true" /> : null}
+      {motionEnabled ? (
+        <canvas
+          ref={canvasRef}
+          className="climax-confetti-canvas"
+          data-testid="climax-confetti-canvas"
+          data-engine={confettiEngine}
+          data-worker="true"
+          aria-hidden="true"
+        />
+      ) : null}
       <div className="climax-spotlight" aria-hidden="true" />
       <div className="climax-card" data-testid="climax-stage-card">
         <span>{isWinner ? '落槌高光' : '本场落槌'}</span>

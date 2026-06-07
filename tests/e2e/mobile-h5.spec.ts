@@ -2327,6 +2327,8 @@ test('H5 extension and sold visual effects use bounded nonblocking motion layers
   await expect(page.getByTestId('climax-layer')).toBeVisible();
   await expect(page.getByTestId('climax-layer')).toHaveAttribute('data-motion', 'on');
   await expect(page.getByTestId('climax-confetti-canvas')).toBeVisible();
+  await expect(page.getByTestId('climax-confetti-canvas')).toHaveAttribute('data-engine', 'canvas-confetti');
+  await expect(page.getByTestId('climax-confetti-canvas')).toHaveAttribute('data-worker', 'true');
   await expect(page.getByTestId('climax-stage-card')).toContainText('本场落槌');
   await expect(page.getByTestId('climax-stage-card')).toContainText('¥600.00');
   await expect(page.getByTestId('climax-stage-card')).toContainText('2 人有效出价');
