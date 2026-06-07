@@ -304,8 +304,8 @@ test.beforeEach(async ({ page }) => {
 
 test('PC console renders live API auctions, orders, and expanded diagnostic panels', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByTestId('auction-queue').getByText('青瓷手作茶盏')).toBeVisible();
-  await expect(page.getByTestId('auction-queue').getByText('紫砂壶')).toBeVisible();
+  await expect(page.getByTestId('queue-group-active').getByRole('button', { name: /青瓷手作茶盏/ })).toBeVisible();
+  await expect(page.getByTestId('queue-group-draft').getByRole('button', { name: /紫砂壶/ })).toBeVisible();
   await expect(page.getByTestId('health-ribbon')).toBeVisible();
   await expect(page.getByTestId('pc-auction-page')).toBeVisible();
   await expect(page.getByTestId('pc-command-center')).toBeVisible();
@@ -314,7 +314,15 @@ test('PC console renders live API auctions, orders, and expanded diagnostic pane
   await expect(page.getByTestId('queue-group-scheduled').getByText('银壶')).toBeVisible();
   await expect(page.getByTestId('queue-group-draft').getByText('紫砂壶')).toBeVisible();
   await expect(page.getByTestId('live-assist-rail')).toBeVisible();
-  await expect(page.getByText('ord_pending')).toBeVisible();
+  await expect(page.getByText(/单号 JP\d{8}-PENDING/)).toBeVisible();
+  await expect(page.getByText('保证金已冻结')).toBeVisible();
+  await page.getByRole('button', { name: /单号 JP\d{8}-PENDING/ }).click();
+  const orderDrawer = page.getByTestId('order-detail-drawer');
+  await expect(orderDrawer.getByText(/JP\d{8}-PENDING/)).toBeVisible();
+  await expect(orderDrawer.getByText('保证金已冻结')).toBeVisible();
+  await expect(orderDrawer.getByText('排查编号 ord_pending')).toBeVisible();
+  await expect(orderDrawer).not.toContainText('HELD');
+  await page.reload();
   await page.getByRole('button', { name: '拍品', exact: true }).click();
   await expect(page.getByTestId('pc-inventory-page')).toBeVisible();
   await expect(page.getByTestId('pc-command-center')).not.toBeVisible();
@@ -322,8 +330,8 @@ test('PC console renders live API auctions, orders, and expanded diagnostic pane
   await expect(page.getByTestId('pc-diagnostics-page')).toBeVisible();
   await expect(page.getByTestId('auction-queue')).not.toBeVisible();
   await expect(page.getByTestId('diagnostics')).toBeVisible();
-  await expect(page.getByTestId('redis-engine-summary')).toContainText('pending Redis 1');
-  await expect(page.getByTestId('redis-engine-summary')).toContainText('append 7/1/0');
+  await expect(page.getByTestId('redis-engine-summary')).toContainText('待确认 1');
+  await expect(page.getByTestId('redis-engine-summary')).toContainText('写入结果 7/1/0');
   await expect(page.getByTestId('redis-engine-summary')).toContainText('ACKED · seq 42');
   await expect(page.getByLabel('monitor-anomaly-type')).toBeVisible();
   await page.getByRole('button', { name: '竞拍', exact: true }).click();
@@ -372,7 +380,8 @@ test('PC accessibility gate exposes live diagnostic state and named controls', a
   await page.goto('/');
   await expect(page.getByTestId('health-ribbon-status')).toHaveAttribute('role', 'status');
   await expect(page.getByTestId('health-ribbon-status')).toHaveAttribute('aria-live', 'polite');
-  await expect(page.getByTestId('health-ribbon-status')).toContainText('待推送');
+  await expect(page.getByTestId('health-ribbon-status')).toContainText(/引擎 ● (正常|降级|异常)/);
+  await expect(page.getByTestId('health-ribbon-status')).not.toContainText('待推送');
   await expect(page.getByLabel('room-selector')).toBeVisible();
   await expect(page.getByRole('button', { name: '刷新' })).toBeVisible();
 
@@ -504,7 +513,9 @@ test('PC creates item and auction through backend upload and create APIs', async
   await page.getByRole('button', { name: '拍品', exact: true }).click();
   await expect(page.getByTestId('wizard-product-step')).toBeVisible();
   await page.getByLabel('item-title').fill('白瓷杯');
-  await page.getByLabel('item-image-file').setInputFiles({
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: '选择图片' }).click();
+  await (await chooser).setFiles({
     name: 'cup.jpg',
     mimeType: 'image/jpeg',
     buffer: Buffer.from('fake image bytes')
@@ -531,16 +542,16 @@ test('PC rule save targets selected draft auction and includes all money/rule fi
   await page.getByRole('button', { name: '拍品', exact: true }).click();
   await page.getByText('紫砂壶').click();
   await expect(page.getByTestId('seller-rule-wizard')).toBeVisible();
-  await expect(page.getByLabel('seller-rule-wizard-steps').getByText('Product')).toBeVisible();
-  await expect(page.getByLabel('seller-rule-wizard-steps').getByText('Price')).toBeVisible();
-  await expect(page.getByLabel('seller-rule-wizard-steps').getByText('Time')).toBeVisible();
-  await expect(page.getByLabel('seller-rule-wizard-steps').getByText('Trust')).toBeVisible();
-  await expect(page.getByLabel('seller-rule-wizard-steps').getByText('Preview')).toBeVisible();
-  await expect(page.getByTestId('verified-bidder-placeholder').getByText('Verified bidder gate')).toBeVisible();
+  await expect(page.getByLabel('seller-rule-wizard-steps').getByText('拍品')).toBeVisible();
+  await expect(page.getByLabel('seller-rule-wizard-steps').getByText('价格')).toBeVisible();
+  await expect(page.getByLabel('seller-rule-wizard-steps').getByText('时间')).toBeVisible();
+  await expect(page.getByLabel('seller-rule-wizard-steps').getByText('保障')).toBeVisible();
+  await expect(page.getByLabel('seller-rule-wizard-steps').getByText('预览')).toBeVisible();
+  await expect(page.getByTestId('verified-bidder-placeholder').getByText('买家验证门槛')).toBeVisible();
   await expect(page.getByTestId('verified-bidder-placeholder').getByRole('button', { name: '启用验证门槛' })).toBeDisabled();
-  await page.getByLabel('start-price-cents').fill('20000');
-  await page.getByLabel('increment-cents').fill('10000');
-  await page.getByLabel('cap-price-cents').fill('70000');
+  await page.getByLabel('start-price-cents').fill('200');
+  await page.getByLabel('increment-cents').fill('100');
+  await page.getByLabel('cap-price-cents').fill('700');
   await expect(page.getByTestId('h5-rule-preview').getByText('下一口 ¥300.00')).toBeVisible();
   await expect(page.getByTestId('h5-rule-preview').getByText('封顶 ¥700.00')).toBeVisible();
   await expect(page.getByTestId('h5-rule-preview').getByText(/保证金 10%/)).toBeVisible();
@@ -578,11 +589,12 @@ test('PC lifecycle controls call selected auction APIs', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: '竞拍', exact: true }).click();
   await page.getByText('紫砂壶').click();
-  await page.getByLabel('schedule-start-at').fill('2026-05-22T14:30');
-  await page.getByRole('button', { name: '排期' }).click();
+  await page.getByPlaceholder('请选择日期').fill('2026-05-22 14:30');
+  await page.keyboard.press('Enter');
+  await page.getByTestId('auction-control-summary').getByRole('button', { name: '排期', exact: true }).click();
   await expect.poll(() => scheduleBody?.start_at).toBe('2026-05-22T06:30:00.000Z');
   await page.getByLabel('cancel-reason').fill('主播临时下架');
-  await page.getByRole('button', { name: '取消' }).click();
+  await page.getByTestId('auction-control-summary').getByRole('button', { name: '取消' }).click();
   await page.getByRole('dialog', { name: '确认取消竞拍' }).getByRole('button', { name: '确定' }).click();
   await expect.poll(() => cancelBody?.reason).toBe('主播临时下架');
 });

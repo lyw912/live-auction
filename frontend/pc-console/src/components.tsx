@@ -1412,7 +1412,8 @@ export function OrderDetailDrawer({
           <div className="order-detail-head">
             <div>
               <span>订单编号</span>
-              <strong>{order.id}</strong>
+              <strong>{displayOrderNo(order)}</strong>
+              <code className="trace-id">排查编号 {order.id}</code>
             </div>
             <Tag color={order.status === 'PAID' ? 'green' : order.status === 'ORDER_EXPIRED' ? 'red' : 'orange'}>{orderStatusLabel(order.status)}</Tag>
           </div>
@@ -1421,7 +1422,7 @@ export function OrderDetailDrawer({
             <div><span>成交价</span><strong>{formatCents(order.amount_cents)}</strong></div>
             <div><span>中标人</span><strong>{maskUser(order.winner_id)}</strong></div>
             <div><span>保证金</span><strong>{formatCents(order.deposit_cents ?? 0)}</strong></div>
-            <div><span>保证金状态</span><strong>{order.deposit_status}</strong></div>
+            <div><span>保证金状态</span><strong>{depositStatusLabel(order.deposit_status)}</strong></div>
             <div><span>支付截止</span><strong>{order.expire_at ? new Date(order.expire_at).toLocaleString() : '-'}</strong></div>
             <div><span>支付完成</span><strong>{order.paid_at ? new Date(order.paid_at).toLocaleString() : '-'}</strong></div>
           </div>
