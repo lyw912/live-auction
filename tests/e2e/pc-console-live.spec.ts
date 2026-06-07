@@ -10,15 +10,7 @@ test('PC console covers live backend host workflow and diagnostics', async ({ pa
   await page.getByRole('button', { name: '竞拍', exact: true }).click();
   await page.getByLabel('room-selector').selectOption('room_side');
   await expect(page.getByTestId('auction-queue').getByText('和田玉福牌吊坠')).toBeVisible();
-  const activeCarryOver = page.getByTestId('auction-queue').getByRole('button', { name: /冰种翡翠戒面 .*当前直播主拍品/ });
-  if (await activeCarryOver.isVisible().catch(() => false)) {
-    await activeCarryOver.click();
-    await expect(page.getByTestId('auction-control-summary').getByRole('button', { name: '取消' })).toBeEnabled();
-    await page.getByLabel('cancel-reason').fill('live pc smoke pre-cleanup');
-    await page.getByTestId('auction-control-summary').getByRole('button', { name: '取消' }).click();
-    await page.getByRole('dialog', { name: '确认取消竞拍' }).getByRole('button', { name: '确定' }).click();
-    await expect(page.getByText('已取消').first()).toBeVisible();
-  }
+  await expect(page.getByTestId('auction-queue')).not.toContainText('冰种翡翠戒面');
 
   const suffix = Date.now();
   await page.getByRole('button', { name: '拍品', exact: true }).click();
