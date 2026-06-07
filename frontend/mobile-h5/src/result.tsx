@@ -327,6 +327,14 @@ export function ResultSheet({
           </div>
         </div>
       ) : null}
+      {kind === 'winner' ? (
+        <div className="result-climax-card" data-testid="result-climax-card" aria-label="落槌高光">
+          <span>落槌高光</span>
+          <strong>{soldPrice}</strong>
+          <p>{Math.max(0, recapHeat.acceptedBidderCount)} 人有效出价 · {Math.max(0, recapHeat.totalAcceptedBids ?? recapHeat.acceptedBids30s)} 次真实出价</p>
+          <em>战绩卡已生成，先确认成交事实再进入支付</em>
+        </div>
+      ) : null}
       {kind !== 'winner' && nextAuction ? (
         <div className="next-auction-card" data-testid="next-auction-handoff">
           <span>直播间下一件</span>

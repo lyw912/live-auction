@@ -7,8 +7,8 @@ const H5_URL = process.env.H5_URL || 'http://127.0.0.1:5276/';
 const productImageDataURL = 'data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20600%20800%22%3E%3Crect%20width%3D%22600%22%20height%3D%22800%22%20fill%3D%22%23222f2b%22%2F%3E%3Ccircle%20cx%3D%22300%22%20cy%3D%22300%22%20r%3D%22142%22%20fill%3D%22%23e5f3ef%22%2F%3E%3Cellipse%20cx%3D%22300%22%20cy%3D%22320%22%20rx%3D%22164%22%20ry%3D%2286%22%20fill%3D%22%2310b981%22%2F%3E%3Cpath%20d%3D%22M170%20352c52%2068%20208%2068%20260%200%22%20stroke%3D%22%23d6a84f%22%20stroke-width%3D%2218%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%3Ctext%20x%3D%22300%22%20y%3D%22640%22%20text-anchor%3D%22middle%22%20font-size%3D%2248%22%20font-family%3D%22Arial%22%20fill%3D%22white%22%3ELOT%20A-102%3C%2Ftext%3E%3C%2Fsvg%3E';
 
 async function installRoutes(page, options = {}) {
-  const serverTime = Date.parse('2099-05-22T13:59:55.000Z');
-  const endAt = options.finalSeconds ? '2099-05-22T13:59:59.900Z' : '2099-05-22T14:00:00Z';
+  const serverTime = Date.parse(options.finalSeconds ? '2099-05-22T13:59:55.000Z' : '2099-05-22T13:58:45.000Z');
+  const endAt = options.finalSeconds ? '2099-05-22T13:59:59.900Z' : '2099-05-22T14:00:00.000Z';
   await page.route('**/api/auth/me', async (route) => {
     await route.fulfill({ json: { user: { ID: 'user_1', Role: 'user' } } });
   });
@@ -24,6 +24,7 @@ async function installRoutes(page, options = {}) {
       room_id: 'room_main',
       status: 'ACTIVE',
       current_price_cents: 35000,
+      current_winner_id: 'user_2',
       increment_cents: 5000,
       accepted_bid_count: 3,
       seq: 41,
@@ -37,6 +38,37 @@ async function installRoutes(page, options = {}) {
         shipping: '顺丰包邮'
       }
     }] });
+  });
+  await page.route('**/api/auctions/auc_live', async (route) => {
+    await route.fulfill({ json: {
+      event_type: 'snapshot',
+      auction_id: 'auc_live',
+      id: 'auc_live',
+      status: 'ACTIVE',
+      seq: 41,
+      source: 'db',
+      stale: false,
+      current_price_cents: 35000,
+      increment_cents: 5000,
+      current_winner_id: 'user_2',
+      end_at: endAt,
+      server_time_ms: serverTime,
+      payload: {
+        status: 'ACTIVE',
+        current_price_cents: 35000,
+        leader_user_masked: '张**',
+        current_winner_id: 'user_2',
+        end_at: endAt,
+        server_time_ms: serverTime,
+        item: {
+          title: '天然翡翠A货平安扣吊坠',
+          image_url: productImageDataURL,
+          certificate: 'GID 20260607 · 可核验',
+          condition: '品相完整',
+          shipping: '顺丰包邮'
+        }
+      }
+    } });
   });
   await page.route('**/api/auctions/auc_live/leaderboard?limit=5', async (route) => {
     await route.fulfill({ json: {
@@ -71,7 +103,9 @@ async function installRoutes(page, options = {}) {
     await route.fulfill({ json: { items: [] } });
   });
   await page.route('**/api/users/me/orders', async (route) => {
-    await route.fulfill({ json: { items: [] } });
+    await route.fulfill({ json: { items: options.winner ? [
+      { order_id: 'ord_pending', auction_id: 'auc_live', amount_cents: 60000, order_status: 'ORDER_PENDING' }
+    ] : [] } });
   });
   await page.addInitScript(() => {
     class VisualAuctionWebSocket extends EventTarget {
@@ -132,9 +166,43 @@ async function capture(width, file, options = {}) {
   });
   const page = await context.newPage();
   await installRoutes(page, options);
-  await page.goto(H5_URL);
+  await page.goto(options.winner ? `${H5_URL}?stateMatrix=1` : H5_URL);
   await expect(page.getByTestId('race-board')).toBeVisible();
   await expect.poll(async () => page.evaluate(() => Boolean(window.__auctionWS?.some(({ url }) => url.includes('/ws?'))))).toBe(true);
+  if (options.winner) {
+    await page.getByRole('button', { name: '竞价中' }).click();
+    await expect(page.getByLabel('auction-state')).toBeVisible();
+    await expect.poll(async () => page.evaluate(() => Boolean(window.__auctionWS?.some(({ url }) => url.includes('/ws?'))))).toBe(true);
+    await page.evaluate(() => {
+      const [entry] = window.__auctionWS.filter(({ url }) => url.includes('/ws?'));
+      entry.socket.dispatchServerMessage({
+        auction_id: 'auc_live',
+        event_type: 'leaderboard_delta',
+        seq: 46,
+        current_price_cents: 60000,
+        next_valid_bid_cents: 65000,
+        current_winner_id: 'user_1',
+        leader_amount_cents: 60000,
+        accepted_bidder_count: 2,
+        active_bidders_30s: 2,
+        accepted_bids_30s: 3,
+        price_velocity_cents_per_min: 10000,
+        entries: [
+          { rank: 1, user_id: 'user_1', user_masked: '我', amount_cents: 60000, bid_count: 2 },
+          { rank: 2, user_id: 'user_2', user_masked: '张**', amount_cents: 55000, bid_count: 1 }
+        ]
+      });
+    });
+    await expect(page.getByTestId('race-board')).toContainText('我 ¥600.00');
+    await expect(page.getByTestId('heat-meter')).toContainText('近30秒 2 人 · 3 次出价');
+    await page.getByRole('navigation', { name: 'state-matrix' }).getByRole('button', { name: '成交', exact: true }).click();
+    await expect(page.getByTestId('result-climax-card')).toContainText('落槌高光');
+    await expect(page.getByTestId('result-climax-card')).toContainText('2 人有效出价');
+    await expect(page.getByTestId('result-climax-card')).toContainText('3 次真实出价');
+    await page.screenshot({ path: path.join(OUT, file), fullPage: false });
+    await browser.close();
+    return;
+  }
   if (options.finalSeconds) {
     await expect(page.getByTestId('final-seconds-layer')).toContainText('最后 5 秒');
     await page.screenshot({ path: path.join(OUT, file), fullPage: false });
@@ -189,4 +257,5 @@ await fs.mkdir(OUT, { recursive: true });
 await capture(390, '08-race-board-waterfall-ai-390.png');
 await capture(360, '09-race-board-waterfall-ai-360.png');
 await capture(360, '10-final-seconds-layer-360.png', { finalSeconds: true });
+await capture(390, '11-winner-climax-card-390.png', { winner: true });
 console.log(JSON.stringify({ ok: true, out: OUT }, null, 2));

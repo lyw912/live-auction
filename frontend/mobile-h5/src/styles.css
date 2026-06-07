@@ -2368,6 +2368,7 @@ button {
 }
 
 .result-sheet.is-compact .result-actions {
+  grid-column: 1 / -1;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 
@@ -2601,6 +2602,54 @@ button {
 .result-recap-actions b {
   color: rgba(255, 255, 255, .78);
   font-size: 12px;
+}
+
+.result-climax-card {
+  border: 1px solid rgba(255, 209, 102, .34);
+  border-radius: 14px;
+  padding: 12px;
+  background:
+    radial-gradient(circle at 18% 12%, rgba(255, 209, 102, .28), transparent 34%),
+    rgba(28, 22, 14, .56);
+  box-shadow: inset 0 0 28px rgba(255, 209, 102, .12);
+  display: grid;
+  gap: 4px;
+  text-align: center;
+}
+
+.result-climax-card span,
+.result-climax-card em {
+  color: rgba(255, 255, 255, .74);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.result-climax-card strong {
+  color: #ffe39a;
+  font-family: var(--font-auction-tabular);
+  font-size: 28px;
+  line-height: 1.1;
+}
+
+.result-climax-card p {
+  margin: 0;
+  color: rgba(255, 255, 255, .88);
+  font-size: 12px;
+}
+
+.result-sheet.is-compact .result-climax-card {
+  grid-column: 1 / -1;
+  border-color: rgba(212, 149, 34, .28);
+  background: #fff8e6;
+  box-shadow: none;
+}
+
+.result-sheet.is-compact .result-climax-card strong,
+.result-sheet.is-compact .result-climax-card p,
+.result-sheet.is-compact .result-climax-card span,
+.result-sheet.is-compact .result-climax-card em {
+  color: #7f4f05;
 }
 
 .result-sheet.is-compact .result-recap-actions button {

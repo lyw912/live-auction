@@ -1242,6 +1242,16 @@ test('H5 winner result sheet locks order and shares the single payment path', as
   await expect(sheet.getByText('成交价 ¥600.00')).toBeVisible();
   await expect(sheet.getByText(/订单 JP\d{8}-PENDING 已锁定/)).toBeVisible();
   await expect(sheet.getByText('保证金会随订单状态处理')).toBeVisible();
+  await expect(sheet.getByTestId('result-climax-card')).toContainText('落槌高光');
+  await expect(sheet.getByTestId('result-climax-card')).toContainText('¥600.00');
+  await expect(sheet.getByTestId('result-climax-card')).toContainText('2 人有效出价');
+  await expect(sheet.getByTestId('result-climax-card')).toContainText('3 次真实出价');
+  await expect(sheet.getByTestId('result-climax-card')).toContainText('先确认成交事实再进入支付');
+  await expect(page.getByTestId('rank-strip')).toContainText('已中拍 · 订单待支付');
+  await expect(page.getByTestId('rank-strip')).toContainText('确认成交事实再支付');
+  await expect(page.getByTestId('bid-hint')).toContainText('成交价 ¥600.00 · 订单以服务端为准');
+  await expect(page.getByTestId('rank-strip')).not.toContainText('下一口');
+  await expect(page.getByTestId('bid-hint')).not.toContainText('最低有效出价');
   await expect(page.getByTestId('bid-cta')).toHaveCount(1);
   await sheet.getByLabel('copy-result-recap').click();
   await expect(sheet.getByText('已复制')).toBeVisible();

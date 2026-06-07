@@ -1879,6 +1879,7 @@ function App() {
           countdownCopy={countdownCopy}
           currentPriceCents={currentPriceCents}
           extensionNotice={extensionNotice}
+          heat={heat}
           item={stageItem}
           leaderboard={leaderboard}
           minimumNextBidCents={minimumNextBidCents}

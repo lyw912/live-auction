@@ -662,6 +662,7 @@ export function AuctionStatePanel({
   countdownCopy,
   currentPriceCents,
   extensionNotice,
+  heat,
   item,
   leaderboard,
   minimumNextBidCents,
@@ -690,6 +691,7 @@ export function AuctionStatePanel({
   countdownCopy: string;
   currentPriceCents: number;
   extensionNotice: string;
+  heat: HeatSnapshot;
   item: AuctionItem;
   leaderboard: LeaderboardPayload | null;
   minimumNextBidCents: number;
@@ -736,8 +738,20 @@ export function AuctionStatePanel({
       ? '当前领先'
       : scenario.feedback;
   const rankAction = leaderboardActionCopy(leaderboard, nextBidCents);
+  const resultRankAction = scenario.sold
+    ? {
+      headline: scenario.winner ? '已中拍 · 订单待支付' : '本场已落槌',
+      action: scenario.winner ? '确认成交事实再支付' : '查看出价记录',
+      freshness: '结果以服务端终态为准'
+    }
+    : rankAction;
   const mediaURL = item.video_poster_url ?? item.videoPosterURL ?? item.image_url ?? item.imageURL ?? '';
   const bidHint = (() => {
+    if (scenario.sold) {
+      return scenario.winner
+        ? `成交价 ${scenario.price} · 订单以服务端为准`
+        : '本场已落槌，出价入口已关闭';
+    }
     if (scenario.title === '需完成验证') return scenario.feedback;
     if (scenario.ctaDisabled && !scenario.sold && scenario.leader.includes('你')) return h5Copy.selfLeading;
     if (unsafeAction && !scenario.sold) return h5Copy.confirmingPrice;
@@ -823,9 +837,9 @@ export function AuctionStatePanel({
         <strong>{rankCopy} · {gapCopy}</strong>
       </div>
       <div className="rank-strip" data-testid="rank-strip">
-        <span>{rankAction.headline}</span>
-        <strong>{rankAction.action}</strong>
-        <em>{rankAction.freshness}</em>
+        <span>{resultRankAction.headline}</span>
+        <strong>{resultRankAction.action}</strong>
+        <em>{resultRankAction.freshness}</em>
       </div>
       <div className="signal-row">
         {scenario.stale || connectionPhase === 'disconnected' ? <WifiOff size={16} /> : <Wifi size={16} />}
@@ -842,7 +856,7 @@ export function AuctionStatePanel({
       ) : null}
       <ResultSheet
         activeSheet={null}
-        heat={undefined}
+        heat={heat}
         item={item}
         kind={resultSheetKind}
         nextAuction={nextAuction}
