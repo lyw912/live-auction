@@ -1092,6 +1092,125 @@ func TestRedisLedgerFatFingerConfirmRevalidatesCurrentPrice(t *testing.T) {
 	}
 }
 
+func TestRedisLedgerFatFingerConfirmRejectsTokenAbuseWithoutDecision(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	auctionID := createEngineAuction(t, db, 0)
+
+	if _, err := db.Exec(ctx, `
+		UPDATE auction_rules
+		SET fat_finger_threshold_cents = 1000
+		WHERE auction_id = $1
+	`, auctionID); err != nil {
+		t.Fatalf("enable fat-finger: %v", err)
+	}
+	pending, err := engine.PlaceBid(ctx, auctionID, "user_1", "ff-token-abuse", auction.BidInput{
+		ClientBidID:   "ff-token-abuse",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_ff_token_abuse")
+	if err != nil {
+		t.Fatalf("pending bid: %v", err)
+	}
+	if pending.ConfirmToken == "" {
+		t.Fatalf("pending confirm token empty: %#v", pending)
+	}
+	if _, err := engine.ConfirmBid(ctx, auctionID, "user_2", "ff-token-abuse", auction.ConfirmBidInput{
+		ConfirmToken:   pending.ConfirmToken,
+		IdempotencyKey: "ff-token-abuse",
+	}, "tr_ff_wrong_user"); err == nil {
+		t.Fatalf("wrong-user confirm succeeded")
+	} else {
+		assertAPIErrorCode(t, err, apierrors.CodeIdempotencyKeyReusedWithDifferentRequest)
+	}
+	if _, err := engine.ConfirmBid(ctx, auctionID, "user_1", "ff-token-abuse", auction.ConfirmBidInput{
+		ConfirmToken:   "ft_wrong_token",
+		IdempotencyKey: "ff-token-abuse",
+	}, "tr_ff_wrong_token"); err == nil {
+		t.Fatalf("wrong-token confirm succeeded")
+	} else {
+		assertAPIErrorCode(t, err, apierrors.CodeConfirmUsed)
+	}
+	assertAuctionEngineSeq(t, db, auctionID, 0, 10_000, "ACTIVE")
+
+	confirmed, err := engine.ConfirmBid(ctx, auctionID, "user_1", "ff-token-abuse", auction.ConfirmBidInput{
+		ConfirmToken:   pending.ConfirmToken,
+		IdempotencyKey: "ff-token-abuse",
+	}, "tr_ff_good_after_abuse")
+	if err != nil {
+		t.Fatalf("valid confirm after rejected abuse attempts: %v", err)
+	}
+	if confirmed.Result != auction.BidResultEngineAccepted || confirmed.EngineSeq != 1 || confirmed.CurrentPriceCents != 15_000 {
+		t.Fatalf("confirmed = %#v, want accepted seq 1 at 15000", confirmed)
+	}
+	replay, err := engine.ConfirmBid(ctx, auctionID, "user_1", "ff-token-abuse", auction.ConfirmBidInput{
+		ConfirmToken:   pending.ConfirmToken,
+		IdempotencyKey: "ff-token-abuse",
+	}, "tr_ff_confirm_replay")
+	if err != nil {
+		t.Fatalf("confirm replay: %v", err)
+	}
+	if replay.Result != confirmed.Result || replay.EngineSeq != confirmed.EngineSeq || replay.CurrentPriceCents != confirmed.CurrentPriceCents {
+		t.Fatalf("confirm replay = %#v, want stable replay of %#v", replay, confirmed)
+	}
+	assertAuctionEngineSeq(t, db, auctionID, 0, 10_000, "ACTIVE")
+}
+
+func TestRedisLedgerFatFingerConfirmExpiredTokenDoesNotConsumeValidReplay(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	auctionID := createEngineAuction(t, db, 0)
+
+	if _, err := db.Exec(ctx, `
+		UPDATE auction_rules
+		SET fat_finger_threshold_cents = 1000
+		WHERE auction_id = $1
+	`, auctionID); err != nil {
+		t.Fatalf("enable fat-finger: %v", err)
+	}
+	pending, err := engine.PlaceBid(ctx, auctionID, "user_1", "ff-token-expired", auction.BidInput{
+		ClientBidID:   "ff-token-expired",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_ff_token_expired")
+	if err != nil {
+		t.Fatalf("pending bid: %v", err)
+	}
+	if pending.ConfirmToken == "" {
+		t.Fatalf("pending confirm token empty: %#v", pending)
+	}
+	if err := rdb.HSet(ctx, redisx.BidEnginePendingConfirmKey(auctionID, "user_1", "ff-token-expired"), "expires_at_ms", time.Now().UTC().Add(-time.Second).UnixMilli()).Err(); err != nil {
+		t.Fatalf("force token expiry: %v", err)
+	}
+	if _, err := engine.ConfirmBid(ctx, auctionID, "user_1", "ff-token-expired", auction.ConfirmBidInput{
+		ConfirmToken:   pending.ConfirmToken,
+		IdempotencyKey: "ff-token-expired",
+	}, "tr_ff_expired_confirm"); err == nil {
+		t.Fatalf("expired confirm succeeded")
+	} else {
+		assertAPIErrorCode(t, err, apierrors.CodeConfirmUsed)
+	}
+	assertAuctionEngineSeq(t, db, auctionID, 0, 10_000, "ACTIVE")
+
+	replayed, err := engine.PlaceBid(ctx, auctionID, "user_1", "ff-token-expired", auction.BidInput{
+		ClientBidID:   "ff-token-expired",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_ff_pending_replay_after_expiry")
+	if err != nil {
+		t.Fatalf("pending replay after expired confirm: %v", err)
+	}
+	if replayed.Result != string(apierrors.CodeFatFingerConfirmRequired) || replayed.ConfirmToken != pending.ConfirmToken {
+		t.Fatalf("pending replay = %#v, want original confirm-required token", replayed)
+	}
+}
+
 func TestRedisLedgerHotProxyAutoOutbidsThroughSameCAS(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
@@ -1162,6 +1281,124 @@ func TestRedisLedgerHotProxyAutoOutbidsThroughSameCAS(t *testing.T) {
 	}
 	if lastApplied == nil || *lastApplied != 2 {
 		t.Fatalf("last_applied_seq = %v, want 2", lastApplied)
+	}
+}
+
+func TestRedisLedgerHotProxyIgnoresCancelledIntent(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+	repo := auction.NewRepository(db)
+	intent, err := repo.UpsertMaxBidIntent(ctx, auctionID, "user_2", auction.MaxBidIntentInput{
+		MaxAmountCents: 30_000,
+		Source:         auction.MaxBidIntentSourceMaxBid,
+	})
+	if err != nil {
+		t.Fatalf("UpsertMaxBidIntent: %v", err)
+	}
+	if _, err := repo.CancelMaxBidIntent(ctx, auctionID, "user_2"); err != nil {
+		t.Fatalf("CancelMaxBidIntent: %v", err)
+	}
+
+	resp, err := engine.PlaceBid(ctx, auctionID, "user_1", "proxy-cancelled-trigger", auction.BidInput{
+		ClientBidID:   "proxy-cancelled-trigger",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_proxy_cancelled")
+	if err != nil {
+		t.Fatalf("PlaceBid: %v", err)
+	}
+	if resp.Result != auction.BidResultEngineAccepted || resp.CurrentWinnerID == nil || *resp.CurrentWinnerID != "user_1" || resp.CurrentPriceCents != 15_000 || resp.EngineSeq != 1 {
+		t.Fatalf("response = %#v, want manual user_1 accepted without proxy", resp)
+	}
+	ensureLedgerMessages(t, ctx, worker, 1)
+	if _, err := worker.ProcessKafka(ctx, 10); err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+	assertAuctionEngineSeq(t, db, auctionID, 1, 15_000, "ACTIVE")
+	assertMaxBidIntentState(t, db, intent.ID, auction.MaxBidIntentStatusCancelled, nil)
+}
+
+func TestRedisLedgerHotProxyExhaustsIntentBelowNextBid(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+	repo := auction.NewRepository(db)
+	intent, err := repo.UpsertMaxBidIntent(ctx, auctionID, "user_2", auction.MaxBidIntentInput{
+		MaxAmountCents: 15_000,
+		Source:         auction.MaxBidIntentSourceMaxBid,
+	})
+	if err != nil {
+		t.Fatalf("UpsertMaxBidIntent: %v", err)
+	}
+
+	resp, err := engine.PlaceBid(ctx, auctionID, "user_1", "proxy-exhaust-trigger", auction.BidInput{
+		ClientBidID:   "proxy-exhaust-trigger",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_proxy_exhaust")
+	if err != nil {
+		t.Fatalf("PlaceBid: %v", err)
+	}
+	if resp.Result != auction.BidResultEngineAccepted || resp.CurrentWinnerID == nil || *resp.CurrentWinnerID != "user_1" || resp.EngineSeq != 1 {
+		t.Fatalf("response = %#v, want manual user_1 accepted without proxy", resp)
+	}
+	ensureLedgerMessages(t, ctx, worker, 1)
+	if _, err := worker.ProcessKafka(ctx, 10); err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+	assertAuctionEngineSeq(t, db, auctionID, 1, 15_000, "ACTIVE")
+	assertMaxBidIntentState(t, db, intent.ID, auction.MaxBidIntentStatusExhausted, nil)
+}
+
+func TestRedisLedgerHotProxyCanReachCapAndSell(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 25_000)
+	repo := auction.NewRepository(db)
+	intent, err := repo.UpsertMaxBidIntent(ctx, auctionID, "user_2", auction.MaxBidIntentInput{
+		MaxAmountCents: 25_000,
+		Source:         auction.MaxBidIntentSourceMaxBid,
+	})
+	if err != nil {
+		t.Fatalf("UpsertMaxBidIntent: %v", err)
+	}
+
+	resp, err := engine.PlaceBid(ctx, auctionID, "user_1", "proxy-cap-trigger", auction.BidInput{
+		ClientBidID:   "proxy-cap-trigger",
+		AmountCents:   20_000,
+		ClientSeenSeq: 0,
+	}, "tr_proxy_cap")
+	if err != nil {
+		t.Fatalf("PlaceBid: %v", err)
+	}
+	if resp.Result != auction.BidResultEngineSold || resp.CurrentWinnerID == nil || *resp.CurrentWinnerID != "user_2" || resp.CurrentPriceCents != 25_000 || resp.EngineSeq != 2 {
+		t.Fatalf("response = %#v, want proxy user_2 sold at cap seq 2", resp)
+	}
+	ensureLedgerMessages(t, ctx, worker, 2)
+	if _, err := worker.ProcessKafka(ctx, 10); err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+	assertAuctionEngineSeq(t, db, auctionID, 2, 25_000, "SOLD")
+	assertMaxBidIntentState(t, db, intent.ID, auction.MaxBidIntentStatusActive, int64Ptr(2))
+	var orders int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM orders WHERE auction_id = $1 AND user_id = 'user_2' AND amount_cents = 25000`, auctionID).Scan(&orders); err != nil {
+		t.Fatalf("count proxy cap orders: %v", err)
+	}
+	if orders != 1 {
+		t.Fatalf("proxy cap orders = %d, want 1", orders)
 	}
 }
 
@@ -3423,6 +3660,31 @@ func assertAuctionEngineSeq(t *testing.T, db *pgxpool.Pool, auctionID string, wa
 	}
 	if seq != wantSeq || price != wantPrice || status != wantStatus {
 		t.Fatalf("auction state seq=%d price=%d status=%s, want seq=%d price=%d status=%s", seq, price, status, wantSeq, wantPrice, wantStatus)
+	}
+}
+
+func assertMaxBidIntentState(t *testing.T, db *pgxpool.Pool, intentID string, wantStatus auction.MaxBidIntentStatus, wantLastApplied *int64) {
+	t.Helper()
+	var status string
+	var lastApplied *int64
+	if err := db.QueryRow(context.Background(), `
+		SELECT status, last_applied_seq
+		FROM max_bid_intents
+		WHERE id = $1
+	`, intentID).Scan(&status, &lastApplied); err != nil {
+		t.Fatalf("load max bid intent: %v", err)
+	}
+	if status != string(wantStatus) {
+		t.Fatalf("max bid intent status = %s, want %s", status, wantStatus)
+	}
+	if wantLastApplied == nil {
+		if lastApplied != nil {
+			t.Fatalf("max bid intent last_applied_seq = %v, want nil", *lastApplied)
+		}
+		return
+	}
+	if lastApplied == nil || *lastApplied != *wantLastApplied {
+		t.Fatalf("max bid intent last_applied_seq = %v, want %d", lastApplied, *wantLastApplied)
 	}
 }
 
