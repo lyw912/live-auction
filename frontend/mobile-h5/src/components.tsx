@@ -185,7 +185,7 @@ export function LiveStage({
       {countdownPhase.phase === 'hammer' && countdownPhase.beat && !scenario.stale && !scenario.sold ? (
         <div className="hammer-beat-layer" data-testid="hammer-beat-layer" aria-live="polite">
           <span>{countdownPhase.beat}</span>
-          <strong>{countdownPhase.beat === '最后一次' ? '落锤前最后确认' : '有效出价仍会延时'}</strong>
+          <strong>{countdownPhase.beat === '最后一次' ? '落槌前最后确认' : '有效出价仍会延时'}</strong>
           <em>以最终成交结果为准</em>
         </div>
       ) : null}
@@ -450,6 +450,7 @@ export function AuctionStatePanel({
   scenario,
   terminalPriceCents,
   terminalWinnerID,
+  terminalWinnerMasked,
   onClose,
   onDecreaseBid,
   onIncreaseBid,
@@ -477,6 +478,7 @@ export function AuctionStatePanel({
   scenario: Scenario;
   terminalPriceCents: number;
   terminalWinnerID: string;
+  terminalWinnerMasked: string;
   onClose: () => void;
   onDecreaseBid: () => void;
   onIncreaseBid: () => void;
@@ -548,7 +550,7 @@ export function AuctionStatePanel({
         <div className="countdown-row" data-testid="auction-countdown" data-effect={atmosphereCue?.kind === 'extended' ? 'extension-stretch' : 'none'} data-countdown-phase={countdownPhase.phase}>
           <Clock3 size={16} />
           <span>{scenario.countdown ?? countdownCopy}</span>
-          {countdownPhase.phase === 'hammer' && !scenario.stale && !scenario.sold && <strong>{countdownPhase.beat || '落锤窗口'}</strong>}
+          {countdownPhase.phase === 'hammer' && !scenario.stale && !scenario.sold && <strong>{countdownPhase.beat || '落槌窗口'}</strong>}
           {extensionNotice && !scenario.sold && <strong>{extensionNotice}</strong>}
         </div>
       </div>
@@ -585,6 +587,7 @@ export function AuctionStatePanel({
         scenario={scenario}
         terminalPriceCents={terminalPriceCents || currentPriceCents}
         terminalWinnerID={terminalWinnerID}
+        terminalWinnerMasked={terminalWinnerMasked}
         userBestCents={leaderboard?.my_best_amount_cents ?? 0}
         orderID={orderID}
         orderAmountCents={orderAmountCents}
@@ -624,6 +627,7 @@ export function ResultSheet({
   scenario,
   terminalPriceCents,
   terminalWinnerID,
+  terminalWinnerMasked,
   userBestCents,
   onOpenOrders,
   onPay
@@ -640,6 +644,7 @@ export function ResultSheet({
   scenario: Scenario;
   terminalPriceCents: number;
   terminalWinnerID: string;
+  terminalWinnerMasked: string;
   userBestCents: number;
   onOpenOrders: () => void;
   onPay: () => void;
@@ -649,17 +654,18 @@ export function ResultSheet({
   const soldPrice = formatCents(orderAmountCents || terminalPriceCents);
   const nextTitle = nextAuction?.item?.title ?? '下一件拍品';
   const nextPrice = nextAuction ? formatCents(nextAuction.current_price_cents ?? 0) : '';
-  const nextStatus = nextAuction?.status ?? '';
+  const nextStatus = nextAuction ? auctionStatusLabel(nextAuction.status) : '';
   const gapCents = Math.max(0, terminalPriceCents - userBestCents);
+  const winnerDisplayName = terminalWinnerMasked || (kind === 'winner' ? '我' : '领先者');
   const isPaymentDisabled = scenario.ctaDisabled || paymentPhase === 'pending' || paymentPhase === 'paid' || paymentPhase === 'expired' || !orderID;
   const title = kind === 'winner'
     ? paymentPhase === 'paid'
       ? '支付已完成'
       : paymentPhase === 'expired'
         ? '支付窗口已关闭'
-        : '恭喜拍中'
+        : '恭喜中拍'
     : kind === 'loser'
-      ? '本场已落锤'
+      ? '本场已落槌'
       : '本场未成交';
   const recapHeat: HeatSnapshot = heat ?? {
     activeBidders30s: 0,
@@ -674,6 +680,7 @@ export function ResultSheet({
     kind,
     terminalPriceCents: orderAmountCents || terminalPriceCents,
     terminalWinnerID,
+    terminalWinnerMasked: winnerDisplayName,
     heat: recapHeat,
     nextTitle: nextAuction?.item?.title
   });
@@ -736,7 +743,7 @@ export function ResultSheet({
         )}
         {kind === 'loser' && (
           <>
-            <p>{terminalWinnerID ? `${terminalWinnerID.slice(0, 2)}**` : '领先者'} 以 {formatCents(terminalPriceCents)} 拍中。{gapCents > 0 ? `你距离成交差 ${formatCents(gapCents)}。` : '你未在最后价格领先。'}</p>
+            <p>{winnerDisplayName} 以 {formatCents(terminalPriceCents)} 中拍。{gapCents > 0 ? `你距离成交差 ${formatCents(gapCents)}。` : '你未在最后价格领先。'}</p>
             <p>可继续关注 {nextTitle}，本场历史会保留在出价记录中。下一件来自当前直播间拍品列表，不是库存预留或个性化推荐。</p>
           </>
         )}
@@ -1065,7 +1072,7 @@ export function ProductRuleSheet({ auction, item, scenario }: { auction?: Auctio
   const depositCap = auction?.rule?.deposit_cap_cents ?? 0;
   const depositBps = auction?.rule?.deposit_bps ?? 0;
   const depositCopy = depositFloor > 0 || depositBps > 0
-    ? `本场要求保证金，最低 ${formatCents(depositFloor)}${depositCap > 0 ? `，最高 ${formatCents(depositCap)}` : ''}。未拍中或订单完成后按支付链路处理。`
+    ? `本场要求保证金，最低 ${formatCents(depositFloor)}${depositCap > 0 ? `，最高 ${formatCents(depositCap)}` : ''}。未中拍或订单完成后按支付链路处理。`
     : '本场未展示固定保证金门槛；以服务端出价校验和订单状态为准。';
   const extensionCopy = `最后 ${auction?.rule?.extend_window_seconds ?? 10} 秒内有有效出价，会自动延长 ${auction?.rule?.extend_by_seconds ?? 10} 秒${auction?.rule?.max_extend_count ? `，最多 ${auction.rule.max_extend_count} 次` : ''}，避免最后一秒抢拍。`;
   const capCopy = auction?.cap_price_cents

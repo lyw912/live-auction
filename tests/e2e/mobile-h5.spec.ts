@@ -19,6 +19,16 @@ async function expectDockConnection(page: Page, text: string) {
   await expect(page.getByLabel('auction-state').locator('.signal-row')).toContainText(text);
 }
 
+async function raisePreparedBid(page: Page, amountText: string) {
+  const amount = page.getByLabel('auction-state').locator('.bid-stepper').locator('span');
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if ((await amount.textContent().catch(() => ''))?.includes(amountText)) return;
+    await page.getByRole('button', { name: 'increase' }).click();
+    await page.waitForTimeout(50);
+  }
+  await expect(amount).toContainText(amountText);
+}
+
 async function openLiveOpsPanel(page: Page) {
   if (await page.getByTestId('live-ops-panel').isVisible().catch(() => false)) return;
   await page.getByRole('button', { name: '直播互动' }).click();
@@ -826,7 +836,7 @@ test('H5 engine sold pending waits for settlement before payment copy', async ({
   await page.getByRole('button', { name: '竞价中' }).click();
   await page.getByTestId('bid-cta').click();
 
-  await expect(page.getByLabel('auction-state').getByText('落锤结算中')).toBeVisible();
+  await expect(page.getByLabel('auction-state').getByText('落槌结算中')).toBeVisible();
   await expect(page.getByTestId('bid-cta')).toHaveText(/等待订单/);
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
   await expect(page.getByText('订单 ord_pending 已锁定')).not.toBeVisible();
@@ -1163,7 +1173,7 @@ test('H5 winner result sheet locks order and shares the single payment path', as
   });
   const sheet = page.getByTestId('result-sheet');
   await expect(sheet).toBeVisible();
-  await expect(sheet.getByRole('heading', { name: '恭喜拍中' })).toBeVisible();
+  await expect(sheet.getByRole('heading', { name: '恭喜中拍' })).toBeVisible();
   await expect(sheet.getByText('成交价 ¥600.00')).toBeVisible();
   await expect(sheet.getByText(/订单 JP\d{8}-PENDING 已锁定/)).toBeVisible();
   await expect(sheet.getByText('保证金会随订单状态处理')).toBeVisible();
@@ -1190,7 +1200,7 @@ test('H5 winner result sheet locks order and shares the single payment path', as
 test('H5 loser and unsold result sheets explain next action without enabling bid', async ({ page }) => {
   await page.goto('/?stateMatrix=1');
 
-  await page.getByRole('button', { name: '竞价中' }).click();
+  await selectActiveBidsState(page);
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent('auction:event', {
       detail: {
@@ -1199,19 +1209,22 @@ test('H5 loser and unsold result sheets explain next action without enabling bid
         seq: 42,
         payload: {
           amount_cents: 60000,
+          current_price_cents: 60000,
           current_winner_id: 'user_2',
           user_id: 'user_2',
-          leader_user_masked: '赵**'
+          leader_user_masked: '赵**',
+          end_at: '2099-05-22T14:00:00Z',
+          server_time_ms: Date.parse('2099-05-22T13:59:00Z')
         }
       }
     }));
   });
-  const loserSheet = page.getByTestId('result-sheet').filter({ hasText: '本场已落锤' }).first();
-  await expect(loserSheet.getByRole('heading', { name: '本场已落锤' })).toBeVisible();
-  await expect(loserSheet.getByText('us** 以 ¥600.00 拍中')).toBeVisible();
+  const loserSheet = page.getByTestId('result-sheet').filter({ hasText: '本场已落槌' }).first();
+  await expect(loserSheet.getByRole('heading', { name: '本场已落槌' })).toBeVisible();
+  await expect(loserSheet.getByText('赵** 以 ¥600.00 中拍')).toBeVisible();
   await expect(loserSheet.getByText('下一件：紫砂壶')).toBeVisible();
   await expect(loserSheet.getByTestId('next-auction-handoff').getByText('直播间下一件', { exact: true })).toBeVisible();
-  await expect(loserSheet.getByTestId('next-auction-handoff').getByText('SCHEDULED')).toBeVisible();
+  await expect(loserSheet.getByTestId('next-auction-handoff').getByText('即将开拍')).toBeVisible();
   await expect(loserSheet.getByTestId('next-auction-handoff').getByText(/未承诺相似度、库存预留或中标优先权/)).toBeVisible();
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
 
@@ -1223,7 +1236,10 @@ test('H5 loser and unsold result sheets explain next action without enabling bid
         auction_id: 'auc_live',
         event_type: 'auction_ended',
         seq: 42,
-        payload: {}
+        payload: {
+          end_at: '2099-05-22T14:00:00Z',
+          server_time_ms: Date.parse('2099-05-22T13:59:00Z')
+        }
       }
     }));
   });
@@ -1910,7 +1926,7 @@ test('H5 official bid hints stay beside amount and CTA', async ({ page }) => {
   await expect(page.getByTestId('bid-hint')).not.toContainText('Redis');
 
   await page.getByRole('button', { name: '竞价中' }).click();
-  await page.getByRole('button', { name: 'increase' }).click();
+  await raisePreparedBid(page, '¥450.00');
   await expect(page.getByTestId('bid-hint')).toContainText('高于当前价 ¥100.00');
   await expect(page.getByTestId('bid-hint')).toContainText('高于最低下一口 ¥50.00');
 });
@@ -1918,8 +1934,7 @@ test('H5 official bid hints stay beside amount and CTA', async ({ page }) => {
 test('H5 prepared bid hint updates when authoritative price changes', async ({ page }) => {
   await page.goto('/?stateMatrix=1');
   await page.getByRole('button', { name: '竞价中' }).click();
-  await page.getByRole('button', { name: 'increase' }).click();
-  await page.getByRole('button', { name: 'increase' }).click();
+  await raisePreparedBid(page, '¥500.00');
   await expect(page.getByTestId('bid-hint')).toContainText('高于最低下一口 ¥100.00');
 
   await page.evaluate(() => {
@@ -2210,17 +2225,20 @@ test('H5 extension and sold visual effects use bounded nonblocking motion layers
   await expect(page.getByTestId('auction-countdown')).toHaveCSS('animation-name', 'countdown-stretch');
 
   await expect(page.getByTestId('live-stage')).toHaveAttribute('data-atmosphere-kind', 'none', { timeout: 3000 });
+
+  await page.goto('/?stateMatrix=1');
+  await selectActiveBidsState(page);
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent('auction:event', {
       detail: {
         auction_id: 'auc_live',
         event_type: 'auction_sold',
-        seq: 43,
+        seq: 42,
         payload: {
-          current_price_cents: 40000,
+          current_price_cents: 60000,
           current_winner_id: 'user_2',
           leader_user_masked: '张**',
-          end_at: '2099-05-22T14:00:20Z',
+          end_at: '2099-05-22T14:00:00Z',
           server_time_ms: Date.parse('2099-05-22T13:59:52Z')
         }
       }

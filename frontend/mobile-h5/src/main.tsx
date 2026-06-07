@@ -56,6 +56,7 @@ function App() {
   const [payableOrderAmountCents, setPayableOrderAmountCents] = useState(0);
   const [terminalPriceCents, setTerminalPriceCents] = useState(0);
   const [terminalWinnerID, setTerminalWinnerID] = useState('');
+  const [terminalWinnerMasked, setTerminalWinnerMasked] = useState('');
   const [auctionEndAt, setAuctionEndAt] = useState('');
   const [serverTimeMS, setServerTimeMS] = useState(0);
   const [nowMS, setNowMS] = useState(Date.now());
@@ -422,7 +423,7 @@ function App() {
           title: '支付中',
           status: 'SOLD',
           price: soldPrice,
-          leader: '你已拍中',
+          leader: '你已中拍',
           feedback: '等待支付确认',
           countdown: '支付确认中',
           cta: '支付中',
@@ -452,7 +453,7 @@ function App() {
           title: '支付失败',
           status: 'SOLD',
           price: soldPrice,
-          leader: '你已拍中',
+          leader: '你已中拍',
           feedback: '支付未确认，请重试',
           countdown: '订单仍待支付',
           cta: '重新支付',
@@ -481,7 +482,7 @@ function App() {
         title: '成交',
         status: 'SOLD',
         price: soldPrice,
-        leader: '你已拍中',
+        leader: '你已中拍',
         feedback: payableOrderID ? '订单待支付' : '订单生成中',
         countdown: payableOrderID ? '支付倒计时以订单为准' : '订单生成中',
         cta: payableOrderID ? '去支付' : '等待订单',
@@ -496,9 +497,9 @@ function App() {
         title: '已成交',
         status: 'SOLD',
         price: formatCents(terminalPriceCents || currentPriceCents),
-        leader: terminalWinnerID ? `${terminalWinnerID.slice(0, 2)}** 拍中` : '已拍出',
+        leader: terminalWinnerMasked ? `${terminalWinnerMasked} 中拍` : '已中拍',
         feedback: '本场已结束',
-        countdown: '已落锤',
+        countdown: '已落槌',
         cta: '已结束',
         ctaDisabled: true,
         sold: true
@@ -631,10 +632,10 @@ function App() {
     if (bidPhase === 'engine_sold_pending') {
       return {
         key: 'pending' as AuctionState,
-        title: '落锤结算中',
+        title: '落槌结算中',
         status: 'ENGINE_SOLD_PENDING',
         price: formatCents(currentPriceCents),
-        leader: leaderMasked ? `${leaderMasked} 拍中` : '正在确认成交',
+        leader: leaderMasked ? `${leaderMasked} 中拍` : '正在确认成交',
         feedback: bidFeedback || '等待订单结算确认',
         countdown: '订单生成中',
         cta: '等待订单',
@@ -818,11 +819,12 @@ function App() {
     if (payload.result === 'ACCEPTED_SOLD') {
       setTerminalPriceCents(acceptedPrice);
       setTerminalWinnerID(payload.current_winner_id ?? '');
+      setTerminalWinnerMasked(payload.leader_user_masked ?? leaderMaskedRef.current);
       setSelected(payload.current_winner_id === currentUserID ? 'sold_winner' : 'sold_loser');
       showAtmosphere({
         kind: 'sold',
         title: payload.current_winner_id === currentUserID ? '成交！' : '已成交',
-        detail: payload.current_winner_id === currentUserID ? '你已拍中，订单待支付' : '本场已落锤',
+        detail: payload.current_winner_id === currentUserID ? '你已中拍，订单待支付' : '本场已落槌',
         auction_id: payload.auction_id ?? activeAuctionIDRef.current,
         cause_seq: payload.seq ?? lastSeqRef.current,
         event_type: payload.result,
@@ -906,6 +908,7 @@ function App() {
     if (status === 'SOLD' && syncSelected) {
       setTerminalPriceCents(price);
       setTerminalWinnerID(winnerID ?? '');
+      setTerminalWinnerMasked(snapshot.payload?.leader_user_masked ?? leaderMaskedRef.current);
       setSelected(winnerID === currentUserID ? 'sold_winner' : 'sold_loser');
       if (winnerID === currentUserID) {
         void loadPayableOrderForAuction(snapshotAuctionID ?? activeAuctionIDRef.current);
@@ -1009,6 +1012,7 @@ function App() {
     if (detail.event_type === 'auction_sold') {
       setTerminalPriceCents(price);
       setTerminalWinnerID(winnerID);
+      setTerminalWinnerMasked(detail.payload?.leader_user_masked ?? leaderMaskedRef.current);
       if (detail.payload?.order_id && winnerID === currentUserID) {
         setPayableOrderID(detail.payload.order_id);
         setPayableOrderAmountCents(price);
@@ -1017,7 +1021,7 @@ function App() {
       showAtmosphere({
         kind: 'sold',
         title: winnerID === currentUserID ? '成交！' : '已成交',
-        detail: winnerID === currentUserID ? '你已拍中，订单待支付' : '本场已落锤',
+        detail: winnerID === currentUserID ? '你已中拍，订单待支付' : '本场已落槌',
         auction_id: detail.auction_id,
         cause_seq: detail.seq,
         event_type: detail.event_type,
@@ -1826,6 +1830,7 @@ function App() {
           resultSheetKind={resultSheetKind}
           terminalPriceCents={terminalPriceCents || currentPriceCents}
           terminalWinnerID={terminalWinnerID}
+          terminalWinnerMasked={terminalWinnerMasked}
           onClose={() => setOverlayMode('feed')}
           onDecreaseBid={decreaseBidAmount}
           onIncreaseBid={increaseBidAmount}
@@ -1852,6 +1857,7 @@ function App() {
           scenario={scenario}
           terminalPriceCents={terminalPriceCents || currentPriceCents}
           terminalWinnerID={terminalWinnerID}
+          terminalWinnerMasked={terminalWinnerMasked}
           userBestCents={leaderboard?.my_best_amount_cents ?? 0}
           onOpenOrders={() => setActiveSheet(resultSheetKind === 'winner' ? 'orders' : 'history')}
           onPay={payOrder}

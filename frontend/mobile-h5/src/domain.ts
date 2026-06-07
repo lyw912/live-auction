@@ -85,6 +85,7 @@ export type BidResponse = {
   };
   current_price_cents?: number;
   current_winner_id?: string;
+  leader_user_masked?: string;
   end_at?: string;
   server_time_ms?: number;
   reject_reason?: string | null;
@@ -368,8 +369,8 @@ export const scenarios: Scenario[] = [
   { key: 'extended', title: '已延时', status: 'ACTIVE', price: '¥450.00', leader: '王** 领先', feedback: '已延时 10 秒', countdown: '延时后 00:20', cta: '出一手 ¥500.00', ctaDisabled: false },
   { key: 'recovering', title: '恢复中', status: 'RECOVERING', price: '¥450.00', leader: '加载中', feedback: h5Copy.refreshing, countdown: '剩余时间确认中', cta: h5Copy.loading, ctaDisabled: true, stale: true },
   { key: 'disconnected', title: '已断开', status: 'DISCONNECTED', price: '¥450.00', leader: '离线', feedback: '重连中', countdown: '剩余时间已过期', cta: '重连中', ctaDisabled: true, stale: true },
-  { key: 'sold_winner', title: '成交', status: 'SOLD', price: '¥600.00', leader: '你已拍中', feedback: '订单待支付', countdown: '正在生成支付倒计时', cta: '去支付', ctaDisabled: false, winner: true, sold: true },
-  { key: 'sold_loser', title: '已成交', status: 'SOLD', price: '¥600.00', leader: '赵** 拍中', feedback: '本场已结束', countdown: '已落锤', cta: '已结束', ctaDisabled: true, sold: true },
+  { key: 'sold_winner', title: '成交', status: 'SOLD', price: '¥600.00', leader: '你已中拍', feedback: '订单待支付', countdown: '正在生成支付倒计时', cta: '去支付', ctaDisabled: false, winner: true, sold: true },
+  { key: 'sold_loser', title: '已成交', status: 'SOLD', price: '¥600.00', leader: '赵** 中拍', feedback: '本场已结束', countdown: '已落槌', cta: '已结束', ctaDisabled: true, sold: true },
   { key: 'ended', title: '流拍', status: 'ENDED', price: '¥100.00', leader: '无成交', feedback: '无人出价', countdown: '已结束', cta: '已结束', ctaDisabled: true },
   { key: 'cancelled', title: '已取消', status: 'CANCELLED', price: '¥350.00', leader: '取消前价格', feedback: '主播已取消', countdown: '已取消', cta: '已取消', ctaDisabled: true }
 ];
@@ -771,20 +772,21 @@ export function buildResultRecap(input: {
   kind: 'winner' | 'loser' | 'unsold';
   terminalPriceCents: number;
   terminalWinnerID?: string;
+  terminalWinnerMasked?: string;
   heat: HeatSnapshot;
   extendCount?: number;
   nextTitle?: string;
 }): ResultRecap {
   const price = formatCents(input.terminalPriceCents);
-  const status = input.kind === 'winner' ? '已拍中' : input.kind === 'loser' ? '已落锤' : '未成交';
+  const status = input.kind === 'winner' ? '已中拍' : input.kind === 'loser' ? '已落槌' : '未成交';
   const winner = input.kind === 'unsold'
     ? '无成交买家'
     : input.kind === 'winner'
       ? '我'
-      : input.terminalWinnerID ? `${input.terminalWinnerID.slice(0, 2)}**` : '领先者';
+      : input.terminalWinnerMasked || '领先者';
   const facts = [
     input.heat.acceptedBidderCount > 0 ? `${input.heat.acceptedBidderCount} 人有效出价` : '',
-    input.heat.totalAcceptedBids != null ? `${input.heat.totalAcceptedBids} 口有效出价` : '',
+    input.heat.totalAcceptedBids != null ? `${input.heat.totalAcceptedBids} 次出价` : '',
     input.extendCount && input.extendCount > 0 ? `末段延时 ${input.extendCount} 次` : '',
     input.heat.priceVelocityCentsPerMin > 0 ? `${formatCents(input.heat.priceVelocityCentsPerMin)}/分` : ''
   ].filter(Boolean);

@@ -630,7 +630,7 @@ export function QueueCard({
           起 {formatCents(auction.start_price_cents)} · 加 {formatCents(auction.increment_cents)} · 封 {formatCents(auction.cap_price_cents)}
         </span>
         <span className="queue-rules">
-          当前/成交 {formatCents(auction.current_price_cents)} · {auction.accepted_bid_count} 口 · {auction.end_at ? formatRemaining(auction.end_at) : '-'}
+          当前/成交 {formatCents(auction.current_price_cents)} · {auction.accepted_bid_count} 次出价 · {auction.end_at ? formatRemaining(auction.end_at) : '-'}
         </span>
         <span className="queue-constraints">
           {constraints.map((constraint) => <em key={constraint}>{constraint}</em>)}
@@ -673,7 +673,7 @@ export function AuctionControlSummary({
           <div className="command-subline">
             <span>领先者 {maskUser(selectedAuction.current_winner_id)}</span>
             <span>刚刚更新</span>
-            <span>{selectedAuction.accepted_bid_count} 口有效出价</span>
+            <span>{selectedAuction.accepted_bid_count} 次有效出价</span>
           </div>
         </div>
       </div>
@@ -692,7 +692,7 @@ export function AuctionControlSummary({
         </div>
         <div>
           <span>有效出价</span>
-          <strong>{selectedAuction.accepted_bid_count} 口</strong>
+          <strong>{selectedAuction.accepted_bid_count} 次</strong>
         </div>
         <div>
           <span>延时次数</span>
@@ -1622,6 +1622,9 @@ export function DiagnosticsPanel({
   const latestAppendLabel = latestAppend
     ? `${latestAppend.latest_append_status ?? '-'} · seq ${latestAppend.latest_append_engine_seq ?? '-'} · ${latestAppend.latest_append_topic ?? '-'}:${latestAppend.latest_append_partition ?? '-'}:${latestAppend.latest_append_offset ?? '-'}`
     : '暂无 append marker';
+  const recoveryLabel = engineSummary.last_recovery_rto_ms
+    ? `最近恢复 ${formatLag(engineSummary.last_recovery_rto_ms)} ${engineSummary.last_recovery_status ?? ''}`.trim()
+    : '最近恢复 暂无记录';
   return (
     <section className="band diagnostics" data-testid="diagnostics">
       <div className="section-title">
@@ -1634,7 +1637,7 @@ export function DiagnosticsPanel({
         <span>写入结果 {engineSummary.append_success_count}/{engineSummary.append_failure_count}/{engineSummary.append_unknown_count}</span>
         <span>待入账 {engineSummary.pending_settlements}/{engineSummary.failed_settlements}</span>
         <span>最长延迟 {engineSummary.settlement_lag_max_ms}ms</span>
-        <span>最近恢复 {engineSummary.last_recovery_rto_ms ?? '-'}ms {engineSummary.last_recovery_status ?? ''}</span>
+        <span>{recoveryLabel}</span>
         <span>暂停中 {engineSummary.paused_auctions}</span>
         <span>{latestAppendLabel}</span>
       </div>
