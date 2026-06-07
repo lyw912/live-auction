@@ -80,6 +80,16 @@ body {
   color: #fff;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    scroll-behavior: auto !important;
+    transition: none !important;
+  }
+}
+
 .content {
   padding: 20px;
   background: #f5f6fa;

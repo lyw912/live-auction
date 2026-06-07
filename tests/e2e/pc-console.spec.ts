@@ -399,6 +399,14 @@ test('PC accessibility gate exposes live diagnostic state and named controls', a
   await expect(page.getByLabel('monitor-trace-id')).toBeVisible();
 });
 
+test('PC respects reduced motion preference while keeping controls usable', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/');
+  await expect(page.getByTestId('health-ribbon-status')).toBeVisible();
+  await expect(page.getByRole('button', { name: '诊断', exact: true })).toBeVisible();
+  await expect(page.evaluate(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches)).resolves.toBe(true);
+});
+
 test('PC host live assist renders API prompts and dismisses locally without mutating auction state', async ({ page }) => {
   const mutationRequests: string[] = [];
   page.on('request', (request) => {
