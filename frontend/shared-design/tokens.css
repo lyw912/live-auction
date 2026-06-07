@@ -1,6 +1,6 @@
 :root {
-  --font-auction-sans: Inter, "Segoe UI", Arial, sans-serif;
-  --font-auction-tabular: Inter, "Segoe UI", Arial, sans-serif;
+  --font-auction-sans: "Alibaba PuHuiTi 3.0", -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+  --font-auction-tabular: "Roboto Mono", "SFMono-Regular", ui-monospace, "Segoe UI", monospace;
 
   --color-ink-950: #111315;
   --color-ink-900: #181a22;
@@ -13,6 +13,13 @@
   --color-muted: #667085;
   --color-muted-strong: #313746;
   --color-bid-red: #ff2d55;
+  --color-cta: #FE2C55;
+  --color-primary: #165DFF;
+  --color-danger: #FF4D4F;
+  --color-success: #00A870;
+  --color-gold: #D4AF37;
+  --color-gold-bright: #EFBF04;
+  --color-champagne: #F7E6CA;
   --color-bid-red-soft: #fff0f4;
   --color-auction-gold: #ffb000;
   --color-auction-gold-soft: #fff7df;

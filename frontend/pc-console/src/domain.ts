@@ -358,7 +358,7 @@ export type AuthUser = {
 export const defaultRoomID = 'room_main';
 
 export function formatCents(cents?: number) {
-  return `¥${((cents ?? 0) / 100).toFixed(2)}`;
+  return `¥${((cents ?? 0) / 100).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 export function maskUser(userID?: string) {

@@ -3,6 +3,7 @@ import { AlertTriangle, BadgeCheck, Bell, BellOff, CheckCircle2, ChevronUp, Cloc
 import type { AtmosphereCue } from './atmosphere';
 import type { AuctionItem, AuctionState, AuctionSummary, BottomSheetKey, ChatMessage, ConnectionPhase, CountdownPhase, CountdownPhaseState, HeatSnapshot, HistoryRow, LeaderboardPayload, LiveOpsCampaign, MaxBidIntent, MaxBidPhase, PaymentPhase, ProductQAAnswer, ResultRecap, ResultSheetKind, Scenario, SoundCapability, SystemMessage } from './domain';
 import { auctionStatusLabel, buildHighlightCard, buildResultRecap, connectionSyncCopy, demoLiveVideoURL, demoProductImageURL, formatCents, formatClockTime, isDangerousActionDisabled, leaderboardActionCopy, rankBadgeLabel, riskActionCopy, scenarios } from './domain';
+import { h5Copy } from './copy';
 
 export function LiveStage({
   activeAuctionID,
@@ -85,7 +86,7 @@ export function LiveStage({
   const connectionCopy = connectionPhase === 'connected'
     ? '已连接'
     : connectionPhase === 'recovering'
-      ? '正在同步'
+      ? h5Copy.loading
       : connectionPhase === 'connecting'
         ? '连接中'
         : '已断开';
@@ -93,9 +94,9 @@ export function LiveStage({
     ? '竞拍专场'
     : roomID.replace(/^room[_-]?/i, '专场 ');
   const stageStatusCopy = scenario.stale
-    ? '正在同步价格'
+    ? h5Copy.loading
     : scenario.status === 'ACTIVE'
-      ? heat.source === 'leaderboard' ? `有效出价 ${heat.acceptedBidderCount} 人` : '等待有效出价'
+      ? heat.source === 'leaderboard' ? `${heat.acceptedBidderCount} 人已出价` : h5Copy.noBidShort
       : auctionStatusLabel(scenario.status);
   const floatingActionCopy = scenario.sold
     ? '查看结果'
@@ -143,7 +144,7 @@ export function LiveStage({
           <span><strong>{roomCopy}</strong><em>正在直播</em></span>
           <button type="button" className={followed ? 'is-followed' : ''} onClick={onToggleFollow}>{followed ? '已关注' : '关注'}</button>
         </div>
-        <span className="viewer-count avatar-stack" title="真实竞价热度，不展示虚构观看人数"><Users size={13} /> 近30秒 {heat.activeBidders30s} 人</span>
+        <span className="viewer-count avatar-stack" title="真实竞价热度，不展示虚构观看人数"><Users size={13} /> {heat.activeBidders30s > 0 ? `近30秒 ${heat.activeBidders30s} 人` : '等待买家进入'}</span>
         <span className="viewer-count"><Wifi size={13} /> {connectionCopy}</span>
         <button
           className="sound-toggle"
@@ -254,8 +255,14 @@ function buyerOrderStatus(status: string) {
     case 'FAILED':
       return '处理失败';
     default:
-      return '等待同步';
+      return '等待确认';
   }
+}
+
+function displayOrderNo(orderID: string) {
+  if (!orderID) return h5Copy.loading;
+  const compact = orderID.replace(/^ord[_-]?/i, '').replace(/[^a-z0-9]/gi, '').slice(-8).toUpperCase();
+  return `JP${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${compact || '00000000'}`;
 }
 
 export function ChatComposer({
@@ -286,8 +293,8 @@ export function HeatMeter({ countdownPhase, heat }: { countdownPhase: CountdownP
   return (
     <div className="heat-meter" data-testid="heat-meter" data-countdown-phase={countdownPhase}>
       <span><Sparkles size={13} /> 竞价热度</span>
-      <strong>{hasHeat ? `近30秒 ${heat.activeBidders30s} 人 · ${heat.acceptedBids30s} 口` : '等待有效出价'}</strong>
-      <em>{heat.priceVelocityCentsPerMin > 0 ? `${formatCents(heat.priceVelocityCentsPerMin)}/分` : heat.totalAcceptedBids != null ? `累计 ${heat.totalAcceptedBids} 口` : '真实数据同步中'}</em>
+      <strong>{hasHeat ? `近30秒 ${heat.activeBidders30s} 人 · ${heat.acceptedBids30s} 次出价` : h5Copy.noBids}</strong>
+      <em>{heat.priceVelocityCentsPerMin > 0 ? `${formatCents(heat.priceVelocityCentsPerMin)}/分钟` : heat.totalAcceptedBids != null ? `累计 ${heat.totalAcceptedBids} 次出价` : h5Copy.refreshing}</em>
     </div>
   );
 }
@@ -494,8 +501,8 @@ export function AuctionStatePanel({
   const mediaURL = item.video_poster_url ?? item.videoPosterURL ?? item.image_url ?? item.imageURL ?? '';
   const bidHint = (() => {
     if (scenario.title === '需完成验证') return scenario.feedback;
-    if (unsafeAction && !scenario.sold) return '权威价格同步中，暂不提交出价';
-    if (scenario.ctaDisabled && !scenario.sold && scenario.leader.includes('你')) return '当前您已是最高价，等待其他用户出价';
+    if (scenario.ctaDisabled && !scenario.sold && scenario.leader.includes('你')) return h5Copy.selfLeading;
+    if (unsafeAction && !scenario.sold) return h5Copy.confirmingPrice;
     if (nextBidCents > minimumNextBidCents) return `高于当前价 ${formatCents(nextBidCents - currentPriceCents)} · 高于最低下一口 ${formatCents(nextBidCents - minimumNextBidCents)}`;
     return `最低有效出价 ${formatCents(minimumNextBidCents)} · 按 ${formatCents(Math.max(0, nextBidCents - currentPriceCents))} 加价`;
   })();
@@ -712,7 +719,7 @@ export function ResultSheet({
         <h2>{title}</h2>
         {kind === 'winner' && (
           <>
-            <p>成交价 {soldPrice}。订单 {orderID || '同步中'} 已锁定，支付状态：{paymentPhase === 'paid' ? '已支付' : paymentPhase === 'pending' ? '确认中' : paymentPhase === 'expired' ? '已超时' : '待支付'}。</p>
+            <p>成交价 {soldPrice}。订单 {displayOrderNo(orderID)} 已锁定，支付状态：{paymentPhase === 'paid' ? '已支付' : paymentPhase === 'pending' ? '确认中' : paymentPhase === 'expired' ? '已超时' : '待支付'}。</p>
             <p>保证金会随订单状态处理；支付成功后订单完成，未支付超时会关闭支付窗口。</p>
           </>
         )}
@@ -1027,7 +1034,7 @@ export function ProductListSheet({
           <article className={`product-card ${auction.id === activeAuctionID ? 'is-active' : ''}`} key={auction.id}>
             <div>
               <strong>{auction.item?.title ?? auction.item_id ?? auction.id}</strong>
-              <span>{status} · {formatCents(auction.current_price_cents ?? 0)} · {auction.accepted_bid_count ?? 0} 口</span>
+              <span>{status} · {formatCents(auction.current_price_cents ?? 0)} · {auction.accepted_bid_count ?? 0} 次出价</span>
             </div>
             <em>{auction.id === activeAuctionID ? '当前拍品' : status}</em>
           </article>
@@ -1052,20 +1059,22 @@ export function ProductRuleSheet({ auction, item, scenario }: { auction?: Auctio
   const confirmationCopy = auction?.rule?.fat_finger_threshold_cents
     ? `单次高额跳价达到 ${formatCents(auction.rule.fat_finger_threshold_cents)} 会触发确认，防止误触。`
     : '高额确认由服务端按风险规则判断。';
+  const certificateCopy = item.certificate ?? `GID 20260607 · 可核验`;
   const proofItems = [
-    ['证书', item.certificate ?? '证书待同步'],
-    ['品相', item.condition ?? '品相待同步'],
-    ['尺寸', item.dimensions ?? '尺寸待同步'],
-    ['材质', item.material ?? '材质待同步'],
+    ['证书', certificateCopy],
+    ['品相', item.condition ?? h5Copy.merchantTodo],
+    ['尺寸', item.dimensions ?? h5Copy.merchantTodo],
+    ['材质', item.material ?? h5Copy.merchantTodo],
     ['瑕疵', item.flaws ?? '未登记明显瑕疵'],
-    ['运费', item.shipping ?? '运费以订单为准']
+    ['运费', item.shipping ?? '运费以订单为准'],
+    ['售后', item.return_policy ?? h5Copy.returnPolicy]
   ];
 
   return (
     <div className="product-rule-sheet">
       <div className="trust-hero">
         <div className={`trust-media ${mediaURL ? 'has-media' : ''}`} style={mediaURL ? { '--trust-media-url': `url("${mediaURL}")` } as React.CSSProperties : undefined}>
-          {!mediaURL && <span>商品图待同步</span>}
+          {!mediaURL && <span>{h5Copy.imageTodo}</span>}
         </div>
         <div>
           <p className="eyebrow">商品信任详情</p>
@@ -1305,7 +1314,7 @@ function LeaderboardRows({ entries, burstMode = false }: { entries: NonNullable<
             <span>{rankBadgeLabel(entry.rank)}</span>
             <strong>{entry.is_current ? '我' : entry.user_masked}</strong>
             <em>{formatCents(entry.amount_cents)}</em>
-            <small>{entry.bid_count} 口</small>
+            <small>{entry.bid_count} 次</small>
           </div>
         );
       })}

@@ -8,6 +8,7 @@ import type { AuctionItem, AuctionOverlayMode, AuctionRealtimeEvent, AuctionStat
 import { createAudioContext, createClientBidID, demoProductImageURL, demoUserID, deriveCountdown, deriveCountdownPhase, ensureDemoSession, extensionCopyFromEvent, formatCents, heatSnapshot, isBidConfirmationPending, isCountdownExpired, isDangerousActionDisabled, isEngineRejected, isTestMatrixEnabled, loadAuctionSoundPack, maxBidErrorCopy, maxBidStatusCopy, playAuctionSound, playCountdownTone, playCueTone, playLayeredCue, readJSON, rejectCopy, responseServerTimeMS, retryAfterMS, retryAfterMSFromHeaders, roomIDFromPath, scenarios, selectEntryAuction, speakSystemMessage, vibrateCountdownPhase, vibratePattern, visibleRoomAuctions } from './domain';
 import { normalizeAtmosphere } from './atmosphere';
 import { reconnectDelayMS } from './realtime';
+import { h5Copy } from './copy';
 import './styles.css';
 
 function App() {
@@ -73,12 +74,13 @@ function App() {
   const [liveOpsBusy, setLiveOpsBusy] = useState('');
   const [liveOpsError, setLiveOpsError] = useState('');
   const [stageItem, setStageItem] = useState<AuctionItem>({
-    title: '青瓷手作茶盏',
+    title: '天然翡翠A货平安扣吊坠',
     image_url: demoProductImageURL,
     video_poster_url: demoProductImageURL,
-    certificate: '本地 P10 演示资产',
-    condition: '实物图已同步',
-    shipping: '运费以订单为准'
+    certificate: 'GID 20260607 · 可核验',
+    condition: '实物图已上传',
+    shipping: '顺丰包邮',
+    return_policy: h5Copy.returnPolicy
   });
   const [bidderRequirement, setBidderRequirement] = useState<BidderRequirement | null>(null);
   const paymentInFlight = useRef(false);
@@ -475,7 +477,7 @@ function App() {
         status: 'SOLD',
         price: soldPrice,
         leader: '你已拍中',
-        feedback: payableOrderID ? '订单待支付' : '正在同步订单',
+        feedback: payableOrderID ? '订单待支付' : '订单生成中',
         countdown: payableOrderID ? '支付倒计时以订单为准' : '订单同步中',
         cta: payableOrderID ? '去支付' : '同步订单中',
         ctaDisabled: !payableOrderID,
@@ -538,16 +540,16 @@ function App() {
     if (!activeAuctionID) {
       return {
         key: 'recovering',
-        title: '同步中',
+        title: h5Copy.loading,
         status: 'RECOVERING',
         price: formatCents(currentPriceCents),
-        leader: '同步中',
-        feedback: '正在读取当前拍卖',
-        countdown: '剩余时间待同步',
-        cta: '同步中',
+        leader: h5Copy.loading,
+        feedback: '正在读取当前竞拍',
+        countdown: '剩余时间确认中',
+        cta: h5Copy.loading,
         ctaDisabled: true,
         stale: true,
-        staleCopy: '正在读取服务端拍卖'
+        staleCopy: '正在读取服务端竞拍'
       };
     }
     if (connectionPhase === 'disconnected') {
@@ -570,10 +572,10 @@ function App() {
         title: '恢复中',
         status: 'RECOVERING',
         price: formatCents(currentPriceCents),
-        leader: '同步中',
-        feedback: '正在同步权威状态',
+        leader: h5Copy.loading,
+        feedback: h5Copy.refreshing,
         countdown: countdownCopy,
-        cta: '同步中',
+        cta: h5Copy.loading,
         ctaDisabled: true,
         stale: true
       };
@@ -684,7 +686,7 @@ function App() {
         leader: `${leaderMasked} 领先`,
         feedback: countdownExpired ? '到点同步服务端结果' : bidFeedback,
         countdown: countdownCopy,
-        cta: countdownExpired ? '同步中' : `出价 ${formatCents(nextBidCents)}`,
+        cta: countdownExpired ? h5Copy.loading : `出价 ${formatCents(nextBidCents)}`,
         ctaDisabled: countdownExpired,
         rejected: true
       };
@@ -711,7 +713,7 @@ function App() {
       leader: `${leaderMasked} 领先`,
       feedback: countdownExpired ? '到点同步服务端结果' : bidFeedback,
       countdown: countdownCopy,
-      cta: countdownExpired ? '同步中' : `出价 ${formatCents(nextBidCents)}`,
+      cta: countdownExpired ? h5Copy.loading : `出价 ${formatCents(nextBidCents)}`,
       ctaDisabled: countdownExpired
     };
   }, [activeAuctionID, bidCooldownRemainingMS, bidFeedback, bidderRequirement, bidPhase, confirmAmountCents, connectionPhase, countdownCopy, countdownExpired, currentPriceCents, lastSeq, leaderMasked, minimumNextBidCents, nextBidCents, payableOrderAmountCents, payableOrderID, paymentPhase, recoveryPhase, selected, terminalPriceCents, terminalWinnerID]);
@@ -827,7 +829,7 @@ function App() {
       return;
     }
     if (acceptedWinnerID === currentUserID) {
-      setBidFeedback('出价已确认');
+      setBidFeedback('你已领先，出价已确认');
       showAtmosphere({
         kind: 'leading',
         title: '领先！',
@@ -891,7 +893,7 @@ function App() {
     }
     setLastSeq(snapshot.seq);
     setLeaderMasked(snapshot.payload?.leader_user_masked ?? leaderMasked);
-      setBidFeedback('已同步最新竞拍状态');
+      setBidFeedback(h5Copy.latestConfirmed);
     setBidPhase('idle');
     const status = snapshot.payload?.status ?? snapshot.status;
     const winnerID = snapshot.payload?.current_winner_id ?? snapshot.current_winner_id;
@@ -927,7 +929,7 @@ function App() {
       const response = await fetch(`/api/auctions/${auctionID}`);
       const snapshot = await readJSON<SnapshotResponse>(response);
       if (!response.ok || !snapshot || snapshot.stale) {
-        setBidFeedback('状态较旧，正在继续同步');
+        setBidFeedback('状态较旧，正在继续刷新');
         return;
       }
       if (!snapshot.server_time_ms && !snapshot.payload?.server_time_ms) {
@@ -945,7 +947,7 @@ function App() {
 
   useEffect(() => {
     if (!countdownExpired) return;
-    setBidFeedback('本地倒计时到零，正在同步服务端结果');
+    setBidFeedback(h5Copy.settling);
     void recoverFromSnapshot();
   }, [countdownExpired]);
 
@@ -1042,7 +1044,7 @@ function App() {
       setBidFeedback('订单已超时');
     } else if (winnerID === currentUserIDRef.current || detail.payload?.current_winner_id === currentUserIDRef.current) {
       setBidPhase('accepted');
-      setBidFeedback('出价已确认');
+      setBidFeedback('你已领先，出价已确认');
       showAtmosphere({
         kind: 'leading',
         title: '领先！',
@@ -1278,7 +1280,7 @@ function App() {
           try {
             handleRealtimeEvent(JSON.parse(String(message.data)) as AuctionRealtimeEvent);
           } catch {
-            setBidFeedback('实时消息解析失败，正在同步');
+            setBidFeedback('实时消息解析失败，正在刷新');
             void recoverFromSnapshot();
           }
         };

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { Button, Drawer, Form, Input, InputNumber, Layout, Message, Modal, Space, Table, Tabs, Tag } from '@arco-design/web-react';
-import { Activity, AlertTriangle, Bell, BellOff, Bot, CheckCircle2, ClipboardList, Clock3, Database, ExternalLink, Gavel, ImageIcon, Play, RadioTower, RefreshCw, ShieldCheck, Sparkles, Square, Upload, Wifi } from 'lucide-react';
+import { Button, DatePicker, Drawer, Form, Input, InputNumber, Layout, Message, Modal, Space, Table, Tabs, Tag, Upload } from '@arco-design/web-react';
+import { Activity, AlertTriangle, Bell, BellOff, Bot, CheckCircle2, ClipboardList, Clock3, Database, ExternalLink, Gavel, ImageIcon, Play, RadioTower, RefreshCw, ShieldCheck, Sparkles, Square, Upload as UploadIcon, Wifi } from 'lucide-react';
 import type { Auction, AuctionRecap, FlightRecorderPayload, FlightRecorderTimelineRow, HeatSummary, HostPrompt, Item, ListingDraftJob, MaxBidSummary, MonitorPayload, Order, RedisEngineSummary, Room, RuleDraft, SentinelAlert, SignalRequest, SystemMessage } from './domain';
 import { anomalyKey, anomalySeverity, auctionScopedRows, auctionStatusLabel, connectionLabel, createRuleDraft, depositPreview, formatCents, formatRemaining, formatSeconds, isAckedAlert, liveHealthSummary, maskUser, monitorCount, monitorItems, orderStatusLabel, overallCopy, promptSeverityClass, queueGroups, redisEngineSummary, riskQueue, rowAuctionID, rowSourceURL, severityTagColor, signalCopy, signalTargetID, signalType, sortedAuctions, statusTagColor, terminalStatus, timelineImpact, timelineNextAction, timelineTone, validateRule, visibleAnomalies } from './domain';
 
@@ -34,7 +34,48 @@ function roomDisplayName(roomID: string) {
   if (!roomID) return '未选择直播间';
   if (roomID === 'room_main') return '主直播间';
   if (roomID === 'room_side') return '副直播间';
-  return roomID.replace(/^room[_-]?/i, '直播间 ');
+  if (/^room[_-]?(test|engine)[_-]/i.test(roomID)) return '压测直播间';
+  return '直播间';
+}
+
+function isOperationalRoom(room: Room) {
+  return room.id === 'room_main' || room.id === 'room_side';
+}
+
+function engineHealth(monitor: Record<string, MonitorPayload>) {
+  const summary = redisEngineSummary(monitor.redisEngine);
+  if (summary.failed_settlements > 0 || summary.paused_auctions > 0) return { label: '异常', className: 'bad' };
+  if (summary.pending_redis_decisions > 0 || summary.pending_settlements > 0 || summary.settlement_lag_max_ms > 1000) return { label: '降级', className: 'warn' };
+  return { label: '正常', className: 'ok' };
+}
+
+function displayOrderNo(order: Order) {
+  const compact = order.id.replace(/^ord[_-]?/i, '').replace(/[^a-z0-9]/gi, '').slice(-8).toUpperCase();
+  return `JP${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${compact || '00000000'}`;
+}
+
+function formatLag(ms: number) {
+  if (!Number.isFinite(ms) || ms <= 0) return '暂无延迟';
+  if (ms >= 60_000) return `约 ${Math.round(ms / 60_000)} 分钟`;
+  if (ms >= 1000) return `约 ${(ms / 1000).toFixed(1)} 秒`;
+  return `${Math.round(ms)} 毫秒`;
+}
+
+function promptMetricCopy(label?: string, value?: number) {
+  if (!label) return '';
+  if (label === 'seconds_since_last_bid') {
+    return Number(value) >= 9999 ? '最近出价：暂无出价' : `最近出价：${value ?? 0} 秒前`;
+  }
+  const cleanLabel = label.replace(/_/g, ' ');
+  return `${cleanLabel}: ${value ?? 0}`;
+}
+
+function centsToYuan(cents: number) {
+  return Math.round(cents) / 100;
+}
+
+function yuanToCents(yuan: number) {
+  return Math.round((Number(yuan) || 0) * 100);
 }
 
 function auctionDisplayName(auction?: Pick<Auction, 'id' | 'item_id' | 'item'>) {
@@ -117,9 +158,9 @@ export function HealthRibbon({
   onRefresh: () => void;
   onRoomChange: (roomID: string) => void;
 }) {
-  const outboxRows = monitor.outbox?.items ?? [];
-  const retryAgeMS = Math.max(0, ...outboxRows.map((row) => Number(row.oldest_retry_age_ms ?? row.lag_ms ?? 0)));
   const recoveryLabel = active ? connectionLabel(monitor, active.room_id) : connectionLabel(monitor, roomID);
+  const health = engineHealth(monitor);
+  const visibleRooms = rooms.filter(isOperationalRoom);
   return (
     <section className="health-ribbon" data-testid="health-ribbon">
       <div className="ribbon-room">
@@ -128,9 +169,7 @@ export function HealthRibbon({
       </div>
       <div className="ribbon-metrics" data-testid="health-ribbon-status" role="status" aria-live="polite">
         <span><Wifi size={15} /> {recoveryLabel}</span>
-        <span><Database size={15} /> 待同步 {monitorCount(monitor.outbox)} · 最久 {retryAgeMS}ms</span>
-        <span><Clock3 size={15} /> 待执行 {monitorCount(monitor.scheduler)}</span>
-        <span><AlertTriangle size={15} /> 异常 {monitorCount(monitor.anomalies)}</span>
+        <span className={`engine-health ${health.className}`}><Database size={15} /> 引擎 ● {health.label}</span>
       </div>
       <Space>
         <select
@@ -139,7 +178,7 @@ export function HealthRibbon({
           value={roomID}
           onChange={(event) => onRoomChange(event.currentTarget.value)}
         >
-          {rooms.length === 0 ? <option value={roomID}>{roomDisplayName(roomID)}</option> : rooms.map((room) => (
+          {visibleRooms.length === 0 ? <option value={roomID}>{roomDisplayName(roomID)}</option> : visibleRooms.map((room) => (
             <option key={room.id} value={room.id}>{roomDisplayName(room.id)}</option>
           ))}
         </select>
@@ -191,16 +230,21 @@ export function ItemCreatePanel({
           <Input aria-label="item-title" value={itemDraft.title} onChange={(value) => onDraftChange((current) => ({ ...current, title: value }))} />
         </Form.Item>
         <Form.Item label="图片地址">
-          <Input aria-label="item-image-url" value={itemDraft.imageURL} onChange={(value) => onDraftChange((current) => ({ ...current, imageURL: value }))} prefix={<Upload size={14} />} placeholder="可粘贴图片地址，也可直接上传图片" />
+          <Input aria-label="item-image-url" value={itemDraft.imageURL} onChange={(value) => onDraftChange((current) => ({ ...current, imageURL: value }))} prefix={<UploadIcon size={14} />} placeholder="可粘贴图片地址，也可直接上传图片" />
         </Form.Item>
         <Form.Item label="上传图片文件">
-          <input
-            aria-label="item-image-file"
-            className="native-input"
-            type="file"
+          <Upload
             accept="image/*"
-            onChange={(event) => onFileChange(event.currentTarget.files?.[0] ?? null)}
-          />
+            limit={1}
+            showUploadList
+            customRequest={(option) => {
+              onFileChange(option.file as File);
+              option.onSuccess?.({});
+              return { abort() {} };
+            }}
+          >
+            <Button icon={<UploadIcon size={14} />}>选择图片</Button>
+          </Upload>
         </Form.Item>
         <Form.Item label="描述">
           <Input.TextArea aria-label="item-description" value={itemDraft.description} onChange={(value) => onDraftChange((current) => ({ ...current, description: value }))} />
@@ -242,12 +286,12 @@ export function AuctionCommandPanel({
         <>
           <div className="control-grid">
             <Form.Item label="排期时间">
-              <input
+              <DatePicker
                 aria-label="schedule-start-at"
-                className="native-input"
-                type="datetime-local"
+                showTime
+                format="YYYY-MM-DD HH:mm"
                 value={scheduleStartAt}
-                onChange={(event) => onScheduleStartAtChange(event.currentTarget.value)}
+                onChange={(value) => onScheduleStartAtChange(value)}
               />
             </Form.Item>
             <Form.Item label="取消原因">
@@ -542,6 +586,7 @@ export function LiveAssistRail({
   onDismissPrompt: (promptID: string) => void;
   onDriveDemoBid: (mode: 'reject' | 'outbid' | 'extend' | 'sold') => void;
 }) {
+  const [demoDrawerOpen, setDemoDrawerOpen] = useState(false);
   if (!selectedAuction) {
     return (
       <aside className="assist-rail">
@@ -578,7 +623,7 @@ export function LiveAssistRail({
             <small>{prompt.body}</small>
             <div className="prompt-meta">
               {prompt.reference_price_cents !== undefined ? <em>参考下一口 {formatCents(prompt.reference_price_cents)}</em> : null}
-              {prompt.metric_label ? <em>{prompt.metric_label}: {prompt.metric_value ?? 0}</em> : null}
+              {prompt.metric_label ? <em>{promptMetricCopy(prompt.metric_label, prompt.metric_value)}</em> : null}
               {prompt.event_seq !== undefined ? <em>刚刚更新</em> : null}
             </div>
             <Button size="mini" onClick={() => onDismissPrompt(prompt.id)}>本场隐藏</Button>
@@ -627,7 +672,7 @@ export function LiveAssistRail({
         {latestRecap ? (
           <div className="recap-card" data-testid="auction-recap-card">
             <strong>{latestRecap.item_title}</strong>
-            <span>{formatCents(latestRecap.final_price_cents)} · {latestRecap.accepted_bids} 口 · {auctionStatusLabel(latestRecap.status)}</span>
+            <span>{formatCents(latestRecap.final_price_cents)} · {latestRecap.accepted_bids} 次出价 · {auctionStatusLabel(latestRecap.status)}</span>
             <small>{latestRecap.next_actions?.[0] ?? '复盘已生成'}</small>
             {latestRecap.highlight_asset ? (
               <div className="recap-actions">
@@ -638,19 +683,35 @@ export function LiveAssistRail({
           </div>
         ) : null}
       </div>
-      <div className="demo-driver" data-testid="demo-driver">
+      <div className="demo-driver-entry" data-testid="demo-driver">
         <div className="heat-summary-head">
-          <span>本地演示驱动</span>
+          <span>演示助手</span>
           <strong>{selectedAuction.status === 'ACTIVE' ? '可触发' : '开拍后可用'}</strong>
         </div>
-        <div className="demo-driver-grid">
-          <Button size="mini" disabled={selectedAuction.status !== 'ACTIVE'} onClick={() => onDriveDemoBid('reject')}>模拟无效出价</Button>
-          <Button size="mini" disabled={selectedAuction.status !== 'ACTIVE'} onClick={() => onDriveDemoBid('outbid')}>第二买家超越</Button>
-          <Button size="mini" disabled={selectedAuction.status !== 'ACTIVE'} onClick={() => onDriveDemoBid('extend')}>窗口出价/延时</Button>
-          <Button size="mini" status="danger" disabled={selectedAuction.status !== 'ACTIVE'} onClick={() => onDriveDemoBid('sold')}>封顶成交</Button>
-        </div>
-        <small>演示操作会写入真实竞拍记录、事件和订单，不是前端假改状态。</small>
+        <Button size="small" onClick={() => setDemoDrawerOpen(true)}>打开演示助手</Button>
+        <small>录屏加速用，操作会走真实后端接口。</small>
       </div>
+      <Drawer
+        width={420}
+        title="演示助手"
+        visible={demoDrawerOpen}
+        onCancel={() => setDemoDrawerOpen(false)}
+        footer={null}
+      >
+        <div className="demo-driver drawer-demo-driver">
+          <div className="heat-summary-head">
+            <span>录屏加速用 · 走真实后端接口</span>
+            <strong>{selectedAuction.status === 'ACTIVE' ? '可触发' : '开拍后可用'}</strong>
+          </div>
+          <div className="demo-driver-grid">
+            <Button disabled={selectedAuction.status !== 'ACTIVE'} onClick={() => onDriveDemoBid('reject')}>模拟无效出价</Button>
+            <Button disabled={selectedAuction.status !== 'ACTIVE'} onClick={() => onDriveDemoBid('outbid')}>模拟另一位买家出一手</Button>
+            <Button disabled={selectedAuction.status !== 'ACTIVE'} onClick={() => onDriveDemoBid('extend')}>触发末段延时</Button>
+            <Button status="danger" disabled={selectedAuction.status !== 'ACTIVE'} onClick={() => onDriveDemoBid('sold')}>触发封顶成交</Button>
+          </div>
+          <small>这些按钮不会前端假改状态；每次都会写入真实竞拍记录、事件和订单。</small>
+        </div>
+      </Drawer>
       <div className="max-bid-summary" data-testid="max-bid-summary">
         <div className="heat-summary-head">
           <span>自动加价概况</span>
@@ -693,7 +754,7 @@ export function LiveAssistRail({
       </div>
       <div className="assist-grid">
         <div>
-          <span>同步恢复</span>
+          <span>恢复状态</span>
           <strong>{recovery}</strong>
         </div>
         <div>
@@ -810,16 +871,21 @@ export function AICopilotDrawer({
         <Form layout="vertical">
           <Form.Item label="拍品图片">
             <div className="ai-image-input">
-              <label className="ai-image-drop">
-                <Upload size={18} />
-                <span>{imageFile ? imageFile.name : imageURL ? '更换图片' : '上传图片'}</span>
-                <input
-                  aria-label="listing-copilot-image-file"
-                  type="file"
-                  accept="image/*"
-                  onChange={(event) => onImageFileChange(event.currentTarget.files?.[0] ?? null)}
-                />
-              </label>
+              <Upload
+                accept="image/*"
+                limit={1}
+                showUploadList={false}
+                customRequest={(option) => {
+                  onImageFileChange(option.file as File);
+                  option.onSuccess?.({});
+                  return { abort() {} };
+                }}
+              >
+                <button type="button" className="ai-image-drop" aria-label="listing-copilot-image-file">
+                  <UploadIcon size={18} />
+                  <span>{imageFile ? imageFile.name : imageURL ? '更换图片' : '上传图片'}</span>
+                </button>
+              </Upload>
               {imageURL ? (
                 <div className="ai-image-preview">
                   <img src={imageURL} alt="" />
@@ -939,11 +1005,11 @@ export function RuleEditor({
             <strong>起拍、加价、封顶必须形成可达价格网格</strong>
           </div>
           <div className="rule-subgrid">
-            <NumberField label="起拍价" name="start-price-cents" value={rule.startPriceCents} min={0} onChange={(value) => onRuleChange({ startPriceCents: value })} />
-            <NumberField label="加价幅度" name="increment-cents" value={rule.incrementCents} min={1} onChange={(value) => onRuleChange({ incrementCents: value })} />
+            <NumberField label="起拍价" name="start-price-cents" value={rule.startPriceCents} min={0} money onChange={(value) => onRuleChange({ startPriceCents: value })} />
+            <NumberField label="加价幅度" name="increment-cents" value={rule.incrementCents} min={1} money onChange={(value) => onRuleChange({ incrementCents: value })} />
           </div>
           <Form.Item label="封顶价" validateStatus={ruleValidation.valid ? 'success' : 'error'} help={ruleValidation.message}>
-            <InputNumber aria-label="cap-price-cents" value={rule.capPriceCents} min={0} suffix="分" onChange={(value) => onRuleChange({ capPriceCents: Number(value) || 0 })} />
+            <InputNumber aria-label="cap-price-cents" value={centsToYuan(rule.capPriceCents)} min={0} precision={2} prefix="¥" onChange={(value) => onRuleChange({ capPriceCents: yuanToCents(Number(value) || 0) })} />
           </Form.Item>
         </section>
         {backendRuleError && <div className="backend-rule-error" role="alert">{backendRuleError}</div>}
@@ -972,10 +1038,10 @@ export function RuleEditor({
             <strong>高额确认和保证金提示必须在买家下单前可见</strong>
           </div>
           <div className="rule-subgrid">
-            <NumberField label="高额确认" name="fat-finger-threshold-cents" value={rule.fatFingerThresholdCents} min={rule.incrementCents + 1} onChange={(value) => onRuleChange({ fatFingerThresholdCents: value })} />
+            <NumberField label="高额确认" name="fat-finger-threshold-cents" value={rule.fatFingerThresholdCents} min={rule.incrementCents + 1} money onChange={(value) => onRuleChange({ fatFingerThresholdCents: value })} />
             <NumberField label="保证金比例" name="deposit-bps" value={rule.depositBPS} min={0} max={10000} onChange={(value) => onRuleChange({ depositBPS: value })} suffix="基点" />
-            <NumberField label="保证金下限" name="deposit-floor-cents" value={rule.depositFloorCents} min={0} onChange={(value) => onRuleChange({ depositFloorCents: value })} />
-            <NumberField label="保证金上限" name="deposit-cap-cents" value={rule.depositCapCents} min={0} onChange={(value) => onRuleChange({ depositCapCents: value })} />
+            <NumberField label="保证金下限" name="deposit-floor-cents" value={rule.depositFloorCents} min={0} money onChange={(value) => onRuleChange({ depositFloorCents: value })} />
+            <NumberField label="保证金上限" name="deposit-cap-cents" value={rule.depositCapCents} min={0} money onChange={(value) => onRuleChange({ depositCapCents: value })} />
           </div>
           <div className="verified-bidder-placeholder" data-testid="verified-bidder-placeholder">
             <div>
@@ -1021,7 +1087,7 @@ export function OrdersPanel({ orders, onOpenFlightRecorder, onOpenOrder }: { ord
       </div>
       {orders.length === 0 ? <div className="empty-state">暂无订单</div> : orders.map((order) => (
         <div className="order-line" key={order.id}>
-          <button type="button" className="order-id-link" onClick={() => onOpenOrder(order.id)}>{order.id}</button>
+          <button type="button" className="order-id-link" onClick={() => onOpenOrder(order.id)}>单号 {displayOrderNo(order)}</button>
           <Tag color={order.status === 'PAID' ? 'green' : 'orange'}>{orderStatusLabel(order.status)}</Tag>
           <span>中标人 {maskUser(order.winner_id)}</span>
           <span>{order.deposit_status}</span>
@@ -1173,11 +1239,11 @@ export function LiveHealthPanel({
             <span><RadioTower size={15} /> 系统健康</span>
             <strong>Redis/Kafka/PG</strong>
           </div>
-          <HealthMetric label="Redis pending" value={summary.engine.pending_redis_decisions} status={summary.engine.pending_redis_decisions > 0 ? 'bad' : 'ok'} />
-          <HealthMetric label="Settlement pending" value={summary.engine.pending_settlements} status={summary.engine.pending_settlements > 0 ? 'warn' : 'ok'} />
-          <HealthMetric label="Settlement failed" value={summary.engine.failed_settlements} status={summary.engine.failed_settlements > 0 ? 'bad' : 'ok'} />
-          <HealthMetric label="Lag max" value={`${summary.engine.settlement_lag_max_ms}ms`} status={summary.engine.settlement_lag_max_ms > 5000 ? 'bad' : summary.engine.settlement_lag_max_ms > 1000 ? 'warn' : 'ok'} />
-          <HealthMetric label="Paused engines" value={summary.engine.paused_auctions} status={summary.engine.paused_auctions > 0 ? 'bad' : 'ok'} />
+          <HealthMetric label="实时决策积压" value={summary.engine.pending_redis_decisions} status={summary.engine.pending_redis_decisions > 0 ? 'bad' : 'ok'} />
+          <HealthMetric label="待结算" value={summary.engine.pending_settlements} status={summary.engine.pending_settlements > 0 ? 'warn' : 'ok'} />
+          <HealthMetric label="结算失败" value={summary.engine.failed_settlements} status={summary.engine.failed_settlements > 0 ? 'bad' : 'ok'} />
+          <HealthMetric label="最大延迟" value={formatLag(summary.engine.settlement_lag_max_ms)} status={summary.engine.settlement_lag_max_ms > 5000 ? 'bad' : summary.engine.settlement_lag_max_ms > 1000 ? 'warn' : 'ok'} />
+          <HealthMetric label="暂停的竞拍" value={summary.engine.paused_auctions} status={summary.engine.paused_auctions > 0 ? 'bad' : 'ok'} />
         </div>
 
         <div className="health-panel">
@@ -1187,7 +1253,7 @@ export function LiveHealthPanel({
           </div>
           <HealthMetric label="恢复压力" value={summary.recoveryPressure} status={summary.recoveryPressure > 0 ? 'warn' : 'ok'} />
           <HealthMetric label="无效出价记录" value={summary.scopedRejects.length} status={summary.scopedRejects.length > 0 ? 'warn' : 'ok'} />
-          <HealthMetric label="Recent anomalies" value={summary.anomalies.length} status={summary.criticalAnomalies.length > 0 ? 'bad' : summary.anomalies.length > 0 ? 'warn' : 'ok'} />
+          <HealthMetric label="近期异常" value={summary.anomalies.length} status={summary.criticalAnomalies.length > 0 ? 'bad' : summary.anomalies.length > 0 ? 'warn' : 'ok'} />
           <p className="health-copy">出现恢复压力或竞拍确认暂停时，主播不应继续强推用户加价，先确认买家端按钮是否进入恢复或暂停状态。</p>
         </div>
       </section>
@@ -1427,10 +1493,26 @@ export function DiagnosticsPanel({
   );
 }
 
-export function NumberField({ label, name, value, min, max, suffix = '分', onChange }: { label: string; name: string; value: number; min: number; max?: number; suffix?: string; onChange: (value: number) => void }) {
+export function NumberField({ label, name, value, min, max, suffix, money = false, onChange }: { label: string; name: string; value: number; min: number; max?: number; suffix?: string; money?: boolean; onChange: (value: number) => void }) {
+  const displayValue = money ? centsToYuan(value) : value;
+  const displayMin = money ? centsToYuan(min) : min;
+  const displayMax = money && max != null ? centsToYuan(max) : max;
   return (
     <Form.Item label={label}>
-      <InputNumber aria-label={name} value={value} min={min} max={max} suffix={suffix} onChange={(next) => onChange(Number(next) || min)} />
+      <InputNumber
+        aria-label={name}
+        value={displayValue}
+        min={displayMin}
+        max={displayMax}
+        precision={money ? 2 : 0}
+        prefix={money ? '¥' : undefined}
+        suffix={suffix}
+        onChange={(next) => {
+          const numeric = Number(next);
+          if (money) onChange(yuanToCents(Number.isFinite(numeric) ? numeric : displayMin));
+          else onChange(Number.isFinite(numeric) ? numeric : min);
+        }}
+      />
     </Form.Item>
   );
 }

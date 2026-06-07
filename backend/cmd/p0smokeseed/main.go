@@ -99,16 +99,16 @@ func seed(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client) error {
 		VALUES
 		(
 		  'item_live',
-		  'P0 Live Smoke Item',
-		  '/demo/ceramic-tea-cup.jpg',
-		  'P0 live backend smoke item.',
+		  '天然翡翠A货平安扣吊坠',
+		  '/demo/jade-pendant.jpg',
+		  '天然A货翡翠平安扣，附GID证书，顺丰包邮，支持7天无理由。',
 		  'READY'
 		),
 		(
 		  'item_side',
-		  'Side Room Smoke Item',
-		  '/demo/ceramic-tea-cup.jpg',
-		  'Second room smoke item.',
+		  '和田玉福牌吊坠',
+		  '/demo/jade-pendant.jpg',
+		  '温润和田玉福牌，附鉴定证书，支持7天无理由。',
 		  'READY'
 		)
 		ON CONFLICT (id) DO UPDATE
@@ -192,7 +192,24 @@ func seed(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client) error {
 }
 
 func clearRedisSmokeKeys(ctx context.Context, rdb *redis.Client) error {
-	keys := []string{"auction:auc_live:events", "auction:auc_live:snapshot"}
+	auctionIDs := []string{"auc_live", "auc_side"}
+	keys := []string{
+		"auction:auc_live:events",
+		"auction:auc_live:snapshot",
+		"auction:auc_side:events",
+		"auction:auc_side:snapshot",
+	}
+	for _, auctionID := range auctionIDs {
+		keys = append(keys,
+			"bid:{"+auctionID+"}:engine:state",
+			"bid:{"+auctionID+"}:engine:pending",
+			"bid:{"+auctionID+"}:engine:append-marker",
+			"bid:{"+auctionID+"}:engine:append-stats",
+			"bid:{"+auctionID+"}:engine:log",
+			"bid:{"+auctionID+"}:engine:relay-cursor",
+			"bid:{"+auctionID+"}:guard:projection",
+		)
+	}
 	var cursor uint64
 	for {
 		matched, next, err := rdb.Scan(ctx, cursor, "ws_ticket:*", 100).Result()
@@ -203,6 +220,20 @@ func clearRedisSmokeKeys(ctx context.Context, rdb *redis.Client) error {
 		cursor = next
 		if cursor == 0 {
 			break
+		}
+	}
+	for _, auctionID := range auctionIDs {
+		cursor = 0
+		for {
+			matched, next, err := rdb.Scan(ctx, cursor, "bid:{"+auctionID+"}:engine:idem:*", 100).Result()
+			if err != nil {
+				return err
+			}
+			keys = append(keys, matched...)
+			cursor = next
+			if cursor == 0 {
+				break
+			}
 		}
 	}
 	if len(keys) == 0 {

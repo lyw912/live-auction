@@ -1,4 +1,5 @@
 import type { AtmosphereCue } from './atmosphere';
+import { h5Copy } from './copy';
 
 export type AuctionState =
   | 'scheduled'
@@ -354,8 +355,8 @@ export type AuthUser = {
 };
 
 export const demoUserID = 'user_1';
-export const demoLiveVideoURL = '/demo/pottery-live-loop.webm';
-export const demoProductImageURL = '/demo/ceramic-tea-cup.jpg';
+export const demoLiveVideoURL = '/demo/jade-live-loop.mp4';
+export const demoProductImageURL = '/demo/jade-pendant.jpg';
 
 export const scenarios: Scenario[] = [
   { key: 'scheduled', title: '即将开拍', status: 'SCHEDULED', price: '¥100.00', leader: '暂无领先', feedback: '19:58 开始', countdown: '距开拍 12:00', cta: '等待开拍', ctaDisabled: true },
@@ -365,7 +366,7 @@ export const scenarios: Scenario[] = [
   { key: 'pending', title: '提交中', status: 'ACTIVE', price: '¥400.00', leader: '李** 领先', feedback: '等待服务端确认', countdown: '剩余 01:08', cta: '确认中', ctaDisabled: true, pending: true },
   { key: 'rejected', title: '被拒绝', status: 'ACTIVE', price: '¥400.00', leader: '李** 领先', feedback: '请按加价幅度出价', countdown: '剩余 00:58', cta: '出价 ¥450.00', ctaDisabled: false, rejected: true },
   { key: 'extended', title: '已延时', status: 'ACTIVE', price: '¥450.00', leader: '王** 领先', feedback: '已延时 10 秒', countdown: '延时后 00:20', cta: '出价 ¥500.00', ctaDisabled: false },
-  { key: 'recovering', title: '恢复中', status: 'RECOVERING', price: '¥450.00', leader: '同步中', feedback: '正在同步权威状态', countdown: '剩余时间待同步', cta: '同步中', ctaDisabled: true, stale: true },
+  { key: 'recovering', title: '恢复中', status: 'RECOVERING', price: '¥450.00', leader: '加载中', feedback: h5Copy.refreshing, countdown: '剩余时间确认中', cta: h5Copy.loading, ctaDisabled: true, stale: true },
   { key: 'disconnected', title: '已断开', status: 'DISCONNECTED', price: '¥450.00', leader: '离线', feedback: '重连中', countdown: '剩余时间已过期', cta: '重连中', ctaDisabled: true, stale: true },
   { key: 'sold_winner', title: '成交', status: 'SOLD', price: '¥600.00', leader: '你已拍中', feedback: '订单待支付', countdown: '支付倒计时同步中', cta: '去支付', ctaDisabled: false, winner: true, sold: true },
   { key: 'sold_loser', title: '已成交', status: 'SOLD', price: '¥600.00', leader: '赵** 拍中', feedback: '本场已结束', countdown: '已落锤', cta: '已结束', ctaDisabled: true, sold: true },
@@ -374,7 +375,7 @@ export const scenarios: Scenario[] = [
 ];
 
 export function formatCents(cents: number) {
-  return `¥${(cents / 100).toFixed(2)}`;
+  return `¥${(cents / 100).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 export function formatRemaining(ms: number) {
@@ -390,7 +391,7 @@ export function formatRemaining(ms: number) {
 
 export function deriveCountdown(endAt: string, serverTimeMS: number, nowMS: number, serverTimeSyncedAt: number, terminal: boolean, stale: boolean, extended: boolean) {
   if (terminal) return '已结束';
-  if (!endAt || serverTimeMS <= 0) return stale ? '剩余时间待同步' : '等待服务端时间';
+  if (!endAt || serverTimeMS <= 0) return stale ? '剩余时间确认中' : '等待服务端时间';
   const endAtMS = Date.parse(endAt);
   if (!Number.isFinite(endAtMS)) return '等待服务端时间';
   // Measure elapsed using local-monotonic time since the last server-time sync.
@@ -399,7 +400,7 @@ export function deriveCountdown(endAt: string, serverTimeMS: number, nowMS: numb
   const syncedAt = serverTimeSyncedAt > 0 ? serverTimeSyncedAt : serverTimeMS;
   const elapsed = Math.max(0, nowMS - syncedAt);
   const remaining = endAtMS - serverTimeMS - elapsed;
-  if (remaining <= 0) return stale ? '本地到零，正在同步' : '到点同步中';
+  if (remaining <= 0) return stale ? h5Copy.settling : h5Copy.settling;
   return `${extended ? '延时后' : '剩余'} ${formatRemaining(remaining)}`;
 }
 
@@ -480,7 +481,7 @@ export function responseServerTimeMS(response: Response) {
 }
 
 export function leaderboardCopy(payload: LeaderboardPayload | null) {
-  if (!payload || !payload.entries?.length) return '等待首个有效出价';
+  if (!payload || !payload.entries?.length) return h5Copy.noBids;
   if (payload.my_rank === 1) return '你正在领先';
   if (payload.my_rank && payload.gap_to_leader_cents != null) {
     return `第 ${payload.my_rank} 名 · 差 ${formatCents(payload.gap_to_leader_cents)}`;
@@ -492,7 +493,7 @@ export function leaderboardActionCopy(payload: LeaderboardPayload | null, fallba
   const nextBid = payload?.next_valid_bid_cents ?? fallbackBidCents;
   if (!payload || !payload.entries?.length) {
     return {
-      headline: '等待首个有效出价',
+      headline: h5Copy.noBids,
       action: `下一口 ${formatCents(nextBid)}`,
       freshness: '榜单等待实时更新'
     };
@@ -508,7 +509,7 @@ export function leaderboardActionCopy(payload: LeaderboardPayload | null, fallba
     return {
       headline: `第 ${payload.my_rank} 名 · 差 ${formatCents(payload.gap_to_next_rank_cents)}`,
       action: `下一口 ${formatCents(nextBid)}`,
-      freshness: `刚刚更新 · 近30秒 ${payload.accepted_bids_30s ?? 0} 口`
+      freshness: `刚刚更新 · 近30秒 ${payload.accepted_bids_30s ?? 0} 次出价`
     };
   }
   return {
@@ -537,7 +538,7 @@ export function auctionStatusLabel(status?: string) {
     case 'ORDER_EXPIRED':
       return '订单超时';
     case 'RECOVERING':
-      return '同步中';
+      return h5Copy.loading;
     case 'DISCONNECTED':
       return '重连中';
     case 'THROTTLED':
@@ -554,9 +555,9 @@ export function auctionStatusLabel(status?: string) {
 }
 
 export function connectionSyncCopy(phase: ConnectionPhase, stale?: boolean, staleCopy?: string) {
-  if (stale) return staleCopy ?? '正在重新同步';
+  if (stale) return staleCopy ?? h5Copy.refreshing;
   if (phase === 'connected') return '已同步';
-  if (phase === 'recovering') return '正在同步';
+  if (phase === 'recovering') return h5Copy.loading;
   if (phase === 'connecting') return '连接中';
   return '正在重连';
 }
@@ -885,7 +886,7 @@ export function rejectCopy(code?: string | null) {
     case 'IDEMPOTENCY_TIMEOUT':
       return '操作未确认，请重新出价';
     case 'AUCTION_ENDED':
-      return '竞拍已结束，正在同步结果';
+      return '竞拍已结束，正在确认结果';
     case 'FORBIDDEN_ROOM':
       return '无法进入该直播间';
     case 'NETWORK_ERROR':
@@ -930,11 +931,11 @@ export function riskActionCopy(code?: string | null) {
     case 'BID_TOO_LOW':
       return '按服务端给出的最低有效价和加价幅度调整';
     case 'AUCTION_ENDED':
-      return '等待服务端结果同步，当前不要继续提交';
+      return '等待服务端确认结果，当前不要继续提交';
     case 'NETWORK_ERROR':
       return '响应丢失不代表请求失败，请用同一请求重试确认';
     default:
-      return '本次未成交，按当前权威价格重新确认';
+      return '本次未成交，按当前最新价格重新确认';
   }
 }
 

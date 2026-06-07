@@ -3,10 +3,39 @@
 :root {
   font-family: var(--font-auction-sans);
   color: var(--color-ink-900);
-  background: #090d0f;
+  background: #181818;
+  --bg-page: #181818;
+  --bg-card: #242424;
+  --bg-component: #393939;
+  --bg-elevated: #2c2c2c;
+  --mask: rgba(0,0,0,.40);
+  --text-1: rgba(255,255,255,.90);
+  --text-2: rgba(255,255,255,.55);
+  --text-3: rgba(255,255,255,.35);
+  --cta: #FE2C55;
+  --danger: #FF4D4F;
+  --success: #00A870;
+  --gold: #D4AF37;
+  --gold-bright: #EFBF04;
+  --champagne: #F7E6CA;
+  --radius-sheet: 16px;
+  --radius-card: 12px;
   --h5-shell-width: 430px;
   --h5-shell-shadow: 0 0 0 1px rgba(255, 255, 255, .08), 0 24px 70px rgba(0, 0, 0, .48);
   --h5-bid-dock-reserved-height: calc(0px + var(--safe-area-bottom));
+}
+
+.price,
+.countdown,
+.bid-amount,
+.stat-num,
+[data-testid="auction-price"],
+[data-testid="auction-countdown"],
+.dock-price-row h2,
+.countdown-row {
+  font-family: var(--font-auction-tabular);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
 }
 
 * {
