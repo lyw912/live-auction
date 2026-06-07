@@ -570,6 +570,69 @@ test('H5 applies WebSocket leaderboard delta without polling leaderboard', async
   expect(leaderboardReads).toBe(readsAfterInitialLoad);
 });
 
+test('H5 renders always-on race board and waterfall from authoritative leaderboard delta', async ({ page }) => {
+  await page.goto('/');
+  await expect.poll(async () => page.evaluate(() => {
+    return ((window as typeof window & { __auctionWS?: Array<{ url: string }> }).__auctionWS ?? [])
+      .some(({ url }) => url.includes('/ws?'));
+  })).toBe(true);
+  await expect(page.getByTestId('live-stage').getByTestId('race-board')).toBeVisible();
+
+  await page.evaluate(() => {
+    const [entry] = ((window as typeof window & { __auctionWS?: Array<{ url: string; socket: { dispatchServerMessage: (payload: unknown) => void } }> }).__auctionWS ?? [])
+      .filter(({ url }) => url.includes('/ws?'));
+    entry.socket.dispatchServerMessage({
+      auction_id: 'auc_live',
+      event_type: 'leaderboard_delta',
+      seq: 44,
+      current_price_cents: 52000,
+      next_valid_bid_cents: 57000,
+      current_winner_id: 'user_1',
+      leader_amount_cents: 52000,
+      accepted_bidder_count: 3,
+      active_bidders_30s: 3,
+      accepted_bids_30s: 6,
+      price_velocity_cents_per_min: 12000,
+      entries: [
+        { rank: 1, user_id: 'user_1', user_masked: '我**', amount_cents: 52000, bid_count: 4 },
+        { rank: 2, user_id: 'user_2', user_masked: '陈**', amount_cents: 50000, bid_count: 3 }
+      ]
+    });
+  });
+
+  const stage = page.getByTestId('live-stage');
+  await expect(stage.getByTestId('race-board')).toContainText('榜一 我 ¥520.00');
+  await expect(stage.getByTestId('race-board')).toContainText('竞速榜');
+  await expect(stage.getByTestId('bid-waterfall')).toBeVisible();
+  await expect(stage.getByTestId('atmosphere-cue')).toContainText('领先');
+
+  await page.evaluate(() => {
+    const [entry] = ((window as typeof window & { __auctionWS?: Array<{ url: string; socket: { dispatchServerMessage: (payload: unknown) => void } }> }).__auctionWS ?? [])
+      .filter(({ url }) => url.includes('/ws?'));
+    entry.socket.dispatchServerMessage({
+      auction_id: 'auc_live',
+      event_type: 'leaderboard_delta',
+      seq: 45,
+      current_price_cents: 57000,
+      next_valid_bid_cents: 62000,
+      current_winner_id: 'user_2',
+      leader_amount_cents: 57000,
+      accepted_bidder_count: 3,
+      active_bidders_30s: 3,
+      accepted_bids_30s: 7,
+      price_velocity_cents_per_min: 15000,
+      entries: [
+        { rank: 1, user_id: 'user_2', user_masked: '陈**', amount_cents: 57000, bid_count: 4 },
+        { rank: 2, user_id: 'user_1', user_masked: '我**', amount_cents: 52000, bid_count: 4 }
+      ]
+    });
+  });
+
+  await expect(stage.getByTestId('race-board')).toContainText('我 #2 差 ¥50.00');
+  await expect(stage.getByTestId('atmosphere-cue')).toContainText('差 ¥50.00');
+  await expect(stage.getByTestId('atmosphere-cue')).toContainText('立即反超');
+});
+
 test('H5 coalesces burst leaderboard deltas to the latest visible rank state', async ({ page }) => {
   let leaderboardReads = 0;
   await page.route('/api/auctions/auc_live/leaderboard?limit=5', async (route) => {

@@ -14,6 +14,15 @@ import { auctionStatusLabel, connectionSyncCopy, demoLiveVideoURL, demoProductIm
 import { h5Copy } from './copy';
 import { ResultSheet } from './result';
 
+export type WaterfallChip = {
+  id: string;
+  seq: number;
+  amount_cents: number;
+  user_masked: string;
+  is_current: boolean;
+  created_at: number;
+};
+
 function displayChatUser(userID: string, currentUserID: string) {
   if (userID === currentUserID) return '我';
   if (/^[\u4e00-\u9fa5].*\*\*$/.test(userID)) return userID;
@@ -37,6 +46,7 @@ export function LiveStage({
   heat,
   item,
   likeCount,
+  leaderboard,
   lotTitle,
   nextBidCents,
   roomID,
@@ -44,6 +54,8 @@ export function LiveStage({
   soundEnabled,
   soundCapability,
   systemMessages,
+  waterfallChips,
+  raceBoardExpanded,
   onOpenBid,
   onOpenLiveOps,
   onOpenMore,
@@ -65,6 +77,7 @@ export function LiveStage({
   heat: HeatSnapshot;
   item: AuctionItem;
   likeCount: number;
+  leaderboard: LeaderboardPayload | null;
   lotTitle: string;
   nextBidCents: number;
   roomID: string;
@@ -72,6 +85,8 @@ export function LiveStage({
   soundEnabled: boolean;
   soundCapability: SoundCapability;
   systemMessages: SystemMessage[];
+  waterfallChips: WaterfallChip[];
+  raceBoardExpanded: boolean;
   onOpenBid: () => void;
   onOpenLiveOps: () => void;
   onOpenMore: () => void;
@@ -88,7 +103,9 @@ export function LiveStage({
   if (item.certificate) proofChips.push({ icon: <CertificateIcon size={13} theme="multi-color" fill={iconParkProofFill} />, label: item.certificate });
   if (item.condition) proofChips.push({ icon: <JewelryIcon size={13} theme="multi-color" fill={iconParkProofFill} />, label: item.condition });
   if (item.shipping) proofChips.push({ icon: <TruckIcon size={13} theme="multi-color" fill={['#00A870', '#2c2c2c', '#F7E6CA', '#D4AF37']} />, label: item.shipping });
-  const visibleSystem = systemMessages.slice(0, 2).map((message) => ({
+  const cohostMessages = systemMessages.filter((message) => message.source === 'SYSTEM_AI');
+  const barrageMessages = systemMessages.filter((message) => message.source !== 'SYSTEM_AI');
+  const visibleSystem = barrageMessages.slice(0, 2).map((message) => ({
     id: `sys-${message.id}`,
     user: '助手',
     body: message.body
@@ -129,6 +146,7 @@ export function LiveStage({
       data-testid="live-stage"
       data-atmosphere-kind={atmosphereCue?.kind ?? 'none'}
       data-countdown-phase={countdownPhase.phase}
+      data-race-board={raceBoardExpanded ? 'expanded' : 'rest'}
       style={mediaURL ? { '--stage-media-url': `url("${mediaURL}")` } as React.CSSProperties : undefined}
     >
       <video className="live-video-bg" src={videoURL} poster={mediaURL || demoProductImageURL} autoPlay muted loop playsInline aria-hidden="true" />
@@ -155,7 +173,8 @@ export function LiveStage({
           <span>{atmosphereCue.detail}</span>
         </div>
       )}
-      <BarrageLayer messages={systemMessages} />
+      <BidWaterfall chips={waterfallChips} />
+      <BarrageLayer messages={barrageMessages} />
       <div className="video-topbar">
         <div className="host-profile">
           <span className="host-avatar">{roomID.slice(0, 1).toUpperCase()}</span>
@@ -175,6 +194,8 @@ export function LiveStage({
           {soundEnabled ? <SoundIcon size={14} theme="filled" fill="#fff" /> : <BellOff size={14} />}
         </button>
       </div>
+      <RaceBoard leaderboard={leaderboard} nextBidCents={nextBidCents} forceExpanded={raceBoardExpanded} onOpenBid={onOpenBid} />
+      <CohostRibbon messages={cohostMessages} />
       <div className="stage-safe-zone">
         <div className="live-topic-row" aria-label="live-topic">
           <span>{auctionStatusLabel(scenario.status)}</span>
@@ -235,6 +256,142 @@ export function LiveStage({
         <button type="button" onClick={onLike} aria-label="点赞"><LikeIcon className="action-rail-icon" size={26} theme="outline" fill={iconParkActionFill} strokeWidth={4} /><span className="live-action-badge">{likeCount}</span></button>
         <button type="button" onClick={onOpenMore} aria-label="更多"><MoreIcon className="action-rail-icon" size={26} theme="outline" fill={iconParkActionFill} strokeWidth={4} /></button>
       </div>
+    </section>
+  );
+}
+
+function RaceBoard({
+  leaderboard,
+  nextBidCents,
+  forceExpanded,
+  onOpenBid
+}: {
+  leaderboard: LeaderboardPayload | null;
+  nextBidCents: number;
+  forceExpanded: boolean;
+  onOpenBid: () => void;
+}) {
+  const entries = leaderboard?.entries ?? [];
+  const top = entries.slice(0, 3);
+  const mine = entries.find((entry) => entry.is_current);
+  const leader = top[0];
+  const myRank = mine?.rank ?? leaderboard?.my_rank;
+  const gap = leaderboard?.gap_to_leader_cents ?? (mine && leader ? Math.max(0, leader.amount_cents - mine.amount_cents) : undefined);
+  const hasBids = entries.length > 0 || (leaderboard?.accepted_bidder_count ?? 0) > 0;
+  const expanded = Boolean(forceExpanded || leaderboard?.burst_mode || (leaderboard?.accepted_bids_30s ?? 0) >= 4 || leaderboard?.state === 'OUTBID');
+  const headline = hasBids && leader
+    ? `榜一 ${leader.is_current ? '我' : leader.user_masked} ${formatCents(leader.amount_cents)}`
+    : '等你第一手登顶';
+  const mineCopy = myRank
+    ? myRank === 1
+      ? '我 #1 正在领先'
+      : `我 #${myRank}${gap != null ? ` 差 ${formatCents(gap)}` : ''}`
+    : `下一口 ${formatCents(nextBidCents)}`;
+
+  return (
+    <section
+      className={`race-board ${expanded ? 'is-expanded' : 'is-rest'}`}
+      data-testid="race-board"
+      aria-label="常驻竞速榜"
+      aria-live="polite"
+    >
+      <button className="race-board-rest" type="button" onClick={onOpenBid}>
+        <Trophy size={15} />
+        <strong>{headline}</strong>
+        <span>{mineCopy}</span>
+        <em>{(leaderboard?.accepted_bids_30s ?? 0) > 0 ? `近30秒 ${leaderboard?.accepted_bids_30s} 次` : '真实有效出价'}</em>
+      </button>
+      <div className="race-board-expanded">
+        <div className="race-board-title">
+          <strong>竞速榜</strong>
+          <span>{(leaderboard?.accepted_bids_30s ?? 0) > 0 ? `近30s ${leaderboard?.accepted_bids_30s} 次` : '最高有效价优先'}</span>
+        </div>
+        {hasBids ? (
+          <LeaderboardRows entries={top.length > 0 ? top : entries} burstMode={Boolean(leaderboard?.burst_mode)} />
+        ) : (
+          <p>等你第一手登顶</p>
+        )}
+        {mine && !top.some((entry) => entry.user_id === mine.user_id) ? (
+          <div className="leaderboard-row is-current race-board-mine">
+            <span>#{mine.rank}</span>
+            <strong>我</strong>
+            <em>{formatCents(mine.amount_cents)}</em>
+            <small>{gap != null && gap > 0 ? `差 ${formatCents(gap)}` : '正在领先'}</small>
+          </div>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function BidWaterfall({ chips }: { chips: WaterfallChip[] }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    if (reduceMotion) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    let frame = 0;
+    const draw = () => {
+      const rect = canvas.getBoundingClientRect();
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const width = Math.max(1, Math.round(rect.width * dpr));
+      const height = Math.max(1, Math.round(rect.height * dpr));
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+      ctx.clearRect(0, 0, width, height);
+      const now = Date.now();
+      const active = chips.slice(-24);
+      active.forEach((chip, index) => {
+        const age = now - chip.created_at;
+        const life = 2600;
+        if (age < 0 || age > life) return;
+        const progress = age / life;
+        const lane = index % 3;
+        const chipWidth = 104 * dpr;
+        const chipHeight = 28 * dpr;
+        const x = width - chipWidth - (8 + lane * 18) * dpr;
+        const y = (34 + progress * (rect.height - 86) + lane * 12) * dpr;
+        const alpha = progress < .15 ? progress / .15 : Math.max(0, 1 - (progress - .72) / .28);
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.translate(x, y);
+        ctx.fillStyle = chip.is_current ? 'rgba(255, 210, 96, .94)' : 'rgba(18, 28, 35, .76)';
+        ctx.strokeStyle = chip.is_current ? 'rgba(255, 255, 255, .72)' : 'rgba(255, 255, 255, .24)';
+        ctx.lineWidth = 1 * dpr;
+        const radius = 10 * dpr;
+        ctx.beginPath();
+        ctx.roundRect(0, 0, chipWidth, chipHeight, radius);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = chip.is_current ? '#16120a' : '#fff';
+        ctx.font = `${11 * dpr}px sans-serif`;
+        ctx.fillText(chip.is_current ? '我' : chip.user_masked, 10 * dpr, 18 * dpr);
+        ctx.font = `bold ${12 * dpr}px sans-serif`;
+        ctx.fillText(formatCents(chip.amount_cents), 42 * dpr, 18 * dpr);
+        ctx.restore();
+      });
+      frame = window.requestAnimationFrame(draw);
+    };
+    draw();
+    return () => window.cancelAnimationFrame(frame);
+  }, [chips]);
+
+  return <canvas className="bid-waterfall" data-testid="bid-waterfall" ref={canvasRef} aria-hidden="true" />;
+}
+
+function CohostRibbon({ messages }: { messages: SystemMessage[] }) {
+  const latest = messages[0];
+  if (!latest) return null;
+  return (
+    <section className="cohost-ribbon" data-testid="cohost-ribbon" aria-label="AI 气氛官" aria-live="polite">
+      <div className="cohost-ribbon-id"><Sparkles size={14} /><strong>气氛官</strong><span>AI</span></div>
+      <p>{latest.body}</p>
     </section>
   );
 }

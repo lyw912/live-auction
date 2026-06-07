@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { CheckCircle2, ChevronUp, Radio, RefreshCw } from 'lucide-react';
 import type { AtmosphereCue, AtmosphereInput } from './atmosphere';
-import { AuctionStatePanel, BottomSheet, ChatComposer, ChatPanel, LeaderboardPanel, LiveStage, StateMatrixTabs } from './components';
+import { AuctionStatePanel, BottomSheet, ChatComposer, ChatPanel, LeaderboardPanel, LiveStage, StateMatrixTabs, type WaterfallChip } from './components';
 import { ResultSheet } from './result';
 import type { AuctionItem, AuctionOverlayMode, AuctionRealtimeEvent, AuctionState, AuctionSummary, AuctionSoundPack, AuthUser, BidderRequirement, BidPhase, BidResponse, BottomSheetKey, ChatMessage, ConnectionPhase, HistoryRow, LeaderboardPayload, LiveOpsCampaign, MaxBidIntent, MaxBidPhase, OrderRow, PaymentPhase, PendingBidRequest, ProductQAAnswer, ProductQATurn, RecoveryPhase, ResultSheetKind, Scenario, SnapshotResponse, SoundCapability, SystemMessage, WSTicketResponse } from './domain';
 import { createAudioContext, createClientBidID, demoProductImageURL, demoUserID, deriveCountdown, deriveCountdownPhase, ensureDemoSession, extensionCopyFromEvent, formatCents, heatSnapshot, isBidConfirmationPending, isCountdownExpired, isDangerousActionDisabled, isEngineRejected, isTestMatrixEnabled, loadAuctionSoundPack, maxBidErrorCopy, maxBidStatusCopy, playAuctionSound, playCountdownTone, playCueTone, playLayeredCue, readJSON, rejectCopy, responseServerTimeMS, retryAfterMS, retryAfterMSFromHeaders, roomIDFromPath, scenarios, selectEntryAuction, speakSystemMessage, vibrateCountdownPhase, vibratePattern, visibleRoomAuctions } from './domain';
@@ -47,6 +47,8 @@ function App() {
   const [qaHistory, setQAHistory] = useState<ProductQAAnswer[]>([]);
   const [qaLoading, setQALoading] = useState(false);
   const [leaderboard, setLeaderboard] = useState<LeaderboardPayload | null>(null);
+  const [waterfallChips, setWaterfallChips] = useState<WaterfallChip[]>([]);
+  const [raceBoardExpandedUntil, setRaceBoardExpandedUntil] = useState(0);
   const [atmosphereCue, setAtmosphereCue] = useState<AtmosphereCue | null>(null);
   const [soundEnabled, setSoundEnabled] = useState(false);
   const [soundCapability, setSoundCapability] = useState<SoundCapability>('ready');
@@ -216,6 +218,7 @@ function App() {
   const activeAuction = useMemo(() => roomAuctions.find((auction) => auction.id === activeAuctionID), [activeAuctionID, roomAuctions]);
   const heat = useMemo(() => heatSnapshot(leaderboard, activeAuction), [activeAuction, leaderboard]);
   const bidCooldownRemainingMS = Math.max(0, bidCooldownUntilMS - nowMS);
+  const raceBoardExpanded = raceBoardExpandedUntil > nowMS;
   const countdownExpired = useMemo(() => (
     selected === 'active_bids' &&
     connectionPhase === 'connected' &&
@@ -248,6 +251,9 @@ function App() {
     const currentSeq = leaderboardRef.current?.seq ?? lastSeqRef.current;
     if (delta.seq != null && currentSeq != null && delta.seq < currentSeq) return;
     const previous = leaderboardRef.current;
+    const previousSeq = previous?.seq ?? lastSeqRef.current;
+    const previousWinnerID = previous?.current_winner_id;
+    const previousState = previous?.state;
     const entries = (delta.entries ?? []).map((entry) => ({
       ...entry,
       is_current: entry.user_id === currentUserIDRef.current
@@ -274,6 +280,42 @@ function App() {
     setNextBidCents((prepared) => Math.max(delta.next_valid_bid_cents ?? delta.current_price_cents + activeIncrementCentsRef.current, prepared));
     if (delta.server_time_ms) syncServerTimeMS(delta.server_time_ms);
     if (leader?.user_masked) setLeaderMasked(leader.user_masked);
+    const isNewDelta = delta.seq != null && delta.seq > previousSeq;
+    if (isNewDelta && leader) {
+      setRaceBoardExpandedUntil(Date.now() + 3200);
+      setWaterfallChips((chips) => [
+        ...chips.slice(-23),
+        {
+          id: `${delta.auction_id}:${delta.seq}`,
+          seq: delta.seq ?? Date.now(),
+          amount_cents: leader.amount_cents,
+          user_masked: leader.is_current ? '我' : leader.user_masked,
+          is_current: Boolean(leader.is_current),
+          created_at: Date.now()
+        }
+      ]);
+    }
+    if (isNewDelta && mine?.rank === 1 && previousState !== 'LEADING') {
+      showAtmosphere({
+        kind: 'leading',
+        title: '领先！',
+        detail: `${formatCents(leaderAmount)} 已确认`,
+        auction_id: delta.auction_id,
+        cause_seq: delta.seq,
+        event_type: delta.event_type || 'leaderboard_delta',
+        user_scope: 'self'
+      });
+    } else if (isNewDelta && mine && mine.rank > 1 && (previousWinnerID === currentUserIDRef.current || previousState === 'LEADING')) {
+      showAtmosphere({
+        kind: 'outbid',
+        title: '被反超！',
+        detail: `${gapToLeader != null ? `差 ${formatCents(gapToLeader)}` : '有人已经领先'} · 立即反超`,
+        auction_id: delta.auction_id,
+        cause_seq: delta.seq,
+        event_type: delta.event_type || 'leaderboard_delta',
+        user_scope: 'self'
+      });
+    }
     if (!delta.burst_mode && soundEnabledRef.current && audioContextRef.current && soundCapabilityRef.current === 'ready') {
       playLayeredCue(audioContextRef.current, 'rank_change', soundPackRef.current);
     }
@@ -1792,12 +1834,15 @@ function App() {
         heat={heat}
         item={stageItem}
         likeCount={likeCount}
+        leaderboard={leaderboard}
         lotTitle={lotTitle}
         roomID={roomID}
         scenario={scenario}
         soundEnabled={soundEnabled}
         soundCapability={soundCapability}
         systemMessages={systemMessages}
+        waterfallChips={waterfallChips}
+        raceBoardExpanded={raceBoardExpanded}
         auctions={roomAuctions}
         activeAuctionID={activeAuctionID}
         currentPriceCents={currentPriceCents}

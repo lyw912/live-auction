@@ -1,0 +1,35 @@
+{
+  "updated_at": "2026-06-07T22:36:00+08:00",
+  "round": "P0 atmosphere main-stage loop",
+  "commands": [
+    "pnpm --filter mobile-h5 build",
+    "npx playwright test tests/e2e/mobile-h5.spec.ts -g \"always-on race board|leaderboard delta\" --reporter=line",
+    "node docs/reviews/极致竞价氛围-3.0-2026-06-07/capture-atmosphere.mjs"
+  ],
+  "live_backend_probe": {
+    "url": "http://127.0.0.1:5276/",
+    "observed": [
+      "live-stage 内可见 race-board",
+      "SYSTEM_AI 可见为 AI 气氛官 ribbon",
+      "当前真实库为已成交态，因此高能竞价态另用可控 WS 取证脚本"
+    ],
+    "console_errors": [
+      "/api/auth/me 401 初始登录探测",
+      "/favicon.ico 404"
+    ]
+  },
+  "controlled_playwright_evidence": {
+    "script": "docs/reviews/极致竞价氛围-3.0-2026-06-07/capture-atmosphere.mjs",
+    "screenshots": [
+      "evidence/08-race-board-waterfall-ai-390.png",
+      "evidence/09-race-board-waterfall-ai-360.png"
+    ],
+    "assertions": [
+      "race-board visible in live-stage",
+      "leaderboard_delta seq 44/45 drives expanded board",
+      "outbid copy contains real gap ¥50.00",
+      "cohost-ribbon contains explicit AI identity",
+      "360px visual inspection: no structural overlap between board, AI ribbon, heat meter, product card and action rail"
+    ]
+  }
+}
