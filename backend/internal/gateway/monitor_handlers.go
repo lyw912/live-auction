@@ -782,7 +782,7 @@ func (h MonitorHandler) RedisEngine(w http.ResponseWriter, r *http.Request) {
 		SELECT a.id,
 		       CASE
 		         WHEN a.engine_seq > 0 OR a.engine_paused OR sl.auction_id IS NOT NULL OR c.auction_id IS NOT NULL THEN 'redis_ledger'
-		         ELSE 'postgres_lane_or_uninitialized'
+		         ELSE 'redis_ledger_uninitialized'
 		       END AS engine_mode,
 		       a.status, a.current_price_cents, a.current_winner_id, a.seq,
 		       a.engine_epoch, a.engine_seq, a.engine_paused, a.engine_pause_reason,

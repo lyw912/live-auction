@@ -22,13 +22,11 @@ func NewRouter(cfg config.Config, deps *storage.Dependencies, log *slog.Logger) 
 	cfg = normalizeBidLaneConfig(cfg)
 	rt := realtime.NewServerWithOptions(deps.Postgres, deps.Redis, realtimeOptions(cfg)).WithAdmission(newRealtimeAdmission(cfg))
 	var ledger redisengine.BidLedger
-	if cfg.BidEngineMode != bidEngineModePostgresLane && cfg.BidEngineMode != bidEngineModeRedisGuard {
-		kafkaLedger, err := redisengine.NewKafkaLedgerFromEnv(cfg.KafkaBrokers, cfg.KafkaBidTopic, cfg.KafkaDLQTopic, "settlement-workers", "gateway")
-		if err == nil {
-			ledger = kafkaLedger
-		} else if log != nil {
-			log.Error("open kafka bid ledger", slog.String("error", err.Error()))
-		}
+	kafkaLedger, err := redisengine.NewKafkaLedgerFromEnv(cfg.KafkaBrokers, cfg.KafkaBidTopic, cfg.KafkaDLQTopic, "settlement-workers", "gateway")
+	if err == nil {
+		ledger = kafkaLedger
+	} else if log != nil {
+		log.Error("open kafka bid ledger", slog.String("error", err.Error()))
 	}
 	return NewRouterWithRealtimeAndLedger(cfg, deps, log, rt, ledger)
 }
@@ -100,11 +98,8 @@ func NewRouterWithRealtimeAndLedger(cfg config.Config, deps *storage.Dependencie
 	r.Get("/api/health", health.Readiness)
 	r.Get("/metrics", observability.Handler(deps.Postgres).ServeHTTP)
 
-	var engine *redisengine.Engine
-	if cfg.BidEngineMode != bidEngineModePostgresLane && cfg.BidEngineMode != bidEngineModeRedisGuard {
-		engine = redisengine.New(deps.Postgres, deps.Redis, ledger).
-			WithResponseDurability(cfg.BidEngineResponseDurability)
-	}
+	engine := redisengine.New(deps.Postgres, deps.Redis, ledger).
+		WithResponseDurability(cfg.BidEngineResponseDurability)
 	aiRepo := aicap.NewRepository(deps.Postgres)
 	aiGen := BuildAIGenerator(cfg)
 	auctionHandler := AuctionHandler{

@@ -18,7 +18,7 @@
 #   F-partial  P2  Toxiproxy Redis latency/timeout → weak-network fail-closed
 #
 # Prerequisites:
-#   ALLOW_MOCK_AUTH=true BID_ENGINE_MODE=redis_ledger ADMISSION_ENABLED=false
+#   ALLOW_MOCK_AUTH=true ADMISSION_ENABLED=false
 #   Toxiproxy running (for F-partial, optional)
 #
 # Usage:
@@ -31,7 +31,7 @@ TIER="${TIER:-P0}"
 SINGLE="${FAULT_TYPE:-}"
 BASE_URL="${BASE_URL:-http://127.0.0.1:18080}"
 LABEL="${LABEL:-s4-$(date +%Y%m%dT%H%M%S)}"
-SERVER_START_CMD="${SERVER_START_CMD:-ALLOW_MOCK_AUTH=true BID_ENGINE_MODE=redis_ledger ADMISSION_ENABLED=false ./live-auction-server}"
+SERVER_START_CMD="${SERVER_START_CMD:-ALLOW_MOCK_AUTH=true ADMISSION_ENABLED=false ./live-auction-server}"
 
 export L1F_PROFILE=rto   # S4-core: proves user-visible RTO, not backlog drain
 export K6_VUS=200

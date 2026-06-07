@@ -141,7 +141,7 @@ missing work. They are the expected result of many users bidding stale amounts
 after the Redis sequencer already advanced the price inside the final-second
 window.
 
-Legacy `2MLCX7WG` remains useful as explicit `redis_aof` low-latency evidence:
+Legacy `2MLCX7WG` remains useful as historical Redis-AOF-local low-latency evidence:
 `285 accepted + 715 rejected = 1000 final decisions`; the 715 rejects are not
 missing work. They are the expected result of many users bidding stale amounts
 after the Redis sequencer already advanced the price inside the final-second
@@ -151,13 +151,13 @@ Current S1 PTS evidence:
 
 | Run | Release model | Count / correctness | Measured burst span | Latency | Verdict |
 |---|---|---|---|---|---|
-| `UIPAX7JG` | default `contention_release_window_ms=500`; 2-agent wall-clock alignment fixed by JMX; default `BID_ENGINE_RESPONSE_DURABILITY=kafka_ack` | 1000 sampling rows, 1000 unique `client_bid_id`, 1000 server POSTs, 1000 Redis Lua executions; 264 accepted, 736 rejected; sampled durability 998 `KAFKA_ACKED`, 2 `ENGINE_DURABLE`; post-run persisted durability/settlement 1000/1000; verifier gates PASS | Global PTS `startTimeTS` span 505 ms; response `server_time_ms` span 507 ms | 100% sampling-log `elapsedTime` p99 58 ms, max 67 ms; gateway total bucket has 985/1000 <=50 ms and 1000/1000 <=100 ms | Current default kafka_ack S1 PASS under 60 ms envelope. Honest wording: stronger response boundary, not strict <=50 ms |
+| `UIPAX7JG` | default `contention_release_window_ms=500`; 2-agent wall-clock alignment fixed by JMX; current kafka_ack runtime | 1000 sampling rows, 1000 unique `client_bid_id`, 1000 server POSTs, 1000 Redis Lua executions; 264 accepted, 736 rejected; sampled durability 998 `KAFKA_ACKED`, 2 `ENGINE_DURABLE`; post-run persisted durability/settlement 1000/1000; verifier gates PASS | Global PTS `startTimeTS` span 505 ms; response `server_time_ms` span 507 ms | 100% sampling-log `elapsedTime` p99 58 ms, max 67 ms; gateway total bucket has 985/1000 <=50 ms and 1000/1000 <=100 ms | Current kafka_ack S1 PASS under 60 ms envelope. Honest wording: stronger response boundary, not strict <=50 ms |
 | `2MLCX7WG` | default `contention_release_window_ms=500`; each pressure agent deterministically spreads its 500 VU inside a 500 ms final-second window | 1000 sampling rows, 1000 unique `client_bid_id`, 1000 server POSTs, 1000 Redis Lua executions; 285 accepted, 715 rejected; 41 verifier gates PASS | Global PTS `startTimeTS` span 1351 ms; response `server_time_ms` span 1348 ms. Per-agent spans: instance 0 `501/503 ms`, instance 1 `525/524 ms` for `startTimeTS/server_time_ms`; server access-log IP attribution was consistent, about `499 ms` and `525 ms` for the two pressure IPs | 100% sampling-log `elapsedTime` p99 23 ms, max 28 ms; server/gateway histogram has 1000/1000 <=25 ms and <=50 ms | Current S1 windowed-burst PASS for correctness and client p99. Honest burst-window claim: 500 ms per pressure agent; global multi-agent span about 1.35 s |
 | `TGLBX7GG` | `contention_release_window_ms=0`; 1000 VU wait at the same barrier and release with no artificial spread | 1000 sampling rows, 1000 unique `client_bid_id`, 1000 server POSTs, 1000 Redis Lua executions; 10 accepted, 990 rejected; 41 verifier gates PASS | PTS `startTimeTS` span 1144 ms; response `server_time_ms` span 1147 ms | sampling-log `elapsedTime` p99 134 ms, max 140 ms; server/gateway histogram has 1000/1000 <= 50 ms | Strong pressure/correctness proof for shared-barrier release, but not an M1 <=50 ms client-side PASS |
 
 Judge-safe wording for `UIPAX7JG`:
 
-> "The current default S1 evidence runs with `BID_ENGINE_RESPONSE_DURABILITY=kafka_ack`.
+> "The current S1 evidence runs with the pinned kafka_ack runtime.
 > The load reached the backend as 1000 POSTs/1000 Redis Lua executions inside a
 > 505 ms PTS send-start span and 507 ms server decision timestamp span. 998/1000
 > sampled responses returned `KAFKA_ACKED`; 2 returned `ENGINE_DURABLE` because

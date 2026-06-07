@@ -88,9 +88,11 @@ The runner starts the backend with:
 
 ```text
 ALLOW_MOCK_AUTH=true
-BID_ENGINE_MODE=redis_ledger
 ADMISSION_ENABLED=false
 ```
+
+The bid engine is now pinned in code to Redis hot ledger + `kafka_ack`; do not
+set `BID_ENGINE_MODE` or `BID_ENGINE_RESPONSE_DURABILITY` for current reruns.
 
 Pass evidence must include:
 

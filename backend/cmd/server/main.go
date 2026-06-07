@@ -73,30 +73,27 @@ func main() {
 	}
 	settlementWorkerID := envOrDefault("REDIS_ENGINE_SETTLEMENT_WORKER_ID", workerID)
 	var bidLedger redisengine.BidLedger
-	if cfg.BidEngineMode != "postgres_lane" && cfg.BidEngineMode != "redis_guard" {
-		ledger, err := redisengine.NewKafkaLedgerFromEnv(cfg.KafkaBrokers, cfg.KafkaBidTopic, cfg.KafkaDLQTopic, "settlement-workers", settlementWorkerID)
-		if err != nil {
-			log.Error("open kafka bid ledger", slog.String("error", err.Error()))
-			os.Exit(1)
-		} else {
-			bidLedger = ledger
-			defer bidLedger.Close()
-			go redisengine.NewWorker(deps.Postgres, deps.Redis, bidLedger, settlementWorkerID).WithLogger(log).Run(ctx, 200*time.Millisecond)
-		}
-		for i := 1; i < cfg.RedisEngineSettlementWorkers; i++ {
-			extraID := settlementWorkerID + "-" + strconv.Itoa(i+1)
-			extraLedger, err := redisengine.NewKafkaLedgerFromEnv(cfg.KafkaBrokers, cfg.KafkaBidTopic, cfg.KafkaDLQTopic, "settlement-workers", extraID)
-			if err != nil {
-				log.Error("open extra kafka settlement ledger", slog.Int("worker_index", i+1), slog.String("error", err.Error()))
-				os.Exit(1)
-			}
-			defer extraLedger.Close()
-			go redisengine.NewWorker(deps.Postgres, deps.Redis, extraLedger, extraID).WithLogger(log).RunKafkaSettlement(ctx, 10*time.Millisecond)
-		}
-		// Wire the Redis engine as the scheduler fencer so terminal transitions
-		// (SOLD/ENDED) immediately fence Redis hot-state rather than waiting for reconciler.
-		schedulerRunner.WithFencer(redisengine.New(deps.Postgres, deps.Redis, bidLedger))
+	ledger, err := redisengine.NewKafkaLedgerFromEnv(cfg.KafkaBrokers, cfg.KafkaBidTopic, cfg.KafkaDLQTopic, "settlement-workers", settlementWorkerID)
+	if err != nil {
+		log.Error("open kafka bid ledger", slog.String("error", err.Error()))
+		os.Exit(1)
 	}
+	bidLedger = ledger
+	defer bidLedger.Close()
+	go redisengine.NewWorker(deps.Postgres, deps.Redis, bidLedger, settlementWorkerID).WithLogger(log).Run(ctx, 200*time.Millisecond)
+	for i := 1; i < cfg.RedisEngineSettlementWorkers; i++ {
+		extraID := settlementWorkerID + "-" + strconv.Itoa(i+1)
+		extraLedger, err := redisengine.NewKafkaLedgerFromEnv(cfg.KafkaBrokers, cfg.KafkaBidTopic, cfg.KafkaDLQTopic, "settlement-workers", extraID)
+		if err != nil {
+			log.Error("open extra kafka settlement ledger", slog.Int("worker_index", i+1), slog.String("error", err.Error()))
+			os.Exit(1)
+		}
+		defer extraLedger.Close()
+		go redisengine.NewWorker(deps.Postgres, deps.Redis, extraLedger, extraID).WithLogger(log).RunKafkaSettlement(ctx, 10*time.Millisecond)
+	}
+	// Wire the Redis engine as the scheduler fencer so terminal transitions
+	// (SOLD/ENDED) immediately fence Redis hot-state rather than waiting for reconciler.
+	schedulerRunner.WithFencer(redisengine.New(deps.Postgres, deps.Redis, bidLedger))
 	go schedulerRunner.Run(ctx, log, 500*time.Millisecond)
 
 	server := &http.Server{

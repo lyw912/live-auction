@@ -19,7 +19,7 @@
 # Prerequisites:
 #   - Docker infra running: postgres, redis, kafka, kafka-init
 #   - Server running with:
-#       ALLOW_MOCK_AUTH=true BID_ENGINE_MODE=redis_ledger ADMISSION_ENABLED=false
+#       ALLOW_MOCK_AUTH=true ADMISSION_ENABLED=false
 #     (k6 uses X-Mock-* headers; real JWT sessions are not required here)
 #   - k6 installed: https://k6.io/docs/get-started/installation/
 #     If local k6 is absent, the runner falls back to Docker image grafana/k6.
@@ -188,7 +188,7 @@ check_prereq() {
   ready=$(curl -fsS "http://${SUT_HOST}/readyz" 2>/dev/null | jq -r '.status // empty' || true)
   if [ "$ready" != "ready" ]; then
     echo "[prereq] FAIL: server not ready at http://${SUT_HOST}/readyz" >&2
-    echo "  Start with: ALLOW_MOCK_AUTH=true BID_ENGINE_MODE=redis_ledger ADMISSION_ENABLED=false" >&2
+    echo "  Start with: ALLOW_MOCK_AUTH=true ADMISSION_ENABLED=false" >&2
     exit 1
   fi
   local admission
@@ -313,7 +313,6 @@ start_fault_backend() {
     KAFKA_DLQ_TOPIC="${KAFKA_DLQ_TOPIC:-auction.dlq}" \
     ALLOW_MOCK_AUTH=true \
     ADMISSION_ENABLED=false \
-    BID_ENGINE_MODE=redis_ledger \
     REDIS_POOL_SIZE="${REDIS_POOL_SIZE:-300}" \
     SESSION_TTL=12h \
     OUTBOX_WORKER_ID=pts-1c \

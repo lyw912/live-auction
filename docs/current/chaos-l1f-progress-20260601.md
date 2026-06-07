@@ -75,8 +75,11 @@ SLEEP_MS=1000
 FAULT_WINDOW_SECONDS=5
 RECOVERY_GRACE=0 for latest kafka/both/settlement reruns
 ADMISSION_ENABLED=false
-BID_ENGINE_MODE=redis_ledger
 ```
+
+Note: this historical evidence listed the runtime override explicitly. Current
+reruns should leave `BID_ENGINE_MODE` unset because the code pins Redis hot ledger
+and `kafka_ack`.
 
 | Fault | Evidence | RTO | k6 distribution | Fault-window signal | Final convergence |
 |---|---|---:|---|---|---|

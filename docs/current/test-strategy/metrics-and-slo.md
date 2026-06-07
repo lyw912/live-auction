@@ -13,7 +13,7 @@ target, and the one place the chart comes from.
 
 | # | Metric (判分名) | One-line definition | Target | Chart source |
 |---|---|---|---|---|
-| **M1** | 出价决策延迟 — bid decision p99 | request start -> final `ENGINE_*` visible to bidder; **accepts and rejects both count** | ≤ 60 ms (default kafka_ack burst S1); ≤ 50 ms (explicit redis_aof diagnostic S1); ≤ 100 ms (steady S2) | PTS sampler `出价决策 bid-decision` p99 |
+| **M1** | 出价决策延迟 — bid decision p99 | request start -> final `ENGINE_*` visible to bidder; **accepts and rejects both count** | ≤ 60 ms (current kafka_ack burst S1); ≤ 100 ms (steady S2) | PTS sampler `出价决策 bid-decision` p99 |
 | **M2** | 广播延迟 — fanout p99 | server `published_at_ms` → client receives that public `seq` | ≤ 1000 ms (same region) | PTS `广播接收 ws-fanout-receive` Single-Read p99 + k6 client histogram |
 | **M3** | 正确性 — correctness (boolean) | winner = highest valid amount; `engine_seq` gap-free; every reject has decision-time basis; no duplicate accepted/settled | **PASS** every run | `verify-l4b-pts-correctness.sh` + scenario verifier |
 | **M4** | 资源稳定性 — stability (soak) | slope of post-GC heap floor, goroutine count, fd count over the soak | slope ≈ 0 (no leak) | Grafana panels (Prometheus) |
@@ -82,9 +82,9 @@ only when `durability_status ∈ {KAFKA_ACKED, ENGINE_DURABLE}` and
 `PENDING_DURABILITY` is **acceptance latency, not decision latency** — never cite
 it as M1. (Contract: `docs/current/performance-correctness-contract.md`.)
 
-Default S1 runs use `BID_ENGINE_RESPONSE_DURABILITY=kafka_ack`: healthy responses
-return `KAFKA_ACKED`; bounded fallback returns `ENGINE_DURABLE` and must later
-converge through Kafka/PostgreSQL. Explicit `redis_aof` runs return at the Redis
+Current S1 runs use the pinned `kafka_ack` boundary: healthy responses
+return `KAFKA_ACKED`; bounded timeout/fault responses return `ENGINE_DURABLE` and must later
+converge through Kafka/PostgreSQL. Historical `redis_aof` runs returned at the Redis
 Lua + Redis Stream + idempotency replay boundary. PostgreSQL settlement and
 outbox/WebSocket delivery are not counted inside M1; they are mandatory M3/M5
 convergence evidence from the same run.

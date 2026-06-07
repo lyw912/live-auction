@@ -63,10 +63,10 @@ docs/
 
 Follow [docs/setup_guide.md](docs/setup_guide.md). Do not start bid, settlement or realtime implementation until the local database, migrations, env file and test commands are in place.
 
-Runtime profiles are intentionally split:
+Current runtime profile:
 
-- `.env.example`: conservative local demo profile, `BID_ENGINE_MODE=postgres_lane`, admission enabled.
-- `.env.pts1b.example`: PTS-1B hot-engine profile, `BID_ENGINE_MODE=redis_ledger`, admission disabled, Kafka required.
+- `.env.example`: local/demo profile on the same Redis hot ledger + Kafka ACK engine; admission enabled.
+- PTS-1B scripts: same engine, admission disabled, Kafka required.
 
 Formal PTS-1B runs should follow [tests/pts/MANIFEST.md](tests/pts/MANIFEST.md), not hand-edited env guesses.
 

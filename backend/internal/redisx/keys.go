@@ -72,3 +72,10 @@ func AuthSessionKey(tokenHash string) string {
 func ACLMembershipKey(auctionID, userID string) string {
 	return fmt.Sprintf("acl:membership:{%s}:%s", auctionID, userID)
 }
+
+// BidEnginePendingConfirmKey holds fat-finger pending-confirmation state for one
+// (auction, user, clientBidID) triple. Keyed within the auction hash tag so it
+// is slot-adjacent to the engine state and can be touched atomically in Lua.
+func BidEnginePendingConfirmKey(auctionID, userID, clientBidID string) string {
+	return fmt.Sprintf("bid:{%s}:engine:pending_confirm:%s:%s", auctionID, userID, clientBidID)
+}

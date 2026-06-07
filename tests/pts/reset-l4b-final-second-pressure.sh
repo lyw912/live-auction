@@ -23,7 +23,6 @@ esac
 export JMX_PATH="${JMX_PATH:-$default_jmx}"
 export REDIS_ADDR="${REDIS_ADDR:-localhost:6380}"
 export KAFKA_BROKERS="${KAFKA_BROKERS:-localhost:9092}"
-export BID_ENGINE_MODE="${BID_ENGINE_MODE:-redis_ledger}"
 export ADMISSION_ENABLED=false
 export P1_LOAD_SEED_TIMEOUT="${P1_LOAD_SEED_TIMEOUT:-5m}"
 export P1_LOAD_AUC_LIVE_CAP_PRICE_CENTS="${P1_LOAD_AUC_LIVE_CAP_PRICE_CENTS:-100000000000000}"
@@ -189,4 +188,4 @@ echo "- Backend: http://47.113.223.90:18080"
 echo "- Profile: ${L4B_PROFILE}"
 echo "- JMX: ${JMX_PATH#$ROOT_DIR/}"
 echo "- CSV: ${SESSION_CSV_PATH#$ROOT_DIR/}"
-echo "- Engine: BID_ENGINE_MODE=${BID_ENGINE_MODE}, ADMISSION_ENABLED=false, Redis=${REDIS_ADDR}, Kafka=${KAFKA_BROKERS}"
+echo "- Engine: redis_ledger + kafka_ack, ADMISSION_ENABLED=false, Redis=${REDIS_ADDR}, Kafka=${KAFKA_BROKERS}"

@@ -19,12 +19,18 @@ import (
 type mockFencer struct {
 	mu      sync.Mutex
 	reasons []string
+	err     error
+	nextRun time.Time
 }
 
 func (m *mockFencer) FenceAuction(_ context.Context, _ string, reason string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.reasons = append(m.reasons, reason)
+}
+
+func (m *mockFencer) FenceAuctionForScheduler(_ context.Context, _ string, _ string, _ time.Time, _ int64, _ *string) (time.Time, error) {
+	return m.nextRun, m.err
 }
 
 func (m *mockFencer) recordedReasons() []string {
@@ -534,5 +540,35 @@ func TestEndAuctionEndedCallsFencer(t *testing.T) {
 	reasons := fencer.recordedReasons()
 	if len(reasons) != 1 || reasons[0] != "SCHEDULER_ENDED" {
 		t.Fatalf("fencer reasons = %v, want [SCHEDULER_ENDED]", reasons)
+	}
+}
+
+func TestEndAuctionReschedulesWhenHotEngineNotConverged(t *testing.T) {
+	db := openDB(t)
+	quiesceSchedulerJobs(t, db)
+	ctx := context.Background()
+	repo := auction.NewRepository(db)
+	row := createActiveAuction(t, repo, db)
+	forceAuctionEndAt(t, db, row.ID, time.Now().UTC().Add(-time.Second))
+	next := time.Now().UTC().Add(2 * time.Second)
+
+	fencer := &mockFencer{err: errors.New("redis not converged"), nextRun: next}
+	ok, err := NewRunner(db, "fencer-retry").WithFencer(fencer).ProcessOne(ctx)
+	if err != nil {
+		t.Fatalf("ProcessOne: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected scheduler job to be processed")
+	}
+	got, err := repo.GetAuction(ctx, row.ID)
+	if err != nil {
+		t.Fatalf("GetAuction: %v", err)
+	}
+	if got.Status != auction.StatusActive {
+		t.Fatalf("status = %s, want ACTIVE", got.Status)
+	}
+	assertJobRunAtNear(t, db, row.ID, next)
+	if reasons := fencer.recordedReasons(); len(reasons) != 0 {
+		t.Fatalf("terminal fence reasons = %v, want none before convergence", reasons)
 	}
 }

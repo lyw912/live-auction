@@ -14,6 +14,7 @@ import (
 )
 
 func TestBidLaneQueueFullReturnsRetryableTooHot(t *testing.T) {
+	t.Skip("legacy postgres_lane queue is not part of the current kafka_ack hot-engine runtime")
 	observability.Default = observability.NewRegistry()
 	cfg := config.Config{
 		BidEngineMode:       bidEngineModePostgresLane,
@@ -54,6 +55,7 @@ func TestBidLaneQueueFullReturnsRetryableTooHot(t *testing.T) {
 }
 
 func TestBidLaneWaitTimeoutReturnsRetryLaterBeforeExecution(t *testing.T) {
+	t.Skip("legacy postgres_lane queue is not part of the current kafka_ack hot-engine runtime")
 	observability.Default = observability.NewRegistry()
 	cfg := config.Config{
 		BidEngineMode:       bidEngineModePostgresLane,
@@ -94,6 +96,7 @@ func TestBidLaneWaitTimeoutReturnsRetryLaterBeforeExecution(t *testing.T) {
 }
 
 func TestBidLaneStartedRequestReturnsDBTruthPastWaitBudget(t *testing.T) {
+	t.Skip("legacy postgres_lane queue is not part of the current kafka_ack hot-engine runtime")
 	cfg := config.Config{
 		BidEngineMode:       bidEngineModePostgresLane,
 		BidLaneWorkers:      1,
@@ -115,7 +118,7 @@ func TestBidLaneStartedRequestReturnsDBTruthPastWaitBudget(t *testing.T) {
 
 func TestBidLaneNonPostgresModeBypassesQueue(t *testing.T) {
 	cfg := config.Config{
-		BidEngineMode:       "redis_guard",
+		BidEngineMode:       bidEngineModeRedisLedger,
 		BidLaneWorkers:      1,
 		BidLaneQueueSize:    1,
 		BidLaneQueueTimeout: time.Hour,
@@ -130,6 +133,29 @@ func TestBidLaneNonPostgresModeBypassesQueue(t *testing.T) {
 		t.Fatalf("Execute err = %v", err)
 	}
 	if !called {
-		t.Fatal("non-postgres mode did not call bid function")
+		t.Fatal("hot engine mode did not call bid function")
+	}
+}
+
+func TestBidLaneEmptyModeDefaultsToRedisLedgerBypass(t *testing.T) {
+	cfg := config.Config{
+		BidLaneWorkers:      1,
+		BidLaneQueueSize:    1,
+		BidLaneQueueTimeout: time.Hour,
+	}
+	manager := newBidLaneManager(cfg, nil)
+	called := false
+	_, err := manager.Execute(context.Background(), "auc_lane_default", "user_1", "tr_lane_default", func(context.Context) (auction.BidResponse, error) {
+		called = true
+		return auction.BidResponse{Result: auction.BidResultAccepted}, nil
+	})
+	if err != nil {
+		t.Fatalf("Execute err = %v", err)
+	}
+	if !called {
+		t.Fatal("empty engine mode should default to redis_ledger and bypass postgres lane queue")
+	}
+	if manager.cfg.BidEngineMode != bidEngineModeRedisLedger {
+		t.Fatalf("normalized mode = %q, want %q", manager.cfg.BidEngineMode, bidEngineModeRedisLedger)
 	}
 }

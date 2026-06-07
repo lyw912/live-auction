@@ -13,7 +13,7 @@ Therefore PostgreSQL is no longer the synchronous decision point for the optimiz
 | Component | Current role | Must not do |
 |---|---|---|
 | Gateway | auth, room/ACL, admission, request decoding, fast idempotency, response contract | perform repeated PG reads on every hot bid if Redis/cache can safely answer |
-| Redis Lua engine | atomic live decision, current price/winner/end, engine_seq, engine idempotency | depend on stale PG snapshots during the hot decision |
+| Redis Lua engine | atomic live decision, current price/winner/end, engine_seq, engine idempotency, Redis-native fat-finger confirm | depend on stale PG snapshots during the hot decision |
 | Redis Stream | synchronous `ENGINE_DURABLE` decision log/idempotency replay boundary; all Lua KEYS use `{auctionID}` hash tag (Cluster-ready) | be treated as safe if AOF/no-eviction/retention is not proven |
 | Kafka | ordered relay/WAL; default `KAFKA_ACKED` response boundary via group-commit latch | be optional for post-run correctness, relay, and fault evidence |
 | PostgreSQL | settlement truth, audit truth, order truth, long-term query truth | be the contended synchronous row-lock decision point for PTS-1B |
@@ -64,19 +64,20 @@ effect. PostgreSQL is the **exactly-once boundary**; Kafka is the at-least-once 
 (by design). This is the industry-standard pattern (at-least-once + idempotent consumer
 = effectively exactly-once).
 
-`KAFKA_ACKED` is the **default synchronous response boundary**
-(`BID_ENGINE_RESPONSE_DURABILITY=kafka_ack`). The handler waits for the relay's
+The Redis hot ledger is the only current bid engine; normal local/demo startup
+must not set a bid-engine mode knob. `KAFKA_ACKED` is the **current synchronous
+response boundary**. The handler waits for the relay's
 group-commit batch confirmation via an in-process latch. Kafka fault behavior is
 protected by two layers: fail-fast wakeup (relay signals `false` immediately on
 AppendBatch failure) and circuit breaker (`kafkaRelayUnhealthy atomic.Bool`,
 zero-cost skip when open). Neither degrades decision correctness — both degrade
 only to the Redis-AOF-local `ENGINE_DURABLE` boundary.
 
-`ENGINE_DURABLE` remains an explicit low-latency diagnostic boundary
-(`BID_ENGINE_RESPONSE_DURABILITY=redis_aof`). It is sufficient to return a final
-business decision when Redis is configured with AOF `appendfsync always`, but the
-run still cannot be called correct until Kafka relay, PG settlement, and outbox
-delivery converge.
+`ENGINE_DURABLE` is a bounded response result inside the `kafka_ack` runtime when
+the relay latch times out, fails fast, or the circuit is open. It is sufficient
+to return a final business decision when Redis is configured with AOF
+`appendfsync always`, but the run still cannot be called correct until Kafka
+relay, PG settlement, and outbox delivery converge.
 
 See `docs/current/runtime-profiles.md#kafka-ack-response-durability-boundary` for
 the full architecture.
@@ -97,11 +98,19 @@ The default contract returns final user-visible `ENGINE_*` decisions at the
 called correct until Redis pending decisions, Kafka relay, PG settlement, and
 outbox delivery have converged or the auction has failed closed.
 
-## Unsupported Or Paused Paths
+## Rich Rules On The Hot Engine
 
-Until a dedicated algorithm exists, complex PG-only features such as proxy/max-bid settlement must either:
+The Redis hot-engine profile now supports the rich rules that previously forced
+`requires_postgres` pauses:
 
-- stay on a separately documented PostgreSQL path with explicit performance limitations; or
-- be disabled/paused for the Redis hot-engine auction profile.
+- fat-finger bids return `FAT_FINGER_CONFIRM_REQUIRED` with a Redis pending token;
+  `/bids/confirm` validates that token and re-runs the normal Lua guards against
+  the current price/winner before accepting;
+- active proxy/max-bid intents no longer pause the auction. A Go resolver reads
+  active intents and injects deterministic `AUTO_MAX_BID` bids through the same
+  Redis CAS path, so automatic bids still consume `engine_seq`, idempotency,
+  Kafka relay, settlement, outbox, and reconcile checks like manual bids.
 
-Do not silently mix PG-only private bidding semantics into the Redis engine without a new invariant proof.
+Hidden max amounts and pending confirmation amounts must remain private: only
+public price, winner, and normal bid events are emitted to snapshots, outbox, and
+WebSocket payloads.

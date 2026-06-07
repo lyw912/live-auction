@@ -291,9 +291,7 @@ generated_at="$(date -Is)"
   echo
   echo "## Classification Rule"
   echo
-  echo "Default kafka_ack rule: a run is S1 CURRENT_PASS only if sampling rows, unique client_bid_id, server POST count, Redis Lua count, engine_seq continuity, settlement/outbox/Kafka gates, KAFKA_ACKED >= 99%, bounded ENGINE_DURABLE fallback, and p99 <= 60 ms all pass. Current durability counts: KAFKA_ACKED=$durability_kafka_acked_count, ENGINE_DURABLE=$durability_engine_durable_count."
-  echo
-  echo "Explicit redis_aof diagnostic rule: if the server was intentionally run with BID_ENGINE_RESPONSE_DURABILITY=redis_aof, require ENGINE_DURABLE decisions and p99 <= 50 ms, and label the evidence as redis_aof low-latency rather than default kafka_ack."
+  echo "Current kafka_ack rule: a run is S1 CURRENT_PASS only if sampling rows, unique client_bid_id, server POST count, Redis Lua count, engine_seq continuity, settlement/outbox/Kafka gates, KAFKA_ACKED >= 99%, bounded ENGINE_DURABLE responses, and p99 <= 60 ms all pass. Current durability counts: KAFKA_ACKED=$durability_kafka_acked_count, ENGINE_DURABLE=$durability_engine_durable_count."
   echo
   echo "If the PTS report/API p99 violates Seg99Rt <= MaxRt, cite the recomputed 100% sampling percentile and mark the report field as invalid."
 } > "$OUT"

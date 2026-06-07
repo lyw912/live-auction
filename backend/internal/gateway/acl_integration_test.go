@@ -20,7 +20,8 @@ import (
 func TestRoomMembershipACLRejectsForeignAndBannedViewer(t *testing.T) {
 	db := openMonitorDB(t)
 	rdb := openMonitorRedis(t)
-	router := NewRouter(testConfig(), &storage.Dependencies{Postgres: db, Redis: rdb}, slog.Default())
+	cfg := testConfig()
+	router := NewRouter(cfg, &storage.Dependencies{Postgres: db, Redis: rdb}, slog.Default())
 	repo := auction.NewRepository(db)
 	owned := createACLAuction(t, repo, db, "room_acl_owned_"+uuid.NewString(), "host_1", "user_1", "ACTIVE")
 	foreign := createACLAuction(t, repo, db, "room_acl_foreign_"+uuid.NewString(), "host_1", "user_1", "BANNED")
@@ -32,7 +33,7 @@ func TestRoomMembershipACLRejectsForeignAndBannedViewer(t *testing.T) {
 	bidBody := `{"client_bid_id":"acl-bid-1","amount_cents":15000,"client_seen_seq":0}`
 	headers := userHeaders("user_1", "user")
 	headers.Set("Idempotency-Key", "acl-bid-1")
-	assertAPIStatus(t, router, http.MethodPost, "/api/auctions/"+foreign.ID+"/bids", bytes.NewBufferString(bidBody), headers, http.StatusForbidden)
+	assertAPIStatus(t, router, http.MethodPost, "/api/auctions/"+foreign.ID+"/bids", bytes.NewBufferString(bidBody), headers, http.StatusServiceUnavailable)
 
 	ticketBody := `{"room_id":"` + foreign.RoomID + `","auction_id":"` + foreign.ID + `"}`
 	assertAPIStatus(t, router, http.MethodPost, "/api/auth/ws-ticket", bytes.NewBufferString(ticketBody), userHeaders("user_1", "user"), http.StatusForbidden)

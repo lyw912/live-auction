@@ -19,8 +19,8 @@ A credible experiment has four parts (Principles of Chaos Engineering + AWS FIS)
 
 ```
 1. STEADY STATE (numeric SLI, measured over a window):
-     decision success >= 99% AND bid decision p99 within the configured M1 envelope
-     (60 ms for default kafka_ack, 50 ms for explicit redis_aof), over a trailing 30 s window
+     decision success >= 99% AND bid decision p99 within the current M1 envelope
+     (60 ms for kafka_ack), over a trailing 30 s window
 2. HYPOTHESIS: "injecting <fault> for 5 s keeps the system SAFE (fail-closed or continue),
      and it returns to steady state within RTO target, losing zero accepted bids."
 3. INJECT: bounded blast radius (one dependency, one 5 s window), with an abort/stop condition.
@@ -325,7 +325,7 @@ Redis proxy.
 ```bash
 # P0 core
 FAULT_TYPE=redis      bash tests/pts/run-pts-1c-concurrent-fault.sh
-FAULT_TYPE=settlement SERVER_START_CMD="ALLOW_MOCK_AUTH=true BID_ENGINE_MODE=redis_ledger ADMISSION_ENABLED=false ./live-auction-server" \
+FAULT_TYPE=settlement SERVER_START_CMD="ALLOW_MOCK_AUTH=true ADMISSION_ENABLED=false ./live-auction-server" \
                       bash tests/pts/run-pts-1c-concurrent-fault.sh
 FAULT_TYPE=pg         bash tests/pts/run-pts-1c-concurrent-fault.sh
 # P1

@@ -45,7 +45,7 @@ type Config struct {
 	BidLimitWindow               time.Duration
 	BidLimitRedisTimeout         time.Duration
 	BidEngineMode                string
-	BidEngineResponseDurability  string // "kafka_ack" (default) or "redis_aof"
+	BidEngineResponseDurability  string // current runtime is kafka_ack only
 	BidLaneWorkers               int
 	BidLaneQueueSize             int
 	BidLaneQueueTimeout          time.Duration
@@ -126,8 +126,8 @@ func Load() Config {
 		BidAuctionMaxInFlight:        getEnvInt("BID_AUCTION_MAX_IN_FLIGHT", 32),
 		BidLimitWindow:               getEnvDuration("BID_LIMIT_WINDOW", time.Second),
 		BidLimitRedisTimeout:         getEnvDuration("BID_LIMIT_REDIS_TIMEOUT", 50*time.Millisecond),
-		BidEngineMode:                getEnv("BID_ENGINE_MODE", "redis_ledger"),
-		BidEngineResponseDurability:  getEnv("BID_ENGINE_RESPONSE_DURABILITY", "kafka_ack"),
+		BidEngineMode:                "redis_ledger",
+		BidEngineResponseDurability:  "kafka_ack",
 		BidLaneWorkers:               getEnvInt("BID_LANE_WORKERS", 1),
 		BidLaneQueueSize:             getEnvInt("BID_LANE_QUEUE_SIZE", 128),
 		BidLaneQueueTimeout:          getEnvDuration("BID_LANE_QUEUE_TIMEOUT", 750*time.Millisecond),

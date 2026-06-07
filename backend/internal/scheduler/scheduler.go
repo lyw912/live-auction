@@ -38,11 +38,12 @@ type Runner struct {
 	fencer   AuctionFencer
 }
 
-// AuctionFencer fences a live auction in Redis hot-state so the engine
-// rejects further bids. Errors are logged internally; callers see only
-// best-effort semantics (the reconciler is the backstop).
+// AuctionFencer fences and verifies live Redis hot-state before the scheduler
+// writes a PG terminal state. Implementations must fail closed if Redis has
+// unrelayed/unsettled decisions or if Redis and PG disagree on price/winner/end.
 type AuctionFencer interface {
 	FenceAuction(ctx context.Context, auctionID string, reason string)
+	FenceAuctionForScheduler(ctx context.Context, auctionID string, terminalStatus string, pgEndAt time.Time, pgPrice int64, pgWinnerID *string) (time.Time, error)
 }
 
 // WithFencer attaches a hot-engine fencer so the scheduler fences Redis
@@ -233,6 +234,15 @@ func (r *Runner) processEndAuction(ctx context.Context, job Job) error {
 	}
 	if now.Before(endAt) {
 		return r.rescheduleTx(ctx, tx, job.ID, endAt)
+	}
+	if r.fencer != nil {
+		nextRunAt, err := r.fencer.FenceAuctionForScheduler(ctx, job.TargetID, "SCHEDULER_ENDING", endAt, price, winnerID)
+		if err != nil {
+			if nextRunAt.IsZero() {
+				nextRunAt = r.now().Add(500 * time.Millisecond)
+			}
+			return r.rescheduleTx(ctx, tx, job.ID, nextRunAt)
+		}
 	}
 
 	eventType := "auction_ended"

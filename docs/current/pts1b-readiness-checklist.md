@@ -17,13 +17,13 @@ waived in the run review.
 ## 2. Runtime Profile
 
 - [ ] Not using `.env.example` for PTS-1B.
-- [ ] `BID_ENGINE_MODE=redis_ledger`.
+- [ ] Runtime is the pinned `redis_ledger + kafka_ack` hot engine.
 - [ ] `ADMISSION_ENABLED=false`.
 - [ ] `REDIS_ADDR=localhost:6380`.
 - [ ] `KAFKA_BROKERS=localhost:9092`.
 - [ ] `KAFKA_BID_TOPIC=auction.bid-events`.
 - [ ] `KAFKA_DLQ_TOPIC=auction.dlq`.
-- [ ] `BID_ENGINE_RESPONSE_DURABILITY=kafka_ack` unless the run is explicitly labeled `redis_aof` low-latency diagnostic evidence.
+- [ ] No legacy `postgres_lane`, `redis_guard`, or `redis_aof` runtime override is used.
 - [ ] Backend listens on the URL used by PTS, normally `:18080`.
 
 ## 3. Reset And Data
@@ -98,7 +98,7 @@ FINAL_WAIT_SECONDS=0 bash tests/pts/verify-l4b-pts-correctness.sh <report-id-or-
 ## 8. Pass Criteria
 
 - [ ] 1000 intended unique bids classified.
-- [ ] User-visible `ENGINE_*` p99 <= 60ms for default `kafka_ack` evidence, or <= 50ms for explicitly labeled `redis_aof` evidence.
+- [ ] User-visible `ENGINE_*` p99 <= 60ms for current `kafka_ack` evidence.
 - [ ] Final decision responses use `durability_status=KAFKA_ACKED` >= 99% in default mode; bounded `ENGINE_DURABLE` fallback is valid only if convergence gates pass.
 - [ ] `202` / `PROCESSING_RETRY_LATER` RTT is not used as the PTS-1B p99.
 - [ ] `pending_ratio` and `timeout_ratio` are reported; dominant pending UX

@@ -562,7 +562,7 @@ func (h AuctionHandler) invalidateMaxBidIntentSnapshotCache(ctx context.Context,
 func (h AuctionHandler) PlaceBid(w http.ResponseWriter, r *http.Request) {
 	mode := h.Config.BidEngineMode
 	if mode == "" {
-		mode = bidEngineModePostgresLane
+		mode = bidEngineModeRedisLedger
 	}
 	ctx, span := apptracing.Start(r.Context(), "bid.place",
 		attribute.String("bid.engine_mode", mode),
@@ -612,21 +612,11 @@ func (h AuctionHandler) PlaceBid(w http.ResponseWriter, r *http.Request) {
 	auctionID := chi.URLParam(r, "id")
 	span.SetAttributes(attribute.String("auction.id", auctionID))
 
-	// For the redis_engine path ACL is enforced atomically inside the Lua script
-	// (KEYS[6] = acl:membership:{auction}:{user}), eliminating a separate Redis RTT.
-	// Non-engine paths (postgres_lane, redis_guard) still use the Go-level check.
 	if h.Engine == nil {
-		stageStart = time.Now()
-		_, stageSpan = apptracing.Start(traceCtx, "bid.acl", attribute.String("auction.id", auctionID))
-		if _, err := h.ACL.requireActiveMembershipForAuction(r.Context(), user, auctionID, traceID(r.Context())); err != nil {
-			handlerErr = err
-			apptracing.End(stageSpan, err)
-			recordBidGatewayStage("acl", mode, "error", time.Since(stageStart))
-			writeResult(w, r, http.StatusOK, nil, err)
-			return
-		}
-		apptracing.End(stageSpan, nil)
-		recordBidGatewayStage("acl", mode, "ok", time.Since(stageStart))
+		err := apierrors.New(apierrors.CodeEnginePaused, "redis/kafka hot engine is required", http.StatusServiceUnavailable)
+		handlerErr = err
+		writeBidAdmissionResult(w, r, auction.BidResponse{}, err)
+		return
 	}
 	if h.Bids != nil {
 		stageStart = time.Now()
@@ -649,81 +639,28 @@ func (h AuctionHandler) PlaceBid(w http.ResponseWriter, r *http.Request) {
 			defer permit.Release()
 		}
 	}
-	if h.Guard != nil {
-		stageStart = time.Now()
-		_, stageSpan = apptracing.Start(traceCtx, "bid.redis_guard", attribute.String("auction.id", auctionID))
-		decision := h.Guard.Check(r.Context(), auctionID, user.ID, req)
-		if decision.Outcome == redisGuardOutcomeReject {
-			result, err := h.Guard.Response(r.Context(), auctionID, user.ID, traceID(r.Context()), decision)
-			if err != nil {
-				handlerErr = err
-				apptracing.End(stageSpan, err)
-				recordBidGatewayStage("redis_guard", mode, "error", time.Since(stageStart))
-			} else {
-				stageSpan.SetAttributes(attribute.String("bid.redis_guard.outcome", "reject"))
-				apptracing.End(stageSpan, nil)
-				recordBidGatewayStage("redis_guard", mode, "reject", time.Since(stageStart))
-				totalOutcome = "ok"
-			}
-			writeBidAdmissionResult(w, r, result, err)
-			return
-		}
-		stageSpan.SetAttributes(attribute.String("bid.redis_guard.outcome", "pass"))
-		apptracing.End(stageSpan, nil)
-		recordBidGatewayStage("redis_guard", mode, "pass", time.Since(stageStart))
-	}
-	if h.Engine != nil {
-		stageStart = time.Now()
-		_, stageSpan = apptracing.Start(traceCtx, "bid.redis_engine", attribute.String("auction.id", auctionID))
-		result, err := h.Engine.PlaceBid(r.Context(), auctionID, user.ID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context()),
-			redisx.ACLMembershipKey(auctionID, user.ID))
-		if err != nil {
-			handlerErr = err
-			apptracing.End(stageSpan, err)
-			recordBidGatewayStage("redis_engine", mode, "error", time.Since(stageStart))
-		} else {
-			stageSpan.SetAttributes(
-				attribute.String("bid.result", result.Result),
-				attribute.Int64("bid.seq", result.Seq),
-			)
-			apptracing.End(stageSpan, nil)
-			recordBidGatewayStage("redis_engine", mode, "ok", time.Since(stageStart))
-			totalOutcome = "ok"
-		}
-		if err == nil {
-			h.maybeCreateAutoCommentary(result)
-		}
-		writeBidAdmissionResult(w, r, result, err)
-		return
-	}
-	place := func(ctx context.Context) (auction.BidResponse, error) {
-		return h.Repo.PlaceBid(ctx, auctionID, user.ID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context()))
-	}
 	stageStart = time.Now()
-	_, stageSpan = apptracing.Start(traceCtx, "bid.postgres_lane", attribute.String("auction.id", auctionID))
-	result, err := h.executeBidLane(r.Context(), auctionID, user.ID, traceID(r.Context()), place)
+	_, stageSpan = apptracing.Start(traceCtx, "bid.redis_engine", attribute.String("auction.id", auctionID))
+	result, err := h.Engine.PlaceBid(r.Context(), auctionID, user.ID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context()),
+		redisx.ACLMembershipKey(auctionID, user.ID))
 	if err != nil {
 		handlerErr = err
 		apptracing.End(stageSpan, err)
-		recordBidGatewayStage("postgres_lane", mode, "error", time.Since(stageStart))
+		recordBidGatewayStage("redis_engine", mode, "error", time.Since(stageStart))
 	} else {
 		stageSpan.SetAttributes(
 			attribute.String("bid.result", result.Result),
 			attribute.Int64("bid.seq", result.Seq),
 		)
 		apptracing.End(stageSpan, nil)
-		recordBidGatewayStage("postgres_lane", mode, "ok", time.Since(stageStart))
+		recordBidGatewayStage("redis_engine", mode, "ok", time.Since(stageStart))
 		totalOutcome = "ok"
-	}
-	if err == nil && h.Guard != nil {
-		// This refresh is a best-effort cache update after PostgreSQL commit.
-		// Outbox relay remains the durable projection repair path.
-		h.Guard.RefreshAfterAcceptedBid(r.Context(), result)
 	}
 	if err == nil {
 		h.maybeCreateAutoCommentary(result)
 	}
 	writeBidAdmissionResult(w, r, result, err)
+	return
 }
 
 func (h AuctionHandler) maybeCreateAutoCommentary(result auction.BidResponse) {
@@ -859,15 +796,12 @@ func (h AuctionHandler) ConfirmBid(w http.ResponseWriter, r *http.Request) {
 			defer permit.Release()
 		}
 	}
-	confirm := func(ctx context.Context) (auction.BidResponse, error) {
-		return h.Repo.ConfirmBid(ctx, auctionID, user.ID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context()))
+	if h.Engine == nil {
+		err := apierrors.New(apierrors.CodeEnginePaused, "redis/kafka hot engine is required", http.StatusServiceUnavailable)
+		writeBidAdmissionResult(w, r, auction.BidResponse{}, err)
+		return
 	}
-	result, err := h.executeBidLane(r.Context(), auctionID, user.ID, traceID(r.Context()), confirm)
-	if err == nil && h.Guard != nil {
-		// This refresh is a best-effort cache update after PostgreSQL commit.
-		// Outbox relay remains the durable projection repair path.
-		h.Guard.RefreshAfterAcceptedBid(r.Context(), result)
-	}
+	result, err := h.Engine.ConfirmBid(r.Context(), auctionID, user.ID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context()))
 	writeBidAdmissionResult(w, r, result, err)
 }
 
@@ -928,7 +862,6 @@ func (h AuctionHandler) PutMaxBidIntent(w http.ResponseWriter, r *http.Request) 
 	result, err := h.Repo.PutMaxBidIntent(r.Context(), auctionID, user.ID, r.Header.Get("Idempotency-Key"), req)
 	if err == nil {
 		h.invalidateMaxBidIntentSnapshotCache(r.Context(), auctionID, user.ID)
-		h.markRedisLedgerRequiresPostgres(r.Context(), auctionID, "active_max_bid_intent")
 	}
 	writeResult(w, r, http.StatusOK, result, err)
 }
@@ -949,22 +882,6 @@ func (h AuctionHandler) DeleteMaxBidIntent(w http.ResponseWriter, r *http.Reques
 		h.invalidateMaxBidIntentSnapshotCache(r.Context(), auctionID, user.ID)
 	}
 	writeResult(w, r, http.StatusOK, result, err)
-}
-
-func (h AuctionHandler) markRedisLedgerRequiresPostgres(ctx context.Context, auctionID string, reason string) {
-	if h.Config.BidEngineMode == bidEngineModePostgresLane || h.Config.BidEngineMode == bidEngineModeRedisGuard || h.Deps == nil || h.Deps.Redis == nil {
-		return
-	}
-	stateKey := redisx.BidEngineStateKey(auctionID)
-	exists, err := h.Deps.Redis.HExists(ctx, stateKey, "engine_seq").Result()
-	if err != nil || !exists {
-		return
-	}
-	_ = h.Deps.Redis.HSet(ctx, redisx.BidEngineStateKey(auctionID),
-		"requires_postgres", reason,
-		"paused", 1,
-		"pause_reason", "REDIS_ENGINE_REQUIRES_POSTGRES_"+reason,
-	).Err()
 }
 
 func (h AuctionHandler) PayMock(w http.ResponseWriter, r *http.Request) {

@@ -149,8 +149,8 @@ the raw per-request data.
 
 ## Current Default kafka_ack Example: UIPAX7JG
 
-`UIPAX7JG` is the current formal S1 PTS evidence after making
-`BID_ENGINE_RESPONSE_DURABILITY=kafka_ack` the default response profile.
+`UIPAX7JG` is the current formal S1 PTS evidence for the pinned kafka_ack
+response profile.
 
 Evidence:
 

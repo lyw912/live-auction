@@ -1,6 +1,6 @@
 # Current Evidence Policy
 
-> Status: governing evidence policy, 2026-06-05.
+> Status: governing evidence policy, 2026-06-07.
 
 This file defines what can be cited as current evidence after the PG-lane to Redis/Kafka reset.
 
@@ -42,8 +42,8 @@ New PTS report reviews must use `docs/current/pts-run-review-template.md`.
 
 All must hold:
 
-- user-visible `ENGINE_*` decision p99 <= 60ms for default `kafka_ack` PTS-1B evidence, or <= 50ms for explicit `redis_aof` low-latency evidence;
-- final `ENGINE_*` decision responses are `KAFKA_ACKED` >= 99% in default `kafka_ack` mode, with bounded `ENGINE_DURABLE` fallback <= 1% and proven convergence;
+- user-visible `ENGINE_*` decision p99 <= 60ms for current `kafka_ack` PTS-1B evidence;
+- final `ENGINE_*` decision responses are `KAFKA_ACKED` >= 99% in current `kafka_ack` mode, with bounded `ENGINE_DURABLE` responses <= 1% and proven convergence;
 - 1000 intended unique bids are classified;
 - final winner is the highest valid amount;
 - every low reject is justified against decision-time current/required price;

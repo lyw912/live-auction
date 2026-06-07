@@ -1,35 +1,45 @@
 # Runtime Profiles
 
-> Status: current runtime profile guide, 2026-06-05.
+> Status: current runtime profile guide, 2026-06-07.
 
-This project intentionally has different runtime profiles. Do not infer architecture readiness from one env file.
+The current runtime has one supported auction decision profile:
+Redis hot ledger with Kafka ACK response boundary (`redis_ledger + kafka_ack`).
+Historical PG/guard/redis-aof profiles are retained only as archived evidence or
+legacy unit coverage; they are not supported startup profiles and must not be
+cited as current behavior.
 
 ## Profiles
 
 | Profile | Env source | Engine | Admission | Purpose |
 |---|---|---|---|---|
-| Local demo | `.env.example` | `postgres_lane` | enabled | conservative manual demo and everyday development |
+| Local demo | `.env.example` | default Redis hot ledger + `kafka_ack` | enabled | everyday development on the same rich hot engine used for PTS |
 | PTS-1B hot path | `.env.pts1b.example` or `tests/pts/reset-l4b-final-second-pressure.sh` | `redis_ledger` | disabled | final-second 1000-user contention pressure |
 | Redis Sentinel HA-ready config | deployment env | `redis_ledger` | deployment-specific | client-side failover discovery; not a completed HA evidence run |
-| Historical PG/guard experiments | old docs/scripts | `postgres_lane` or `redis_guard` | varies | historical diagnosis only |
+| Historical PG/guard/redis-aof experiments | old docs/scripts | not a supported runtime profile | varies | historical diagnosis only |
 
 ## Local Demo Profile
 
-`.env.example` is intentionally conservative:
+`.env.example` now uses the flagship hot engine by default. Normal local/demo
+runs should not set `BID_ENGINE_MODE`; `config.Load()` pins the Redis hot ledger
+so the project cannot accidentally fall back to a PostgreSQL lane during ordinary
+startup.
 
-- `BID_ENGINE_MODE=postgres_lane`
+- response boundary is pinned to `kafka_ack`
 - `ADMISSION_ENABLED=true`
 - `REDIS_ADDR=localhost:6380`
-- Kafka variables are present but not the main demo decision path.
+- Kafka variables are part of the main demo decision path.
 
-This profile is useful for product walkthroughs and debugging. It must not be cited as current PTS-1B performance evidence.
+This profile is useful for product walkthroughs and debugging because it exercises
+the same Redis/Kafka hot engine, including fat-finger confirmation and proxy
+auto-bidding. It must still not be cited as current PTS-1B performance evidence
+because admission remains enabled and the full PTS reset/preflight/evidence
+sequence is not run.
 
 ## PTS-1B Profile
 
 Current PTS-1B requires:
 
 ```text
-BID_ENGINE_MODE=redis_ledger
 ADMISSION_ENABLED=false
 REDIS_ADDR=localhost:6380
 KAFKA_BROKERS=localhost:9092
@@ -37,7 +47,9 @@ KAFKA_BID_TOPIC=auction.bid-events
 KAFKA_DLQ_TOPIC=auction.dlq
 ```
 
-Prefer the scripted sequence in `tests/pts/MANIFEST.md` because it also resets PostgreSQL, Redis, Kafka topics, session CSV, preflight gates, and correctness verification.
+Prefer the scripted sequence in `tests/pts/MANIFEST.md` because it resets
+PostgreSQL, Redis, Kafka topics, session CSV, preflight gates, and correctness
+verification.
 
 Manual use of `.env.pts1b.example` is allowed for local debugging only. Formal evidence still needs reset, preflight, PTS report details, server evidence, and verifier output.
 
@@ -120,16 +132,15 @@ many simultaneous auctions with distinct `{auctionID}` hash slots.
 
 ## Kafka ACK Response Durability Boundary
 
-`BID_ENGINE_RESPONSE_DURABILITY=kafka_ack` is the default PTS/production profile.
-The HTTP response waits for the relay group-commit batch and normally returns
+`kafka_ack` is the only current PTS/production response profile. The HTTP
+response waits for the relay group-commit batch and normally returns
 `KAFKA_ACKED`. A bounded number of responses may fall back to `ENGINE_DURABLE`
 on the 40ms latch timeout/fail-fast/circuit-open path; post-run gates must prove
 those decisions later reached Kafka and PostgreSQL.
 
-`BID_ENGINE_RESPONSE_DURABILITY=redis_aof` remains available as an explicit
-low-latency diagnostic profile: the HTTP response returns after the Redis hot
-state, Redis Stream WAL, and idempotency record are written under local AOF
-`appendfsync always`.
+`ENGINE_DURABLE` is no longer a separate startup profile. It is a bounded result
+inside the `kafka_ack` profile when relay confirmation cannot be observed within
+the latch budget.
 
 ### Architecture — event-driven group-commit latch
 
@@ -159,7 +170,6 @@ timeout = **40ms**; on timeout the response falls back to `ENGINE_DURABLE`.
 The 40ms value is a deliberate tradeoff, not an arbitrary number:
 
 ```
-P99 target (redis_aof baseline):   50ms
 Lua hot-path P99 (measured):       ~23ms
 kafka_ack latch overhead (normal): +6-8ms  → ~29-31ms total  ✓ well under 50ms
 kafka_ack latch overhead (timeout): +40ms  → ~63ms total for timeout cases
@@ -189,8 +199,9 @@ not an error, not a pending state, not a loss.
 
 ### Kafka fault behavior — fail-fast + circuit breaker
 
-`kafka_ack` mode does NOT make Kafka fault worse than `redis_aof` mode. Two
-mechanisms ensure that Kafka unavailability causes zero extra latency:
+`kafka_ack` mode keeps Redis-AOF-local durability as the bounded response result
+when Kafka confirmation is not available. Two mechanisms ensure that Kafka
+unavailability causes zero extra latency:
 
 **Fail-fast wakeup**: when `relayAuctionLogBatch` detects an `AppendBatch`
 failure (hard Kafka error, not context cancellation), it calls
@@ -234,7 +245,7 @@ and `auction_kafka_ack_wait_ms{outcome="acked|eager_acked|fail_fast|timeout"}`.
 | Intended bids | 1000/1000 | All bids reached server |
 | Offered window (`startTimeTS`) | 505ms | 2-agent JMX sync fix worked |
 | Response `server_time_ms` span | 507ms | ≈ window |
-| Final `ENGINE_*` p99 | **58ms** | Under 60ms envelope ✓; above 50ms `redis_aof` baseline |
+| Final `ENGINE_*` p99 | **58ms** | Under current 60ms envelope ✓ |
 | Final `ENGINE_*` max | 67ms | |
 | `KAFKA_ACKED` | **998 (99.8%)** | |
 | `ENGINE_DURABLE` (graceful degradation) | **2 (0.2%)** | See analysis below |
@@ -278,18 +289,18 @@ The 2 `ENGINE_DURABLE` responses are correct behavior, not errors or data loss:
 
 **Interpretation boundary**
 
-This run demonstrates the `kafka_ack` mode under PTS-1B conditions. P99=58ms is
-within the 60ms `kafka_ack` envelope (see Target section of contract). The 50ms
-target remains the `redis_aof` low-latency baseline. Both are valid operational
-modes with documented tradeoffs.
+This run demonstrates the current `kafka_ack` profile under PTS-1B conditions.
+P99=58ms is within the 60ms `kafka_ack` envelope (see Target section of contract).
+The old 50ms redis-aof diagnostic is historical only and is not a current
+operational mode.
 
 **This run must NOT be cited as a ≤50ms strict guarantee.** For a ≤50ms
-`kafka_ack` run, reduce the relay window (requires Kafka broker with sub-2ms RTT)
-or use `redis_aof` mode and cite the prior 23ms P99 evidence.
+`kafka_ack` run, reduce the relay window or broker RTT and produce new current
+evidence.
 
-**Required additional evidence before kafka_ack becomes the unambiguous default:**
+**Required additional evidence for stronger current claims:**
 
-- S4 Kafka-fault subset with `kafka_ack` mode: verify `reason=fail_fast` and
+- S4 Kafka-fault subset with current `kafka_ack` mode: verify `reason=fail_fast` and
   `reason=circuit_open` appear in metrics, all decisions `DECIDED`, settlement
   converges, `reason=circuit_open` resolves to 0 after recovery.
 - `auction_kafka_ack_wait_ms{outcome}` histogram recorded.
@@ -303,5 +314,5 @@ Production requires RF=3, `min.insync.replicas=2`, producer `acks=all`.
 Invalid examples:
 
 - Running `pts-1b-contention-burst-1000vu-1m.jmx` against `.env.example` and calling the result current PTS-1B.
-- Running with `BID_ENGINE_MODE=redis_ledger` but no Kafka topic verification.
+- Running without Kafka topic verification.
 - Comparing a PG-lane run and Redis/Kafka run as if only code changed when admission, CSV, data reset, or PTS script also changed.

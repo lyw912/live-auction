@@ -74,10 +74,9 @@ Read before running or interpreting any workload:
 
 ## Interpretation Rules
 
-- M1 final bid decision requires `result in ENGINE_*`. Default evidence expects
-  `durability_status=KAFKA_ACKED` >= 99% with bounded `ENGINE_DURABLE` fallback
-  <= 1% and post-run relay/settlement convergence. Explicit `redis_aof`
-  diagnostic evidence may expect `ENGINE_DURABLE`.
+- M1 final bid decision requires `result in ENGINE_*`. Current evidence expects
+  `durability_status=KAFKA_ACKED` >= 99% with bounded `ENGINE_DURABLE` responses
+  <= 1% and post-run relay/settlement convergence.
 - S1-burst's default release model is a 500 ms final-second target window, not a
   zero-ms SyncTimer-style wall. To run the old diagnostic microburst, set JMeter
   property `contention_release_window_ms=0` through PTS JMeter environment

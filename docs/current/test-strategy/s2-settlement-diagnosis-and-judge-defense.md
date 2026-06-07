@@ -69,7 +69,7 @@ stage 1          : 20 offered bid attempts/s for 10 min
 stage 2          : 60 offered bid attempts/s for 10 min
 stage 3          : 100 offered bid attempts/s for 10 min
 ramp-down        : 30s
-runtime profile  : BID_ENGINE_MODE=redis_ledger, ADMISSION_ENABLED=false
+runtime profile  : pinned Redis hot ledger + kafka_ack, ADMISSION_ENABLED=false
 auction          : auc_live, reset immediately before run
 auth path        : mock user headers for seeded k6_bidder_* users
 ```
@@ -294,7 +294,7 @@ duration        : 15 min + 30s ramp-down
 bid rate        : 100/s, 100/s, 100/s
 read rate       : 2000/s, 5000/s, 10000/s
 read mix        : 80% snapshot, 15% leaderboard, 5% my-bids
-runtime profile : BID_ENGINE_MODE=redis_ledger, ADMISSION_ENABLED=false
+runtime profile : pinned Redis hot ledger + kafka_ack, ADMISSION_ENABLED=false
 auction         : auc_live, reset immediately before run
 ```
 

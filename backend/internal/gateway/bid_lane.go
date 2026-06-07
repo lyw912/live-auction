@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"encoding/json"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -57,7 +56,7 @@ func newBidLaneManager(cfg config.Config, db *pgxpool.Pool) *bidLaneManager {
 
 func normalizeBidLaneConfig(cfg config.Config) config.Config {
 	if cfg.BidEngineMode == "" {
-		cfg.BidEngineMode = bidEngineModePostgresLane
+		cfg.BidEngineMode = bidEngineModeRedisLedger
 	}
 	if cfg.BidLaneWorkers <= 0 {
 		cfg.BidLaneWorkers = 1
@@ -72,57 +71,7 @@ func normalizeBidLaneConfig(cfg config.Config) config.Config {
 }
 
 func (m *bidLaneManager) Execute(ctx context.Context, auctionID string, userID string, traceID string, fn bidLaneFunc) (auction.BidResponse, error) {
-	if m == nil || (m.cfg.BidEngineMode != bidEngineModePostgresLane && m.cfg.BidEngineMode != bidEngineModeRedisGuard) {
-		return fn(ctx)
-	}
-	lane := m.laneFor(auctionID)
-	queuedAt := time.Now()
-	task := &bidLaneTask{
-		ctx:       ctx,
-		queuedAt:  queuedAt,
-		expiresAt: queuedAt.Add(m.cfg.BidLaneQueueTimeout),
-		run:       fn,
-		started:   make(chan struct{}),
-		done:      make(chan bidLaneResult, 1),
-	}
-	select {
-	case lane.tasks <- task:
-		depth := lane.depth.Add(1)
-		recordBidLaneDepth(auctionID, depth)
-	default:
-		recordBidLaneDepth(auctionID, lane.depth.Load())
-		recordBidLaneReject(apierrors.CodeBidAuctionTooHot)
-		_ = m.recordLaneReject(ctx, auctionID, userID, traceID, apierrors.CodeBidAuctionTooHot, "postgres lane queue full", bidLaneRetryAfter())
-		return auction.BidResponse{}, retryableAdmissionError(apierrors.CodeBidAuctionTooHot, "auction bid lane is full", bidLaneRetryAfter())
-	}
-
-	timer := time.NewTimer(m.cfg.BidLaneQueueTimeout)
-	defer timer.Stop()
-	select {
-	case <-task.started:
-		result := <-task.done
-		return result.response, result.err
-	case result := <-task.done:
-		return result.response, result.err
-	case <-timer.C:
-		if task.state.CompareAndSwap(0, 2) {
-			recordBidLaneReject(apierrors.CodeBidRetryLater)
-			_ = m.recordLaneReject(ctx, auctionID, userID, traceID, apierrors.CodeBidRetryLater, "postgres lane queue wait timeout", bidLaneRetryAfter())
-			return auction.BidResponse{}, retryableAdmissionError(apierrors.CodeBidRetryLater, "auction bid lane is busy; retry later", bidLaneRetryAfter())
-		}
-		switch task.state.Load() {
-		case 1:
-			result := <-task.done
-			return result.response, result.err
-		default:
-			recordBidLaneReject(apierrors.CodeBidRetryLater)
-			_ = m.recordLaneReject(ctx, auctionID, userID, traceID, apierrors.CodeBidRetryLater, "postgres lane queue wait timeout", bidLaneRetryAfter())
-			return auction.BidResponse{}, retryableAdmissionError(apierrors.CodeBidRetryLater, "auction bid lane is busy; retry later", bidLaneRetryAfter())
-		}
-	case <-ctx.Done():
-		task.state.CompareAndSwap(0, 2)
-		return auction.BidResponse{}, ctx.Err()
-	}
+	return fn(ctx)
 }
 
 func (m *bidLaneManager) laneFor(auctionID string) *bidLane {
@@ -171,27 +120,7 @@ func (l *bidLane) worker() {
 }
 
 func (m *bidLaneManager) recordLaneReject(ctx context.Context, auctionID string, userID string, traceID string, code apierrors.Code, reason string, retryAfter time.Duration) error {
-	if (m.cfg.BidEngineMode != bidEngineModePostgresLane && m.cfg.BidEngineMode != bidEngineModeRedisGuard) || m.db == nil {
-		return nil
-	}
-	payload, err := json.Marshal(map[string]any{
-		"auction_id":       auctionID,
-		"user_id":          userID,
-		"trace_id":         traceID,
-		"engine_mode":      m.cfg.BidEngineMode,
-		"code":             code,
-		"reason":           reason,
-		"retry_after_ms":   retryAfter.Milliseconds(),
-		"retry_after_secs": retryAfterSeconds(retryAfter),
-	})
-	if err != nil {
-		return err
-	}
-	_, err = m.db.Exec(ctx, `
-		INSERT INTO system_anomaly_events (severity, type, auction_id, message, payload_json)
-		VALUES ('MED', $1, $2, 'postgres bid lane rejected request', $3)
-	`, string(code), auctionID, payload)
-	return err
+	return nil
 }
 
 func recordBidLaneDepth(auctionID string, depth int64) {

@@ -2,7 +2,7 @@
 <jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
   <hashTree>
     <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="PTS-1B contention burst 1000VU 1m (v3 single-writer decision log)" enabled="true">
-      <stringProp name="TestPlan.comments">PTS-1B contention burst v7 single-writer decision log. Business scenario: final second of a jewellery auction, 1000 bidders submit one bid each inside a controlled short final-second release window. Default contention_release_window_ms=500; set 0 only for diagnostic strict-barrier comparison, or 1000 for conservative one-second fallback. Default server profile is BID_ENGINE_RESPONSE_DURABILITY=kafka_ack: expect synchronous DECIDED with KAFKA_ACKED &gt;= 99%, bounded ENGINE_DURABLE fallback, and p99 &lt;= 60ms. Explicit redis_aof diagnostic evidence may use ENGINE_DURABLE and p99 &lt;= 50ms. Pass: HTTP 200 + decision_status=DECIDED + durability_status=ENGINE_DURABLE|KAFKA_ACKED, all 1000 bids classified, highest amount wins, engine_seq gap-free, no DLQ/pause. Requires ALLOW_MOCK_AUTH=false ADMISSION_ENABLED=false BID_ENGINE_MODE=redis_ledger Kafka topics ready high auction cap. 2-AGENT SYNC: agents self-align to a shared wall-clock barrier (next minute + 15s, at least 20s in the future). No PTS global parameter is required; optional l4b_barrier_target_epoch_ms can still override for diagnostics.</stringProp>
+      <stringProp name="TestPlan.comments">PTS-1B contention burst v7 single-writer decision log. Business scenario: final second of a jewellery auction, 1000 bidders submit one bid each inside a controlled short final-second release window. Default contention_release_window_ms=500; set 0 only for diagnostic strict-barrier comparison, or 1000 for conservative one-second fallback. Current server profile is pinned in code to Redis hot ledger + kafka_ack: expect synchronous DECIDED with KAFKA_ACKED &gt;= 99%, bounded ENGINE_DURABLE fallback, and p99 &lt;= 60ms. Pass: HTTP 200 + decision_status=DECIDED + durability_status=ENGINE_DURABLE|KAFKA_ACKED, all 1000 bids classified, highest amount wins, engine_seq gap-free, no DLQ/pause. Requires ALLOW_MOCK_AUTH=false ADMISSION_ENABLED=false, Kafka topics ready, high auction cap, and no BID_ENGINE_MODE/BID_ENGINE_RESPONSE_DURABILITY override. 2-AGENT SYNC: agents self-align to a shared wall-clock barrier (next minute + 15s, at least 20s in the future). No PTS global parameter is required; optional l4b_barrier_target_epoch_ms can still override for diagnostics.</stringProp>
       <boolProp name="TestPlan.functional_mode">false</boolProp>
       <boolProp name="TestPlan.tearDown_on_shutdown">true</boolProp>
       <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
@@ -308,8 +308,8 @@ if (body != null && body.length() > 0) {
         prev.setResponseMessage('V3_VIOLATION_NOT_DECIDED_decision_status=' + decisionStatus)
         return
       }
-      // durability_status must be KAFKA_ACKED (default kafka_ack mode) or
-      // ENGINE_DURABLE (bounded fallback / explicit redis_aof diagnostic mode).
+      // durability_status must be KAFKA_ACKED (current pinned kafka_ack runtime) or
+      // ENGINE_DURABLE (bounded fallback inside the same kafka_ack runtime).
       // Any other value means the decision has not been durably committed.
       if (durabilityStatus != 'ENGINE_DURABLE' && durabilityStatus != 'KAFKA_ACKED') {
         prev.setSuccessful(false)

@@ -78,6 +78,7 @@ local bid_id = ARGV[8]
 local state_json = ARGV[9]
 local state_ttl_ms = tonumber(ARGV[10])
 local idem_ttl_ms = tonumber(ARGV[11])
+local bid_source = ARGV[12] or 'MANUAL'
 
 local existing = redis.call('HMGET', idem_key, 'request_hash', 'result_json')
 if existing[1] ~= false then
@@ -115,6 +116,7 @@ if redis.call('EXISTS', state_key) == 0 then
   redis.call('HSET', state_key, 'paused', tostring(decoded['paused'] or false))
   redis.call('HSET', state_key, 'pause_reason', tostring(decoded['pause_reason'] or ''))
   redis.call('HSET', state_key, 'requires_postgres', tostring(decoded['requires_postgres'] or ''))
+  redis.call('HSET', state_key, 'fat_finger_threshold_cents', tostring(decoded['fat_finger_threshold_cents'] or 0))
   -- Seed the hard ceiling for soft-close extensions. If the snapshot already carries
   -- absolute_end_ms use it; otherwise compute from initial end + max total extension.
   local abs_end = tonumber(decoded['absolute_end_ms']) or 0
@@ -133,7 +135,7 @@ local s = redis.call('HMGET', state_key,
   'increment_cents', 'cap_price_cents', 'end_at_ms', 'extend_window_ms',
   'extend_by_ms', 'max_extend_count', 'extend_count', 'accepted_bid_count',
   'seq', 'engine_seq', 'engine_epoch', 'paused', 'pause_reason', 'requires_postgres',
-  'absolute_end_ms')
+  'absolute_end_ms', 'fat_finger_threshold_cents')
 
 local status = tostring(s[1])
 local current_price = tonumber(s[2]) or 0
@@ -156,6 +158,7 @@ local paused = tostring(s[16])
 local pause_reason = tostring(s[17] or '')
 local requires_postgres = tostring(s[18] or '')
 local absolute_end_ms = tonumber(s[19]) or 0
+local fat_finger_threshold = tonumber(s[20]) or 0
 
 if status == '' or s[2] == false or s[4] == false or s[5] == false or s[7] == false or
    s[12] == false or s[13] == false or s[14] == false or s[15] == false or s[16] == false then
@@ -296,6 +299,47 @@ if ((amount - base) % increment) ~= 0 then
   return reject('BID_INCREMENT_MISMATCH')
 end
 
+-- Fat-finger detection: if bid jumps by >= threshold, require a second confirmation.
+-- Strictly mirrors the PG lane's ClassifyBidAmount fat-finger branch:
+--   amount - current_price >= fat_finger_threshold (where current_price == base).
+-- pending_confirm key holds (amount, token, expires_at_ms) for the confirmBid script.
+if fat_finger_threshold > 0 and (amount - base) >= fat_finger_threshold then
+  local pc_key = 'bid:{' .. auction_id .. '}:engine:pending_confirm:' .. user_id .. ':' .. client_bid_id
+  local pc = redis.call('HMGET', pc_key, 'amount', 'token', 'expires_at_ms')
+  local token
+  if pc[1] ~= false and tonumber(pc[1]) == amount and pc[3] ~= false and now_ms <= tonumber(pc[3]) then
+    token = pc[2]
+  else
+    token = 'ft_' .. bid_id
+    redis.call('HSET', pc_key, 'amount', tostring(amount), 'token', token, 'expires_at_ms', tostring(now_ms + 30000))
+    redis.call('PEXPIRE', pc_key, 30000)
+  end
+  local fat_result = {
+    result = 'FAT_FINGER_CONFIRM_REQUIRED',
+    bid_id = bid_id,
+    auction_id = auction_id,
+    user_id = user_id,
+    client_bid_id = client_bid_id,
+    amount_cents = amount,
+    seq = public_seq,
+    engine_seq = engine_seq,
+    engine_epoch = engine_epoch,
+    settlement_status = 'NOT_REQUIRED',
+    current_price_cents = current_price,
+    current_winner_id = current_winner,
+    end_at_ms = end_at_ms,
+    server_time_ms = now_ms,
+    trace_id = trace_id,
+    request_hash = request_hash,
+    source = bid_source,
+    confirm_token = token,
+    expires_in_ms = 30000
+  }
+  -- Store in idem_key so replay of the original bid returns the same FFCR response.
+  store_result(fat_result)
+  return {'OK', cjson.encode(fat_result)}
+end
+
 engine_seq = engine_seq + 1
 local result_code = 'ENGINE_ACCEPTED'
 local new_status = 'ACTIVE'
@@ -305,6 +349,11 @@ if cap > 0 and amount == cap then
   result_code = 'ENGINE_SOLD'
   new_status = 'SOLD'
 else
+  if bid_source == 'AUTO_MAX_BID' then
+    -- Proxy resolver output is a consequence of the manual bid that already
+    -- entered the final window. Do not stack anti-sniping extensions for the
+    -- automatic response.
+  else
   if extend_count < max_extend_count and (end_at_ms - now_ms) <= extend_window_ms then
     local candidate = end_at_ms + extend_by_ms
     if candidate > end_at_ms then
@@ -316,6 +365,7 @@ else
       new_end_at_ms = candidate
       new_extend_count = extend_count + 1
     end
+  end
   end
 end
 
@@ -348,9 +398,248 @@ local result = {
   extend_count = new_extend_count,
   server_time_ms = now_ms,
   trace_id = trace_id,
-  request_hash = request_hash
+  request_hash = request_hash,
+  source = bid_source
 }
 return {'OK', store_decision(with_basis(result, nil))}
+`)
+
+// confirmLedgerRunner implements the second Lua entry point for A1 fat-finger
+// two-step confirmation. It validates the pending confirm key, re-runs all bid
+// guards with the *current* auction state, then falls through to the accept path.
+//
+// KEYS: [state_key, idem_key, pending_key, log_stream_key, acl_key, pending_confirm_key]
+// ARGV: [now_ms, auction_id, user_id, client_bid_id, amount, request_hash,
+//
+//	trace_id, bid_id, confirm_token, state_ttl_ms, idem_ttl_ms]
+var confirmLedgerRunner = redisx.NewScriptRunner(redisx.ScriptConfirmBidRedisLedger, `
+local state_key          = KEYS[1]
+local idem_key           = KEYS[2]
+local pending_key        = KEYS[3]
+local log_stream_key     = KEYS[4]
+local pending_confirm_key = KEYS[6]
+
+local now_ms         = tonumber(ARGV[1])
+local auction_id     = ARGV[2]
+local user_id        = ARGV[3]
+local client_bid_id  = ARGV[4]
+local amount         = tonumber(ARGV[5])
+local request_hash   = ARGV[6]
+local trace_id       = ARGV[7]
+local bid_id         = ARGV[8]
+local confirm_token  = ARGV[9]
+local state_ttl_ms   = tonumber(ARGV[10])
+local idem_ttl_ms    = tonumber(ARGV[11])
+
+-- If already settled (non-FFCR), replay the completed result.
+local existing = redis.call('HMGET', idem_key, 'request_hash', 'result_json')
+if existing[1] ~= false and existing[2] ~= false and existing[2] ~= '' then
+  local decoded = cjson.decode(existing[2])
+  if decoded['result'] ~= 'FAT_FINGER_CONFIRM_REQUIRED' then
+    return {'REPLAY', existing[2]}
+  end
+end
+
+-- Validate pending confirm key.
+local pc = redis.call('HMGET', pending_confirm_key, 'amount', 'token', 'expires_at_ms')
+if pc[1] == false then
+  return {'ERROR', 'CONFIRM_TOKEN_INVALID', 'pending confirm not found or expired'}
+end
+if pc[2] ~= confirm_token then
+  return {'ERROR', 'CONFIRM_TOKEN_INVALID', 'token mismatch'}
+end
+if tonumber(pc[3]) ~= nil and now_ms > tonumber(pc[3]) then
+  return {'ERROR', 'CONFIRM_TOKEN_EXPIRED', 'confirm token expired'}
+end
+if tonumber(pc[1]) ~= amount then
+  return {'ERROR', 'CONFIRM_TOKEN_INVALID', 'amount mismatch'}
+end
+
+-- Re-read live state (not cached snapshot — must see latest price/winner).
+local s = redis.call('HMGET', state_key,
+  'status', 'current_price_cents', 'current_winner_id', 'start_price_cents',
+  'increment_cents', 'cap_price_cents', 'end_at_ms', 'extend_window_ms',
+  'extend_by_ms', 'max_extend_count', 'extend_count', 'accepted_bid_count',
+  'seq', 'engine_seq', 'engine_epoch', 'paused', 'pause_reason', 'absolute_end_ms')
+
+if s[1] == false or s[2] == false then
+  return {'ERROR', 'RECONCILING', 'redis engine state missing for confirm'}
+end
+
+local status         = tostring(s[1])
+local current_price  = tonumber(s[2]) or 0
+local current_winner = s[3]; if current_winner == false then current_winner = '' end
+local start_price    = tonumber(s[4]) or 0
+local increment      = tonumber(s[5]) or 0
+local cap            = tonumber(s[6]) or 0
+local end_at_ms      = tonumber(s[7]) or 0
+local extend_window_ms  = tonumber(s[8]) or 0
+local extend_by_ms      = tonumber(s[9]) or 0
+local max_extend_count  = tonumber(s[10]) or 0
+local extend_count      = tonumber(s[11]) or 0
+local accepted_bid_count = tonumber(s[12]) or 0
+local public_seq        = tonumber(s[13]) or 0
+local engine_seq        = tonumber(s[14]) or 0
+local engine_epoch      = tonumber(s[15]) or 1
+local paused            = tostring(s[16])
+local absolute_end_ms   = tonumber(s[18]) or 0
+
+if paused == '1' or paused == 'true' then
+  return {'ERROR', 'ENGINE_PAUSED', tostring(s[17] or '')}
+end
+if status == 'RECONCILING' then
+  return {'ERROR', 'RECONCILING', ''}
+end
+
+local function confirm_reject(reason)
+  engine_seq = engine_seq + 1
+  redis.call('HSET', state_key, 'engine_seq', tostring(engine_seq))
+  redis.call('PEXPIRE', state_key, state_ttl_ms)
+  redis.call('DEL', pending_confirm_key)
+  local basis_base = current_price
+  if accepted_bid_count <= 0 then basis_base = start_price end
+  local result = {
+    result = 'ENGINE_REJECTED',
+    bid_id = bid_id,
+    auction_id = auction_id,
+    user_id = user_id,
+    client_bid_id = client_bid_id,
+    amount_cents = amount,
+    seq = public_seq,
+    engine_seq = engine_seq,
+    engine_epoch = engine_epoch,
+    settlement_status = 'PENDING',
+    reject_reason = reason,
+    current_price_cents = current_price,
+    current_winner_id = current_winner,
+    end_at_ms = end_at_ms,
+    server_time_ms = now_ms,
+    trace_id = trace_id,
+    request_hash = request_hash,
+    decision_basis = {
+      previous_price_cents = basis_base,
+      required_min_price_cents = basis_base + increment,
+      current_price_cents = current_price,
+      reason = reason,
+      engine_seq = engine_seq
+    }
+  }
+  local encoded = cjson.encode(result)
+  redis.call('HSET', idem_key, 'request_hash', request_hash)
+  redis.call('HSET', idem_key, 'result_json', encoded)
+  redis.call('HSET', idem_key, 'engine_seq', tostring(engine_seq))
+  redis.call('HSET', idem_key, 'engine_epoch', tostring(engine_epoch))
+  redis.call('HSET', idem_key, 'kafka_append_status', 'UNKNOWN')
+  redis.call('HSET', idem_key, 'expires_at_ms', tostring(now_ms + idem_ttl_ms))
+  redis.call('PEXPIRE', idem_key, idem_ttl_ms)
+  redis.call('HSET', pending_key, tostring(engine_seq), encoded)
+  redis.call('PEXPIRE', pending_key, state_ttl_ms)
+  redis.call('XADD', log_stream_key, '*',
+    'engine_seq', tostring(engine_seq),
+    'engine_epoch', tostring(engine_epoch),
+    'result', 'ENGINE_REJECTED',
+    'auction_id', auction_id,
+    'payload', encoded)
+  redis.call('PEXPIRE', log_stream_key, state_ttl_ms)
+  return {'OK', encoded}
+end
+
+-- Re-validate all bid guards with current state (price may have moved during confirm wait).
+if status ~= 'ACTIVE' then
+  return confirm_reject('AUCTION_NOT_ACTIVE')
+end
+if now_ms > end_at_ms then
+  return confirm_reject('AUCTION_ENDED')
+end
+if current_winner ~= '' and current_winner == user_id then
+  return confirm_reject('REJECTED_SELF_LEADING')
+end
+local base = current_price
+if accepted_bid_count <= 0 then base = start_price end
+if cap > 0 and amount > cap then
+  return confirm_reject('BID_ABOVE_CAP')
+end
+if amount < (base + increment) then
+  return confirm_reject('BID_TOO_LOW')
+end
+if increment > 0 and ((amount - base) % increment) ~= 0 then
+  return confirm_reject('BID_INCREMENT_MISMATCH')
+end
+
+-- All guards passed — accept the bid (same as ledgerRunner accept path).
+engine_seq = engine_seq + 1
+local result_code = 'ENGINE_ACCEPTED'
+local new_status = 'ACTIVE'
+local new_end_at_ms = end_at_ms
+local new_extend_count = extend_count
+if cap > 0 and amount == cap then
+  result_code = 'ENGINE_SOLD'
+  new_status = 'SOLD'
+else
+  if extend_count < max_extend_count and (end_at_ms - now_ms) <= extend_window_ms then
+    local candidate = end_at_ms + extend_by_ms
+    if candidate > end_at_ms then
+      if absolute_end_ms > 0 and candidate > absolute_end_ms then
+        candidate = absolute_end_ms
+      end
+      new_end_at_ms = candidate
+      new_extend_count = extend_count + 1
+    end
+  end
+end
+
+redis.call('HSET', state_key, 'status', new_status)
+redis.call('HSET', state_key, 'current_price_cents', tostring(amount))
+redis.call('HSET', state_key, 'current_winner_id', user_id)
+redis.call('HSET', state_key, 'end_at_ms', tostring(new_end_at_ms))
+redis.call('HSET', state_key, 'extend_count', tostring(new_extend_count))
+redis.call('HSET', state_key, 'accepted_bid_count', tostring(accepted_bid_count + 1))
+redis.call('HSET', state_key, 'engine_seq', tostring(engine_seq))
+redis.call('HSET', state_key, 'engine_epoch', tostring(engine_epoch))
+redis.call('HSET', state_key, 'paused', '0')
+redis.call('HSET', state_key, 'pause_reason', '')
+redis.call('PEXPIRE', state_key, state_ttl_ms)
+
+-- Delete pending confirm key — confirm is consumed.
+redis.call('DEL', pending_confirm_key)
+
+local result = {
+  result = result_code,
+  bid_id = bid_id,
+  auction_id = auction_id,
+  user_id = user_id,
+  client_bid_id = client_bid_id,
+  amount_cents = amount,
+  seq = public_seq,
+  engine_seq = engine_seq,
+  engine_epoch = engine_epoch,
+  settlement_status = 'PENDING',
+  current_price_cents = amount,
+  current_winner_id = user_id,
+  end_at_ms = new_end_at_ms,
+  extend_count = new_extend_count,
+  server_time_ms = now_ms,
+  trace_id = trace_id,
+  request_hash = request_hash
+}
+local encoded = cjson.encode(result)
+redis.call('HSET', idem_key, 'request_hash', request_hash)
+redis.call('HSET', idem_key, 'result_json', encoded)
+redis.call('HSET', idem_key, 'engine_seq', tostring(engine_seq))
+redis.call('HSET', idem_key, 'engine_epoch', tostring(engine_epoch))
+redis.call('HSET', idem_key, 'kafka_append_status', 'UNKNOWN')
+redis.call('HSET', idem_key, 'expires_at_ms', tostring(now_ms + idem_ttl_ms))
+redis.call('PEXPIRE', idem_key, idem_ttl_ms)
+redis.call('HSET', pending_key, tostring(engine_seq), encoded)
+redis.call('PEXPIRE', pending_key, state_ttl_ms)
+redis.call('XADD', log_stream_key, '*',
+  'engine_seq', tostring(engine_seq),
+  'engine_epoch', tostring(engine_epoch),
+  'result', result_code,
+  'auction_id', auction_id,
+  'payload', encoded)
+redis.call('PEXPIRE', log_stream_key, state_ttl_ms)
+return {'OK', encoded}
 `)
 
 // kafkaAckRegistry is an in-process latch table: HTTP handlers in "kafka_ack" mode
@@ -401,9 +690,13 @@ func registerKafkaAckWaiter(auctionID, clientBidID string) (chan bool, func()) {
 // overflow is safe because the periodic fallback catches any missed triggers.
 // Single-process assumption: Engine and Worker share this channel in the same binary.
 var relayTriggerCh = make(chan string, 256)
+var relayTriggerSuppressed atomic.Bool
 
 // triggerRelayForAuction sends a non-blocking hint to the relay goroutine.
 func triggerRelayForAuction(auctionID string) {
+	if relayTriggerSuppressed.Load() {
+		return
+	}
 	select {
 	case relayTriggerCh <- auctionID:
 	default: // channel full — relay is busy; periodic fallback will handle it
@@ -444,12 +737,9 @@ type Engine struct {
 	ledger         BidLedger
 	snapshotLoads  singleflight.Group
 	coldStartGroup singleflight.Group // serialises cold-start recovery per auction
-	// responseDurability controls the durability boundary returned to callers.
-	// "kafka_ack" (default): wait for the group-commit relay batch to confirm KAFKA_ACKED
-	//   before responding; gracefully degrades to ENGINE_DURABLE on the 40ms latch timeout,
-	//   relay fail-fast, or circuit-open.
-	// "redis_aof": return ENGINE_DURABLE immediately after Lua writes to Stream.
-	// Under PTS-1B load the relay batches continuously so healthy waits are typically small.
+	// responseDurability is pinned to kafka_ack for the current runtime. The
+	// boundary waits for the group-commit relay batch to confirm KAFKA_ACKED and
+	// may gracefully return ENGINE_DURABLE on timeout/fail-fast/circuit-open.
 	responseDurability string
 	// pendingSetSeen tracks which auctionIDs have been written to the global relay-discovery
 	// set (BidEnginePendingAuctionsKey). SADD only needs to happen once per auction per
@@ -469,18 +759,19 @@ type snapshot struct {
 	// AbsoluteEndMS is the hard ceiling for soft-close extensions:
 	// original_end_at + max_extend_count * extend_by. Set once at seed time and
 	// restored on rebuild. The Lua clamps new_end_at to this value.
-	AbsoluteEndMS    int64  `json:"absolute_end_ms,omitempty"`
-	ExtendWindowMS   int64  `json:"extend_window_ms"`
-	ExtendByMS       int64  `json:"extend_by_ms"`
-	MaxExtendCount   int    `json:"max_extend_count"`
-	ExtendCount      int    `json:"extend_count"`
-	AcceptedBidCount int64  `json:"accepted_bid_count"`
-	Seq              int64  `json:"seq"`
-	EngineSeq        int64  `json:"engine_seq"`
-	EngineEpoch      int64  `json:"engine_epoch"`
-	Paused           bool   `json:"paused"`
-	PauseReason      string `json:"pause_reason,omitempty"`
-	RequiresPostgres string `json:"requires_postgres,omitempty"`
+	AbsoluteEndMS           int64  `json:"absolute_end_ms,omitempty"`
+	ExtendWindowMS          int64  `json:"extend_window_ms"`
+	ExtendByMS              int64  `json:"extend_by_ms"`
+	MaxExtendCount          int    `json:"max_extend_count"`
+	ExtendCount             int    `json:"extend_count"`
+	AcceptedBidCount        int64  `json:"accepted_bid_count"`
+	Seq                     int64  `json:"seq"`
+	EngineSeq               int64  `json:"engine_seq"`
+	EngineEpoch             int64  `json:"engine_epoch"`
+	Paused                  bool   `json:"paused"`
+	PauseReason             string `json:"pause_reason,omitempty"`
+	RequiresPostgres        string `json:"requires_postgres,omitempty"`
+	FatFingerThresholdCents *int64 `json:"fat_finger_threshold_cents,omitempty"`
 }
 
 type engineResult struct {
@@ -503,6 +794,39 @@ type engineResult struct {
 	TraceID           string        `json:"trace_id"`
 	RequestHash       string        `json:"request_hash"`
 	DecisionBasis     decisionBasis `json:"decision_basis"`
+	ConfirmToken      string        `json:"confirm_token,omitempty"`
+	ExpiresInMS       int64         `json:"expires_in_ms,omitempty"`
+	Source            string        `json:"source,omitempty"`
+}
+
+type confirmEngineResult struct {
+	Result            string `json:"result"`
+	BidID             string `json:"bid_id,omitempty"`
+	AuctionID         string `json:"auction_id"`
+	UserID            string `json:"user_id"`
+	ClientBidID       string `json:"client_bid_id"`
+	AmountCents       int64  `json:"amount_cents"`
+	Seq               int64  `json:"seq"`
+	EngineSeq         int64  `json:"engine_seq"`
+	EngineEpoch       int64  `json:"engine_epoch"`
+	SettlementStatus  string `json:"settlement_status"`
+	RejectReason      string `json:"reject_reason,omitempty"`
+	CurrentPriceCents int64  `json:"current_price_cents"`
+	CurrentWinnerID   string `json:"current_winner_id,omitempty"`
+	EndAtMS           int64  `json:"end_at_ms"`
+	ExtendCount       int    `json:"extend_count,omitempty"`
+	ServerTimeMS      int64  `json:"server_time_ms"`
+	TraceID           string `json:"trace_id"`
+	RequestHash       string `json:"request_hash"`
+	ConfirmToken      string `json:"confirm_token,omitempty"`
+	ExpiresInMS       int64  `json:"expires_in_ms,omitempty"`
+}
+
+type hotProxyIntent struct {
+	ID             string
+	UserID         string
+	MaxAmountCents int64
+	CreatedAt      time.Time
 }
 
 type decisionBasis struct {
@@ -531,14 +855,11 @@ func New(db *pgxpool.Pool, redisClient *redis.Client, ledger BidLedger) *Engine 
 	return &Engine{db: db, redis: redisClient, ledger: ledger}
 }
 
-// WithResponseDurability sets the durability boundary for bid responses.
-// "kafka_ack" is the default configured by config.Load: block until the group-commit
-// relay confirms KAFKA_ACKED, then return KAFKA_ACKED; gracefully degrades to
-// ENGINE_DURABLE on timeout/fail-fast/circuit-open.
-// "redis_aof": return ENGINE_DURABLE immediately (Redis-AOF-local).
+// WithResponseDurability pins the durability boundary for bid responses. The
+// current runtime accepts only kafka_ack; unknown or historical modes are ignored.
 func (e *Engine) WithResponseDurability(mode string) *Engine {
 	if e != nil {
-		e.responseDurability = mode
+		e.responseDurability = "kafka_ack"
 	}
 	return e
 }
@@ -601,6 +922,10 @@ func (e *Engine) waitKafkaAck(ctx context.Context, auctionID, clientBidID string
 // inside the Lua script atomically (no extra Redis RTT). Omit it (or pass "")
 // for test/non-gateway callers — Lua skips the ACL check in that case.
 func (e *Engine) PlaceBid(ctx context.Context, auctionID string, userID string, idempotencyKey string, input auction.BidInput, traceID string, aclKey ...string) (auction.BidResponse, error) {
+	return e.placeBidWithSource(ctx, auctionID, userID, idempotencyKey, input, traceID, auction.BidSourceManual, aclKey...)
+}
+
+func (e *Engine) placeBidWithSource(ctx context.Context, auctionID string, userID string, idempotencyKey string, input auction.BidInput, traceID string, source string, aclKey ...string) (auction.BidResponse, error) {
 	acl := ""
 	if len(aclKey) > 0 {
 		acl = aclKey[0]
@@ -632,7 +957,289 @@ func (e *Engine) PlaceBid(ctx context.Context, auctionID string, userID string, 
 	// detect that signal below and run the cold-start path exactly once.
 	stateJSON := ""
 	return e.placeBidWithSnapshot(ctx, traceCtx, auctionID, userID, idempotencyKey, input,
-		requestHash, traceID, nowMS, bidID, stateJSON, acl, &stageErr, &stageSpan)
+		requestHash, traceID, nowMS, bidID, stateJSON, acl, source, &stageErr, &stageSpan)
+}
+
+// ConfirmBid confirms a Redis-native fat-finger pending bid. It validates the
+// short-lived Redis token and re-runs the normal bid guards against the current
+// hot state before accepting. PostgreSQL lane confirmations stay in auction.Repository.
+func (e *Engine) ConfirmBid(ctx context.Context, auctionID string, userID string, idempotencyKey string, input auction.ConfirmBidInput, traceID string) (auction.BidResponse, error) {
+	if e == nil || e.db == nil || e.redis == nil || e.ledger == nil {
+		return auction.BidResponse{}, apierrors.New(apierrors.CodeEnginePaused, "redis/kafka ledger engine is unavailable", http.StatusServiceUnavailable)
+	}
+	if input.ConfirmToken == "" || input.IdempotencyKey == "" || idempotencyKey == "" || idempotencyKey != input.IdempotencyKey {
+		return auction.BidResponse{}, apierrors.New(apierrors.CodeInvalidArgument, "confirm_token and matching Idempotency-Key are required", http.StatusBadRequest)
+	}
+	load, err := e.loadRedisIdempotencyReplay(ctx, auctionID, idempotencyKey)
+	if err != nil {
+		return auction.BidResponse{}, err
+	}
+	if !load.Found {
+		return auction.BidResponse{}, apierrors.New(apierrors.CodeInvalidArgument, "confirm token not found", http.StatusNotFound)
+	}
+	var pending confirmEngineResult
+	if err := json.Unmarshal([]byte(load.Record.ResultJSON), &pending); err != nil {
+		_ = e.pause(ctx, auctionID, "REDIS_CONFIRM_REPLAY_DECODE_FAILED", err.Error(), traceID)
+		return auction.BidResponse{}, err
+	}
+	if load.Record.RequestHash != requestHash(auctionID, userID, idempotencyKey, pending.AmountCents) {
+		return auction.BidResponse{}, apierrors.New(apierrors.CodeIdempotencyKeyReusedWithDifferentRequest, "confirm request hash mismatch", http.StatusConflict)
+	}
+	if pending.Result != string(apierrors.CodeFatFingerConfirmRequired) {
+		result := engineResult{
+			Result:            pending.Result,
+			BidID:             pending.BidID,
+			AuctionID:         pending.AuctionID,
+			UserID:            pending.UserID,
+			ClientBidID:       pending.ClientBidID,
+			AmountCents:       pending.AmountCents,
+			Seq:               pending.Seq,
+			EngineSeq:         pending.EngineSeq,
+			EngineEpoch:       pending.EngineEpoch,
+			SettlementStatus:  pending.SettlementStatus,
+			CurrentPriceCents: pending.CurrentPriceCents,
+			CurrentWinnerID:   pending.CurrentWinnerID,
+			EndAtMS:           pending.EndAtMS,
+			ExtendCount:       pending.ExtendCount,
+			ServerTimeMS:      pending.ServerTimeMS,
+			TraceID:           pending.TraceID,
+			RequestHash:       pending.RequestHash,
+		}
+		if pending.RejectReason != "" {
+			reason := pending.RejectReason
+			result.RejectReason = &reason
+		}
+		return e.redisIdempotencyReplayResponseFromRecord(load.Record, result, time.Now())
+	}
+
+	nowMS := time.Now().UTC().UnixMilli()
+	bidID := "bid_" + uuid.NewString()
+	totalStart := time.Now()
+	start := time.Now()
+	cmd := confirmLedgerRunner.Run(ctx, e.redis, []string{
+		redisx.BidEngineStateKey(auctionID),
+		redisx.BidEngineIdempotencyKey(auctionID, idempotencyKey),
+		redisx.BidEnginePendingKey(auctionID),
+		redisx.BidEngineLogStreamKey(auctionID),
+		"",
+		redisx.BidEnginePendingConfirmKey(auctionID, userID, idempotencyKey),
+	}, nowMS, auctionID, userID, idempotencyKey, pending.AmountCents, load.Record.RequestHash, traceID, bidID, input.ConfirmToken, engineStateTTL.Milliseconds(), idempotencyTTL.Milliseconds())
+	values, err := cmd.Slice()
+	if err != nil {
+		confirmLedgerRunner.Record(redisx.ClassifyScriptError(err), time.Since(start))
+		_ = e.pause(ctx, auctionID, "REDIS_CONFIRM_SCRIPT_ERROR", err.Error(), traceID)
+		return auction.BidResponse{}, apierrors.New(apierrors.CodeEnginePaused, "redis confirm engine paused after script failure: "+err.Error(), http.StatusServiceUnavailable)
+	}
+	if len(values) < 2 {
+		_ = e.pause(ctx, auctionID, "REDIS_CONFIRM_BAD_SCRIPT_RESULT", fmt.Sprintf("%v", values), traceID)
+		return auction.BidResponse{}, apierrors.New(apierrors.CodeEnginePaused, "redis confirm engine returned invalid result", http.StatusServiceUnavailable)
+	}
+	status := stringValue(values[0])
+	if status == "ERROR" {
+		code := apierrors.Code(stringValue(values[1]))
+		switch code {
+		case "CONFIRM_TOKEN_INVALID", "CONFIRM_TOKEN_EXPIRED":
+			return auction.BidResponse{}, apierrors.New(apierrors.CodeConfirmUsed, "confirm token invalid or expired", http.StatusConflict)
+		case apierrors.CodeEngineReconciling:
+			return auction.BidResponse{}, apierrors.New(apierrors.CodeEngineReconciling, "auction is reconciling", http.StatusConflict)
+		case apierrors.CodeEnginePaused:
+			return auction.BidResponse{}, apierrors.New(apierrors.CodeEnginePaused, "auction engine is paused", http.StatusConflict)
+		default:
+			return auction.BidResponse{}, apierrors.New(code, "redis confirm engine rejected request", http.StatusConflict)
+		}
+	}
+	var result engineResult
+	if err := json.Unmarshal([]byte(stringValue(values[1])), &result); err != nil {
+		_ = e.pause(ctx, auctionID, "REDIS_CONFIRM_RESULT_DECODE_FAILED", err.Error(), traceID)
+		return auction.BidResponse{}, err
+	}
+	confirmLedgerRunner.Record("ok", time.Since(start))
+	recordDecision(result.Result, time.Since(start))
+	if _, seen := e.pendingSetSeen.LoadOrStore(auctionID, struct{}{}); !seen {
+		_ = e.redis.SAdd(ctx, redisx.BidEnginePendingAuctionsKey(), auctionID).Err()
+	}
+	triggerRelayForAuction(auctionID)
+	if ackStatus := e.waitKafkaAck(ctx, auctionID, idempotencyKey, 40*time.Millisecond); ackStatus == kafkaAppendStatusAcked {
+		responseResult := result.response(auction.DurabilityStatusKafkaAcked, auction.DecisionStatusDecided)
+		if result.Result == resultAccepted || result.Result == resultSold {
+			if autoResp, ok := e.resolveHotMaxBids(ctx, auctionID, result, traceID); ok {
+				responseResult = mergeHotProxyResponse(responseResult, autoResp)
+			}
+		}
+		recordHTTPStage("total", result.Result, "confirm_kafka_ack_wait", time.Since(totalStart))
+		return responseResult, nil
+	}
+	responseResult := result.response(auction.DurabilityStatusEngineDurable, auction.DecisionStatusDecided)
+	if result.Result == resultAccepted || result.Result == resultSold {
+		if autoResp, ok := e.resolveHotMaxBids(ctx, auctionID, result, traceID); ok {
+			responseResult = mergeHotProxyResponse(responseResult, autoResp)
+		}
+	}
+	recordHTTPStage("total", result.Result, "confirm_ok", time.Since(totalStart))
+	return responseResult, nil
+}
+
+func mergeHotProxyResponse(base auction.BidResponse, auto auction.BidResponse) auction.BidResponse {
+	base.CurrentPriceCents = auto.CurrentPriceCents
+	base.CurrentWinnerID = auto.CurrentWinnerID
+	base.EndAt = auto.EndAt
+	base.Seq = auto.Seq
+	base.EngineSeq = auto.EngineSeq
+	base.EngineEpoch = auto.EngineEpoch
+	base.Result = auto.Result
+	base.DecisionStatus = auto.DecisionStatus
+	base.DurabilityStatus = auto.DurabilityStatus
+	base.SettlementStatus = auto.SettlementStatus
+	return base
+}
+
+func (e *Engine) resolveHotMaxBids(ctx context.Context, auctionID string, trigger engineResult, traceID string) (auction.BidResponse, bool) {
+	if e == nil || e.db == nil || e.redis == nil {
+		return auction.BidResponse{}, false
+	}
+	var last auction.BidResponse
+	applied := false
+	for attempts := 0; attempts < 100; attempts++ {
+		state, err := e.redis.HGetAll(ctx, redisx.BidEngineStateKey(auctionID)).Result()
+		if err != nil || len(state) == 0 || state["status"] != "ACTIVE" || state["paused"] == "1" {
+			return last, applied
+		}
+		currentPrice := parseInt64(state["current_price_cents"])
+		currentWinner := state["current_winner_id"]
+		acceptedCount := parseInt64(state["accepted_bid_count"])
+		startPrice := parseInt64(state["start_price_cents"])
+		increment := parseInt64(state["increment_cents"])
+		capPrice := parseInt64(state["cap_price_cents"])
+		engineSeq := parseInt64(state["engine_seq"])
+		minimum := currentPrice + increment
+		if acceptedCount <= 0 {
+			minimum = startPrice + increment
+		}
+		intents, err := e.loadHotProxyIntents(ctx, auctionID)
+		if err != nil || len(intents) == 0 {
+			return last, applied
+		}
+		var defender *hotProxyIntent
+		for i := range intents {
+			if currentWinner != "" && intents[i].UserID == currentWinner {
+				defender = &intents[i]
+				break
+			}
+		}
+		var step *hotProxyIntent
+		var amount int64
+		for i := range intents {
+			intent := &intents[i]
+			if currentWinner != "" && intent.UserID == currentWinner {
+				continue
+			}
+			if intent.MaxAmountCents < minimum {
+				_ = e.markHotProxyIntentExhausted(ctx, intent.ID)
+				continue
+			}
+			if defender != nil && hotProxyDefenderBeatsOrTies(*defender, *intent) {
+				amount = hotProxyDefendingAmount(*defender, *intent, increment, capPrice)
+				if amount < minimum {
+					_ = e.markHotProxyIntentExhausted(ctx, intent.ID)
+					continue
+				}
+				step = defender
+				_ = e.markHotProxyIntentExhausted(ctx, intent.ID)
+				break
+			}
+			step = intent
+			amount = minimum
+			break
+		}
+		if step == nil || amount <= 0 {
+			return last, applied
+		}
+		clientBidID := fmt.Sprintf("auto:%s:%d:%d", step.ID, trigger.EngineSeq, engineSeq)
+		resp, err := e.placeBidWithSource(ctx, auctionID, step.UserID, clientBidID, auction.BidInput{
+			ClientBidID:   clientBidID,
+			AmountCents:   amount,
+			ClientSeenSeq: engineSeq,
+		}, traceID, auction.BidSourceAutoMaxBid)
+		if err != nil || (resp.Result != auction.BidResultEngineAccepted && resp.Result != auction.BidResultEngineSold) {
+			return last, applied
+		}
+		_ = e.markHotProxyIntentApplied(ctx, step.ID, resp.EngineSeq)
+		last = resp
+		applied = true
+		trigger = engineResult{AuctionID: auctionID, EngineSeq: resp.EngineSeq}
+	}
+	_ = e.pause(ctx, auctionID, "REDIS_PROXY_RESOLVER_BOUNDED_ITERATION_EXCEEDED", "proxy resolver exceeded bounded iteration limit", traceID)
+	return last, applied
+}
+
+func (e *Engine) loadHotProxyIntents(ctx context.Context, auctionID string) ([]hotProxyIntent, error) {
+	rows, err := e.db.Query(ctx, `
+		SELECT id, user_id, max_amount_cents, created_at
+		FROM max_bid_intents
+		WHERE auction_id = $1 AND status = 'ACTIVE'
+		ORDER BY max_amount_cents DESC, created_at ASC, id ASC
+		LIMIT 100
+	`, auctionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []hotProxyIntent
+	for rows.Next() {
+		var intent hotProxyIntent
+		if err := rows.Scan(&intent.ID, &intent.UserID, &intent.MaxAmountCents, &intent.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, intent)
+	}
+	return out, rows.Err()
+}
+
+func (e *Engine) markHotProxyIntentApplied(ctx context.Context, intentID string, engineSeq int64) error {
+	_, err := e.db.Exec(ctx, `
+		UPDATE max_bid_intents
+		SET last_applied_seq = GREATEST(COALESCE(last_applied_seq, 0), $2),
+		    updated_at = now(),
+		    version = version + 1
+		WHERE id = $1 AND status = 'ACTIVE'
+	`, intentID, engineSeq)
+	return err
+}
+
+func (e *Engine) markHotProxyIntentExhausted(ctx context.Context, intentID string) error {
+	_, err := e.db.Exec(ctx, `
+		UPDATE max_bid_intents
+		SET status = 'EXHAUSTED',
+		    exhausted_at = COALESCE(exhausted_at, now()),
+		    updated_at = now(),
+		    version = version + 1
+		WHERE id = $1 AND status = 'ACTIVE'
+	`, intentID)
+	return err
+}
+
+func hotProxyDefenderBeatsOrTies(defender hotProxyIntent, challenger hotProxyIntent) bool {
+	if defender.MaxAmountCents != challenger.MaxAmountCents {
+		return defender.MaxAmountCents > challenger.MaxAmountCents
+	}
+	if !defender.CreatedAt.Equal(challenger.CreatedAt) {
+		return defender.CreatedAt.Before(challenger.CreatedAt)
+	}
+	return defender.ID < challenger.ID
+}
+
+func hotProxyDefendingAmount(defender hotProxyIntent, challenger hotProxyIntent, increment int64, capPrice int64) int64 {
+	amount := challenger.MaxAmountCents
+	if defender.MaxAmountCents > challenger.MaxAmountCents {
+		amount = challenger.MaxAmountCents + increment
+	}
+	if amount > defender.MaxAmountCents {
+		amount = defender.MaxAmountCents
+	}
+	if capPrice > 0 && amount > capPrice {
+		amount = capPrice
+	}
+	return amount
 }
 
 // placeBidWithSnapshot runs the Lua CAS and, on cold-start signal, loads a
@@ -641,7 +1248,7 @@ func (e *Engine) PlaceBid(ctx context.Context, auctionID string, userID string, 
 func (e *Engine) placeBidWithSnapshot(
 	ctx context.Context, traceCtx context.Context,
 	auctionID, userID, idempotencyKey string, input auction.BidInput,
-	requestHash, traceID string, nowMS int64, bidID, stateJSON, aclKey string,
+	requestHash, traceID string, nowMS int64, bidID, stateJSON, aclKey, source string,
 	stageErr *error, stageSpan *trace.Span,
 ) (auction.BidResponse, error) {
 	totalStart := time.Now()
@@ -653,7 +1260,7 @@ func (e *Engine) placeBidWithSnapshot(
 		redisx.BidEnginePendingKey(auctionID),
 		redisx.BidEngineLogStreamKey(auctionID), // KEYS[4]: decision log stream (WAL)
 		aclKey,                                  // KEYS[5]: ACL check in-Lua (empty = skip)
-	}, nowMS, auctionID, userID, input.ClientBidID, input.AmountCents, requestHash, traceID, bidID, stateJSON, engineStateTTL.Milliseconds(), idempotencyTTL.Milliseconds())
+	}, nowMS, auctionID, userID, input.ClientBidID, input.AmountCents, requestHash, traceID, bidID, stateJSON, engineStateTTL.Milliseconds(), idempotencyTTL.Milliseconds(), source)
 	values, err := cmd.Slice()
 	if err != nil {
 		apptracing.End(*stageSpan, err)
@@ -699,7 +1306,7 @@ func (e *Engine) placeBidWithSnapshot(
 				return cr.resp, nil
 			}
 			return e.placeBidWithSnapshot(ctx, traceCtx, auctionID, userID, idempotencyKey, input,
-				requestHash, traceID, nowMS, bidID, cr.snapJSON, aclKey, stageErr, stageSpan)
+				requestHash, traceID, nowMS, bidID, cr.snapJSON, aclKey, source, stageErr, stageSpan)
 		}
 
 		if code == apierrors.CodeEngineReconciling {
@@ -735,6 +1342,10 @@ func (e *Engine) placeBidWithSnapshot(
 		apptracing.End(*stageSpan, err)
 		return resp, err
 	}
+	if result.Result == string(apierrors.CodeFatFingerConfirmRequired) {
+		recordHTTPStage("total", result.Result, "confirm_required", time.Since(totalStart))
+		return result.response(auction.DurabilityStatusEngineDurable, auction.DecisionStatusDecided), nil
+	}
 	// best-effort: add to global relay-discovery index outside Lua to keep all Lua KEYS
 	// same-slot (Cluster-ready). ProcessPendingAppends falls back to activeAuctionIDs
 	// (DB) when this set is missing or TTL-expired, so failure here is non-fatal.
@@ -755,22 +1366,31 @@ func (e *Engine) placeBidWithSnapshot(
 		_ = e.redis.SAdd(ctx, redisx.BidEnginePendingAuctionsKey(), auctionID).Err()
 	}
 	// Wake the relay goroutine immediately so Kafka ACK arrives before waitKafkaAck
-	// timeout. Non-blocking: safe to call even in redis_aof mode (relay runs faster,
-	// KAFKA_ACKED on replay is more current). Overflow is handled by 200ms fallback.
+	// timeout. Non-blocking; overflow is handled by the 200ms relay fallback.
 	triggerRelayForAuction(auctionID)
-	if e.responseDurability == "kafka_ack" {
-		// 40ms budget: with event-driven relay (~1ms wake-up + ~5ms Kafka RTT local)
-		// typical wait is 6-8ms, leaving ample headroom to 50ms P99 target.
-		// On timeout → ENGINE_DURABLE graceful degradation.
-		if ackStatus := e.waitKafkaAck(ctx, auctionID, input.ClientBidID, 40*time.Millisecond); ackStatus == kafkaAppendStatusAcked {
-			recordHTTPStage("total", result.Result, "kafka_ack_wait", time.Since(totalStart))
-			return result.response(auction.DurabilityStatusKafkaAcked, auction.DecisionStatusDecided), nil
+	// 40ms budget: with event-driven relay (~1ms wake-up + ~5ms Kafka RTT local)
+	// typical wait is 6-8ms. On timeout, return the already durable decision as
+	// ENGINE_DURABLE and prove convergence through relay/settlement evidence.
+	if ackStatus := e.waitKafkaAck(ctx, auctionID, input.ClientBidID, 40*time.Millisecond); ackStatus == kafkaAppendStatusAcked {
+		responseResult := result.response(auction.DurabilityStatusKafkaAcked, auction.DecisionStatusDecided)
+		if source != auction.BidSourceAutoMaxBid && (result.Result == resultAccepted || result.Result == resultSold) {
+			if autoResp, ok := e.resolveHotMaxBids(ctx, auctionID, result, traceID); ok {
+				responseResult = mergeHotProxyResponse(responseResult, autoResp)
+			}
 		}
-		// Timeout or error: graceful degradation — relay batch may be slow or Redis
-		// pipeline is under pressure; client still gets a final ENGINE_DURABLE decision.
+		recordHTTPStage("total", result.Result, "kafka_ack_wait", time.Since(totalStart))
+		return responseResult, nil
+	}
+	// Timeout or error: graceful degradation — relay batch may be slow or Redis
+	// pipeline is under pressure; client still gets a final ENGINE_DURABLE decision.
+	responseResult := result.response(auction.DurabilityStatusEngineDurable, auction.DecisionStatusDecided)
+	if source != auction.BidSourceAutoMaxBid && (result.Result == resultAccepted || result.Result == resultSold) {
+		if autoResp, ok := e.resolveHotMaxBids(ctx, auctionID, result, traceID); ok {
+			responseResult = mergeHotProxyResponse(responseResult, autoResp)
+		}
 	}
 	recordHTTPStage("total", result.Result, "ok", time.Since(totalStart))
-	return result.response(auction.DurabilityStatusEngineDurable, auction.DecisionStatusDecided), nil
+	return responseResult, nil
 }
 
 // runColdStart performs the safety checks and snapshot load that must precede
@@ -1074,19 +1694,12 @@ func (e *Engine) loadSnapshot(ctx context.Context, auctionID string) (snapshot, 
 		       ar.max_extend_count, a.extend_count, a.accepted_bid_count,
 		       a.seq, a.engine_seq, a.engine_epoch, a.engine_paused,
 		       COALESCE(a.engine_pause_reason, ''),
-		       CASE
-		         WHEN ar.fat_finger_threshold_cents IS NOT NULL THEN 'fat_finger_confirm'
-		         WHEN EXISTS (
-		           SELECT 1
-		           FROM max_bid_intents mbi
-		           WHERE mbi.auction_id = a.id AND mbi.status = 'ACTIVE'
-		         ) THEN 'active_max_bid_intent'
-		         ELSE ''
-		       END
+		       '',
+		       ar.fat_finger_threshold_cents
 		FROM auctions a
 		JOIN auction_rules ar ON ar.auction_id = a.id AND ar.rule_version = a.rule_version
 		WHERE a.id = $1
-	`, auctionID).Scan(&s.Status, &s.CurrentPriceCents, &winner, &s.StartPriceCents, &s.IncrementCents, &capPrice, &endAt, &s.ExtendWindowMS, &s.ExtendByMS, &s.MaxExtendCount, &s.ExtendCount, &s.AcceptedBidCount, &s.Seq, &s.EngineSeq, &s.EngineEpoch, &s.Paused, &s.PauseReason, &s.RequiresPostgres)
+	`, auctionID).Scan(&s.Status, &s.CurrentPriceCents, &winner, &s.StartPriceCents, &s.IncrementCents, &capPrice, &endAt, &s.ExtendWindowMS, &s.ExtendByMS, &s.MaxExtendCount, &s.ExtendCount, &s.AcceptedBidCount, &s.Seq, &s.EngineSeq, &s.EngineEpoch, &s.Paused, &s.PauseReason, &s.RequiresPostgres, &s.FatFingerThresholdCents)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return snapshot{}, apierrors.New(apierrors.CodeAuctionNotFound, "auction not found", http.StatusNotFound)
 	}
@@ -1167,14 +1780,89 @@ func (e *Engine) FenceAuction(ctx context.Context, auctionID string, reason stri
 	}
 	// Pipeline is non-atomic but idempotent: reconciler's checkTerminalFenced
 	// will detect and repair any partial write.
+	status := "CANCELLED"
+	switch reason {
+	case "SCHEDULER_SOLD":
+		status = "SOLD"
+	case "SCHEDULER_ENDED":
+		status = "ENDED"
+	}
 	pipe := e.redis.Pipeline()
-	pipe.HSet(ctx, key, "paused", "1", "pause_reason", reason, "status", "CANCELLED")
+	pipe.HSet(ctx, key, "paused", "1", "pause_reason", reason, "status", status)
 	pipe.PExpire(ctx, key, engineStateTTL)
 	if _, err := pipe.Exec(ctx); err != nil {
 		slog.Warn("redis_engine_fence_write_failed", slog.String("auction_id", auctionID), slog.String("reason", reason), slog.String("error", err.Error()))
 		return
 	}
 	observability.Inc("auction_bid_engine_pause_total", map[string]string{"reason": reason})
+}
+
+// FenceAuctionForScheduler stops new hot-engine decisions and verifies that
+// Redis hot state has converged with PostgreSQL before scheduler commits a
+// natural terminal transition. A mismatch means settlement is still catching up
+// or Redis has extended end_at; caller must reschedule instead of deciding a
+// potentially stale winner.
+func (e *Engine) FenceAuctionForScheduler(ctx context.Context, auctionID string, reason string, pgEndAt time.Time, pgPrice int64, pgWinnerID *string) (time.Time, error) {
+	if e == nil || e.redis == nil {
+		return time.Time{}, nil
+	}
+	key := redisx.BidEngineStateKey(auctionID)
+	values, err := e.redis.HGetAll(ctx, key).Result()
+	if err != nil {
+		return time.Now().UTC().Add(500 * time.Millisecond), err
+	}
+	if len(values) == 0 {
+		return time.Time{}, nil
+	}
+	pipe := e.redis.Pipeline()
+	pipe.HSet(ctx, key, "paused", "1", "pause_reason", reason)
+	pipe.PExpire(ctx, key, engineStateTTL)
+	if _, err := pipe.Exec(ctx); err != nil {
+		return time.Now().UTC().Add(500 * time.Millisecond), err
+	}
+	pending, err := e.redis.XLen(ctx, redisx.BidEngineLogStreamKey(auctionID)).Result()
+	if err != nil {
+		return time.Now().UTC().Add(500 * time.Millisecond), err
+	}
+	cursor, err := e.redis.Get(ctx, redisx.BidEngineRelayCursorKey(auctionID)).Result()
+	if errors.Is(err, redis.Nil) {
+		cursor = "0-0"
+	} else if err != nil {
+		return time.Now().UTC().Add(500 * time.Millisecond), err
+	}
+	if pending > 0 {
+		msgs, err := e.redis.XRangeN(ctx, redisx.BidEngineLogStreamKey(auctionID), "("+cursor, "+", 1).Result()
+		if err != nil {
+			return time.Now().UTC().Add(500 * time.Millisecond), err
+		}
+		if len(msgs) > 0 {
+			return time.Now().UTC().Add(500 * time.Millisecond), fmt.Errorf("redis engine has unrelayed terminal decisions")
+		}
+	}
+	redisEndAtMS := parseInt64(values["end_at_ms"])
+	if redisEndAtMS > pgEndAt.UnixMilli() {
+		_ = e.redis.HSet(ctx, key, "paused", "0", "pause_reason", "").Err()
+		return time.Now().UTC().Add(500 * time.Millisecond), fmt.Errorf("redis end_at is newer than PostgreSQL")
+	}
+	redisPrice := parseInt64(values["current_price_cents"])
+	if redisPrice != pgPrice {
+		_ = e.redis.HSet(ctx, key, "paused", "0", "pause_reason", "").Err()
+		return time.Now().UTC().Add(500 * time.Millisecond), fmt.Errorf("redis price %d != postgres price %d", redisPrice, pgPrice)
+	}
+	redisWinner := values["current_winner_id"]
+	pgWinner := ""
+	if pgWinnerID != nil {
+		pgWinner = *pgWinnerID
+	}
+	if redisWinner != pgWinner {
+		_ = e.redis.HSet(ctx, key, "paused", "0", "pause_reason", "").Err()
+		return time.Now().UTC().Add(500 * time.Millisecond), fmt.Errorf("redis winner %q != postgres winner %q", redisWinner, pgWinner)
+	}
+	if redisEndAtMS > 0 && time.Now().UTC().UnixMilli() < redisEndAtMS {
+		_ = e.redis.HSet(ctx, key, "paused", "0", "pause_reason", "").Err()
+		return time.UnixMilli(redisEndAtMS).UTC(), fmt.Errorf("redis auction has not reached end_at")
+	}
+	return time.Time{}, nil
 }
 
 func (r engineResult) response(durabilityStatus string, decisionStatus string) auction.BidResponse {
@@ -1187,6 +1875,10 @@ func (r engineResult) response(durabilityStatus string, decisionStatus string) a
 	}
 	if result == resultRejected {
 		result = auction.BidResultEngineRejected
+	}
+	if result == string(apierrors.CodeFatFingerConfirmRequired) {
+		durabilityStatus = auction.DurabilityStatusEngineDurable
+		decisionStatus = auction.DecisionStatusDecided
 	}
 	var winner *string
 	if r.CurrentWinnerID != "" {
@@ -1233,6 +1925,15 @@ func (r engineResult) response(durabilityStatus string, decisionStatus string) a
 		ServerTimeMS:      r.ServerTimeMS,
 		RejectReason:      r.RejectReason,
 		AmountCents:       r.AmountCents,
+		ConfirmToken:      r.ConfirmToken,
+		ExpiresInMS:       r.ExpiresInMS,
+		ConfirmExpiresAt: func() *time.Time {
+			if r.ExpiresInMS <= 0 || r.ServerTimeMS <= 0 {
+				return nil
+			}
+			t := time.UnixMilli(r.ServerTimeMS + r.ExpiresInMS).UTC()
+			return &t
+		}(),
 	}
 }
 
@@ -1285,14 +1986,15 @@ func recordHTTPStage(stage string, result string, status string, elapsed time.Du
 }
 
 type Worker struct {
-	db         *pgxpool.Pool
-	redis      *redis.Client
-	ledger     BidLedger
-	dlqTopic   string
-	consumerID string
-	batchSize  int64
-	block      time.Duration
-	log        *slog.Logger
+	db                *pgxpool.Pool
+	redis             *redis.Client
+	ledger            BidLedger
+	dlqTopic          string
+	consumerID        string
+	batchSize         int64
+	block             time.Duration
+	pendingScanCursor atomic.Uint64
+	log               *slog.Logger
 }
 
 type Report struct {
@@ -1504,29 +2206,43 @@ func (w *Worker) ProcessPendingAppends(ctx context.Context, limit int) (int, err
 	if limit <= 0 {
 		limit = 1
 	}
-	// Collect candidate auctions from the pending-set (set by the Lua on every decision)
-	// plus active auctions (in case the pending-set TTL expired).
-	auctionIDs, err := w.pendingAuctionIDs(ctx, limit)
+	// Active auctions are the authoritative bounded candidate list for the relay.
+	// The Redis pending-set is only a discovery optimization and may contain stale
+	// test/demo IDs; it must not starve currently active hot auctions.
+	activeLimit := limit
+	if limit > 1 {
+		activeLimit = limit / 2
+	}
+	activeIDs, err := w.activeAuctionIDs(ctx, activeLimit)
 	if err != nil {
 		return 0, err
 	}
-	if len(auctionIDs) < limit {
-		activeIDs, err := w.activeAuctionIDs(ctx, limit)
-		if err != nil {
-			return 0, err
+	pendingIDs, err := w.pendingAuctionIDs(ctx, limit-activeLimit)
+	if err != nil {
+		return 0, err
+	}
+	auctionIDs := make([]string, 0, limit)
+	seen := make(map[string]struct{}, len(activeIDs)+len(pendingIDs))
+	appendID := func(id string) {
+		if id == "" || len(auctionIDs) >= limit {
+			return
 		}
-		seen := make(map[string]struct{}, len(auctionIDs)+len(activeIDs))
-		for _, id := range auctionIDs {
-			seen[id] = struct{}{}
+		if _, ok := seen[id]; ok {
+			return
 		}
-		for _, id := range activeIDs {
-			if _, ok := seen[id]; !ok {
-				auctionIDs = append(auctionIDs, id)
-				seen[id] = struct{}{}
-			}
-			if len(auctionIDs) >= limit {
-				break
-			}
+		seen[id] = struct{}{}
+		auctionIDs = append(auctionIDs, id)
+	}
+	maxLen := len(activeIDs)
+	if len(pendingIDs) > maxLen {
+		maxLen = len(pendingIDs)
+	}
+	for i := 0; i < maxLen && len(auctionIDs) < limit; i++ {
+		if i < len(activeIDs) {
+			appendID(activeIDs[i])
+		}
+		if i < len(pendingIDs) {
+			appendID(pendingIDs[i])
 		}
 	}
 	processed := 0
@@ -1551,10 +2267,12 @@ func (w *Worker) pendingAuctionIDs(ctx context.Context, limit int) ([]string, er
 	if limit <= 0 {
 		limit = 1
 	}
-	values, err := w.redis.SRandMemberN(ctx, redisx.BidEnginePendingAuctionsKey(), int64(limit)).Result()
+	cursor := w.pendingScanCursor.Load()
+	values, next, err := w.redis.SScan(ctx, redisx.BidEnginePendingAuctionsKey(), cursor, "*", int64(limit)).Result()
 	if err != nil {
 		return nil, err
 	}
+	w.pendingScanCursor.Store(next)
 	ids := make([]string, 0, len(values))
 	seen := make(map[string]struct{}, len(values))
 	for _, id := range values {
@@ -2461,6 +3179,7 @@ type acceptedSettlementBatchRow struct {
 	RequestHash     string          `json:"request_hash"`
 	ResponseJSON    json.RawMessage `json:"response_json"`
 	TraceID         string          `json:"trace_id"`
+	Source          string          `json:"source"`
 	PublicSeq       int64           `json:"public_seq"`
 	EventType       string          `json:"event_type"`
 	EventPayload    json.RawMessage `json:"event_payload"`
@@ -2502,6 +3221,10 @@ func acceptedSettlementBatchRows(batch []decodedLedgerMessage, publicSeq int64) 
 		if serverTimeMS <= 0 {
 			serverTimeMS = time.Now().UTC().UnixMilli()
 		}
+		source := result.Source
+		if source == "" {
+			source = auction.BidSourceManual
+		}
 		rows = append(rows, acceptedSettlementBatchRow{
 			StreamID:        item.message.ID,
 			EngineEpoch:     result.EngineEpoch,
@@ -2520,6 +3243,7 @@ func acceptedSettlementBatchRows(batch []decodedLedgerMessage, publicSeq int64) 
 			RequestHash:     result.RequestHash,
 			ResponseJSON:    json.RawMessage(respJSON),
 			TraceID:         result.TraceID,
+			Source:          source,
 			PublicSeq:       seq,
 			EventType:       "bid_accepted",
 			EventPayload:    json.RawMessage(payloadJSON),
@@ -2545,6 +3269,7 @@ func insertAcceptedBidsBatch(ctx context.Context, tx pgx.Tx, auctionID string, r
 		    request_hash text,
 		    response_json jsonb,
 		    trace_id text,
+		    source text,
 		    engine_epoch bigint,
 		    engine_seq bigint,
 		    public_seq bigint
@@ -2556,7 +3281,7 @@ func insertAcceptedBidsBatch(ctx context.Context, tx pgx.Tx, auctionID string, r
 		  engine_epoch, engine_seq, settlement_status
 		)
 		SELECT bid_id, $1, user_id, client_bid_id, amount_cents, public_seq, 'ACCEPTED',
-		       NULL, request_hash, response_json, trace_id, $3,
+		       NULL, request_hash, response_json, trace_id, COALESCE(NULLIF(source, ''), $3),
 		       engine_epoch, engine_seq, 'SETTLED'
 		FROM input
 		ON CONFLICT (auction_id, user_id, client_bid_id) DO UPDATE
@@ -3017,6 +3742,12 @@ func (w *Worker) writeRedisStateSnapshot(ctx context.Context, auctionID string, 
 		"paused", boolInt(snap.Paused),
 		"pause_reason", snap.PauseReason,
 		"requires_postgres", snap.RequiresPostgres,
+		"fat_finger_threshold_cents", func() int64 {
+			if snap.FatFingerThresholdCents != nil {
+				return *snap.FatFingerThresholdCents
+			}
+			return 0
+		}(),
 	}
 	pipe := w.redis.TxPipeline()
 	pipe.HSet(ctx, redisx.BidEngineStateKey(auctionID), fields...)
@@ -3388,19 +4119,12 @@ func loadSnapshotForRedisState(ctx context.Context, db *pgxpool.Pool, auctionID 
 		       ar.max_extend_count, a.extend_count, a.accepted_bid_count,
 		       a.seq, a.engine_seq, a.engine_epoch, a.engine_paused,
 		       COALESCE(a.engine_pause_reason, ''),
-		       CASE
-		         WHEN ar.fat_finger_threshold_cents IS NOT NULL THEN 'fat_finger_confirm'
-		         WHEN EXISTS (
-		           SELECT 1
-		           FROM max_bid_intents mbi
-		           WHERE mbi.auction_id = a.id AND mbi.status = 'ACTIVE'
-		         ) THEN 'active_max_bid_intent'
-		         ELSE ''
-		       END
+		       '',
+		       ar.fat_finger_threshold_cents
 		FROM auctions a
 		JOIN auction_rules ar ON ar.auction_id = a.id AND ar.rule_version = a.rule_version
 		WHERE a.id = $1
-	`, auctionID).Scan(&s.Status, &s.CurrentPriceCents, &winner, &s.StartPriceCents, &s.IncrementCents, &capPrice, &endAt, &s.ExtendWindowMS, &s.ExtendByMS, &s.MaxExtendCount, &s.ExtendCount, &s.AcceptedBidCount, &s.Seq, &s.EngineSeq, &s.EngineEpoch, &s.Paused, &s.PauseReason, &s.RequiresPostgres)
+	`, auctionID).Scan(&s.Status, &s.CurrentPriceCents, &winner, &s.StartPriceCents, &s.IncrementCents, &capPrice, &endAt, &s.ExtendWindowMS, &s.ExtendByMS, &s.MaxExtendCount, &s.ExtendCount, &s.AcceptedBidCount, &s.Seq, &s.EngineSeq, &s.EngineEpoch, &s.Paused, &s.PauseReason, &s.RequiresPostgres, &s.FatFingerThresholdCents)
 	if err != nil {
 		return snapshot{}, err
 	}
@@ -3581,6 +4305,10 @@ func settleRejected(ctx context.Context, tx pgx.Tx, result engineResult) (int64,
 }
 
 func insertBid(ctx context.Context, tx pgx.Tx, result engineResult, seq *int64, status string, rejectReason *string, responseJSON []byte) error {
+	source := result.Source
+	if source == "" {
+		source = auction.BidSourceManual
+	}
 	tag, err := tx.Exec(ctx, `
 		INSERT INTO bids (
 		  id, auction_id, user_id, client_bid_id, amount_cents, seq, status,
@@ -3595,7 +4323,7 @@ func insertBid(ctx context.Context, tx pgx.Tx, result engineResult, seq *int64, 
 		  AND bids.status = EXCLUDED.status
 		  AND COALESCE(bids.engine_epoch, 0) = COALESCE(EXCLUDED.engine_epoch, 0)
 		  AND COALESCE(bids.engine_seq, 0) = COALESCE(EXCLUDED.engine_seq, 0)
-	`, result.BidID, result.AuctionID, result.UserID, result.ClientBidID, result.AmountCents, seq, status, rejectReason, result.RequestHash, responseJSON, result.TraceID, auction.BidSourceManual, result.EngineEpoch, result.EngineSeq)
+	`, result.BidID, result.AuctionID, result.UserID, result.ClientBidID, result.AmountCents, seq, status, rejectReason, result.RequestHash, responseJSON, result.TraceID, source, result.EngineEpoch, result.EngineSeq)
 	if err != nil {
 		return err
 	}
