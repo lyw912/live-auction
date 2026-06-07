@@ -2286,6 +2286,8 @@ test('H5 extension and sold visual effects use bounded nonblocking motion layers
   });
 
   await expect(page.getByTestId('live-stage')).toHaveAttribute('data-atmosphere-kind', 'extended');
+  await expect(page.getByTestId('final-seconds-layer')).toContainText('延时 +10s');
+  await expect(page.getByTestId('final-seconds-layer')).toContainText('最后窗口有真实出价');
   await expect(page.getByTestId('auction-countdown')).toHaveAttribute('data-effect', 'extension-stretch');
   await expect(page.getByTestId('auction-countdown')).toHaveCSS('animation-name', 'countdown-stretch');
 
@@ -2316,7 +2318,7 @@ test('H5 extension and sold visual effects use bounded nonblocking motion layers
 });
 
 test('H5 countdown shows stable tenths and authoritative extension explanation', async ({ page }) => {
-  const oldEndAt = '2099-05-22T14:00:09.900+08:00';
+  const oldEndAt = '2099-05-22T14:00:04.900+08:00';
   const serverTimeMS = Date.parse('2099-05-22T14:00:00+08:00');
   await page.route('/api/auctions/auc_live', async (route) => {
     await route.fulfill({
@@ -2344,8 +2346,9 @@ test('H5 countdown shows stable tenths and authoritative extension explanation',
   });
 
   await page.goto('/');
+  await expect(page.getByTestId('final-seconds-layer')).toContainText('最后 5 秒');
   await openBidPanel(page);
-  await expect(page.getByTestId('auction-countdown')).toContainText(/剩余 00:0\d\.\d/);
+  await expect(page.getByTestId('auction-countdown')).toContainText(/剩余 00:0[1-5]\.\d/);
   const before = await page.getByTestId('auction-countdown').boundingBox();
 
   await page.evaluate(() => {
@@ -2359,8 +2362,8 @@ test('H5 countdown shows stable tenths and authoritative extension explanation',
           current_winner_id: 'user_2',
           user_id: 'user_2',
           leader_user_masked: '张**',
-          old_end_at: '2099-05-22T14:00:09.900+08:00',
-          end_at: '2099-05-22T14:00:19.900+08:00',
+          old_end_at: '2099-05-22T14:00:04.900+08:00',
+          end_at: '2099-05-22T14:00:14.900+08:00',
           extend_count: 2,
           max_extend_count: 3,
           server_time_ms: Date.parse('2099-05-22T14:00:00+08:00')
@@ -2369,8 +2372,8 @@ test('H5 countdown shows stable tenths and authoritative extension explanation',
     }));
   });
 
-  await expect(page.getByTestId('auction-countdown')).toContainText('延时后 00:20');
-  await expect(page.getByTestId('auction-countdown')).toContainText('延时 14:00:09 -> 14:00:19 · 第 2/3 次');
+  await expect(page.getByTestId('auction-countdown')).toContainText('延时后 00:15');
+  await expect(page.getByTestId('auction-countdown')).toContainText('延时 14:00:04 -> 14:00:14 · 第 2/3 次');
   const after = await page.getByTestId('auction-countdown').boundingBox();
   expect(before).not.toBeNull();
   expect(after).not.toBeNull();

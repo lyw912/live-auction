@@ -1322,46 +1322,92 @@ button {
   background: linear-gradient(135deg, #fff8e6, #ffffff);
 }
 
-.hammer-beat-layer {
+.final-seconds-layer {
   position: absolute;
   left: 50%;
-  top: 43%;
-  z-index: 3;
+  top: 42%;
+  z-index: 5;
   transform: translate3d(-50%, -50%, 0);
+  width: min(82%, 320px);
+  min-height: 92px;
+  border: 1px solid rgba(255, 255, 255, .28);
+  border-radius: 18px;
+  padding: 12px 14px;
+  background: rgba(34, 14, 20, .68);
+  box-shadow: 0 22px 56px rgba(0, 0, 0, .34), inset 0 0 34px rgba(255, 91, 117, .18);
+  backdrop-filter: blur(16px);
   display: grid;
   justify-items: center;
   gap: 6px;
   pointer-events: none;
   color: #fff;
   text-shadow: 0 10px 28px rgba(0, 0, 0, .42);
+  animation: final-seconds-pop 860ms cubic-bezier(.2, .8, .2, 1) both;
 }
 
-.hammer-beat-layer span {
+.final-seconds-layer span {
   min-width: 112px;
-  border: 1px solid rgba(255, 255, 255, .34);
   border-radius: var(--radius-md);
-  padding: 8px 14px;
-  background: rgba(15, 23, 42, .48);
-  backdrop-filter: blur(12px);
-  font-size: 28px;
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, .14);
+  font-size: 26px;
   font-weight: 950;
   letter-spacing: 0;
   text-align: center;
-  animation: hammer-beat-pop 760ms ease-out both;
 }
 
-.hammer-beat-layer strong {
+.final-seconds-layer strong {
   border-radius: 999px;
-  padding: 4px 9px;
-  background: rgba(255, 255, 255, .16);
-  font-size: 11px;
+  padding: 4px 10px;
+  background: rgba(255, 209, 102, .18);
+  color: #ffe39a;
+  font-size: 13px;
 }
 
-.hammer-beat-layer em {
+.final-seconds-layer em {
   color: rgba(255, 255, 255, .82);
   font-size: 11px;
   font-style: normal;
   font-weight: 800;
+}
+
+.final-seconds-layer.hammer {
+  border-color: rgba(255, 91, 117, .48);
+  background: rgba(67, 13, 24, .74);
+}
+
+.final-seconds-layer.hammer span {
+  background: rgba(255, 91, 117, .26);
+}
+
+.final-seconds-layer.is-extended {
+  border-color: rgba(77, 231, 255, .42);
+  background: rgba(7, 37, 42, .76);
+  box-shadow: 0 22px 56px rgba(0, 0, 0, .34), inset 0 0 34px rgba(77, 231, 255, .16);
+}
+
+.final-seconds-layer.is-extended span {
+  color: #4de7ff;
+}
+
+.final-seconds-layer.is-extended strong {
+  background: rgba(77, 231, 255, .16);
+  color: #e9fdff;
+}
+
+@keyframes final-seconds-pop {
+  0% {
+    transform: translate3d(-50%, -46%, 0) scale(.96);
+    opacity: 0;
+  }
+  42% {
+    transform: translate3d(-50%, -50%, 0) scale(1.02);
+    opacity: 1;
+  }
+  100% {
+    transform: translate3d(-50%, -50%, 0) scale(1);
+    opacity: 1;
+  }
 }
 
 .auction-panel {

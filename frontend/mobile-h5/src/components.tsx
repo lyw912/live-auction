@@ -202,6 +202,7 @@ export function LiveStage({
       </div>
       <RaceBoard leaderboard={leaderboard} nextBidCents={nextBidCents} forceExpanded={raceBoardExpanded} intensity={atmosphereIntensity} onOpenBid={onOpenBid} />
       <CohostRibbon messages={cohostMessages} />
+      <FinalSecondsLayer countdownPhase={countdownPhase} atmosphereCue={atmosphereCue} scenario={scenario} />
       <div className="stage-safe-zone">
         <div className="live-topic-row" aria-label="live-topic">
           <span>{auctionStatusLabel(scenario.status)}</span>
@@ -227,13 +228,6 @@ export function LiveStage({
           <p>确认价格和时间后再出价 · {scenario.countdown ?? countdownCopy}</p>
         </div>
       </div>
-      {countdownPhase.phase === 'hammer' && countdownPhase.beat && !scenario.stale && !scenario.sold ? (
-        <div className="hammer-beat-layer" data-testid="hammer-beat-layer" aria-live="polite">
-          <span>{countdownPhase.beat}</span>
-          <strong>{countdownPhase.beat === '最后一次' ? '落槌前最后确认' : '有效出价仍会延时'}</strong>
-          <em>以最终成交结果为准</em>
-        </div>
-      ) : null}
       <HeatMeter heat={heat} countdownPhase={countdownPhase.phase} />
       <button className="floating-product-card" type="button" onClick={onOpenBid} data-testid="floating-product-card" aria-label="进入竞拍面板">
         <span className={`floating-thumb ${mediaURL ? 'has-media' : ''}`} style={mediaURL ? { '--floating-media-url': `url("${mediaURL}")` } as React.CSSProperties : undefined}>
@@ -263,6 +257,45 @@ export function LiveStage({
         <button type="button" onClick={onOpenMore} aria-label="更多"><MoreIcon className="action-rail-icon" size={26} theme="outline" fill={iconParkActionFill} strokeWidth={4} /></button>
       </div>
     </section>
+  );
+}
+
+function FinalSecondsLayer({
+  atmosphereCue,
+  countdownPhase,
+  scenario
+}: {
+  atmosphereCue: AtmosphereCue | null;
+  countdownPhase: CountdownPhaseState;
+  scenario: Scenario;
+}) {
+  if (scenario.stale || scenario.sold) return null;
+  const isExtended = atmosphereCue?.kind === 'extended';
+  const isFinal = countdownPhase.phase === 'critical' || countdownPhase.phase === 'hammer';
+  if (!isExtended && !isFinal) return null;
+  const seconds = countdownPhase.remainingMS != null && countdownPhase.remainingMS > 0
+    ? Math.max(1, Math.ceil(countdownPhase.remainingMS / 1000))
+    : null;
+  const title = isExtended
+    ? '延时 +10s'
+    : countdownPhase.phase === 'hammer'
+      ? countdownPhase.beat || '落槌窗口'
+      : '最后 5 秒';
+  const detail = isExtended
+    ? '最后窗口有真实出价，竞拍继续'
+    : countdownPhase.phase === 'hammer'
+      ? countdownPhase.beat === '最后一次' ? '落槌前最后确认' : '有效出价仍会延时'
+      : 'going once · 盯紧下一口';
+  return (
+    <div
+      className={`final-seconds-layer ${isExtended ? 'is-extended' : countdownPhase.phase}`}
+      data-testid="final-seconds-layer"
+      aria-live="assertive"
+    >
+      <span>{title}</span>
+      <strong>{seconds != null && !isExtended ? `${seconds}s` : detail}</strong>
+      {!isExtended && <em>{detail}</em>}
+    </div>
   );
 }
 

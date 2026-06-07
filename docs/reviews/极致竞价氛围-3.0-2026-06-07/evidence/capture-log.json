@@ -5,6 +5,7 @@
     "npx playwright test tests/e2e/atmosphere-engine.spec.ts --reporter=line",
     "pnpm --filter mobile-h5 build",
     "npx playwright test tests/e2e/mobile-h5.spec.ts -g \"always-on race board|leaderboard delta\" --reporter=line",
+    "npx playwright test tests/e2e/mobile-h5.spec.ts -g \"extension and sold visual|countdown shows stable\" --reporter=line",
     "node docs/reviews/极致竞价氛围-3.0-2026-06-07/capture-atmosphere.mjs"
   ],
   "live_backend_probe": {
@@ -23,7 +24,8 @@
     "script": "docs/reviews/极致竞价氛围-3.0-2026-06-07/capture-atmosphere.mjs",
     "screenshots": [
       "evidence/08-race-board-waterfall-ai-390.png",
-      "evidence/09-race-board-waterfall-ai-360.png"
+      "evidence/09-race-board-waterfall-ai-360.png",
+      "evidence/10-final-seconds-layer-360.png"
     ],
     "assertions": [
       "race-board visible in live-stage",
@@ -32,7 +34,9 @@
       "live-stage exposes data-atmosphere-gated=false outside recovery/stale/disconnected",
       "outbid copy contains real gap ¥50.00",
       "cohost-ribbon contains explicit AI identity",
-      "360px visual inspection: no structural overlap between board, AI ribbon, heat meter, product card and action rail"
+      "360px visual inspection: no structural overlap between board, AI ribbon, heat meter, product card and action rail",
+      "final-seconds-layer visible in <=5s controlled snapshot and keeps bottom price/CTA readable",
+      "extended event renders final-seconds-layer with 延时 +10s"
     ]
   }
 }

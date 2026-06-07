@@ -6,7 +6,9 @@ const OUT = path.resolve('docs/reviews/极致竞价氛围-3.0-2026-06-07/evidenc
 const H5_URL = process.env.H5_URL || 'http://127.0.0.1:5276/';
 const productImageDataURL = 'data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20600%20800%22%3E%3Crect%20width%3D%22600%22%20height%3D%22800%22%20fill%3D%22%23222f2b%22%2F%3E%3Ccircle%20cx%3D%22300%22%20cy%3D%22300%22%20r%3D%22142%22%20fill%3D%22%23e5f3ef%22%2F%3E%3Cellipse%20cx%3D%22300%22%20cy%3D%22320%22%20rx%3D%22164%22%20ry%3D%2286%22%20fill%3D%22%2310b981%22%2F%3E%3Cpath%20d%3D%22M170%20352c52%2068%20208%2068%20260%200%22%20stroke%3D%22%23d6a84f%22%20stroke-width%3D%2218%22%20fill%3D%22none%22%20stroke-linecap%3D%22round%22%2F%3E%3Ctext%20x%3D%22300%22%20y%3D%22640%22%20text-anchor%3D%22middle%22%20font-size%3D%2248%22%20font-family%3D%22Arial%22%20fill%3D%22white%22%3ELOT%20A-102%3C%2Ftext%3E%3C%2Fsvg%3E';
 
-async function installRoutes(page) {
+async function installRoutes(page, options = {}) {
+  const serverTime = Date.parse('2099-05-22T13:59:55.000Z');
+  const endAt = options.finalSeconds ? '2099-05-22T13:59:59.900Z' : '2099-05-22T14:00:00Z';
   await page.route('**/api/auth/me', async (route) => {
     await route.fulfill({ json: { user: { ID: 'user_1', Role: 'user' } } });
   });
@@ -25,7 +27,8 @@ async function installRoutes(page) {
       increment_cents: 5000,
       accepted_bid_count: 3,
       seq: 41,
-      end_at: '2099-05-22T14:00:00Z',
+      end_at: endAt,
+      server_time_ms: serverTime,
       item: {
         title: '天然翡翠A货平安扣吊坠',
         image_url: productImageDataURL,
@@ -39,6 +42,7 @@ async function installRoutes(page) {
     await route.fulfill({ json: {
       auction_id: 'auc_live',
       seq: 42,
+      server_time_ms: serverTime,
       current_price_cents: 35000,
       current_winner_id: 'user_2',
       my_rank: 2,
@@ -119,7 +123,7 @@ async function installRoutes(page) {
   });
 }
 
-async function capture(width, file) {
+async function capture(width, file, options = {}) {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     ...devices['iPhone 13'],
@@ -127,10 +131,16 @@ async function capture(width, file) {
     locale: 'zh-CN'
   });
   const page = await context.newPage();
-  await installRoutes(page);
+  await installRoutes(page, options);
   await page.goto(H5_URL);
   await expect(page.getByTestId('race-board')).toBeVisible();
   await expect.poll(async () => page.evaluate(() => Boolean(window.__auctionWS?.some(({ url }) => url.includes('/ws?'))))).toBe(true);
+  if (options.finalSeconds) {
+    await expect(page.getByTestId('final-seconds-layer')).toContainText('最后 5 秒');
+    await page.screenshot({ path: path.join(OUT, file), fullPage: false });
+    await browser.close();
+    return;
+  }
   await page.evaluate(() => {
     const [entry] = window.__auctionWS.filter(({ url }) => url.includes('/ws?'));
     entry.socket.dispatchServerMessage({
@@ -178,4 +188,5 @@ async function capture(width, file) {
 await fs.mkdir(OUT, { recursive: true });
 await capture(390, '08-race-board-waterfall-ai-390.png');
 await capture(360, '09-race-board-waterfall-ai-360.png');
+await capture(360, '10-final-seconds-layer-360.png', { finalSeconds: true });
 console.log(JSON.stringify({ ok: true, out: OUT }, null, 2));
