@@ -17,7 +17,7 @@ const auctionLive = {
   accepted_bid_count: 18,
   extend_count: 1,
   end_at: '2099-05-22T14:00:00Z',
-  item: { id: 'item_live', title: '青瓷手作茶盏', description: 'visual gate', image_url: productImageDataURL, certificate: '中检证书', condition: '无冲线', shipping: '顺丰保价' },
+  item: { id: 'item_live', title: '天然翡翠A货平安扣吊坠', description: '珠宝可视验收', image_url: productImageDataURL, certificate: 'GID 20260607 · 可核验', condition: '品相完整', shipping: '顺丰包邮' },
   rule: {
     duration_seconds: 600,
     extend_window_seconds: 10,
@@ -41,7 +41,7 @@ const auctionDraft = {
   current_winner_id: undefined,
   accepted_bid_count: 0,
   extend_count: 0,
-  item: { id: 'item_next', title: '紫砂壶', description: 'next visual gate' },
+  item: { id: 'item_next', title: '和田玉福牌吊坠', description: 'next 珠宝可视验收' },
   rule: {
     ...auctionLive.rule,
     frozen_at: undefined
@@ -68,7 +68,7 @@ async function mockH5(page: Page) {
           seq: 41,
           end_at: '2099-05-22T14:00:00Z',
           server_time_ms: Date.parse('2099-05-22T13:58:45Z'),
-          item: { title: '青瓷手作茶盏', image_url: productImageDataURL, certificate: '中检证书', condition: '无冲线', shipping: '顺丰保价' }
+          item: { title: '天然翡翠A货平安扣吊坠', image_url: productImageDataURL, certificate: 'GID 20260607 · 可核验', condition: '品相完整', shipping: '顺丰包邮' }
         }
       ]
     });
@@ -95,7 +95,7 @@ async function mockH5(page: Page) {
           current_winner_id: 'user_2',
           end_at: '2099-05-22T14:00:00Z',
           server_time_ms: Date.parse('2099-05-22T13:58:45Z'),
-          item: { title: '青瓷手作茶盏', image_url: productImageDataURL, certificate: '中检证书', condition: '无冲线', shipping: '顺丰保价' }
+          item: { title: '天然翡翠A货平安扣吊坠', image_url: productImageDataURL, certificate: 'GID 20260607 · 可核验', condition: '品相完整', shipping: '顺丰包邮' }
         }
       }
     });
@@ -354,13 +354,24 @@ test.describe('H5 visual states @visual-h5', () => {
       await stabilize(page);
       await page.getByRole('button', { name: '关闭竞拍面板' }).click();
       await page.getByRole('button', { name: state[1], exact: true }).click();
-      await page.getByTestId('floating-product-card').click();
-      await expect(page.getByLabel('auction-state')).toBeVisible();
-      await expect(page.getByTestId('bid-cta')).toBeVisible();
+      if (state[0].startsWith('sold') || state[0] === 'unsold-ended') {
+        await expect(page.getByTestId('result-sheet')).toBeVisible();
+      } else {
+        await page.getByTestId('floating-product-card').click();
+        await expect(page.getByLabel('auction-state')).toBeVisible();
+        await expect(page.getByTestId('bid-cta')).toBeVisible();
+      }
       await expect(page).toHaveScreenshot(`h5-${state[0]}.png`, {
         animations: 'disabled',
         caret: 'hide',
         fullPage: false,
+        mask: [
+          page.getByTestId('floating-auction-price'),
+          page.getByTestId('floating-auction-countdown'),
+          page.getByTestId('auction-price'),
+          page.getByTestId('auction-countdown'),
+          page.getByTestId('bid-cta')
+        ],
         timeout: 10_000
       });
     });

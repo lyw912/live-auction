@@ -363,6 +363,8 @@ export function formatCents(cents?: number) {
 
 export function maskUser(userID?: string) {
   if (!userID) return '-';
+  if (/^[\u4e00-\u9fa5].*\*\*$/.test(userID)) return userID;
+  if (/^user[_-]?\w+/i.test(userID)) return '匿名买家';
   return `${userID.slice(0, 2)}**`;
 }
 

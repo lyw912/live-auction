@@ -15,7 +15,7 @@ const auctionLive = {
   accepted_bid_count: 18,
   extend_count: 0,
   end_at: '2026-05-22T14:00:00Z',
-  item: { id: 'item_live', title: '青瓷手作茶盏', description: 'demo' },
+  item: { id: 'item_live', title: '天然翡翠A货平安扣吊坠', description: '附GID证书，可核验，支持 7 天无理由。' },
   rule: {
     duration_seconds: 600,
     extend_window_seconds: 10,
@@ -37,7 +37,7 @@ const auctionDraft = {
   is_narrating: false,
   current_price_cents: 80000,
   current_winner_id: undefined,
-  item: { id: 'item_next', title: '紫砂壶', description: 'next' },
+  item: { id: 'item_next', title: '和田玉福牌吊坠', description: '国检证书，可核验，顺丰包邮。' },
   rule: {
     ...auctionLive.rule,
     frozen_at: undefined
@@ -54,7 +54,7 @@ const auctionScheduled = {
   current_winner_id: undefined,
   accepted_bid_count: 0,
   start_at: '2026-05-22T14:30:00Z',
-  item: { id: 'item_scheduled', title: '银壶', description: 'scheduled' }
+  item: { id: 'item_scheduled', title: '蜜蜡圆珠手串', description: '附鉴定说明，支持 7 天无理由。' }
 };
 
 test.beforeEach(async ({ page }) => {
@@ -142,7 +142,7 @@ test.beforeEach(async ({ page }) => {
         auction_id: 'auc_live',
         room_id: 'room_main',
         item_id: 'item_live',
-        item_title: '青瓷手作茶盏',
+        item_title: '天然翡翠A货平安扣吊坠',
         status: 'ACTIVE',
         current_price_cents: 45000,
         current_winner_id: 'user_2',
@@ -304,15 +304,15 @@ test.beforeEach(async ({ page }) => {
 
 test('PC console renders live API auctions, orders, and expanded diagnostic panels', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByTestId('queue-group-active').getByRole('button', { name: /青瓷手作茶盏/ })).toBeVisible();
-  await expect(page.getByTestId('queue-group-draft').getByRole('button', { name: /紫砂壶/ })).toBeVisible();
+  await expect(page.getByTestId('queue-group-active').getByRole('button', { name: /天然翡翠A货平安扣吊坠/ })).toBeVisible();
+  await expect(page.getByTestId('queue-group-draft').getByRole('button', { name: /和田玉福牌吊坠/ })).toBeVisible();
   await expect(page.getByTestId('health-ribbon')).toBeVisible();
   await expect(page.getByTestId('pc-auction-page')).toBeVisible();
   await expect(page.getByTestId('pc-command-center')).toBeVisible();
   await expect(page.getByTestId('auction-queue')).toBeVisible();
-  await expect(page.getByTestId('queue-group-active').getByText('青瓷手作茶盏')).toBeVisible();
-  await expect(page.getByTestId('queue-group-scheduled').getByText('银壶')).toBeVisible();
-  await expect(page.getByTestId('queue-group-draft').getByText('紫砂壶')).toBeVisible();
+  await expect(page.getByTestId('queue-group-active').getByText('天然翡翠A货平安扣吊坠')).toBeVisible();
+  await expect(page.getByTestId('queue-group-scheduled').getByText('蜜蜡圆珠手串')).toBeVisible();
+  await expect(page.getByTestId('queue-group-draft').getByText('和田玉福牌吊坠')).toBeVisible();
   await expect(page.getByTestId('live-assist-rail')).toBeVisible();
   await expect(page.getByText(/单号 JP\d{8}-PENDING/)).toBeVisible();
   await expect(page.getByText('保证金已冻结')).toBeVisible();
@@ -466,7 +466,7 @@ test('PC diagnostics row opens flight recorder drawer with real timeline impact 
   await page.getByLabel('无效出价').getByRole('button', { name: /tr_reject/ }).click();
   const drawer = page.getByTestId('flight-recorder-drawer');
   await expect(drawer.getByText('auc_live')).toBeVisible();
-  await expect(drawer.getByText('青瓷手作茶盏')).toBeVisible();
+  await expect(drawer.getByText('天然翡翠A货平安扣吊坠')).toBeVisible();
   await expect(drawer.getByText('bid_accepted', { exact: true })).toBeVisible();
   await expect(drawer.getByText('bid_rejected_row')).toBeVisible();
   await expect(drawer.getByText('bid_accepted:PUBLISHED')).toBeVisible();
@@ -480,14 +480,14 @@ test('PC diagnostics row opens flight recorder drawer with real timeline impact 
 test('PC auction queue pins active auction and explains active and narrating constraints', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByTestId('queue-group-active').getByText('当前直播主拍品')).toBeVisible();
-  await page.getByTestId('auction-queue').getByText('银壶').click();
+  await page.getByTestId('auction-queue').getByText('蜜蜡圆珠手串').click();
   await expect(page.getByTestId('auction-control-summary').getByRole('button', { name: '开拍' })).toBeDisabled();
-  await expect(page.getByText(/房间已有开拍中的拍品「青瓷手作茶盏」/)).toBeVisible();
-  await expect(page.getByTestId('queue-group-scheduled').getByText(/需先处理「青瓷手作茶盏」/)).toBeVisible();
-  await page.getByTestId('auction-queue').getByText('紫砂壶').click();
+  await expect(page.getByText(/房间已有开拍中的拍品「天然翡翠A货平安扣吊坠」/)).toBeVisible();
+  await expect(page.getByTestId('queue-group-scheduled').getByText(/需先处理「天然翡翠A货平安扣吊坠」/)).toBeVisible();
+  await page.getByTestId('auction-queue').getByText('和田玉福牌吊坠').click();
   await expect(page.getByTestId('auction-control-summary').getByRole('button', { name: '开始讲解' })).toBeDisabled();
-  await expect(page.getByTestId('auction-control-summary').getByText(/讲解中拍品为「青瓷手作茶盏」/)).toBeVisible();
-  await expect(page.getByTestId('queue-group-draft').getByText(/讲解中「青瓷手作茶盏」/)).toBeVisible();
+  await expect(page.getByTestId('auction-control-summary').getByText(/讲解中拍品为「天然翡翠A货平安扣吊坠」/)).toBeVisible();
+  await expect(page.getByTestId('queue-group-draft').getByText(/讲解中「天然翡翠A货平安扣吊坠」/)).toBeVisible();
 });
 
 test('PC creates item and auction through backend upload and create APIs', async ({ page }) => {
@@ -548,7 +548,7 @@ test('PC rule save targets selected draft auction and includes all money/rule fi
 
   await page.goto('/');
   await page.getByRole('button', { name: '拍品', exact: true }).click();
-  await page.getByText('紫砂壶').click();
+  await page.getByText('和田玉福牌吊坠').click();
   await expect(page.getByTestId('seller-rule-wizard')).toBeVisible();
   await expect(page.getByLabel('seller-rule-wizard-steps').getByText('拍品')).toBeVisible();
   await expect(page.getByLabel('seller-rule-wizard-steps').getByText('价格')).toBeVisible();
@@ -596,7 +596,7 @@ test('PC lifecycle controls call selected auction APIs', async ({ page }) => {
 
   await page.goto('/');
   await page.getByRole('button', { name: '竞拍', exact: true }).click();
-  await page.getByText('紫砂壶').click();
+  await page.getByText('和田玉福牌吊坠').click();
   await page.getByPlaceholder('请选择日期').fill('2026-05-22 14:30');
   await page.keyboard.press('Enter');
   await page.getByTestId('auction-control-summary').getByRole('button', { name: '排期', exact: true }).click();

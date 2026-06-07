@@ -100,15 +100,15 @@ test.beforeEach(async ({ page }) => {
             deposit_floor_cents: 50000
           },
           item: {
-            title: '青瓷手作茶盏',
-            description: '孤品手作，窑变釉面带自然开片，适合收藏与日用。',
+            title: '天然翡翠A货平安扣吊坠',
+            description: '天然A货翡翠平安扣，附GID证书，顺丰包邮，支持7天无理由。',
             image_url: productImageDataURL,
-            certificate: '中检证书',
-            condition: '无冲线',
-            shipping: '顺丰保价',
+            certificate: 'GID 20260607 · 可核验',
+            condition: '品相完整',
+            shipping: '顺丰包邮',
             dimensions: '直径 9.2cm',
-            material: '景德镇高温瓷',
-            flaws: '口沿一处自然釉缩',
+            material: '天然A货翡翠',
+            flaws: '以实物图为准',
             return_policy: '签收前可验货，证书不符支持售后复核。'
           }
         },
@@ -122,11 +122,11 @@ test.beforeEach(async ({ page }) => {
           accepted_bid_count: 0,
           end_at: '2099-05-22T14:10:00Z',
           item: {
-            title: '紫砂壶',
+            title: '和田玉福牌吊坠',
             image_url: productImageDataURL,
-            certificate: '作者证书',
-            condition: '九五品',
-            shipping: '包邮保价'
+            certificate: '国检证书',
+            condition: '品相完整',
+            shipping: '顺丰包邮'
           }
         }
       ]
@@ -165,15 +165,15 @@ test.beforeEach(async ({ page }) => {
           end_at: '2099-05-22T14:00:00Z',
           server_time_ms: Date.parse('2099-05-22T13:58:45Z'),
           item: {
-            title: '青瓷手作茶盏',
-            description: '孤品手作，窑变釉面带自然开片，适合收藏与日用。',
+            title: '天然翡翠A货平安扣吊坠',
+            description: '天然A货翡翠平安扣，附GID证书，顺丰包邮，支持7天无理由。',
             image_url: productImageDataURL,
-            certificate: '中检证书',
-            condition: '无冲线',
-            shipping: '顺丰保价',
+            certificate: 'GID 20260607 · 可核验',
+            condition: '品相完整',
+            shipping: '顺丰包邮',
             dimensions: '直径 9.2cm',
-            material: '景德镇高温瓷',
-            flaws: '口沿一处自然釉缩',
+            material: '天然A货翡翠',
+            flaws: '以实物图为准',
             return_policy: '签收前可验货，证书不符支持售后复核。'
           }
         }
@@ -219,7 +219,7 @@ test.beforeEach(async ({ page }) => {
     await route.fulfill({
       json: {
         items: [
-          { id: 1, room_id: 'room_main', user_id: 'user_2', body: '这个茶盏釉色不错', created_at: '2026-05-22T13:00:00Z' }
+          { id: 1, room_id: 'room_main', user_id: 'user_2', body: '这件翡翠水头不错', created_at: '2026-05-22T13:00:00Z' }
         ]
       }
     });
@@ -1222,7 +1222,7 @@ test('H5 loser and unsold result sheets explain next action without enabling bid
   const loserSheet = page.getByTestId('result-sheet').filter({ hasText: '本场已落槌' }).first();
   await expect(loserSheet.getByRole('heading', { name: '本场已落槌' })).toBeVisible();
   await expect(loserSheet.getByText('赵** 以 ¥600.00 中拍')).toBeVisible();
-  await expect(loserSheet.getByText('下一件：紫砂壶')).toBeVisible();
+  await expect(loserSheet.getByText('下一件：和田玉福牌吊坠')).toBeVisible();
   await expect(loserSheet.getByTestId('next-auction-handoff').getByText('直播间下一件', { exact: true })).toBeVisible();
   await expect(loserSheet.getByTestId('next-auction-handoff').getByText('即将开拍')).toBeVisible();
   await expect(loserSheet.getByTestId('next-auction-handoff').getByText(/未承诺相似度、库存预留或中标优先权/)).toBeVisible();
@@ -1246,8 +1246,8 @@ test('H5 loser and unsold result sheets explain next action without enabling bid
   const unsoldSheet = page.getByTestId('result-sheet').filter({ hasText: '本场未成交' }).first();
   await expect(unsoldSheet.getByRole('heading', { name: '本场未成交' })).toBeVisible();
   await expect(unsoldSheet.getByText('不会生成订单')).toBeVisible();
-  await expect(unsoldSheet.getByText('紫砂壶 即将开始')).toBeVisible();
-  await expect(unsoldSheet.getByTestId('next-auction-handoff').getByText('紫砂壶')).toBeVisible();
+  await expect(unsoldSheet.getByText('和田玉福牌吊坠 即将开始')).toBeVisible();
+  await expect(unsoldSheet.getByTestId('next-auction-handoff').getByText('和田玉福牌吊坠')).toBeVisible();
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
 });
 
@@ -1456,8 +1456,8 @@ test('H5 bottom sheets open close and keep the primary bid CTA singular', async 
   await expect(sheet).toBeVisible();
   await expect(sheet.getByRole('heading', { name: '商品与规则' })).toBeVisible();
   await sheet.getByRole('tab', { name: '本场' }).click();
-  await expect(sheet.getByText('青瓷手作茶盏')).toBeVisible();
-  await expect(sheet.getByText('紫砂壶')).toBeVisible();
+  await expect(sheet.getByText('天然翡翠A货平安扣吊坠')).toBeVisible();
+  await expect(sheet.getByText('和田玉福牌吊坠')).toBeVisible();
   await expect(sheet.getByText('当前拍品')).toBeVisible();
   await expect(page.getByTestId('bid-cta')).toHaveCount(1);
   await expect(page.getByTestId('bid-cta')).toBeVisible();
@@ -1668,8 +1668,8 @@ test('H5 product trust sheet explains proof money and timing in user language', 
   const sheet = page.getByTestId('bottom-sheet');
   await expect(sheet.getByRole('heading', { name: '商品与规则' })).toBeVisible();
   await expect(sheet.getByText('商品信任详情')).toBeVisible();
-  await expect(sheet.getByText('孤品手作，窑变釉面带自然开片，适合收藏与日用。')).toBeVisible();
-  await expect(sheet.getByLabel('product-trust-proof').getByText('中检证书')).toBeVisible();
+  await expect(sheet.getByText('天然A货翡翠平安扣，附GID证书，顺丰包邮，支持7天无理由。')).toBeVisible();
+  await expect(sheet.getByLabel('product-trust-proof').getByText('GID 20260607 · 可核验')).toBeVisible();
   await expect(sheet.getByLabel('product-trust-proof').getByText('直径 9.2cm')).toBeVisible();
   await expect(sheet.getByText('当前出价节奏')).toBeVisible();
   await expect(sheet.getByText('价格到达 ¥1,500.00 后不再继续抬价。')).toBeVisible();
@@ -1698,7 +1698,7 @@ test('H5 chat reads seed messages and sends room chat API', async ({ page }) => 
   });
 
   await page.goto('/');
-  await expect(page.getByTestId('stage-chat-overlay').getByText('这个茶盏釉色不错')).toBeVisible();
+  await expect(page.getByTestId('stage-chat-overlay').getByText('这件翡翠水头不错')).toBeVisible();
   await page.getByLabel('chat-input').fill('我跟一口');
   await page.getByRole('button', { name: 'send-chat' }).click();
   await expect(page.getByTestId('stage-chat-overlay').getByText('我跟一口')).toBeVisible();
@@ -1815,10 +1815,10 @@ test('H5 live stage uses product media and keeps chat inside safe zone at 360px'
   const stage = page.getByTestId('live-stage');
   await expect(stage).toBeVisible();
   await expect(stage).toHaveClass(/has-media/);
-  await expect(stage.getByText('中检证书')).toBeVisible();
-  await expect(stage.getByText('无冲线')).toBeVisible();
-  await expect(stage.getByText('顺丰保价')).toBeVisible();
-  await expect(page.getByTestId('stage-chat-overlay').getByText('这个茶盏釉色不错')).toBeVisible();
+  await expect(stage.getByText('GID 20260607 · 可核验')).toBeVisible();
+  await expect(stage.getByText('品相完整')).toBeVisible();
+  await expect(stage.getByText('顺丰包邮')).toBeVisible();
+  await expect(page.getByTestId('stage-chat-overlay').getByText('这件翡翠水头不错')).toBeVisible();
 
   const stageBox = await stage.boundingBox();
   const chatBox = await page.getByTestId('stage-chat-overlay').boundingBox();

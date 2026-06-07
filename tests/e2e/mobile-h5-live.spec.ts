@@ -1,11 +1,11 @@
 import { expect, test } from '@playwright/test';
 
 test('H5 covers live backend REST, fat-finger confirm, cap SOLD order, payment, and WebSocket event paths', async ({ page }) => {
-  await page.goto('/rooms/room_main');
   const login = await page.request.post('/api/auth/login', {
     data: { account: 'user' }
   });
   expect(login.ok()).toBeTruthy();
+  await page.goto('/rooms/room_main');
   const roomAuctions = await page.request.get('/api/rooms/room_main/auctions');
   expect(roomAuctions.ok()).toBeTruthy();
   const roomPayload = await roomAuctions.json();
@@ -30,13 +30,14 @@ test('H5 covers live backend REST, fat-finger confirm, cap SOLD order, payment, 
   await expect(page.getByTestId('floating-auction-price')).toHaveText('当前最高价 ¥350.00');
   await expect(page.getByTestId('floating-auction-countdown')).toBeVisible();
   await expect(page.getByTestId('stage-chat-overlay').getByText('这件拍品状态不错')).toBeVisible();
+  await expect(page.getByTestId('stage-chat-overlay').locator('strong').filter({ hasText: '匿名买家' }).first()).toBeVisible();
   await page.getByLabel('chat-input').fill('live smoke chat');
   await page.getByRole('button', { name: 'send-chat' }).click();
   await expect(page.getByTestId('stage-chat-overlay').getByText('live smoke chat')).toBeVisible();
 
   await page.getByTestId('floating-product-card').click();
-  await expect(page.getByLabel('auction-state').getByText('ACTIVE')).toBeVisible();
-  await expect(page.getByText('WebSocket 已连接 · 状态来自服务端事件')).toBeVisible();
+  await expect(page.getByLabel('auction-state').getByText('竞价中')).toBeVisible();
+  await expect(page.getByLabel('auction-state').getByText('已连接')).toBeVisible();
   await expect(page.getByTestId('auction-countdown')).toBeVisible();
   await page.getByRole('button', { name: 'increase' }).click();
   await page.getByRole('button', { name: 'increase' }).click();
@@ -100,11 +101,11 @@ test('H5 covers live backend REST, fat-finger confirm, cap SOLD order, payment, 
 });
 
 test('H5 route isolates two room contexts', async ({ page }) => {
-  await page.goto('/rooms/room_side');
   const login = await page.request.post('/api/auth/login', {
     data: { account: 'user' }
   });
   expect(login.ok()).toBeTruthy();
+  await page.goto('/rooms/room_side');
   const sideAuctions = await page.request.get('/api/rooms/room_side/auctions');
   expect(sideAuctions.ok()).toBeTruthy();
   const sidePayload = await sideAuctions.json();
@@ -115,6 +116,7 @@ test('H5 route isolates two room contexts', async ({ page }) => {
     })
   ]));
   await expect(page.getByText('auc_live')).not.toBeVisible();
-  await expect(page.getByLabel('live-stage').getByText('room_side')).toBeVisible();
+  await expect(page.getByLabel('live-stage').getByText('专场 side')).toBeVisible();
+  await expect(page.getByLabel('live-stage').getByRole('heading', { name: '和田玉福牌吊坠' })).toBeVisible();
   await expect(page.getByTestId('stage-chat-overlay').getByText('侧房间独立弹幕')).toBeVisible();
 });
