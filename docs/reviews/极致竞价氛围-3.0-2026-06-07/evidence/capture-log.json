@@ -2,6 +2,7 @@
   "updated_at": "2026-06-07T22:36:00+08:00",
   "round": "P0 atmosphere main-stage loop",
   "commands": [
+    "npx playwright test tests/e2e/atmosphere-engine.spec.ts --reporter=line",
     "pnpm --filter mobile-h5 build",
     "npx playwright test tests/e2e/mobile-h5.spec.ts -g \"always-on race board|leaderboard delta\" --reporter=line",
     "node docs/reviews/极致竞价氛围-3.0-2026-06-07/capture-atmosphere.mjs"
@@ -27,6 +28,8 @@
     "assertions": [
       "race-board visible in live-stage",
       "leaderboard_delta seq 44/45 drives expanded board",
+      "live-stage exposes data-atmosphere-intensity=3 for hot real-signal state",
+      "live-stage exposes data-atmosphere-gated=false outside recovery/stale/disconnected",
       "outbid copy contains real gap ¥50.00",
       "cohost-ribbon contains explicit AI identity",
       "360px visual inspection: no structural overlap between board, AI ribbon, heat meter, product card and action rail"

@@ -13,6 +13,31 @@ export type AtmosphereCue = {
   priority: number;
 };
 
+export type AtmosphereIntensity = 0 | 1 | 2 | 3;
+
+export type AtmosphereSignals = {
+  acceptedBids30s?: number;
+  priceVelocityCentsPerMin?: number;
+  remainingMS?: number | null;
+  extended?: boolean;
+};
+
+export type AtmosphereGateInput = {
+  recovering?: boolean;
+  stale?: boolean;
+  disconnected?: boolean;
+  reducedMotion?: boolean;
+  lowPower?: boolean;
+  aiOff?: boolean;
+};
+
+export type AtmosphereGate = {
+  gated: boolean;
+  reasons: Array<keyof AtmosphereGateInput>;
+  allowMotion: boolean;
+  allowAI: boolean;
+};
+
 export type AtmosphereInput = {
   kind: AtmosphereKind;
   title: string;
@@ -38,6 +63,45 @@ export const atmospherePriority: Record<AtmosphereKind, number> = {
   leading: 50,
   social: 10
 };
+
+function clampIntensity(value: number): AtmosphereIntensity {
+  if (value >= 3) return 3;
+  if (value >= 2) return 2;
+  if (value >= 1) return 1;
+  return 0;
+}
+
+export function calculateAtmosphereIntensity(signals: AtmosphereSignals): AtmosphereIntensity {
+  const accepted = Math.max(0, signals.acceptedBids30s ?? 0);
+  const velocity = Math.max(0, signals.priceVelocityCentsPerMin ?? 0);
+  const remaining = signals.remainingMS;
+  let intensity = 0;
+  if (accepted >= 10) intensity = Math.max(intensity, 3);
+  else if (accepted >= 4) intensity = Math.max(intensity, 2);
+  else if (accepted >= 1) intensity = Math.max(intensity, 1);
+  if (velocity >= 12000) intensity = Math.max(intensity, 3);
+  else if (velocity >= 5000) intensity = Math.max(intensity, 2);
+  else if (velocity > 0) intensity = Math.max(intensity, 1);
+  if (remaining != null && Number.isFinite(remaining) && remaining > 0) {
+    if (remaining <= 3000) intensity = Math.max(intensity, 3);
+    else if (remaining <= 5000) intensity = Math.max(intensity, 2);
+    else if (remaining <= 10000) intensity = Math.max(intensity, 1);
+  }
+  if (signals.extended && intensity > 0) intensity += 1;
+  return clampIntensity(intensity);
+}
+
+export function shouldGateAtmosphere(input: AtmosphereGateInput): AtmosphereGate {
+  const reasons = (['recovering', 'stale', 'disconnected', 'reducedMotion', 'lowPower', 'aiOff'] as Array<keyof AtmosphereGateInput>)
+    .filter((key) => Boolean(input[key]));
+  const hardGated = Boolean(input.recovering || input.stale || input.disconnected);
+  return {
+    gated: hardGated || Boolean(input.reducedMotion || input.lowPower),
+    reasons,
+    allowMotion: !hardGated && !input.reducedMotion && !input.lowPower,
+    allowAI: !hardGated && !input.aiOff
+  };
+}
 
 export function normalizeAtmosphere(
   input: AtmosphereInput,

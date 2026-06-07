@@ -348,6 +348,23 @@ button {
   animation: race-board-open 220ms ease-out both;
 }
 
+.race-board[data-intensity="2"] .race-board-rest,
+.race-board[data-intensity="2"] .race-board-expanded {
+  border-color: rgba(255, 209, 102, .34);
+}
+
+.race-board[data-intensity="3"] .race-board-rest,
+.race-board[data-intensity="3"] .race-board-expanded {
+  border-color: rgba(255, 91, 117, .48);
+  box-shadow: 0 16px 34px rgba(0, 0, 0, .28), 0 0 0 1px rgba(255, 91, 117, .12);
+}
+
+.video-stage[data-atmosphere-gated="true"] .race-board,
+.video-stage[data-atmosphere-gated="true"] .cohost-ribbon,
+.video-stage[data-atmosphere-gated="true"] .heat-meter {
+  filter: saturate(.68);
+}
+
 .race-board-title {
   min-height: 20px;
   display: flex;

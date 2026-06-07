@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { atmospherePriority, normalizeAtmosphere } from '../../frontend/mobile-h5/src/atmosphere';
+import { atmospherePriority, calculateAtmosphereIntensity, normalizeAtmosphere, shouldGateAtmosphere } from '../../frontend/mobile-h5/src/atmosphere';
 import { reconnectDelayMS } from '../../frontend/mobile-h5/src/realtime';
 
 test('H5 atmosphere priority keeps terminal and recovery effects above bid and social noise', () => {
@@ -62,6 +62,51 @@ test('H5 atmosphere cue ids are monotonic by default', () => {
     user_scope: 'self'
   }, 43);
   expect(second?.id).toBeGreaterThan(first?.id ?? 0);
+});
+
+test('H5 atmosphere intensity maps real heat and final seconds to 0..3', () => {
+  expect(calculateAtmosphereIntensity({ acceptedBids30s: 0, priceVelocityCentsPerMin: 0, remainingMS: 60_000 })).toBe(0);
+  expect(calculateAtmosphereIntensity({ acceptedBids30s: 2, priceVelocityCentsPerMin: 0, remainingMS: 60_000 })).toBe(1);
+  expect(calculateAtmosphereIntensity({ acceptedBids30s: 5, priceVelocityCentsPerMin: 5000, remainingMS: 60_000 })).toBe(2);
+  expect(calculateAtmosphereIntensity({ acceptedBids30s: 10, priceVelocityCentsPerMin: 0, remainingMS: 60_000 })).toBe(3);
+  expect(calculateAtmosphereIntensity({ acceptedBids30s: 0, priceVelocityCentsPerMin: 12000, remainingMS: 60_000 })).toBe(3);
+  expect(calculateAtmosphereIntensity({ acceptedBids30s: 0, priceVelocityCentsPerMin: 0, remainingMS: 9_500 })).toBe(1);
+  expect(calculateAtmosphereIntensity({ acceptedBids30s: 0, priceVelocityCentsPerMin: 0, remainingMS: 4_500 })).toBe(2);
+  expect(calculateAtmosphereIntensity({ acceptedBids30s: 0, priceVelocityCentsPerMin: 0, remainingMS: 2_500 })).toBe(3);
+  expect(calculateAtmosphereIntensity({ acceptedBids30s: 4, priceVelocityCentsPerMin: 0, remainingMS: 60_000, extended: true })).toBe(3);
+});
+
+test('H5 atmosphere gate suppresses hype during stale recovery while preserving AI-off separation', () => {
+  expect(shouldGateAtmosphere({})).toEqual({
+    gated: false,
+    reasons: [],
+    allowMotion: true,
+    allowAI: true
+  });
+  expect(shouldGateAtmosphere({ recovering: true, stale: true })).toEqual({
+    gated: true,
+    reasons: ['recovering', 'stale'],
+    allowMotion: false,
+    allowAI: false
+  });
+  expect(shouldGateAtmosphere({ disconnected: true })).toEqual({
+    gated: true,
+    reasons: ['disconnected'],
+    allowMotion: false,
+    allowAI: false
+  });
+  expect(shouldGateAtmosphere({ reducedMotion: true, aiOff: true })).toEqual({
+    gated: true,
+    reasons: ['reducedMotion', 'aiOff'],
+    allowMotion: false,
+    allowAI: false
+  });
+  expect(shouldGateAtmosphere({ aiOff: true })).toEqual({
+    gated: false,
+    reasons: ['aiOff'],
+    allowMotion: true,
+    allowAI: false
+  });
 });
 
 test('H5 reconnect backoff honors Retry-After and stays bounded', () => {

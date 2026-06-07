@@ -8,7 +8,7 @@ import MoreIcon from '@icon-park/react/es/icons/More';
 import ShoppingBagIcon from '@icon-park/react/es/icons/ShoppingBagOne';
 import SoundIcon from '@icon-park/react/es/icons/SoundOne';
 import TruckIcon from '@icon-park/react/es/icons/Truck';
-import type { AtmosphereCue } from './atmosphere';
+import type { AtmosphereCue, AtmosphereIntensity } from './atmosphere';
 import type { AuctionItem, AuctionState, AuctionSummary, BottomSheetKey, ChatMessage, ConnectionPhase, CountdownPhase, CountdownPhaseState, HeatSnapshot, HistoryRow, LeaderboardPayload, LiveOpsCampaign, MaxBidIntent, MaxBidPhase, PaymentPhase, ProductQAAnswer, ResultSheetKind, Scenario, SoundCapability, SystemMessage } from './domain';
 import { auctionStatusLabel, connectionSyncCopy, demoLiveVideoURL, demoProductImageURL, formatCents, formatClockTime, isDangerousActionDisabled, leaderboardActionCopy, rankBadgeLabel, riskActionCopy, scenarios } from './domain';
 import { h5Copy } from './copy';
@@ -56,6 +56,8 @@ export function LiveStage({
   systemMessages,
   waterfallChips,
   raceBoardExpanded,
+  atmosphereIntensity,
+  atmosphereGated,
   onOpenBid,
   onOpenLiveOps,
   onOpenMore,
@@ -87,6 +89,8 @@ export function LiveStage({
   systemMessages: SystemMessage[];
   waterfallChips: WaterfallChip[];
   raceBoardExpanded: boolean;
+  atmosphereIntensity: AtmosphereIntensity;
+  atmosphereGated: boolean;
   onOpenBid: () => void;
   onOpenLiveOps: () => void;
   onOpenMore: () => void;
@@ -147,6 +151,8 @@ export function LiveStage({
       data-atmosphere-kind={atmosphereCue?.kind ?? 'none'}
       data-countdown-phase={countdownPhase.phase}
       data-race-board={raceBoardExpanded ? 'expanded' : 'rest'}
+      data-atmosphere-intensity={atmosphereIntensity}
+      data-atmosphere-gated={atmosphereGated ? 'true' : 'false'}
       style={mediaURL ? { '--stage-media-url': `url("${mediaURL}")` } as React.CSSProperties : undefined}
     >
       <video className="live-video-bg" src={videoURL} poster={mediaURL || demoProductImageURL} autoPlay muted loop playsInline aria-hidden="true" />
@@ -173,7 +179,7 @@ export function LiveStage({
           <span>{atmosphereCue.detail}</span>
         </div>
       )}
-      <BidWaterfall chips={waterfallChips} />
+      <BidWaterfall chips={atmosphereGated ? [] : waterfallChips} intensity={atmosphereIntensity} />
       <BarrageLayer messages={barrageMessages} />
       <div className="video-topbar">
         <div className="host-profile">
@@ -194,7 +200,7 @@ export function LiveStage({
           {soundEnabled ? <SoundIcon size={14} theme="filled" fill="#fff" /> : <BellOff size={14} />}
         </button>
       </div>
-      <RaceBoard leaderboard={leaderboard} nextBidCents={nextBidCents} forceExpanded={raceBoardExpanded} onOpenBid={onOpenBid} />
+      <RaceBoard leaderboard={leaderboard} nextBidCents={nextBidCents} forceExpanded={raceBoardExpanded} intensity={atmosphereIntensity} onOpenBid={onOpenBid} />
       <CohostRibbon messages={cohostMessages} />
       <div className="stage-safe-zone">
         <div className="live-topic-row" aria-label="live-topic">
@@ -264,11 +270,13 @@ function RaceBoard({
   leaderboard,
   nextBidCents,
   forceExpanded,
+  intensity,
   onOpenBid
 }: {
   leaderboard: LeaderboardPayload | null;
   nextBidCents: number;
   forceExpanded: boolean;
+  intensity: AtmosphereIntensity;
   onOpenBid: () => void;
 }) {
   const entries = leaderboard?.entries ?? [];
@@ -292,6 +300,7 @@ function RaceBoard({
     <section
       className={`race-board ${expanded ? 'is-expanded' : 'is-rest'}`}
       data-testid="race-board"
+      data-intensity={intensity}
       aria-label="常驻竞速榜"
       aria-live="polite"
     >
@@ -324,7 +333,7 @@ function RaceBoard({
   );
 }
 
-function BidWaterfall({ chips }: { chips: WaterfallChip[] }) {
+function BidWaterfall({ chips, intensity }: { chips: WaterfallChip[]; intensity: AtmosphereIntensity }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
@@ -346,7 +355,8 @@ function BidWaterfall({ chips }: { chips: WaterfallChip[] }) {
       }
       ctx.clearRect(0, 0, width, height);
       const now = Date.now();
-      const active = chips.slice(-24);
+      const activeLimit = intensity >= 3 ? 24 : intensity === 2 ? 16 : 8;
+      const active = chips.slice(-activeLimit);
       active.forEach((chip, index) => {
         const age = now - chip.created_at;
         const life = 2600;

@@ -601,6 +601,8 @@ test('H5 renders always-on race board and waterfall from authoritative leaderboa
   });
 
   const stage = page.getByTestId('live-stage');
+  await expect(stage).toHaveAttribute('data-atmosphere-gated', 'false');
+  await expect(stage).toHaveAttribute('data-atmosphere-intensity', '3');
   await expect(stage.getByTestId('race-board')).toContainText('榜一 我 ¥520.00');
   await expect(stage.getByTestId('race-board')).toContainText('竞速榜');
   await expect(stage.getByTestId('bid-waterfall')).toBeVisible();

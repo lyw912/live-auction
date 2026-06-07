@@ -7,7 +7,7 @@ import { AuctionStatePanel, BottomSheet, ChatComposer, ChatPanel, LeaderboardPan
 import { ResultSheet } from './result';
 import type { AuctionItem, AuctionOverlayMode, AuctionRealtimeEvent, AuctionState, AuctionSummary, AuctionSoundPack, AuthUser, BidderRequirement, BidPhase, BidResponse, BottomSheetKey, ChatMessage, ConnectionPhase, HistoryRow, LeaderboardPayload, LiveOpsCampaign, MaxBidIntent, MaxBidPhase, OrderRow, PaymentPhase, PendingBidRequest, ProductQAAnswer, ProductQATurn, RecoveryPhase, ResultSheetKind, Scenario, SnapshotResponse, SoundCapability, SystemMessage, WSTicketResponse } from './domain';
 import { createAudioContext, createClientBidID, demoProductImageURL, demoUserID, deriveCountdown, deriveCountdownPhase, ensureDemoSession, extensionCopyFromEvent, formatCents, heatSnapshot, isBidConfirmationPending, isCountdownExpired, isDangerousActionDisabled, isEngineRejected, isTestMatrixEnabled, loadAuctionSoundPack, maxBidErrorCopy, maxBidStatusCopy, playAuctionSound, playCountdownTone, playCueTone, playLayeredCue, readJSON, rejectCopy, responseServerTimeMS, retryAfterMS, retryAfterMSFromHeaders, roomIDFromPath, scenarios, selectEntryAuction, speakSystemMessage, vibrateCountdownPhase, vibratePattern, visibleRoomAuctions } from './domain';
-import { normalizeAtmosphere } from './atmosphere';
+import { calculateAtmosphereIntensity, normalizeAtmosphere, shouldGateAtmosphere } from './atmosphere';
 import { reconnectDelayMS } from './realtime';
 import { h5Copy } from './copy';
 import './styles.css';
@@ -217,6 +217,12 @@ function App() {
   }, [activeAuctionID, auctionEndAt, connectionPhase, nowMS, recoveryPhase, selected, serverTimeMS]);
   const activeAuction = useMemo(() => roomAuctions.find((auction) => auction.id === activeAuctionID), [activeAuctionID, roomAuctions]);
   const heat = useMemo(() => heatSnapshot(leaderboard, activeAuction), [activeAuction, leaderboard]);
+  const atmosphereIntensity = useMemo(() => calculateAtmosphereIntensity({
+    acceptedBids30s: heat.acceptedBids30s,
+    priceVelocityCentsPerMin: heat.priceVelocityCentsPerMin,
+    remainingMS: countdownPhase.remainingMS,
+    extended: selected === 'extended'
+  }), [countdownPhase.remainingMS, heat.acceptedBids30s, heat.priceVelocityCentsPerMin, selected]);
   const bidCooldownRemainingMS = Math.max(0, bidCooldownUntilMS - nowMS);
   const raceBoardExpanded = raceBoardExpandedUntil > nowMS;
   const countdownExpired = useMemo(() => (
@@ -766,6 +772,14 @@ function App() {
       ctaDisabled: countdownExpired
     };
   }, [activeAuctionID, bidCooldownRemainingMS, bidFeedback, bidderRequirement, bidPhase, confirmAmountCents, connectionPhase, countdownCopy, countdownExpired, currentPriceCents, lastSeq, leaderMasked, minimumNextBidCents, nextBidCents, payableOrderAmountCents, payableOrderID, paymentPhase, recoveryPhase, selected, terminalPriceCents, terminalWinnerID]);
+  const atmosphereGate = useMemo(() => shouldGateAtmosphere({
+    recovering: recoveryPhase !== 'idle' || connectionPhase === 'recovering',
+    stale: scenario.stale || countdownPhase.phase === 'stale' || selected === 'recovering',
+    disconnected: connectionPhase === 'disconnected' || selected === 'disconnected',
+    reducedMotion: false,
+    lowPower: false,
+    aiOff: false
+  }), [connectionPhase, countdownPhase.phase, recoveryPhase, scenario.stale, selected]);
   const resultSheetKind: ResultSheetKind | null = selected === 'sold_winner'
     ? 'winner'
     : selected === 'sold_loser'
@@ -1843,6 +1857,8 @@ function App() {
         systemMessages={systemMessages}
         waterfallChips={waterfallChips}
         raceBoardExpanded={raceBoardExpanded}
+        atmosphereIntensity={atmosphereIntensity}
+        atmosphereGated={atmosphereGate.gated}
         auctions={roomAuctions}
         activeAuctionID={activeAuctionID}
         currentPriceCents={currentPriceCents}
