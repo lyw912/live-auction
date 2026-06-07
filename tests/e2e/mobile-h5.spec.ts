@@ -383,7 +383,11 @@ test('H5 renders honest heat and all visible live actions are interactive', asyn
   await expect(page.getByTestId('live-stage').getByRole('button', { name: '已关注' })).toBeVisible();
   await page.getByRole('button', { name: '更多' }).click();
   await expect(page.getByTestId('more-sheet')).toBeVisible();
-  await page.getByTestId('more-sheet').getByRole('button', { name: '关闭' }).click();
+  await expect(page.getByTestId('buyer-trust-card')).toContainText('本场受反作弊保护');
+  await expect(page.getByTestId('buyer-trust-card')).toContainText('价格、倒计时和有效出价以服务端为准');
+  await expect(page.getByTestId('buyer-trust-card')).toContainText('页面不展示虚构观看人数');
+  await expect(page.getByTestId('buyer-trust-card')).toContainText('不向买家泄露风控策略');
+  await page.getByTestId('bottom-sheet').getByRole('button', { name: '关闭' }).click();
   await expect(page.getByTestId('more-sheet')).toHaveCount(0);
 });
 
@@ -1502,9 +1506,10 @@ test('H5 renders bid and order history from user APIs', async ({ page }) => {
 
   await page.goto('/');
   await openBidPanel(page);
-  await page.getByLabel('bid-dock-shortcuts').getByRole('button', { name: '更多' }).click();
+  await page.getByLabel('bid-dock-shortcuts').getByRole('button', { name: '保护' }).click();
   const historySheet = page.getByTestId('bottom-sheet');
   await expect(historySheet).toBeVisible();
+  await expect(historySheet.getByTestId('buyer-trust-card')).toContainText('本场受反作弊保护');
   await historySheet.getByRole('button', { name: '我的出价' }).click();
   await historySheet.getByRole('button', { name: /刷新/ }).click();
   await expect(historySheet.getByText('出价 ¥450.00')).toBeVisible();
@@ -1719,8 +1724,9 @@ test('H5 bottom sheet history and orders use existing user APIs', async ({ page 
 
   await page.goto('/');
   await openBidPanel(page);
-  await page.getByLabel('bid-dock-shortcuts').getByRole('button', { name: '更多' }).click();
+  await page.getByLabel('bid-dock-shortcuts').getByRole('button', { name: '保护' }).click();
   const sheet = page.getByTestId('bottom-sheet');
+  await expect(sheet.getByTestId('buyer-trust-card')).toContainText('价格、倒计时和有效出价以服务端为准');
   await sheet.getByRole('button', { name: '我的出价' }).click();
   await sheet.getByRole('button', { name: /刷新/ }).click();
   await expect(sheet.getByText('出价 ¥450.00')).toBeVisible();

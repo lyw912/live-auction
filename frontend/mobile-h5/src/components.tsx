@@ -1056,7 +1056,7 @@ export function AuctionStatePanel({
         <button type="button" onClick={() => onOpenSheet('details')}>拍品与规则</button>
         <button type="button" onClick={() => onOpenSheet('leaderboard')}>出价榜</button>
         <button type="button" onClick={() => onOpenSheet('maxBid')}>自动加价</button>
-        <button type="button" onClick={() => onOpenSheet('more')}>更多</button>
+        <button type="button" onClick={() => onOpenSheet('more')}>保护</button>
       </div>
     </section>
   );
@@ -1170,7 +1170,7 @@ export function BottomSheet({
     orders: '我的订单',
     qa: '拍品问答',
     liveops: '互动福利',
-    more: '直播设置'
+    more: '直播保护'
   };
   useEffect(() => {
     if (!activeSheet) return undefined;
@@ -1279,7 +1279,6 @@ export function BottomSheet({
           {activeSheet === 'more' && (
             <MoreSheet
               followed={followed}
-              onClose={onClose}
               onOpenHistory={() => onOpenSheet('history')}
               onOpenLiveOps={() => onOpenSheet('liveops')}
               onOpenOrders={() => onOpenSheet('orders')}
@@ -1603,7 +1602,6 @@ function LeaderboardRows({ entries, burstMode = false }: { entries: NonNullable<
 
 export function MoreSheet({
   followed,
-  onClose,
   onOpenHistory,
   onOpenLiveOps,
   onOpenOrders,
@@ -1613,7 +1611,6 @@ export function MoreSheet({
   onToggleSound
 }: {
   followed: boolean;
-  onClose: () => void;
   onOpenHistory: () => void;
   onOpenLiveOps: () => void;
   onOpenOrders: () => void;
@@ -1625,8 +1622,12 @@ export function MoreSheet({
   return (
     <div className="more-sheet" data-testid="more-sheet">
       <div className="sheet-action-row">
-        <strong><Info size={16} /> 直播设置</strong>
-        <button type="button" onClick={onClose}>关闭</button>
+        <strong><ShieldCheck size={16} /> 直播保护</strong>
+      </div>
+      <div className="buyer-trust-card" data-testid="buyer-trust-card" role="status" aria-live="polite">
+        <span><ShieldCheck size={15} /> 本场受反作弊保护</span>
+        <strong>价格、倒计时和有效出价以服务端为准</strong>
+        <p>页面不展示虚构观看人数；热度只来自真实出价、榜单和互动任务。异常竞拍由商家端哨兵面板处理，不向买家泄露风控策略。</p>
       </div>
       <button type="button" onClick={onToggleFollow}>
         <ShieldCheck size={16} />
@@ -1652,7 +1653,7 @@ export function MoreSheet({
         <CreditCard size={16} />
         我的订单
       </button>
-      <p>页面只展示真实竞价数据；异常竞拍由商家端处理。</p>
+      <p>保护说明只披露买家可验证事实；不会承诺库存预留、相似拍品优先权或虚构人气。</p>
     </div>
   );
 }

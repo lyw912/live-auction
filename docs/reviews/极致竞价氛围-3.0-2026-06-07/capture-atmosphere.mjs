@@ -262,6 +262,14 @@ async function capture(width, file, options = {}) {
     await browser.close();
     return;
   }
+  if (options.trustCard) {
+    await page.getByRole('button', { name: '更多' }).click();
+    await expect(page.getByTestId('buyer-trust-card')).toContainText('本场受反作弊保护');
+    await expect(page.getByTestId('buyer-trust-card')).toContainText('页面不展示虚构观看人数');
+    await page.getByTestId('bottom-sheet').screenshot({ path: path.join(OUT, file) });
+    await browser.close();
+    return;
+  }
   await page.evaluate(() => {
     const [entry] = window.__auctionWS.filter(({ url }) => url.includes('/ws?'));
     entry.socket.dispatchServerMessage({
@@ -313,4 +321,5 @@ await capture(360, '10-final-seconds-layer-360.png', { finalSeconds: true });
 await capture(390, '11-winner-climax-card-390.png', { winner: true });
 await capture(360, '12-soft-close-plus20-360.png', { softClose: true });
 await capture(390, '13-climax-layer-390.png', { climax: true });
+await capture(390, '15-buyer-trust-card-390.png', { trustCard: true });
 console.log(JSON.stringify({ ok: true, out: OUT }, null, 2));

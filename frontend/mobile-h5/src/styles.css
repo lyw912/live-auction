@@ -2018,6 +2018,39 @@ button {
   font-weight: 900;
 }
 
+.buyer-trust-card {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid rgba(20, 184, 166, 0.28);
+  border-radius: var(--radius-md);
+  background: #f0fdfa;
+}
+
+.buyer-trust-card span,
+.buyer-trust-card strong {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #134e4a;
+}
+
+.buyer-trust-card span {
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.buyer-trust-card strong {
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.buyer-trust-card p {
+  padding: 0;
+  background: transparent;
+  color: #0f766e;
+}
+
 .more-sheet p {
   margin: 0;
   border-radius: var(--radius-md);
