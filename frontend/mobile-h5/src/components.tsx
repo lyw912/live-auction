@@ -1,9 +1,9 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, BadgeCheck, Bell, BellOff, CheckCircle2, ChevronUp, Clock3, CreditCard, Flame, Heart, History, Info, MessageCircle, MoreHorizontal, PackageCheck, RefreshCw, Send, ShieldCheck, ShoppingCart, Sparkles, Truck, Trophy, Users, Wifi, WifiOff, X } from 'lucide-react';
+import { AlertTriangle, BadgeCheck, Bell, BellOff, CheckCircle2, ChevronUp, Clock3, CreditCard, Flame, History, Info, MessageCircle, MoreHorizontal, PackageCheck, RefreshCw, Send, ShieldCheck, ShoppingCart, Sparkles, Truck, Trophy, Users, Wifi, WifiOff, X } from 'lucide-react';
 import CertificateIcon from '@icon-park/react/es/icons/Certificate';
 import CommentIcon from '@icon-park/react/es/icons/CommentOne';
-import HeartIcon from '@icon-park/react/es/icons/Heart';
 import JewelryIcon from '@icon-park/react/es/icons/Jewelry';
+import LikeIcon from '@icon-park/react/es/icons/Like';
 import MoreIcon from '@icon-park/react/es/icons/More';
 import ShoppingBagIcon from '@icon-park/react/es/icons/ShoppingBagOne';
 import SoundIcon from '@icon-park/react/es/icons/SoundOne';
@@ -232,7 +232,7 @@ export function LiveStage({
       <div className="live-action-rail" aria-label="live-actions">
         <button type="button" onClick={onOpenProducts} aria-label="商品列表"><ShoppingBagIcon className="action-rail-icon" size={26} theme="outline" fill={iconParkActionFill} strokeWidth={4} /><span className="live-action-badge">{queuedCount + 1}</span></button>
         <button type="button" onClick={onOpenLiveOps} aria-label="直播互动"><CommentIcon className="action-rail-icon" size={26} theme="outline" fill={iconParkActionFill} strokeWidth={4} /></button>
-        <button type="button" onClick={onLike} aria-label="点赞"><HeartIcon className="action-rail-icon" size={26} theme="outline" fill={iconParkActionFill} strokeWidth={4} /><span className="live-action-badge">{likeCount}</span></button>
+        <button type="button" onClick={onLike} aria-label="点赞"><LikeIcon className="action-rail-icon" size={26} theme="outline" fill={iconParkActionFill} strokeWidth={4} /><span className="live-action-badge">{likeCount}</span></button>
         <button type="button" onClick={onOpenMore} aria-label="更多"><MoreIcon className="action-rail-icon" size={26} theme="outline" fill={iconParkActionFill} strokeWidth={4} /></button>
       </div>
     </section>
