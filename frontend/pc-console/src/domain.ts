@@ -457,9 +457,9 @@ export function riskQueue(monitor: Record<string, MonitorPayload>, selectedAucti
   if (highAnomaly) {
     risks.push({
       level: String(highAnomaly.severity ?? '').toUpperCase() === 'CRITICAL' ? 'high' : 'med',
-      title: String(highAnomaly.type ?? 'Anomaly'),
-      body: String(highAnomaly.message ?? 'Open Anomalies and flight recorder before claiming room health.'),
-      source: 'system_anomaly_events'
+      title: '系统异常待确认',
+      body: String(highAnomaly.message ?? '先查看运行监控和事件回放，再继续强推成交。'),
+      source: '运行监控'
     });
   }
   const rejects = monitorItems(monitor.rejects).filter(auctionScoped);
@@ -467,9 +467,9 @@ export function riskQueue(monitor: Record<string, MonitorPayload>, selectedAucti
     const hot = rejects.some((row) => ['BID_AUCTION_TOO_HOT', 'RATE_LIMITED', 'PROCESSING_RETRY_LATER'].includes(String(row.reject_reason ?? row.code ?? '')));
     risks.push({
       level: hot ? 'high' : 'med',
-      title: hot ? 'Bid pressure throttle' : 'Rejected bid pressure',
-      body: `${rejects.length} recent reject rows; inspect reject_reason and user copy before prompting more bidding.`,
-      source: 'bids'
+      title: hot ? '出价过于密集' : '有无效出价',
+      body: `${rejects.length} 条无效出价记录；先确认买家提示和规则说明，再继续引导出价。`,
+      source: '出价记录'
     });
   }
   const recoveryRows = monitorItems(monitor.recovery).filter(auctionScoped);
@@ -482,9 +482,9 @@ export function riskQueue(monitor: Record<string, MonitorPayload>, selectedAucti
   if (recoveryTotal > 0) {
     risks.push({
       level: recoveryRows.some((row) => Number(row.snapshot_stale ?? 0) > 0 || Number(row.slow_consumer_disconnects ?? 0) > 0) ? 'high' : 'low',
-      title: 'Recovery pressure',
-      body: `${recoveryTotal} reconnect/stale/slow-consumer signals; avoid urging bids until recovery is stable.`,
-      source: 'user_activity_events'
+      title: '恢复链路有压力',
+      body: `${recoveryTotal} 条重连或慢客户端信号；确认买家端状态稳定后再催促出价。`,
+      source: '恢复记录'
     });
   }
   return risks.slice(0, 3);
@@ -497,7 +497,7 @@ export function connectionLabel(monitor: Record<string, MonitorPayload>, roomID:
   const stale = Number(row.snapshot_stale ?? 0);
   const slow = Number(row.slow_consumer_disconnects ?? 0);
   if (slow > 0) return `慢客户端断开 ${slow}`;
-  if (stale > 0) return `snapshot stale ${stale}`;
+  if (stale > 0) return `状态快照待刷新 ${stale}`;
   if (reconnects > 0) return `近期重连 ${reconnects}`;
   return '恢复链路正常';
 }

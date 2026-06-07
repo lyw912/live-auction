@@ -78,6 +78,43 @@ function formatLag(ms: number) {
   return `${Math.round(ms)} 毫秒`;
 }
 
+function eventKindLabel(value?: unknown) {
+  const key = String(value ?? '').toLowerCase();
+  if (key.includes('anomaly')) return '异常';
+  if (key.includes('auction_event')) return '竞拍事件';
+  if (key === 'bid') return '出价';
+  if (key === 'outbox') return '推送';
+  if (key === 'order') return '订单';
+  if (key.includes('payment')) return '支付';
+  if (key.includes('snapshot')) return '状态恢复';
+  return '事件';
+}
+
+function eventStatusLabel(value?: unknown) {
+  const key = String(value ?? '').toLowerCase();
+  if (!key || key === '-') return '已记录';
+  if (key.includes('rate_limit')) return '限流服务异常';
+  if (key.includes('redis_engine_accepted_public_seq_gap')) return '推送序号待恢复';
+  if (key.includes('bid_accepted')) return '出价已接受';
+  if (key.includes('bid_rejected')) return '出价被拒绝';
+  if (key.includes('auction_sold')) return '已落槌成交';
+  if (key.includes('auction_extended')) return '已自动延时';
+  if (key.includes('published')) return '已推送';
+  if (key.includes('accepted')) return '已接受';
+  if (key.includes('rejected')) return '已拒绝';
+  if (key.includes('failed')) return '失败';
+  if (key.includes('dead')) return '待人工处理';
+  return key.includes('_') ? '已记录' : String(value);
+}
+
+function eventReferenceLabel(event: Record<string, unknown>) {
+  if (event.seq !== undefined && event.seq !== null) return `事件 #${String(event.seq)}`;
+  if (event.trace_id) return `排查 ${String(event.trace_id).slice(0, 10)}`;
+  if (event.outbox_id) return `推送 #${String(event.outbox_id)}`;
+  if (event.order_id) return '订单记录';
+  return '-';
+}
+
 const monitorFieldLabels: Record<string, string> = {
   id: '排查编号',
   auction_id: '竞拍编号',
@@ -766,7 +803,6 @@ export function LiveAssistRail({
     );
   }
   const recovery = connectionLabel(monitor, selectedAuction.room_id);
-  const hasAnomaly = monitorCount(monitor.anomalies) > 0;
   const visiblePrompts = prompts.filter((prompt) => prompt.id && !dismissedPromptIDs.includes(prompt.id)).slice(0, 3);
   const topPrompt = visiblePrompts[0];
   const risks = riskQueue(monitor, selectedAuction);
@@ -919,22 +955,14 @@ export function LiveAssistRail({
           <div className="heat-unavailable">{heatLoading ? '正在读取真实聚合' : '热度聚合暂不可用'}</div>
         )}
       </div>
-      <div className="assist-grid">
+      <div className="assist-grid monitor-summary">
         <div>
           <span>恢复状态</span>
           <strong>{recovery}</strong>
         </div>
         <div>
-          <span>待推送</span>
-          <strong>{monitorCount(monitor.outbox)}</strong>
-        </div>
-        <div>
-          <span>无效出价</span>
-          <strong>{monitorCount(monitor.rejects)}</strong>
-        </div>
-        <div className={hasAnomaly ? 'risk' : ''}>
-          <span>风险</span>
-          <strong>{hasAnomaly ? `${monitorCount(monitor.anomalies)} 条异常` : '正常'}</strong>
+          <span>监控入口</span>
+          <strong>诊断页查看</strong>
         </div>
       </div>
       <div className="risk-queue" data-testid="risk-queue" role="status" aria-live="polite">
@@ -979,9 +1007,9 @@ export function EventTimeline({
         <div className="empty-state compact-empty">暂无最近事件</div>
       ) : events.map((event, index) => (
         <div className="recent-event-row" key={`${String(event.kind ?? event.event_type ?? 'event')}-${index}`}>
-          <Tag color={String(event.kind ?? event.event_type).includes('anomaly') ? 'red' : 'arcoblue'}>{String(event.kind ?? event.event_type ?? '-')}</Tag>
-          <span>{String(event.event_type ?? event.status ?? event.result ?? '-')}</span>
-          <code>{String(event.seq ?? event.trace_id ?? event.outbox_id ?? event.order_id ?? '-')}</code>
+          <Tag color={String(event.kind ?? event.event_type).includes('anomaly') ? 'red' : 'arcoblue'}>{eventKindLabel(event.kind ?? event.event_type)}</Tag>
+          <span>{eventStatusLabel(event.event_type ?? event.status ?? event.result)}</span>
+          <code>{eventReferenceLabel(event)}</code>
         </div>
       ))}
     </div>
