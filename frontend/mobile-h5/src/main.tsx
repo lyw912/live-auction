@@ -90,6 +90,7 @@ function App() {
   const reconnectTimerRef = useRef<number | null>(null);
   const reconnectAttemptRef = useRef(0);
   const recoveryInFlightRef = useRef(false);
+  const selectedRef = useRef(selected);
   const lastSeqRef = useRef(lastSeq);
   const currentPriceRef = useRef(currentPriceCents);
   const leaderMaskedRef = useRef(leaderMasked);
@@ -116,6 +117,10 @@ function App() {
   const activeCueRef = useRef<AtmosphereCue | null>(null);
   const countdownCueRef = useRef('');
   const spokenSystemMessageRef = useRef(0);
+
+  useEffect(() => {
+    selectedRef.current = selected;
+  }, [selected]);
 
   useEffect(() => {
     lastSeqRef.current = lastSeq;
@@ -897,21 +902,22 @@ function App() {
     setBidPhase('idle');
     const status = snapshot.payload?.status ?? snapshot.status;
     const winnerID = snapshot.payload?.current_winner_id ?? snapshot.current_winner_id;
-    if (status === 'SOLD') {
+    const syncSelected = !showStateMatrix || selectedRef.current === 'active_bids';
+    if (status === 'SOLD' && syncSelected) {
       setTerminalPriceCents(price);
       setTerminalWinnerID(winnerID ?? '');
       setSelected(winnerID === currentUserID ? 'sold_winner' : 'sold_loser');
       if (winnerID === currentUserID) {
         void loadPayableOrderForAuction(snapshotAuctionID ?? activeAuctionIDRef.current);
       }
-    } else if (status === 'ENDED') {
+    } else if (status === 'ENDED' && syncSelected) {
       setSelected('ended');
-    } else if (status === 'CANCELLED') {
+    } else if (status === 'CANCELLED' && syncSelected) {
       setSelected('cancelled');
       setBidFeedback(snapshot.payload?.reason ?? '主播已取消');
-    } else if (status === 'SCHEDULED' || status === 'DRAFT') {
+    } else if ((status === 'SCHEDULED' || status === 'DRAFT') && syncSelected) {
       setSelected('scheduled');
-    } else if (status === 'ACTIVE') {
+    } else if (status === 'ACTIVE' && syncSelected) {
       setSelected('active_bids');
     }
     void loadLeaderboard(snapshotAuctionID ?? activeAuctionIDRef.current);
@@ -922,7 +928,7 @@ function App() {
     if (!auctionID) return;
     if (recoveryInFlightRef.current) return;
     recoveryInFlightRef.current = true;
-    setSelected('active_bids');
+    if (!showStateMatrix || selectedRef.current === 'active_bids') setSelected('active_bids');
     setRecoveryPhase('recovering');
     setConnectionPhase((phase) => phase === 'disconnected' ? phase : 'recovering');
     try {
@@ -1824,7 +1830,11 @@ function App() {
           onDecreaseBid={decreaseBidAmount}
           onIncreaseBid={increaseBidAmount}
           onOpenOrders={() => setActiveSheet('orders')}
-          onOpenSheet={setActiveSheet}
+          onOpenSheet={(sheet) => {
+            if (sheet === 'products') openWarmupSheet('products', 'watch');
+            else if (sheet === 'leaderboard') openWarmupSheet('leaderboard', 'leaderboard');
+            else setActiveSheet(sheet);
+          }}
           onPay={payOrder}
           onPrimaryAction={handlePrimaryAction}
         />
@@ -1892,7 +1902,13 @@ function App() {
           onCancelMaxBid={cancelMaxBidIntent}
           onDecreaseMaxBid={decreaseMaxBidAmount}
           onIncreaseMaxBid={increaseMaxBidAmount}
-          onOpenSheet={setActiveSheet}
+          onOpenLeaderboard={() => openWarmupSheet('leaderboard', 'leaderboard')}
+          onOpenProducts={() => openWarmupSheet('products', 'watch')}
+          onOpenSheet={(sheet) => {
+            if (sheet === 'products') openWarmupSheet('products', 'watch');
+            else if (sheet === 'leaderboard') openWarmupSheet('leaderboard', 'leaderboard');
+            else setActiveSheet(sheet);
+          }}
           onRefreshHistory={loadHistory}
           onRefreshLeaderboard={() => void loadLeaderboard()}
           onRefreshMaxBid={() => void loadMaxBidIntent()}

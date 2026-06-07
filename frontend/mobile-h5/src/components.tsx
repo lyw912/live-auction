@@ -832,6 +832,8 @@ export function BottomSheet({
   onClose,
   onDecreaseMaxBid,
   onIncreaseMaxBid,
+  onOpenLeaderboard,
+  onOpenProducts,
   onOpenSheet,
   onRefreshHistory,
   onRefreshLeaderboard,
@@ -879,6 +881,8 @@ export function BottomSheet({
   onClose: () => void;
   onDecreaseMaxBid: () => void;
   onIncreaseMaxBid: () => void;
+  onOpenLeaderboard?: () => void;
+  onOpenProducts?: () => void;
   onOpenSheet: (sheet: BottomSheetKey) => void;
   onRefreshHistory: () => void;
   onRefreshLeaderboard: () => void;
@@ -999,9 +1003,9 @@ export function BottomSheet({
               liveOpsError={liveOpsError}
               likeCount={likeCount}
               scenario={scenario}
-              onOpenProducts={() => onOpenSheet('products')}
+              onOpenProducts={onOpenProducts ?? (() => onOpenSheet('products'))}
               onOpenQA={() => onOpenSheet('qa')}
-              onOpenLeaderboard={() => onOpenSheet('leaderboard')}
+              onOpenLeaderboard={onOpenLeaderboard ?? (() => onOpenSheet('leaderboard'))}
               onEnterLuckyDraw={onEnterLuckyDraw}
               onOpenLuckyDraw={onOpenLuckyDraw}
               onSelectTeam={onSelectTeam}

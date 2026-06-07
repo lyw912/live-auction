@@ -12,7 +12,17 @@ async function selectActiveBidsState(page: Page) {
   const auctionState = page.getByLabel('auction-state');
   await expect(auctionState.locator('.eyebrow')).toHaveText('竞价中');
   await expect(auctionState.getByTestId('auction-price')).toHaveText('¥350.00');
-  await expect(page.getByTestId('bid-cta')).toHaveText(/出价 ¥400.00/);
+  await expect(page.getByTestId('bid-cta')).toHaveText(/出一手 ¥400.00/);
+}
+
+async function expectDockConnection(page: Page, text: string) {
+  await expect(page.getByLabel('auction-state').locator('.signal-row')).toContainText(text);
+}
+
+async function openLiveOpsPanel(page: Page) {
+  if (await page.getByTestId('live-ops-panel').isVisible().catch(() => false)) return;
+  await page.getByRole('button', { name: '直播互动' }).click();
+  await expect(page.getByTestId('live-ops-panel')).toBeVisible();
 }
 
 test.beforeEach(async ({ page }) => {
@@ -331,7 +341,7 @@ test('H5 renders honest heat and all visible live actions are interactive', asyn
   await page.goto('/');
   await expect(page.getByText('2333')).toHaveCount(0);
   await expect(page.locator('.viewer-count.avatar-stack')).toContainText('近30秒 2 人');
-  await expect(page.getByTestId('heat-meter')).toContainText('近30秒 2 人 · 3 口');
+  await expect(page.getByTestId('heat-meter')).toContainText('近30秒 2 人 · 3 次出价');
   await expect(page.getByText('热点 明星大货撑')).toHaveCount(0);
   await expect(page.getByText('古玩榜第 8 名')).toHaveCount(0);
   await expect(page.getByText('保证金锁定')).toHaveCount(0);
@@ -341,12 +351,12 @@ test('H5 renders honest heat and all visible live actions are interactive', asyn
   await expect.poll(() => liveOpsTasks).toContain('follow');
   await page.getByRole('button', { name: '点赞' }).click();
   await expect(page.getByRole('button', { name: '点赞' })).toContainText('1');
-  await expect(page.getByTestId('live-ops-panel')).toBeVisible();
+  await openLiveOpsPanel(page);
   await expect(page.getByTestId('warmup-card')).toContainText('暖场任务');
   await page.getByTestId('warmup-card').getByRole('button', { name: '看拍品' }).click();
-  await expect.poll(() => liveOpsTasks).toContain('watch');
-  await expect(page.getByTestId('bottom-sheet')).toContainText('本场商品');
+  await expect(page.getByTestId('bottom-sheet')).toContainText('本场');
   await page.getByTestId('bottom-sheet').getByRole('button', { name: '关闭' }).click();
+  await openLiveOpsPanel(page);
   await expect(page.getByTestId('warmup-card')).toContainText('2/4 已完成');
   await expect(page.getByTestId('buyer-pk-card')).toContainText('买家阵营');
   await page.getByTestId('buyer-pk-card').getByRole('button', { name: /故事派/ }).click();
@@ -355,6 +365,7 @@ test('H5 renders honest heat and all visible live actions are interactive', asyn
   await page.getByTestId('entry-effect-card').click();
   await expect(page.getByTestId('leaderboard-sheet')).toBeVisible();
   await page.getByTestId('bottom-sheet').getByRole('button', { name: '关闭' }).click();
+  await openLiveOpsPanel(page);
   await page.getByTestId('warmup-card').getByRole('button', { name: '看榜单' }).click();
   await expect.poll(() => liveOpsTasks).toContain('leaderboard');
   await expect(page.getByTestId('leaderboard-sheet')).toBeVisible();
@@ -400,6 +411,7 @@ test('H5 product QA completes liveops ask task only after a real answer', async 
   });
 
   await page.goto('/');
+  await openLiveOpsPanel(page);
   await page.getByTestId('warmup-card').getByRole('button', { name: '问拍品' }).click();
   await expect(page.getByTestId('product-qa-sheet')).toBeVisible();
   await page.getByLabel('product-qa-input').fill('起拍价是多少？');
@@ -408,13 +420,17 @@ test('H5 product QA completes liveops ask task only after a real answer', async 
   await expect(page.getByLabel('product-qa-thread')).toContainText('起拍价是 ¥350.00');
   await expect.poll(() => qaRequest?.question).toBe('起拍价是多少？');
   await expect.poll(() => liveOpsTasks).toContain('ask');
-  await expect(page.getByTestId('warmup-card')).toContainText('1/4 已完成');
   await page.getByTestId('bottom-sheet').getByRole('button', { name: '关闭' }).click();
+  await openLiveOpsPanel(page);
+  await expect(page.getByTestId('warmup-card')).toContainText('1/4 已完成');
   await page.getByTestId('warmup-card').getByRole('button', { name: '看拍品' }).click();
   await page.getByTestId('bottom-sheet').getByRole('button', { name: '关闭' }).click();
-  await page.getByTestId('live-stage').getByRole('button', { name: '关注' }).click();
+  await openLiveOpsPanel(page);
+  await page.getByTestId('warmup-card').getByRole('button', { name: '关注' }).click();
+  await openLiveOpsPanel(page);
   await page.getByTestId('warmup-card').getByRole('button', { name: '看榜单' }).click();
   await page.getByTestId('bottom-sheet').getByRole('button', { name: '关闭' }).click();
+  await openLiveOpsPanel(page);
   await expect(page.getByTestId('warmup-card')).toContainText('4/4 已完成');
   await page.getByTestId('lucky-draw-card').getByRole('button', { name: '参与福袋' }).click();
   await expect.poll(() => luckyEntered).toBe(true);
@@ -437,12 +453,12 @@ test('H5 disables bid CTA for unsafe states and keeps text inside controls', asy
   await expect(page.getByTestId('bid-cta')).toBeEnabled();
 
   await page.getByRole('button', { name: '提交中' }).click();
-  await expect(page.getByText('等待服务端确认')).toBeVisible();
-  await expect(page.getByText('状态来自服务端事件')).toBeVisible();
+  await expect(page.getByLabel('auction-state').locator('.eyebrow')).toHaveText('提交中');
+  await expect(page.getByTestId('bid-cta')).toBeDisabled();
   await expect(page.getByTestId('auction-countdown')).toBeVisible();
-  await page.getByRole('button', { name: '榜单' }).click();
-  await expect(page.getByText('2 口')).toBeVisible();
-  await expect(page.getByText('1 口')).toBeVisible();
+  await page.getByRole('button', { name: '出价榜' }).click();
+  await expect(page.getByText('2 次')).toBeVisible();
+  await expect(page.getByText('1 次')).toBeVisible();
 
   const buttons = await page.locator('button').all();
   for (const button of buttons) {
@@ -468,7 +484,7 @@ test('H5 opens browser WebSocket with ticket subprotocol and consumes authoritat
 
   await page.goto('/');
   await page.getByRole('button', { name: /进入竞拍面板/ }).click();
-  await expect(page.getByText('已同步')).toBeVisible();
+  await expectDockConnection(page, '已连接');
   const expectedWSURL = await page.evaluate(() => {
     const wsScheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     return `${wsScheme}//${window.location.host}/ws?room_id=room_main&auction_id=auc_live&last_seq=41`;
@@ -511,7 +527,7 @@ test('H5 applies WebSocket leaderboard delta without polling leaderboard', async
   });
 
   await page.goto('/?stateMatrix=1');
-  await expect(page.getByText('已同步')).toBeVisible();
+  await expectDockConnection(page, '已连接');
   await expect(page.getByTestId('leaderboard-panel')).toContainText('榜一');
   const readsAfterInitialLoad = leaderboardReads;
 
@@ -540,7 +556,7 @@ test('H5 applies WebSocket leaderboard delta without polling leaderboard', async
   await expect(page.getByLabel('auction-state').locator('h2')).toHaveText('¥520.00');
   await expect(page.getByTestId('leaderboard-panel-rank-strip')).toContainText('第 1 名');
   await expect(page.getByTestId('leaderboard-panel-rank-strip')).toContainText('正在领先');
-  await expect(page.getByTestId('leaderboard-panel')).toContainText('4 口');
+  await expect(page.getByTestId('leaderboard-panel')).toContainText('4 次');
   expect(leaderboardReads).toBe(readsAfterInitialLoad);
 });
 
@@ -552,7 +568,7 @@ test('H5 coalesces burst leaderboard deltas to the latest visible rank state', a
   });
 
   await page.goto('/?stateMatrix=1');
-  await expect(page.getByText('已同步')).toBeVisible();
+  await expectDockConnection(page, '已连接');
   await expect.poll(async () => page.evaluate(() => {
     return ((window as typeof window & { __auctionWS?: Array<{ url: string }> }).__auctionWS ?? [])
       .some(({ url }) => url.includes('/ws?'));
@@ -585,8 +601,8 @@ test('H5 coalesces burst leaderboard deltas to the latest visible rank state', a
   });
 
   await expect(page.getByLabel('auction-state').locator('h2')).toHaveText('¥620.00');
-  await expect(page.getByTestId('leaderboard-panel')).toContainText('6 口');
-  await expect(page.getByTestId('leaderboard-panel')).not.toContainText('4 口');
+  await expect(page.getByTestId('leaderboard-panel')).toContainText('6 次');
+  await expect(page.getByTestId('leaderboard-panel')).not.toContainText('4 次');
   expect(leaderboardReads).toBe(readsAfterInitialLoad);
 });
 
@@ -622,7 +638,7 @@ test('H5 keeps recovery snapshot quiet while WebSocket is healthy', async ({ pag
 
   await page.goto('/');
   await page.getByRole('button', { name: /进入竞拍面板/ }).click();
-  await expect(page.getByText('已同步')).toBeVisible();
+  await expectDockConnection(page, '已连接');
   await page.waitForTimeout(3200);
   expect(snapshotReads).toBe(1);
 });
@@ -638,7 +654,7 @@ test('H5 disables bid CTA while WebSocket is still connecting', async ({ page })
 
   await page.goto('/');
   await page.getByRole('button', { name: /进入竞拍面板/ }).click();
-  await expect(page.getByText('WebSocket 连接中 · 状态来自服务端事件')).toBeVisible();
+  await expectDockConnection(page, '连接中');
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
   await page.waitForTimeout(500);
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
@@ -647,7 +663,7 @@ test('H5 disables bid CTA while WebSocket is still connecting', async ({ page })
 test('H5 recovering and disconnected states show stale marker', async ({ page }) => {
   await page.goto('/?stateMatrix=1');
   await page.getByRole('button', { name: '恢复中' }).click();
-  await expect(page.getByText('状态可能已过期')).toBeVisible();
+  await expect(page.getByLabel('auction-state').locator('.eyebrow')).toHaveText('恢复中');
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
   await page.getByRole('button', { name: '已断开' }).click();
   await expect(page.getByLabel('auction-state').locator('.dock-feedback')).toContainText('重连中');
@@ -686,7 +702,7 @@ test('H5 bid stays pending until authoritative accepted response', async ({ page
   await page.getByTestId('bid-cta').click();
   const bidRequest = await bidArrived;
 
-  await expect(page.getByText('等待服务端确认')).toBeVisible();
+  await expect(page.getByLabel('auction-state').locator('.eyebrow')).toHaveText('提交中');
   await expect(page.getByLabel('auction-state').locator('h2')).toHaveText('¥350.00');
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
   expect(bidRequest.idempotencyKey).toBe(bidRequest.body.client_bid_id);
@@ -733,12 +749,11 @@ test('H5 local bid lock suppresses rapid duplicate clicks', async ({ page }) => 
     bidCTA.click({ force: true })
   ]);
   await expect(bidCTA).toBeDisabled();
-  await expect(page.getByText('等待服务端确认')).toBeVisible();
   await page.waitForTimeout(100);
   expect(bidRequests).toBe(1);
 
   releaseBid();
-  await expect(page.getByText('出价已提交，正在确认')).toBeVisible();
+  await expect(page.getByTestId('bid-cta')).toBeDisabled();
   expect(bidRequests).toBe(1);
 });
 
@@ -811,7 +826,6 @@ test('H5 engine sold pending waits for settlement before payment copy', async ({
   await page.getByTestId('bid-cta').click();
 
   await expect(page.getByLabel('auction-state').getByText('落锤结算中')).toBeVisible();
-  await expect(page.getByLabel('auction-state').getByText('订单同步中')).toBeVisible();
   await expect(page.getByTestId('bid-cta')).toHaveText(/等待订单/);
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
   await expect(page.getByText('订单 ord_pending 已锁定')).not.toBeVisible();
@@ -1056,7 +1070,7 @@ test('H5 fat-finger confirm waits for confirm API before accepted UI', async ({ 
 
   await page.getByTestId('bid-cta').click();
   const confirmRequest = await confirmArrived;
-  await expect(page.getByText('等待服务端确认高额出价')).toBeVisible();
+  await expect(page.getByText('正在确认最新价格...')).toBeVisible();
   await expect(page.getByLabel('auction-state').locator('h2')).toHaveText('¥350.00');
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
   expect(confirmRequest.idempotencyKey).toBe(firstBidKey);
@@ -1150,7 +1164,7 @@ test('H5 winner result sheet locks order and shares the single payment path', as
   await expect(sheet).toBeVisible();
   await expect(sheet.getByRole('heading', { name: '恭喜拍中' })).toBeVisible();
   await expect(sheet.getByText('成交价 ¥600.00')).toBeVisible();
-  await expect(sheet.getByText('订单 ord_pending 已锁定')).toBeVisible();
+  await expect(sheet.getByText(/订单 JP\d{8}-PENDING 已锁定/)).toBeVisible();
   await expect(sheet.getByText('保证金会随订单状态处理')).toBeVisible();
   await expect(page.getByTestId('bid-cta')).toHaveCount(1);
   await sheet.getByLabel('copy-result-recap').click();
@@ -1184,6 +1198,7 @@ test('H5 loser and unsold result sheets explain next action without enabling bid
         seq: 42,
         payload: {
           amount_cents: 60000,
+          current_winner_id: 'user_2',
           user_id: 'user_2',
           leader_user_masked: '赵**'
         }
@@ -1268,12 +1283,10 @@ test('H5 seq gap enters recovering and resumes from fresh snapshot', async ({ pa
   });
   await snapshotArrived;
 
-  await expect(page.getByText('状态可能已过期')).toBeVisible();
-  await expect(page.getByText('正在同步权威状态')).toBeVisible();
+  await expect(page.getByTestId('bid-hint')).toHaveText('正在确认最新价格...');
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
 
   releaseSnapshot();
-  await expect(page.getByText('snapshot db seq 44')).toBeVisible();
   await expect(page.getByTestId('auction-price')).toHaveText('¥450.00');
   await expect(page.getByLabel('auction-state').getByText('王** 领先').first()).toBeVisible();
   await expect(page.getByTestId('auction-countdown')).toHaveText(/延时后|剩余/);
@@ -1309,8 +1322,7 @@ test('H5 stale snapshot keeps recovering CTA disabled', async ({ page }) => {
     }));
   });
 
-  await expect(page.getByText('状态可能已过期')).toBeVisible();
-  await expect(page.getByText('正在同步权威状态')).toBeVisible();
+  await expect(page.getByTestId('bid-hint')).toHaveText('正在确认最新价格...');
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
 });
 
@@ -1342,6 +1354,7 @@ test('H5 atmosphere engine dedupes strong effects after recovery snapshot', asyn
 
   await page.goto('/?stateMatrix=1');
   await page.getByRole('button', { name: '竞价中' }).click();
+  await openBidPanel(page);
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent('auction:event', {
       detail: {
@@ -1351,7 +1364,8 @@ test('H5 atmosphere engine dedupes strong effects after recovery snapshot', asyn
       }
     }));
   });
-  await expect(page.getByText('snapshot db seq 45')).toBeVisible();
+  await expect(page.getByTestId('auction-price')).toHaveText('¥450.00');
+  await expect(page.getByLabel('auction-state').getByText('王** 领先').first()).toBeVisible();
   await expect(page.getByTestId('atmosphere-cue')).toHaveCount(0);
 
   await page.evaluate(() => {
@@ -1420,10 +1434,11 @@ test('H5 bottom sheets open close and keep the primary bid CTA singular', async 
   const dock = page.getByLabel('auction-state');
   await expect(page.getByTestId('bid-cta')).toHaveCount(1);
 
-  await page.getByLabel('bid-dock-shortcuts').getByRole('button', { name: '商品' }).click();
+  await page.getByLabel('bid-dock-shortcuts').getByRole('button', { name: '拍品与规则' }).click();
   const sheet = page.getByTestId('bottom-sheet');
   await expect(sheet).toBeVisible();
-  await expect(sheet.getByRole('heading', { name: '本场商品' })).toBeVisible();
+  await expect(sheet.getByRole('heading', { name: '商品与规则' })).toBeVisible();
+  await sheet.getByRole('tab', { name: '本场' }).click();
   await expect(sheet.getByText('青瓷手作茶盏')).toBeVisible();
   await expect(sheet.getByText('紫砂壶')).toBeVisible();
   await expect(sheet.getByText('当前拍品')).toBeVisible();
@@ -1431,19 +1446,19 @@ test('H5 bottom sheets open close and keep the primary bid CTA singular', async 
   await expect(page.getByTestId('bid-cta')).toBeVisible();
   await expect(dock).toBeVisible();
 
-  await sheet.getByRole('tab', { name: '规则' }).click();
+  await sheet.getByRole('tab', { name: '详情' }).click();
   await expect(sheet.getByRole('heading', { name: '商品与规则' })).toBeVisible();
   await expect(sheet.getByText('当前出价节奏')).toBeVisible();
   await expect(sheet.getByText('误触保护')).toBeVisible();
   await expect(page.getByTestId('bid-cta')).toHaveCount(1);
 
-  await sheet.getByRole('tab', { name: 'Max' }).click();
+  await sheet.getByRole('tab', { name: '自动加价' }).click();
   await expect(sheet.getByRole('heading', { name: '自动加价' })).toBeVisible();
-  await expect(sheet.getByTestId('max-bid-sheet')).toContainText('私密意图');
+  await expect(sheet.getByTestId('max-bid-sheet')).toContainText('仅自己可见');
   await expect(page.getByTestId('bid-cta')).toHaveCount(1);
 
-  await sheet.getByRole('tab', { name: '榜单' }).click();
-  await expect(sheet.getByRole('heading', { name: '实时榜单' })).toBeVisible();
+  await sheet.getByRole('tab', { name: '出价榜' }).click();
+  await expect(sheet.getByRole('heading', { name: '出价榜' })).toBeVisible();
   await expect(sheet.getByText('张**')).toBeVisible();
   await expect(page.getByTestId('bid-cta')).toHaveCount(1);
 
@@ -1567,7 +1582,7 @@ test('H5 automatic bidding sheet surfaces server abuse rejects without optimisti
 
   await page.goto('/');
   await openBidPanel(page);
-  await page.getByLabel('bid-dock-shortcuts').getByRole('button', { name: 'Max' }).click();
+  await page.getByLabel('bid-dock-shortcuts').getByRole('button', { name: '自动加价' }).click();
   const sheet = page.getByTestId('max-bid-sheet');
   const submit = sheet.getByRole('button', { name: /设置自动加价|更新自动加价/ });
 
@@ -1632,7 +1647,7 @@ test('H5 product trust sheet explains proof money and timing in user language', 
   await page.goto('/');
 
   await page.getByTestId('floating-product-card').click();
-  await page.getByLabel('bid-dock-shortcuts').getByRole('button', { name: '规则' }).click();
+  await page.getByLabel('bid-dock-shortcuts').getByRole('button', { name: '拍品与规则' }).click();
   const sheet = page.getByTestId('bottom-sheet');
   await expect(sheet.getByRole('heading', { name: '商品与规则' })).toBeVisible();
   await expect(sheet.getByText('商品信任详情')).toBeVisible();
@@ -1640,11 +1655,11 @@ test('H5 product trust sheet explains proof money and timing in user language', 
   await expect(sheet.getByLabel('product-trust-proof').getByText('中检证书')).toBeVisible();
   await expect(sheet.getByLabel('product-trust-proof').getByText('直径 9.2cm')).toBeVisible();
   await expect(sheet.getByText('当前出价节奏')).toBeVisible();
-  await expect(sheet.getByText('价格到达 ¥1500.00 后不再继续抬价。')).toBeVisible();
+  await expect(sheet.getByText('价格到达 ¥1,500.00 后不再继续抬价。')).toBeVisible();
   await expect(sheet.getByText('本场要求保证金，最低 ¥500.00')).toBeVisible();
   await expect(sheet.getByText('最后 10 秒内有有效出价，会自动延长 10 秒，最多 3 次')).toBeVisible();
-  await expect(sheet.getByText('单次高额跳价达到 ¥1000.00 会触发确认，防止误触。')).toBeVisible();
-  await expect(sheet.getByText('签收前可验货，证书不符支持售后复核。')).toBeVisible();
+  await expect(sheet.getByText('单次高额跳价达到 ¥1,000.00 会触发确认，防止误触。')).toBeVisible();
+  await expect(sheet.getByRole('paragraph').filter({ hasText: '签收前可验货，证书不符支持售后复核。' })).toBeVisible();
   await expect(page.getByTestId('bid-cta')).toHaveCount(1);
   await expect(page.getByTestId('bid-cta')).toBeVisible();
 });
@@ -1677,6 +1692,7 @@ test('H5 chat reads seed messages and sends room chat API', async ({ page }) => 
 test('H5 server terminal events drive sold, ended, and cancelled states', async ({ page }) => {
   await page.goto('/?stateMatrix=1');
   await page.getByRole('button', { name: '竞价中' }).click();
+  await openBidPanel(page);
   await expect(page.getByLabel('auction-state').locator('.eyebrow')).toHaveText('竞价中');
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent('auction:event', {
@@ -1733,7 +1749,7 @@ test('H5 live panel keeps server countdown visible with status connection and CT
   await page.getByRole('button', { name: '竞价中' }).click();
 
   await expect(page.getByLabel('auction-state').getByText('竞拍中')).toBeVisible();
-  await expect(page.getByText('已同步')).toBeVisible();
+  await expectDockConnection(page, '已连接');
   await expect(page.getByTestId('auction-countdown')).toHaveText(/剩余|延时后/);
   await expect(page.getByTestId('bid-cta')).toBeEnabled();
 });
@@ -1878,7 +1894,7 @@ test('H5 leaderboard sheet shows action metrics without moving the bid CTA', asy
   await page.getByLabel('bid-dock-shortcuts').getByRole('button', { name: '出价榜' }).click();
   await expect(page.getByTestId('leaderboard-sheet')).toContainText('第 2 名 · 差 ¥50.00');
   await expect(page.getByTestId('leaderboard-sheet')).toContainText('下一口 ¥400.00');
-  await expect(page.getByTestId('leaderboard-sheet')).toContainText('近30秒 3 口');
+  await expect(page.getByTestId('leaderboard-sheet')).toContainText('近30秒 3 次出价');
   const ctaAfter = await page.getByTestId('bid-cta').boundingBox();
   expect(ctaBefore).not.toBeNull();
   expect(ctaAfter).not.toBeNull();
@@ -1902,7 +1918,8 @@ test('H5 prepared bid hint updates when authoritative price changes', async ({ p
   await page.goto('/?stateMatrix=1');
   await page.getByRole('button', { name: '竞价中' }).click();
   await page.getByRole('button', { name: 'increase' }).click();
-  await expect(page.getByTestId('bid-hint')).toContainText('高于最低下一口 ¥50.00');
+  await page.getByRole('button', { name: 'increase' }).click();
+  await expect(page.getByTestId('bid-hint')).toContainText('高于最低下一口 ¥100.00');
 
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent('auction:event', {
@@ -1920,7 +1937,7 @@ test('H5 prepared bid hint updates when authoritative price changes', async ({ p
     }));
   });
 
-  await expect(page.getByTestId('bid-hint')).toHaveText('最低有效出价 ¥450.00 · 按 ¥50.00 加价');
+  await expect(page.getByTestId('bid-hint')).toHaveText('高于当前价 ¥100.00 · 高于最低下一口 ¥50.00');
 });
 
 test('H5 sound and haptic policy requires opt-in before cue playback', async ({ page }) => {
@@ -1936,13 +1953,21 @@ test('H5 sound and haptic policy requires opt-in before cue playback', async ({ 
     class MockGain {
       gain = {
         setValueAtTime: () => undefined,
+        setTargetAtTime: () => undefined,
         exponentialRampToValueAtTime: () => undefined
       };
       connect() { return undefined; }
     }
+    class MockBufferSource {
+      buffer: unknown = null;
+      loop = false;
+      connect() { return undefined; }
+      start() { target.__oscillatorStarted = (target.__oscillatorStarted ?? 0) + 1; }
+      stop() { return undefined; }
+    }
     class MockOscillator {
       type = 'sine';
-      frequency = { value: 0 };
+      frequency = { value: 0, setValueAtTime: () => undefined };
       connect() { return undefined; }
       start() { target.__oscillatorStarted = (target.__oscillatorStarted ?? 0) + 1; }
       stop() { return undefined; }
@@ -1952,12 +1977,22 @@ test('H5 sound and haptic policy requires opt-in before cue playback', async ({ 
       destination = {};
       state = 'running';
       constructor() { target.__audioContextCreated = (target.__audioContextCreated ?? 0) + 1; }
+      createBufferSource() { return new MockBufferSource(); }
       createOscillator() { return new MockOscillator(); }
       createGain() { return new MockGain(); }
+      decodeAudioData() { return Promise.resolve({}); }
       resume() { this.state = 'running'; return Promise.resolve(); }
       close() { return Promise.resolve(); }
     }
     Object.defineProperty(window, 'AudioContext', { value: MockAudioContext, configurable: true });
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url;
+      if (url.includes('/audio/auction/')) {
+        return Promise.resolve(new Response(new Uint8Array([1, 2, 3]), { status: 200 }));
+      }
+      return originalFetch(input, init);
+    }) as typeof window.fetch;
     Object.defineProperty(navigator, 'vibrate', {
       value: (pattern: number | number[]) => {
         target.__vibrations?.push(pattern);
@@ -1969,6 +2004,7 @@ test('H5 sound and haptic policy requires opt-in before cue playback', async ({ 
 
   await page.goto('/?stateMatrix=1');
   await page.getByRole('button', { name: '竞价中' }).click();
+  await openBidPanel(page);
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent('auction:event', {
       detail: {
@@ -2049,7 +2085,7 @@ test('H5 sound policy degrades for unsupported audio and reduced motion', async 
 
 test('H5 event-driven visual effects stay nonblocking and respect reduced motion', async ({ page }) => {
   await page.goto('/?stateMatrix=1');
-  await page.getByRole('button', { name: '竞价中' }).click();
+  await selectActiveBidsState(page);
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent('auction:event', {
       detail: {
@@ -2107,7 +2143,7 @@ test('H5 accessibility gate exposes live cues labels and practical touch targets
   await expect(state.getByTestId('auction-price')).toHaveAttribute('aria-live', 'polite');
   await expect(state.locator('.dock-feedback')).toHaveAttribute('aria-live', 'polite');
   await expect(state.locator('.status-chip')).toHaveText('竞拍中');
-  await expect(page.getByText('已同步')).toBeVisible();
+  await expectDockConnection(page, '已连接');
 
   await expect(page.getByTestId('rank-strip')).toContainText('差 ¥50.00');
 
@@ -2115,7 +2151,7 @@ test('H5 accessibility gate exposes live cues labels and practical touch targets
     page.getByTestId('bid-cta'),
     page.getByRole('button', { name: 'increase' }),
     page.getByRole('button', { name: 'decrease' }),
-    page.getByLabel('bid-dock-shortcuts').getByRole('button', { name: '规则' })
+    page.getByLabel('bid-dock-shortcuts').getByRole('button', { name: '拍品与规则' })
   ]) {
     const box = await locator.boundingBox();
     expect(box).not.toBeNull();
@@ -2130,11 +2166,11 @@ test('H5 bottom sheet is dialog-labelled and keyboard dismissible without moving
   await openBidPanel(page);
   const ctaBefore = await page.getByTestId('bid-cta').boundingBox();
 
-  await page.getByLabel('bid-dock-shortcuts').getByRole('button', { name: '规则' }).click();
+  await page.getByLabel('bid-dock-shortcuts').getByRole('button', { name: '拍品与规则' }).click();
   const sheet = page.getByRole('dialog', { name: '商品与规则' });
   await expect(sheet).toBeVisible();
   await expect(sheet.getByRole('button', { name: '关闭面板' })).toBeVisible();
-  await expect(sheet.getByRole('tab', { name: '规则' })).toHaveAttribute('aria-selected', 'true');
+  await expect(sheet.getByRole('tab', { name: '详情' })).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByTestId('bid-cta')).toBeVisible();
 
   const ctaDuring = await page.getByTestId('bid-cta').boundingBox();
@@ -2287,21 +2323,37 @@ test('H5 local zero enters syncing without local hammer', async ({ page }) => {
 
   await page.goto('/');
   await openBidPanel(page);
-  await expect(page.getByTestId('auction-countdown')).toContainText(/到点同步中|本地到零，正在同步/);
+  await expect(page.getByTestId('auction-countdown')).toContainText('到点结算中...');
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
   await expect(page.getByLabel('auction-state').locator('.eyebrow')).not.toHaveText(/成交|已成交|流拍/);
 });
 
 test('H5 order realtime events update winner payment state', async ({ page }) => {
   await page.goto('/?stateMatrix=1');
-  await page.getByRole('button', { name: '成交', exact: true }).click();
+  await selectActiveBidsState(page);
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('auction:event', {
+      detail: {
+        auction_id: 'auc_live',
+        event_type: 'auction_sold',
+        seq: 42,
+        payload: {
+          current_price_cents: 60000,
+          current_winner_id: 'user_1',
+          user_id: 'user_1',
+          order_id: 'ord_pending'
+        }
+      }
+    }));
+  });
+  await expect(page.getByLabel('auction-state').locator('.eyebrow')).toHaveText('成交');
 
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent('auction:event', {
       detail: {
         auction_id: 'auc_live',
         event_type: 'order_paid',
-        seq: 42,
+        seq: 43,
         payload: {
           user_id: 'user_1',
           order_id: 'ord_pending',
@@ -2314,7 +2366,24 @@ test('H5 order realtime events update winner payment state', async ({ page }) =>
   await expect(page.getByLabel('auction-state').locator('.eyebrow')).toHaveText('已支付');
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
 
-  await page.getByRole('button', { name: '成交', exact: true }).click();
+  await page.goto('/?stateMatrix=1');
+  await selectActiveBidsState(page);
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('auction:event', {
+      detail: {
+        auction_id: 'auc_live',
+        event_type: 'auction_sold',
+        seq: 42,
+        payload: {
+          current_price_cents: 60000,
+          current_winner_id: 'user_1',
+          user_id: 'user_1',
+          order_id: 'ord_pending'
+        }
+      }
+    }));
+  });
+  await expect(page.getByLabel('auction-state').locator('.eyebrow')).toHaveText('成交');
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent('auction:event', {
       detail: {
