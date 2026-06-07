@@ -15,7 +15,7 @@ const auctionLive = {
   accepted_bid_count: 18,
   extend_count: 0,
   end_at: '2026-05-22T14:00:00Z',
-  item: { id: 'item_live', title: '天然翡翠A货平安扣吊坠', description: '附GID证书，可核验，支持 7 天无理由。' },
+  item: { id: 'item_live', title: '天然翡翠A货平安扣吊坠', image_url: '/demo/jade-pendant.jpg', description: '附GID证书，可核验，支持 7 天无理由。' },
   rule: {
     duration_seconds: 600,
     extend_window_seconds: 10,
@@ -340,6 +340,10 @@ test('PC console renders live API auctions, orders, and expanded diagnostic pane
   await expect(page.getByLabel('monitor-anomaly-type')).toBeVisible();
   await page.getByRole('button', { name: '开播中控', exact: true }).click();
   await expect(page.getByTestId('auction-control-summary')).toBeVisible();
+  await expect(page.getByTestId('pc-current-media')).toBeVisible();
+  await expect(page.getByTestId('pc-current-media').getByText('直播视频预览')).toBeVisible();
+  await expect.poll(async () => page.getByTestId('pc-current-media').locator('img').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0);
+  await expect.poll(async () => page.getByTestId('pc-current-media').locator('video').evaluate((video: HTMLVideoElement) => video.readyState)).toBeGreaterThan(0);
   await expect(page.getByTestId('auction-control-summary').getByText('当前价')).toBeVisible();
   await expect(page.getByTestId('auction-control-summary').getByText(/服务端倒计时/)).toBeVisible();
   await expect(page.getByTestId('auction-control-summary').getByText('延时次数')).toBeVisible();

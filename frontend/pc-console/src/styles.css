@@ -487,6 +487,7 @@ body {
 }
 
 .command-media {
+  position: relative;
   min-height: 164px;
   border-radius: var(--radius-md);
   background: var(--color-ink-900);
@@ -495,6 +496,44 @@ body {
   align-items: center;
   justify-content: center;
   overflow: hidden;
+}
+
+.command-media.has-media {
+  background: var(--color-surface-2);
+}
+
+.command-video-preview {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  border-radius: var(--radius-sm);
+  padding: 5px;
+  background: rgba(15, 23, 42, .78);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 900;
+  backdrop-filter: blur(10px);
+}
+
+.command-video-preview video {
+  width: 58px;
+  height: 34px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: #111827;
+}
+
+.command-video-preview span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .command-copy {

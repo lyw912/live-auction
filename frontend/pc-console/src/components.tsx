@@ -4,6 +4,8 @@ import { Activity, AlertTriangle, Bell, BellOff, Bot, CheckCircle2, ClipboardLis
 import type { Auction, AuctionRecap, FlightRecorderPayload, FlightRecorderTimelineRow, HeatSummary, HostPrompt, Item, ListingDraftJob, MaxBidSummary, MonitorPayload, Order, RedisEngineSummary, Room, RuleDraft, SentinelAlert, SignalRequest, SystemMessage } from './domain';
 import { anomalyKey, anomalySeverity, auctionScopedRows, auctionStatusLabel, connectionLabel, createRuleDraft, depositPreview, formatCents, formatRemaining, formatSeconds, isAckedAlert, liveHealthSummary, maskUser, monitorCount, monitorItems, orderStatusLabel, overallCopy, promptSeverityClass, queueGroups, redisEngineSummary, riskQueue, rowAuctionID, rowSourceURL, severityTagColor, signalCopy, signalTargetID, signalType, sortedAuctions, statusTagColor, terminalStatus, timelineImpact, timelineNextAction, timelineTone, validateRule, visibleAnomalies } from './domain';
 
+const demoLiveVideoURL = '/demo/jade-live-loop.mp4';
+
 export function ConsoleNav({ activeTab, onSelect }: { activeTab: string; onSelect: (tab: string) => void }) {
   const rows = [
     { key: 'rules', label: '开播中控', icon: <RadioTower size={16} /> },
@@ -706,8 +708,12 @@ export function AuctionControlSummary({
   return (
     <section className={`command-panel status-${selectedAuction.status.toLowerCase()}`} data-testid="auction-control-summary">
       <div className="command-hero">
-        <div className="command-media">
+        <div className={`command-media ${selectedAuction.item?.image_url ? 'has-media' : ''}`} data-testid="pc-current-media">
           {selectedAuction.item?.image_url ? <img src={selectedAuction.item.image_url} alt="" /> : <Gavel size={42} />}
+          <div className="command-video-preview" aria-label="直播视频预览">
+            <video src={demoLiveVideoURL} poster={selectedAuction.item?.image_url || undefined} muted loop playsInline autoPlay />
+            <span>直播视频预览</span>
+          </div>
         </div>
         <div className="command-copy">
           <div className="command-kicker">
