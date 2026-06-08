@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -125,11 +126,13 @@ func NewRouterWithRealtimeAndLedger(cfg config.Config, deps *storage.Dependencie
 		r.Post("/auth/login", authHandler.Login)
 		r.Post("/auth/logout", authHandler.Logout)
 		r.Post("/payments/fake-provider/webhook", auctionHandler.FakePaymentWebhook)
+		r.Get("/media/*", auctionHandler.ServeMedia)
 		r.Group(func(r chi.Router) {
 			r.Use(authMiddleware(cfg, deps.Postgres, deps.Redis))
 			r.Get("/auth/me", authHandler.Me)
 			r.Get("/rooms", auctionHandler.ListRooms)
 			r.With(requireHost).Post("/items/upload-url", auctionHandler.CreateUploadURL)
+			r.With(requireHost).Post("/items/upload", auctionHandler.UploadItemImage)
 			r.With(requireHost).Post("/items", auctionHandler.CreateItem)
 			r.With(requireHost).Post("/auctions", auctionHandler.CreateAuction)
 			r.Get("/auctions", auctionHandler.ListAuctions)
@@ -143,8 +146,11 @@ func NewRouterWithRealtimeAndLedger(cfg config.Config, deps *storage.Dependencie
 			r.With(requireHost).Post("/auctions/{id}/narrate-stop", auctionHandler.NarrateStop)
 			r.Post("/auctions/{id}/bids", auctionHandler.PlaceBid)
 			r.Post("/auctions/{id}/bids/confirm", auctionHandler.ConfirmBid)
+			r.With(requireHost).Post("/demo/reset-seed", auctionHandler.ResetDemoSeed)
 			r.With(requireHost).Post("/demo/auctions/{id}/competing-bid", auctionHandler.DemoCompetingBid)
+			r.With(requireHost).Post("/demo/auctions/{id}/shorten-end", auctionHandler.DemoShortenEnd)
 			r.Get("/auctions/{id}/leaderboard", auctionHandler.GetLeaderboard)
+			r.Get("/auctions/{id}/heat", heatSummaryHandler.PublicSummary)
 			r.Get("/auctions/{id}/max-bid-intent", auctionHandler.GetMaxBidIntent)
 			r.Put("/auctions/{id}/max-bid-intent", auctionHandler.PutMaxBidIntent)
 			r.Delete("/auctions/{id}/max-bid-intent", auctionHandler.DeleteMaxBidIntent)
@@ -159,6 +165,8 @@ func NewRouterWithRealtimeAndLedger(cfg config.Config, deps *storage.Dependencie
 			r.Post("/rooms/{room_id}/liveops/team", auctionHandler.SelectLiveOpsTeam)
 			r.Post("/rooms/{room_id}/liveops/lucky-draw/enter", auctionHandler.EnterLiveOpsLuckyDraw)
 			r.Post("/rooms/{room_id}/liveops/lucky-draw/open", auctionHandler.OpenLiveOpsLuckyDraw)
+			r.With(requireHost).Get("/host/rooms/{room_id}/liveops", auctionHandler.GetHostLiveOpsSummary)
+			r.With(requireHost).Patch("/host/rooms/{room_id}/liveops", auctionHandler.UpdateHostLiveOpsReward)
 			r.Get("/rooms/{room_id}/chat", auctionHandler.ListChatMessages)
 			r.Post("/rooms/{room_id}/chat", auctionHandler.CreateChatMessage)
 			r.Get("/rooms/{room_id}/system-messages", aiHandler.ListSystemMessages)
@@ -206,7 +214,7 @@ func BuildAIGenerator(cfg config.Config) aicap.Generator {
 	}
 	originalMode := mode
 	if mode == "auto" {
-		if cfg.AIAPIKey == "" {
+		if cfg.AITextAPIKey == "" && cfg.AIVisionAPIKey == "" && cfg.AIAPIKey == "" {
 			return aicap.DeterministicGenerator{}
 		}
 		mode = "provider"
@@ -217,13 +225,7 @@ func BuildAIGenerator(cfg config.Config) aicap.Generator {
 	case "deterministic":
 		return aicap.DeterministicGenerator{}
 	case "provider", "chat_completions_adapter":
-		gen, err := aicap.NewChatCompletionsGenerator(aicap.ChatProviderConfig{
-			BaseURL:   cfg.AIRelayBaseURL,
-			Model:     cfg.AIRelayModel,
-			APIKey:    cfg.AIAPIKey,
-			Timeout:   cfg.AIRelayTimeout,
-			MaxTokens: cfg.AIRelayMaxTokens,
-		})
+		gen, err := buildRoutedAIGenerator(cfg)
 		if err == nil {
 			return gen
 		}
@@ -234,6 +236,98 @@ func BuildAIGenerator(cfg config.Config) aicap.Generator {
 	default:
 		return aicap.DeterministicGenerator{}
 	}
+}
+
+func buildRoutedAIGenerator(cfg config.Config) (aicap.Generator, error) {
+	textGen, textErr := aicap.NewChatCompletionsGenerator(aicap.ChatProviderConfig{
+		BaseURL:        firstNonEmpty(cfg.AITextBaseURL, cfg.AIRelayBaseURL),
+		Model:          firstNonEmpty(cfg.AITextModel, cfg.AIRelayModel),
+		APIKey:         firstNonEmpty(cfg.AITextAPIKey, cfg.AIAPIKey),
+		Timeout:        firstPositiveDuration(cfg.AITextTimeout, cfg.AIRelayTimeout),
+		MaxTokens:      firstPositiveInt(cfg.AITextMaxTokens, cfg.AIRelayMaxTokens),
+		ResponseFormat: "json_object",
+		TextOnly:       true,
+	})
+	visionGen, visionErr := aicap.NewChatCompletionsGenerator(aicap.ChatProviderConfig{
+		BaseURL:        firstNonEmpty(cfg.AIVisionBaseURL, cfg.AIRelayBaseURL),
+		Model:          firstNonEmpty(cfg.AIVisionModel, cfg.AIRelayModel),
+		APIKey:         firstNonEmpty(cfg.AIVisionAPIKey, cfg.AIAPIKey),
+		Timeout:        firstPositiveDuration(cfg.AIVisionTimeout, cfg.AIRelayTimeout),
+		MaxTokens:      firstPositiveInt(cfg.AIVisionMaxTokens, cfg.AIRelayMaxTokens),
+		ResponseFormat: "json_object",
+	})
+	if textErr != nil && visionErr != nil {
+		return nil, textErr
+	}
+	if textErr != nil {
+		return visionGen, nil
+	}
+	if visionErr != nil {
+		return textGen, nil
+	}
+	return aicap.RoutedGenerator{
+		Text:   textGen,
+		Vision: visionGen,
+		NeedsVision: func(req aicap.StructuredRequest) bool {
+			if req.Kind != "listing_draft" {
+				return false
+			}
+			return hasImageInputs(req.Input["image_urls"]) || hasImageInputs(req.Input["image_data_urls"])
+		},
+	}, nil
+}
+
+func hasImageInputs(value any) bool {
+	for _, raw := range aiInputStringSlice(value) {
+		if strings.TrimSpace(raw) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func aiInputStringSlice(value any) []string {
+	switch rows := value.(type) {
+	case []string:
+		return rows
+	case []any:
+		out := make([]string, 0, len(rows))
+		for _, row := range rows {
+			if text, ok := row.(string); ok {
+				out = append(out, text)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func firstPositiveDuration(values ...time.Duration) time.Duration {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func firstPositiveInt(values ...int) int {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 func requestLogMiddleware(log *slog.Logger) func(http.Handler) http.Handler {

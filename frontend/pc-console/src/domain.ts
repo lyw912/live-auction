@@ -12,6 +12,21 @@ export type Item = {
   description?: string;
 };
 
+export function displayMediaURL(url?: string) {
+  const value = (url ?? '').trim();
+  if (!value) return '';
+  try {
+    const parsed = new URL(value, window.location.origin);
+    const match = parsed.pathname.match(/\/live-auction-items\/(items\/.+)$/);
+    if ((parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') && parsed.port === '9000' && match) {
+      return `/api/media/${match[1]}`;
+    }
+  } catch {
+    return value;
+  }
+  return value;
+}
+
 export type RuleDraft = {
   startPriceCents: number;
   incrementCents: number;
@@ -213,7 +228,45 @@ export type HeatSummary = {
   recovery_events_30s: number;
   watcher_count_available: boolean;
   watcher_count?: number;
+  bid_response_p95_ms: number;
+  ledger_settle_p95_ms: number;
+  ledger_settle_max_ms: number;
   source: string;
+};
+
+export type LiveOpsRewardConfig = {
+  enabled: boolean;
+  title: string;
+  description: string;
+  reward_name: string;
+  reward_quota: number;
+  required_task_count: number;
+};
+
+export type LiveOpsHostSummary = {
+  campaign: {
+    id: string;
+    room_id: string;
+    status: string;
+    title: string;
+    description: string;
+    progress: number;
+    disclaimer: string;
+    updated_at: string;
+  };
+  reward_config: LiveOpsRewardConfig;
+  participant_count: number;
+  qualified_count: number;
+  opened_count: number;
+  preference_summary: Array<{ key: string; label: string; count: number }>;
+  recent_rewards: Array<{
+    user_id: string;
+    user_masked: string;
+    status: string;
+    reward_label?: string;
+    entered_at: string;
+    opened_at?: string;
+  }>;
 };
 
 export type MaxBidSummary = {
@@ -490,9 +543,9 @@ export function riskQueue(monitor: Record<string, MonitorPayload>, selectedAucti
   if (recoveryTotal > 0) {
     risks.push({
       level: recoveryRows.some((row) => Number(row.snapshot_stale ?? 0) > 0 || Number(row.slow_consumer_disconnects ?? 0) > 0) ? 'high' : 'low',
-      title: '恢复链路有压力',
-      body: `${recoveryTotal} 条重连或慢客户端信号；确认买家端状态稳定后再催促出价。`,
-      source: '恢复记录'
+      title: '买家端同步有压力',
+      body: `${recoveryTotal} 条买家端重连或卡顿信号；确认直播间状态稳定后再催促出价。`,
+      source: '连接记录'
     });
   }
   return risks.slice(0, 3);
@@ -510,8 +563,11 @@ export function connectionLabel(monitor: Record<string, MonitorPayload>, roomID:
   return '恢复链路正常';
 }
 
-export function redisEngineSummary(payload?: MonitorPayload): RedisEngineSummary {
-  const rows = payload?.items ?? [];
+export function redisEngineSummary(payload?: MonitorPayload, auction?: Auction): RedisEngineSummary {
+  const rows = (payload?.items ?? []).filter((row) => {
+    if (!auction) return true;
+    return String(row.auction_id ?? '') === auction.id;
+  });
   const initial: RedisEngineSummary = {
     active_rows: 0,
     paused_auctions: 0,
@@ -609,14 +665,15 @@ export function auctionScopedRows(payload: MonitorPayload | undefined, auction?:
 
 export function liveHealthSummary(auctions: Auction[], orders: Order[], monitor: Record<string, MonitorPayload>, heatSummary: HeatSummary | undefined, selectedAuction: Auction | undefined, now: number) {
   const active = activeAuction(auctions) ?? selectedAuction;
-  const engine = redisEngineSummary(monitor.redisEngine);
+  const engine = redisEngineSummary(monitor.redisEngine, active);
   const anomalies = visibleAnomalies(monitor, now);
   const scopedRejects = auctionScopedRows(monitor.rejects, active);
   const scopedRecovery = auctionScopedRows(monitor.recovery, active);
   const activeOrders = active ? orders.filter((order) => order.auction_id === active.id) : orders;
   const criticalAnomalies = anomalies.filter((row) => ['CRITICAL', 'HIGH'].includes(anomalySeverity(row)));
   const recoveryPressure = scopedRecovery.reduce((sum, row) => sum + Number(row.reconnect_count_recent ?? 0) + Number(row.snapshot_stale ?? 0) + Number(row.slow_consumer_disconnects ?? 0), 0);
-  const moneyRisk = engine.failed_settlements > 0 || engine.settlement_lag_max_ms > 5000 || activeOrders.some((order) => ['FAILED', 'EXPIRED'].includes(order.status));
+  const ledgerMaxMS = heatSummary?.ledger_settle_max_ms ?? engine.settlement_lag_max_ms;
+  const moneyRisk = engine.failed_settlements > 0 || ledgerMaxMS > 5000 || activeOrders.some((order) => ['FAILED', 'EXPIRED'].includes(order.status));
   const buyerRisk = recoveryPressure > 0 || scopedRejects.some((row) => ['BID_AUCTION_TOO_HOT', 'RATE_LIMITED', 'ENGINE_PAUSED', 'RECONCILING'].includes(String(row.reject_reason ?? row.code ?? '')));
   const systemRisk = engine.paused_auctions > 0 || engine.pending_redis_decisions > 0 || engine.append_failure_count > 0 || engine.append_unknown_count > 0;
   const overall = criticalAnomalies.length > 0 || moneyRisk || systemRisk
@@ -653,19 +710,19 @@ export function liveHealthSummary(auctions: Auction[], orders: Order[], monitor:
 }
 
 export function overallCopy(overall: string) {
-  if (overall === 'critical') return { title: 'Critical', body: '停止强推成交，先处理告警和账本风险。', color: 'red' };
-  if (overall === 'degraded') return { title: 'Degraded', body: '直播可继续，但需要关注买家体验或结算积压。', color: 'orange' };
-  return { title: 'Healthy', body: '竞拍、买家体验和结算链路当前无阻断信号。', color: 'green' };
+  if (overall === 'critical') return { title: '需先处理', body: '暂停催拍，先确认成交记录、买家状态和告警原因。', color: 'red' };
+  if (overall === 'degraded') return { title: '需关注', body: '直播可继续，但需要留意买家体验或后台记录积压。', color: 'orange' };
+  return { title: '正常', body: '竞拍、买家体验和成交记录当前无阻断信号。', color: 'green' };
 }
 
 export function signalCopy(signalTypeValue: string) {
   switch (signalTypeValue) {
   case 'reconcile_redis_engine':
-    return '触发 Redis/PG/Kafka 对账';
+    return '校对成交状态';
   case 'force_snapshot_rebuild':
-    return '强制重建客户端快照';
+    return '重建买家状态';
   case 'pause_redis_engine':
-    return '暂停 Redis 热引擎';
+    return '暂停出价确认';
   case 'ack_alert':
     return '确认告警';
   case 'mute_alert_10m':
@@ -708,20 +765,20 @@ export function timelineImpact(row: FlightRecorderTimelineRow) {
   if (row.kind === 'outbox') return row.status === 'PUBLISHED' ? '直播间状态已推送给买家端。' : '买家端状态推送仍在等待重试。';
   if (row.kind === 'order') return '订单和支付状态来自成交结果。';
   if (row.kind === 'payment_event') return '支付回调已记录，可用于对账。';
-  if (row.kind === 'snapshot_rebuild') return '买家端状态已从权威记录重建。';
+  if (row.kind === 'snapshot_rebuild') return '买家端状态已按成交记录重新同步。';
   if (row.kind === 'anomaly') return '这条异常需要主播或运维确认后再继续演示。';
   return '这条记录来自后端事件回放。';
 }
 
 export function timelineNextAction(row: FlightRecorderTimelineRow) {
   if (row.kind === 'bid' && row.payload?.source === 'AUTO_MAX_BID') return '确认买家端只展示自动加价结果，不展示封顶金额。';
-  if (row.kind === 'outbox' && row.status !== 'PUBLISHED') return '打开推送诊断，查看重试次数和最近错误。';
+  if (row.kind === 'outbox' && row.status !== 'PUBLISHED') return '查看买家端是否已收到更新，必要时重建买家状态。';
   if (row.kind === 'anomaly') return '按这场竞拍筛选异常，记录原因后再继续。';
   if (row.kind === 'snapshot_rebuild' && row.status !== 'COMPLETED') return '检查买家端恢复情况，确认是否仍停留在重连中。';
   if (row.kind === 'payment_event') return '先核对订单状态和支付编号，再说明支付结果。';
   if (row.kind === 'order') return '核对中标人、金额、保证金和支付截止时间。';
   if (row.kind === 'bid' && row.status === 'REJECTED') return '用拒绝原因解释买家端提示和按钮状态。';
-  if (row.trace_id) return `需要深查时，用这条追踪号 ${row.trace_id} 查日志。`;
+  if (row.trace_id) return `需要深查时，用排查编号 ${row.trace_id} 查后台日志。`;
   return '状态符合预期时无需处理。';
 }
 
@@ -756,15 +813,15 @@ export function validateRule(rule: RuleDraft) {
   if (rule.startPriceCents < 0) return { valid: false, field: 'start', message: '起拍价不能为负', suggestions: [] };
   if (rule.incrementCents <= 0) return { valid: false, field: 'increment', message: '加价幅度必须大于 0', suggestions: [] };
   if (rule.durationSeconds < 30 || rule.durationSeconds > 86400) return { valid: false, field: 'duration', message: '竞拍时长必须在 30 秒到 86400 秒之间', suggestions: [] };
-  if (rule.extendWindowSeconds < 10 || rule.extendWindowSeconds > 30 || rule.extendBySeconds < 10 || rule.extendBySeconds > 30) return { valid: false, field: 'extension', message: '延时窗口和每次延时必须在 10 秒到 30 秒之间', suggestions: [] };
+  if (rule.extendWindowSeconds < 10 || rule.extendWindowSeconds > 30 || rule.extendBySeconds < 10 || rule.extendBySeconds > 30) return { valid: false, field: 'extension', message: '最后延时触发时间和每次加时必须在 10 秒到 30 秒之间', suggestions: [] };
   if (rule.maxExtendCount < 1 || rule.maxExtendCount > 10) return { valid: false, field: 'extension', message: '最多延时次数必须在 1 到 10 次之间', suggestions: [] };
-  if (rule.fatFingerThresholdCents <= rule.incrementCents) return { valid: false, field: 'fatFinger', message: '高额确认阈值必须大于加价幅度', suggestions: [] };
-  if (rule.depositBPS < 0 || rule.depositBPS > 10000 || rule.depositFloorCents < 0 || rule.depositCapCents < 0) return { valid: false, field: 'deposit', message: '保证金字段不能为负，比例不能超过 10000 bps', suggestions: [] };
+  if (rule.fatFingerThresholdCents <= rule.incrementCents) return { valid: false, field: 'fatFinger', message: '防误触确认金额必须大于加价幅度', suggestions: [] };
+  if (rule.depositBPS < 0 || rule.depositBPS > 10000 || rule.depositFloorCents < 0 || rule.depositCapCents < 0) return { valid: false, field: 'deposit', message: '保证金字段不能为负，比例不能超过 100%', suggestions: [] };
   if (rule.depositFloorCents > rule.depositCapCents) return { valid: false, field: 'deposit', message: '保证金下限不能高于上限', suggestions: [] };
   const minCap = rule.startPriceCents + rule.incrementCents;
   if (rule.capPriceCents < minCap) return { valid: false, field: 'cap', message: `封顶价至少为 ${formatCents(minCap)}`, suggestions: nearestLegalCaps(rule) };
-  if ((rule.capPriceCents - rule.startPriceCents) % rule.incrementCents !== 0) return { valid: false, field: 'cap', message: '封顶价必须落在起拍价 + N * 加价幅度', suggestions: nearestLegalCaps(rule) };
-  return { valid: true, field: 'cap', message: `封顶价可达，预计 ${Math.floor((rule.capPriceCents - rule.startPriceCents) / rule.incrementCents)} 次加价到顶`, suggestions: [] };
+  if ((rule.capPriceCents - rule.startPriceCents) % rule.incrementCents !== 0) return { valid: false, field: 'cap', message: '封顶价需要刚好按当前加价幅度到达', suggestions: nearestLegalCaps(rule) };
+  return { valid: true, field: 'cap', message: `买家按当前加价幅度出价，预计 ${Math.floor((rule.capPriceCents - rule.startPriceCents) / rule.incrementCents)} 次到达封顶价`, suggestions: [] };
 }
 
 export function monitorQuery(roomID: string, filter: { type: string; auctionID: string; userID: string; traceID: string }) {

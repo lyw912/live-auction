@@ -1,6 +1,21 @@
 import type { AtmosphereCue } from './atmosphere';
 import { h5Copy } from './copy';
 
+export function displayMediaURL(url?: string) {
+  const value = (url ?? '').trim();
+  if (!value) return '';
+  try {
+    const parsed = new URL(value, window.location.origin);
+    const match = parsed.pathname.match(/\/live-auction-items\/(items\/.+)$/);
+    if ((parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') && parsed.port === '9000' && match) {
+      return `/api/media/${match[1]}`;
+    }
+  } catch {
+    return value;
+  }
+  return value;
+}
+
 export type AuctionState =
   | 'scheduled'
   | 'active_empty'
@@ -334,6 +349,8 @@ export type HeatSnapshot = {
   priceVelocityCentsPerMin: number;
   acceptedBidderCount: number;
   totalAcceptedBids?: number;
+  watcherCount?: number;
+  watcherCountAvailable?: boolean;
   source: 'leaderboard' | 'auction' | 'fallback';
 };
 export type ResultRecap = {
@@ -826,8 +843,8 @@ export function buildHighlightCard(recap: ResultRecap): HighlightCard {
   const filenameTitle = recap.title
     .replace(/[^\p{L}\p{N}]+/gu, '-')
     .replace(/^-+|-+$/g, '')
-    .slice(0, 28) || 'auction-highlight';
-  const content = `<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1440" viewBox="0 0 1080 1440" role="img" aria-label="${lines[1]}高光卡">
+    .slice(0, 28) || 'auction-credential';
+  const content = `<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1440" viewBox="0 0 1080 1440" role="img" aria-label="${lines[1]}成交凭证">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#151515"/>
@@ -842,13 +859,13 @@ export function buildHighlightCard(recap: ResultRecap): HighlightCard {
   <text x="120" y="450" fill="#ffffff" font-size="96" font-family="Arial, sans-serif" font-weight="900">${lines[2]}</text>
   <text x="120" y="540" fill="#fff0c7" font-size="38" font-family="Arial, sans-serif" font-weight="700">成交/领先：${lines[3]}</text>
   <rect x="120" y="650" width="840" height="220" rx="28" fill="rgba(255,255,255,0.16)"/>
-  <text x="160" y="735" fill="#ffffff" font-size="40" font-family="Arial, sans-serif" font-weight="700">高光事实</text>
+  <text x="160" y="735" fill="#ffffff" font-size="40" font-family="Arial, sans-serif" font-weight="700">成交凭证</text>
   <text x="160" y="815" fill="#fff5db" font-size="34" font-family="Arial, sans-serif">${lines[4]}</text>
   <text x="120" y="1040" fill="#ffffff" font-size="42" font-family="Arial, sans-serif" font-weight="800">${lines[5]}</text>
   <text x="120" y="1260" fill="rgba(255,255,255,0.72)" font-size="28" font-family="Arial, sans-serif">仅展示系统真实竞拍记录，用户身份已脱敏。</text>
 </svg>`;
   return {
-    filename: `${filenameTitle}-highlight.svg`,
+    filename: `${filenameTitle}-credential.svg`,
     mimeType: 'image/svg+xml;charset=utf-8',
     content
   };

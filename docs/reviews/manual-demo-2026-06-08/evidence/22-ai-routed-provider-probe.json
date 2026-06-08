@@ -1,0 +1,99 @@
+{
+  "generated_at": "2026-06-08T10:26:55.629Z",
+  "base_url": "https://api.gptgod.online/v1",
+  "model": "gemini-3.1-flash-image-preview",
+  "text_base_url": "https://api.deepseek.com/v1",
+  "text_model": "deepseek-v4-flash",
+  "timeout_ms": 45000,
+  "checks": [
+    {
+      "name": "text_chat_json_object_required",
+      "status": "PASS",
+      "duration_ms": 3072,
+      "summary": "text provider returned parseable auction commentary JSON",
+      "body_chars": 31,
+      "facts_used_count": 3
+    },
+    {
+      "name": "models_endpoint_optional",
+      "status": "PASS",
+      "duration_ms": 1072,
+      "summary": "configured model appears in /models",
+      "sample_model_count": 349,
+      "configured_model_listed": true
+    },
+    {
+      "name": "responses_text_required",
+      "status": "FAIL",
+      "duration_ms": 681,
+      "error": "HTTP 404 non-JSON response: Not Found"
+    },
+    {
+      "name": "responses_json_schema_required",
+      "status": "FAIL",
+      "duration_ms": 372,
+      "error": "HTTP 404 non-JSON response: Not Found"
+    },
+    {
+      "name": "responses_multimodal_data_url_optional",
+      "status": "WARN",
+      "duration_ms": 311,
+      "error": "HTTP 404 non-JSON response: Not Found"
+    },
+    {
+      "name": "responses_multimodal_https_optional",
+      "status": "WARN",
+      "duration_ms": 340,
+      "error": "HTTP 404 non-JSON response: Not Found"
+    },
+    {
+      "name": "files_upload_optional",
+      "status": "WARN",
+      "duration_ms": 291,
+      "error": "HTTP 404 non-JSON response: 404 page not found"
+    },
+    {
+      "name": "responses_file_input_optional",
+      "status": "WARN",
+      "duration_ms": 306,
+      "error": "HTTP 404 non-JSON response: 404 page not found"
+    },
+    {
+      "name": "chat_plain_text_optional",
+      "status": "WARN",
+      "duration_ms": 1459,
+      "error": "text response did not contain expected marker: \n\n> unknown finish reason: [NO_IMAGE]"
+    },
+    {
+      "name": "chat_structured_text_optional",
+      "status": "WARN",
+      "duration_ms": 1719,
+      "error": "response is not JSON: > unknown finish reason: [NO_IMAGE]"
+    },
+    {
+      "name": "chat_json_schema_optional",
+      "status": "WARN",
+      "duration_ms": 2872,
+      "error": "response is not JSON: > unknown finish reason: [NO_IMAGE]"
+    },
+    {
+      "name": "chat_multimodal_https_optional",
+      "status": "WARN",
+      "duration_ms": 2262,
+      "error": "response is not JSON: > unknown finish reason: [NO_IMAGE]"
+    },
+    {
+      "name": "chat_json_object_optional",
+      "status": "WARN",
+      "duration_ms": 2889,
+      "error": "response is not JSON: > unknown finish reason: [NO_IMAGE]"
+    }
+  ],
+  "verdict": "FAIL",
+  "development_gate": {
+    "can_start_p0_ai": false,
+    "blockers": [
+      "multimodal: no image path worked"
+    ]
+  }
+}

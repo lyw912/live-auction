@@ -5,12 +5,32 @@ import { CheckCircle2, ChevronUp, Radio, RefreshCw } from 'lucide-react';
 import type { AtmosphereCue, AtmosphereInput } from './atmosphere';
 import { AuctionStatePanel, BottomSheet, ChatComposer, ChatPanel, LeaderboardPanel, LiveStage, StateMatrixTabs, type WaterfallChip } from './components';
 import { ResultSheet } from './result';
-import type { AuctionItem, AuctionOverlayMode, AuctionRealtimeEvent, AuctionState, AuctionSummary, AuctionSoundPack, AuthUser, BidderRequirement, BidPhase, BidResponse, BottomSheetKey, ChatMessage, ConnectionPhase, HistoryRow, LeaderboardPayload, LiveOpsCampaign, MaxBidIntent, MaxBidPhase, OrderRow, PaymentPhase, PendingBidRequest, ProductQAAnswer, ProductQATurn, RecoveryPhase, ResultSheetKind, Scenario, SnapshotResponse, SoundCapability, SystemMessage, WSTicketResponse } from './domain';
+import type { AuctionItem, AuctionOverlayMode, AuctionRealtimeEvent, AuctionState, AuctionSummary, AuctionSoundPack, AuthUser, BidderRequirement, BidPhase, BidResponse, BottomSheetKey, ChatMessage, ConnectionPhase, HeatSnapshot, HistoryRow, LeaderboardPayload, LiveOpsCampaign, MaxBidIntent, MaxBidPhase, OrderRow, PaymentPhase, PendingBidRequest, ProductQAAnswer, ProductQATurn, RecoveryPhase, ResultSheetKind, Scenario, SnapshotResponse, SoundCapability, SystemMessage, WSTicketResponse } from './domain';
 import { createAudioContext, createClientBidID, demoProductImageURL, demoUserID, deriveCountdown, deriveCountdownPhase, ensureDemoSession, extendSecondsFromEvent, extensionCopyFromEvent, formatCents, heatSnapshot, isBidConfirmationPending, isCountdownExpired, isDangerousActionDisabled, isEngineRejected, isTestMatrixEnabled, loadAuctionSoundPack, maxBidErrorCopy, maxBidStatusCopy, playAuctionSound, playCountdownTone, playCueTone, playLayeredCue, readJSON, rejectCopy, responseServerTimeMS, retryAfterMS, retryAfterMSFromHeaders, roomIDFromPath, scenarios, selectEntryAuction, speakSystemMessage, vibrateCountdownPhase, vibratePattern, visibleRoomAuctions } from './domain';
 import { calculateAtmosphereIntensity, normalizeAtmosphere, shouldGateAtmosphere } from './atmosphere';
 import { reconnectDelayMS } from './realtime';
 import { h5Copy } from './copy';
 import './styles.css';
+
+function normalizeStageItem(item: AuctionItem, fallbackTitle?: string): AuctionItem {
+  const imageURL = item.image_url ?? item.imageURL;
+  const videoPosterURL = item.video_poster_url ?? item.videoPosterURL;
+  return {
+    title: item.title ?? fallbackTitle,
+    description: item.description,
+    image_url: imageURL,
+    imageURL,
+    video_poster_url: videoPosterURL,
+    videoPosterURL,
+    certificate: item.certificate ?? 'GID 20260607 · 可核验',
+    condition: item.condition ?? (imageURL ? '实物图已上传' : '待补充实物图'),
+    shipping: item.shipping ?? '顺丰包邮',
+    dimensions: item.dimensions,
+    material: item.material,
+    return_policy: item.return_policy ?? h5Copy.returnPolicy,
+    flaws: item.flaws
+  };
+}
 
 function App() {
   const showStateMatrix = useMemo(isTestMatrixEnabled, []);
@@ -47,6 +67,7 @@ function App() {
   const [qaHistory, setQAHistory] = useState<ProductQAAnswer[]>([]);
   const [qaLoading, setQALoading] = useState(false);
   const [leaderboard, setLeaderboard] = useState<LeaderboardPayload | null>(null);
+  const [presenceHeat, setPresenceHeat] = useState<Pick<HeatSnapshot, 'watcherCount' | 'watcherCountAvailable'> | null>(null);
   const [waterfallChips, setWaterfallChips] = useState<WaterfallChip[]>([]);
   const [raceBoardExpandedUntil, setRaceBoardExpandedUntil] = useState(0);
   const [atmosphereCue, setAtmosphereCue] = useState<AtmosphereCue | null>(null);
@@ -178,6 +199,13 @@ function App() {
     currentUserIDRef.current = currentUserID;
   }, [currentUserID]);
 
+  const ensureBuyerSession = async () => {
+    const user = await ensureDemoSession('user');
+    setCurrentUserID(user.ID);
+    currentUserIDRef.current = user.ID;
+    return user;
+  };
+
   useEffect(() => {
     soundEnabledRef.current = soundEnabled;
   }, [soundEnabled]);
@@ -218,7 +246,7 @@ function App() {
     });
   }, [activeAuctionID, auctionEndAt, connectionPhase, nowMS, recoveryPhase, selected, serverTimeMS]);
   const activeAuction = useMemo(() => roomAuctions.find((auction) => auction.id === activeAuctionID), [activeAuctionID, roomAuctions]);
-  const heat = useMemo(() => heatSnapshot(leaderboard, activeAuction), [activeAuction, leaderboard]);
+  const heat = useMemo(() => ({ ...heatSnapshot(leaderboard, activeAuction), ...(presenceHeat ?? {}) }), [activeAuction, leaderboard, presenceHeat]);
   const atmosphereIntensity = useMemo(() => calculateAtmosphereIntensity({
     acceptedBids30s: heat.acceptedBids30s,
     priceVelocityCentsPerMin: heat.priceVelocityCentsPerMin,
@@ -316,13 +344,16 @@ function App() {
     } else if (isNewDelta && mine && mine.rank > 1 && (previousWinnerID === currentUserIDRef.current || previousState === 'LEADING')) {
       showAtmosphere({
         kind: 'outbid',
-        title: '被反超！',
+        title: '被超越！',
         detail: `${gapToLeader != null ? `差 ${formatCents(gapToLeader)}` : '有人已经领先'} · 立即反超`,
         auction_id: delta.auction_id,
         cause_seq: delta.seq,
         event_type: delta.event_type || 'leaderboard_delta',
         user_scope: 'self'
       });
+      if (selectedRef.current === 'active_bids') {
+        setOverlayMode('bid');
+      }
     }
     if (!delta.burst_mode && soundEnabledRef.current && audioContextRef.current && soundCapabilityRef.current === 'ready') {
       playLayeredCue(audioContextRef.current, 'rank_change', soundPackRef.current);
@@ -710,7 +741,7 @@ function App() {
         status: 'ACTIVE',
         price: formatCents(currentPriceCents),
         leader: `${leaderMasked} 领先`,
-        feedback: '等待服务端确认高额出价',
+        feedback: '等待服务端确认大额出价',
         countdown: countdownCopy,
         cta: '确认中',
         ctaDisabled: true,
@@ -720,13 +751,13 @@ function App() {
     if (bidPhase === 'confirm_required') {
       return {
         key: 'active_bids' as AuctionState,
-        title: '高额确认',
+        title: '大额出价确认',
         status: 'ACTIVE',
         price: formatCents(currentPriceCents),
         leader: `${leaderMasked} 领先`,
         feedback: `确认 ${formatCents(confirmAmountCents)} 出价`,
         countdown: countdownCopy,
-        cta: '确认高额出价',
+        cta: '确认出价',
         ctaDisabled: false
       };
     }
@@ -938,6 +969,78 @@ function App() {
     }
   };
 
+  const resetAuctionSessionState = () => {
+    pendingBidRef.current = null;
+    bidInFlightRef.current = false;
+    paymentInFlight.current = false;
+    setBidPhase('idle');
+    setPaymentPhase('idle');
+    setRiskCode('');
+    setConfirmToken('');
+    setConfirmIdempotencyKey('');
+    setConfirmAmountCents(0);
+    setPayableOrderID('');
+    setPayableOrderAmountCents(0);
+    setTerminalPriceCents(0);
+    setTerminalWinnerID('');
+    setTerminalWinnerMasked('');
+    setTerminalSeq(0);
+    setExtensionNotice('');
+    setAtmosphereCue(null);
+    setWaterfallChips([]);
+    setLeaderboard(null);
+    leaderboardRef.current = null;
+    pendingLeaderboardDeltaRef.current = null;
+    selectedRef.current = 'active_bids';
+    setSelected('active_bids');
+    setOverlayMode('feed');
+    setActiveSheet(null);
+  };
+
+  const enterAuctionFromSummary = async (selectedAuction: AuctionSummary, options: { switched?: boolean } = {}) => {
+    if (!selectedAuction) return;
+    if (options.switched || activeAuctionIDRef.current !== selectedAuction.id) {
+      resetAuctionSessionState();
+    }
+    activeAuctionIDRef.current = selectedAuction.id;
+    setActiveAuctionID(selectedAuction.id);
+    setLotTitle(selectedAuction.item?.title ?? selectedAuction.id);
+    if (selectedAuction.item) {
+      setStageItem(normalizeStageItem(selectedAuction.item, selectedAuction.id));
+    } else {
+      setStageItem((current) => ({
+        ...current,
+        title: current.title ?? selectedAuction.id
+      }));
+    }
+    setBidderRequirement(selectedAuction.bidder_requirement ?? null);
+    const price = selectedAuction.current_price_cents ?? currentPriceRef.current;
+    const increment = selectedAuction.increment_cents ?? activeIncrementCentsRef.current;
+    setActiveIncrementCents(increment);
+    setCurrentPriceCents(price);
+    setMinimumNextBidCents(price + increment);
+    setNextBidCents(price + increment);
+    setLastSeq(selectedAuction.seq ?? lastSeqRef.current);
+    setAuctionEndAt(selectedAuction.end_at ?? '');
+    syncServerTimeMS(selectedAuction.server_time_ms ?? 0);
+    setConnectionPhase('connected');
+    setRecoveryPhase('idle');
+    setBidFeedback(options.switched ? '主播已切换到新拍品' : '已进入当前拍品');
+    void loadLeaderboard(selectedAuction.id);
+    try {
+      const snapshotResponse = await fetch(`/api/auctions/${selectedAuction.id}`);
+      const snapshot = await readJSON<SnapshotResponse>(snapshotResponse);
+      if (snapshotResponse.ok && snapshot && !snapshot.stale) {
+        if (!snapshot.server_time_ms && !snapshot.payload?.server_time_ms) {
+          snapshot.server_time_ms = responseServerTimeMS(snapshotResponse);
+        }
+        applySnapshot(snapshot);
+      }
+    } catch {
+      setBidFeedback(options.switched ? '主播已切换到新拍品' : '已进入当前拍品');
+    }
+  };
+
   const applySnapshot = (snapshot: SnapshotResponse) => {
     const price = snapshot.payload?.current_price_cents ?? snapshot.current_price_cents ?? currentPriceCents;
     const increment = snapshot.increment_cents ?? activeIncrementCents;
@@ -947,7 +1050,7 @@ function App() {
     if (snapshotAuctionID) setActiveAuctionID(snapshotAuctionID);
     const snapshotItem = snapshot.payload?.item ?? snapshot.item;
     if (snapshotItem) {
-      setStageItem((current) => ({ ...current, ...snapshotItem }));
+      setStageItem(normalizeStageItem(snapshotItem, snapshotAuctionID || activeAuctionIDRef.current));
       if (snapshotItem.title) setLotTitle(snapshotItem.title);
     }
     setBidderRequirement(snapshot.payload?.bidder_requirement ?? snapshot.bidder_requirement ?? null);
@@ -978,13 +1081,16 @@ function App() {
       setTerminalWinnerID(winnerID ?? '');
       setTerminalWinnerMasked(snapshot.payload?.leader_user_masked ?? leaderMaskedRef.current);
       setSelected(winnerID === currentUserID ? 'sold_winner' : 'sold_loser');
+      setOverlayMode('feed');
       if (winnerID === currentUserID) {
         void loadPayableOrderForAuction(snapshotAuctionID ?? activeAuctionIDRef.current);
       }
     } else if (status === 'ENDED' && syncSelected) {
       setSelected('ended');
+      setOverlayMode('feed');
     } else if (status === 'CANCELLED' && syncSelected) {
       setSelected('cancelled');
+      setOverlayMode('feed');
       setBidFeedback(snapshot.payload?.reason ?? '主播已取消');
     } else if ((status === 'SCHEDULED' || status === 'DRAFT') && syncSelected) {
       setSelected('scheduled');
@@ -1088,6 +1194,7 @@ function App() {
         setPayableOrderAmountCents(price);
       }
       setSelected(winnerID === currentUserID ? 'sold_winner' : 'sold_loser');
+      setOverlayMode('feed');
       showAtmosphere({
         kind: 'sold',
         title: winnerID === currentUserID ? '成交！' : '已成交',
@@ -1103,9 +1210,11 @@ function App() {
       }
     } else if (detail.event_type === 'auction_ended') {
       setSelected('ended');
+      setOverlayMode('feed');
       setBidPhase('idle');
     } else if (detail.event_type === 'auction_cancelled') {
       setSelected('cancelled');
+      setOverlayMode('feed');
       setBidFeedback(detail.payload?.reason ?? '主播已取消');
       setBidPhase('idle');
     } else if (detail.event_type === 'order_paid') {
@@ -1145,6 +1254,7 @@ function App() {
           event_type: detail.event_type,
           user_scope: 'self'
         });
+        setOverlayMode('bid');
       }
       setBidPhase('idle');
       setConfirmToken('');
@@ -1165,37 +1275,7 @@ function App() {
         const selectedAuction = selectEntryAuction(auctions);
         if (!response.ok || !selectedAuction || cancelled) return;
         setRoomAuctions(visibleRoomAuctions(auctions));
-        setActiveAuctionID(selectedAuction.id);
-        setLotTitle(selectedAuction.item?.title ?? selectedAuction.id);
-        setStageItem((current) => ({
-          ...current,
-          ...(selectedAuction.item ?? {}),
-          title: selectedAuction.item?.title ?? current.title ?? selectedAuction.id
-        }));
-        setBidderRequirement(selectedAuction.bidder_requirement ?? null);
-        const price = selectedAuction.current_price_cents ?? currentPriceRef.current;
-        const increment = selectedAuction.increment_cents ?? activeIncrementCents;
-        setActiveIncrementCents(increment);
-        setCurrentPriceCents(price);
-        setMinimumNextBidCents(price + increment);
-        setNextBidCents(price + increment);
-        setLastSeq(selectedAuction.seq ?? lastSeqRef.current);
-        setAuctionEndAt(selectedAuction.end_at ?? '');
-        syncServerTimeMS(selectedAuction.server_time_ms ?? 0);
-        setBidFeedback('已进入当前拍品');
-        void loadLeaderboard(selectedAuction.id);
-        try {
-          const snapshotResponse = await fetch(`/api/auctions/${selectedAuction.id}`);
-          const snapshot = await readJSON<SnapshotResponse>(snapshotResponse);
-          if (snapshotResponse.ok && snapshot && !snapshot.stale) {
-            if (!snapshot.server_time_ms && !snapshot.payload?.server_time_ms) {
-              snapshot.server_time_ms = responseServerTimeMS(snapshotResponse);
-            }
-            applySnapshot(snapshot);
-          }
-        } catch {
-          setBidFeedback('已进入当前拍品');
-        }
+        await enterAuctionFromSummary(selectedAuction);
       } catch {
         setBidFeedback('拍品列表暂不可用');
       }
@@ -1205,6 +1285,33 @@ function App() {
       cancelled = true;
     };
   }, [sessionReady]);
+
+  useEffect(() => {
+    if (!sessionReady) return undefined;
+    let cancelled = false;
+    const refreshRoomAuctions = async () => {
+      try {
+        const response = await fetch(`/api/rooms/${roomID}/auctions`);
+        const payload = await readJSON<AuctionSummary[] | { items?: AuctionSummary[] }>(response);
+        if (!response.ok || cancelled) return;
+        const auctions = Array.isArray(payload) ? payload : payload?.items ?? [];
+        const visible = visibleRoomAuctions(auctions);
+        setRoomAuctions(visible);
+        const liveAuction = visible.find((auction) => auction.status === 'ACTIVE');
+        if (liveAuction && liveAuction.id !== activeAuctionIDRef.current) {
+          await enterAuctionFromSummary(liveAuction, { switched: true });
+        }
+      } catch {
+        if (!cancelled) setBidFeedback('拍品列表暂不可用');
+      }
+    };
+    const timer = window.setInterval(refreshRoomAuctions, 3_000);
+    void refreshRoomAuctions();
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [sessionReady, roomID]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1245,6 +1352,7 @@ function App() {
     setLiveOpsBusy(taskKey);
     setLiveOpsError('');
     try {
+      await ensureBuyerSession();
       const response = await fetch(`/api/rooms/${roomID}/liveops/tasks/${taskKey}`, { method: 'POST' });
       const payload = await readJSON<LiveOpsCampaign>(response);
       if (response.ok && payload) {
@@ -1297,7 +1405,7 @@ function App() {
       }
     };
     void loadSystemMessages();
-    const timer = window.setInterval(loadSystemMessages, 5_000);
+    const timer = window.setInterval(loadSystemMessages, 1_000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
@@ -1422,6 +1530,7 @@ function App() {
     pendingBidRef.current = bidRequest;
     setBidPhase('pending');
     try {
+      await ensureBuyerSession();
       const response = await fetch(`/api/auctions/${auctionID}/bids`, {
         method: 'POST',
         headers: {
@@ -1480,6 +1589,7 @@ function App() {
     bidInFlightRef.current = true;
     setBidPhase('confirming');
     try {
+      await ensureBuyerSession();
       const response = await fetch(`/api/auctions/${auctionID}/bids/confirm`, {
         method: 'POST',
         headers: {
@@ -1541,6 +1651,7 @@ function App() {
     setMaxBidPhase('pending');
     setMaxBidFeedback('正在确认自动加价');
     try {
+      await ensureBuyerSession();
       const key = createClientBidID();
       const response = await fetch(`/api/auctions/${auctionID}/max-bid-intent`, {
         method: 'PUT',
@@ -1602,6 +1713,7 @@ function App() {
     paymentInFlight.current = true;
     setPaymentPhase('pending');
     try {
+      await ensureBuyerSession();
       const response = await fetch(`/api/orders/${payableOrderID}/pay-mock`, {
         method: 'POST',
         headers: {
@@ -1615,7 +1727,12 @@ function App() {
         return;
       }
       const payload = await response.json() as { order_status?: string };
-      setPaymentPhase(payload.order_status === 'PAID' ? 'paid' : 'failed');
+      const paid = payload.order_status === 'PAID';
+      setPaymentPhase(paid ? 'paid' : 'failed');
+      if (paid) {
+        setActiveSheet('orders');
+        void loadHistory();
+      }
     } catch {
       setPaymentPhase('failed');
     } finally {
@@ -1629,6 +1746,8 @@ function App() {
       const response = await fetch(`/api/auctions/${auctionID}/leaderboard?limit=5`);
       const payload = await readJSON<LeaderboardPayload>(response);
       if (response.ok && payload) {
+        setConnectionPhase('connected');
+        void loadPresenceHeat(auctionID);
         setLeaderboard((previous) => {
           const current = leaderboardRef.current ?? previous;
           if (payload.auction_id === current?.auction_id && payload.seq != null && current.seq != null && payload.seq < current.seq) {
@@ -1640,6 +1759,24 @@ function App() {
       }
     } catch {
       setLeaderboard(null);
+      void loadPresenceHeat(auctionID);
+    }
+  };
+
+  const loadPresenceHeat = async (auctionID = activeAuctionIDRef.current) => {
+    if (!auctionID) {
+      setPresenceHeat(null);
+      return;
+    }
+    try {
+      const response = await fetch(`/api/auctions/${auctionID}/heat`);
+      const payload = await readJSON<{ watcher_count_available?: boolean; watcher_count?: number } | null>(response);
+      setPresenceHeat(response.ok ? {
+        watcherCountAvailable: Boolean(payload?.watcher_count_available),
+        watcherCount: typeof payload?.watcher_count === 'number' ? payload.watcher_count : undefined
+      } : null);
+    } catch {
+      setPresenceHeat(null);
     }
   };
 
@@ -1682,6 +1819,7 @@ function App() {
     setHistoryLoading(true);
     setHistoryError('');
     try {
+      await ensureBuyerSession();
       const [bids, orders] = await Promise.all([
         fetch('/api/users/me/bids').then((response) => response.json()),
         fetch('/api/users/me/orders').then((response) => response.json())
@@ -1704,11 +1842,17 @@ function App() {
     }
   };
 
+  useEffect(() => {
+    if (activeSheet !== 'orders' && activeSheet !== 'history') return;
+    void loadHistory();
+  }, [activeSheet, activeAuctionID]);
+
   const sendChat = async () => {
     const body = chatDraft.trim();
     if (!body || chatSending) return;
     setChatSending(true);
     try {
+      await ensureBuyerSession();
       const response = await fetch(`/api/rooms/${roomID}/chat`, {
         method: 'POST',
         headers: {
@@ -1741,6 +1885,7 @@ function App() {
       facts_used: turn.facts_used
     })).filter((turn) => turn.question && turn.answer);
     try {
+      await ensureBuyerSession();
       const response = await fetch(`/api/rooms/${roomID}/product-qa`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1776,7 +1921,12 @@ function App() {
   const toggleFollow = () => {
     setFollowed((value) => {
       const next = !value;
-      if (next) void completeLiveOpsTask('follow');
+      if (next) {
+        setBidFeedback('已关注，入场牌已点亮');
+        void completeLiveOpsTask('follow');
+      } else {
+        setBidFeedback('已取消关注');
+      }
       return next;
     });
   };
@@ -1790,6 +1940,7 @@ function App() {
     setActiveBuyerTeam(team);
     setLiveOpsError('');
     try {
+      await ensureBuyerSession();
       const response = await fetch(`/api/rooms/${roomID}/liveops/team`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1803,16 +1954,17 @@ function App() {
           playLayeredCue(audioContextRef.current, 'pk_surge', soundPackRef.current);
         }
       } else {
-        setLiveOpsError('阵营选择暂不可用，请稍后再试');
+        setLiveOpsError('讲解偏好暂不可用，请稍后再试');
       }
     } catch {
-      setLiveOpsError('阵营选择暂不可用，请稍后再试');
+      setLiveOpsError('讲解偏好暂不可用，请稍后再试');
     }
   };
 
   const enterLuckyDraw = async () => {
     setLiveOpsError('');
     try {
+      await ensureBuyerSession();
       const response = await fetch(`/api/rooms/${roomID}/liveops/lucky-draw/enter`, { method: 'POST' });
       const payload = await readJSON<LiveOpsCampaign>(response);
       if (response.ok && payload) {
@@ -1822,16 +1974,17 @@ function App() {
         }
         vibratePattern('leading');
       } else {
-        setLiveOpsError('请先完成暖场任务再参与福袋');
+        setLiveOpsError('请先完成互动任务再领取资格');
       }
     } catch {
-      setLiveOpsError('福袋暂不可用，请稍后再试');
+      setLiveOpsError('互动奖励暂不可用，请稍后再试');
     }
   };
 
   const openLuckyDraw = async () => {
     setLiveOpsError('');
     try {
+      await ensureBuyerSession();
       const response = await fetch(`/api/rooms/${roomID}/liveops/lucky-draw/open`, { method: 'POST' });
       const payload = await readJSON<LiveOpsCampaign>(response);
       if (response.ok && payload) {
@@ -1841,10 +1994,10 @@ function App() {
         }
         vibratePattern('sold');
       } else {
-        setLiveOpsError('请先参与福袋再开奖');
+        setLiveOpsError('请先领取资格再查看奖励');
       }
     } catch {
-      setLiveOpsError('开奖暂不可用，请稍后再试');
+      setLiveOpsError('互动奖励暂不可用，请稍后再试');
     }
   };
 
@@ -1939,7 +2092,11 @@ function App() {
           terminalWinnerMasked={terminalWinnerMasked}
           leaderboard={leaderboard}
           userBestCents={leaderboard?.my_best_amount_cents ?? 0}
-          onOpenOrders={() => setActiveSheet(resultSheetKind === 'winner' ? 'orders' : 'history')}
+          onOpenOrders={() => {
+            if (resultSheetKind === 'winner') setActiveSheet('orders');
+            else if (resultSheetKind === 'loser') setActiveSheet('history');
+            else openWarmupSheet('products', 'watch');
+          }}
           onPay={payOrder}
         />
       ) : null}

@@ -52,8 +52,8 @@ P10 demo proves the auction product flow, not a scripted UI playback. The judge-
 - Cancel active auction: PC cancels with a reason; H5 receives terminal state; flight recorder shows the cancel event and outbox delivery.
 - DRAFT rule edit: PC edits rules before schedule; invalid cap/increment is rejected by frontend guardrail and backend authority.
 - Recovery: force reconnect or snapshot refresh; H5 marks stale/recovering and disables dangerous actions until a fresh snapshot applies.
-- Extreme atmosphere: show sticky Bid Dock, rank strip, leaderboard sheet, official bid hints, extension pulse, sold mark, sound/haptic opt-in, and reduced-motion fallback.
-- Local host demo driver: PC Live Assist exposes host-only buttons for reject, second-bidder outbid, extension-window bid, and cap SOLD. These buttons call `/api/demo/auctions/{id}/competing-bid`, which is restricted to `APP_ENV=local|test` and host ownership. It still writes through the real bid repository, auction events, outbox, and order path; it must be described as a local driver for another deterministic demo bidder, not as production product UI.
+- Extreme atmosphere: show sticky Bid Dock, pressure action card, rank strip, realtime race board, outbid reminder, official bid hints, extension pulse, sold mark, sound/haptic opt-in, and reduced-motion fallback.
+- Local host demo driver: PC Live Assist exposes host-only buttons for invalid bid, buyer overtake, competitor outbid, three-bid duel, extension-window bid, and cap SOLD. These buttons call `/api/demo/auctions/{id}/competing-bid`, which is restricted to `APP_ENV=local|test` and host ownership. It still writes through the real bid repository, auction events, outbox, and order path; it must be described as a local deterministic bidder driver, not as production buyer UI.
 - Local fake-provider payment: use `/api/orders/{id}/pay-mock` only after saying it is a local provider boundary, not external payment.
 
 ## Manual Operation Map
@@ -73,7 +73,8 @@ H5 bidder room:
 1. Open `/rooms/{room_id}`. The feed shows product media, chat, connection, price/countdown/status, and a floating product card.
 2. Tap the product card to open the bid panel. Price, countdown, CTA, rank strip, Max Bid, leaderboard, rules, history, and orders are available there.
 3. Bid from H5 to see pending then accepted/leading only after backend confirmation.
-4. In PC Live Assist use `第二买家超越`, `触发 reject`, `窗口出价/延时`, and `封顶 SOLD` to drive the other-bidder branches while watching H5. H5 receives normal server responses/events and short non-blocking atmosphere animations.
+4. In PC Live Assist use `打开竞价演示`, then `买家反超一手`, `对手压过买家`, `连续竞价 3 手`, `模拟无效出价`, `触发末段延时`, and `触发封顶成交` to drive deterministic demo branches while watching H5. H5 receives normal server responses/events, expands the race board, opens the bid panel on self-outbid, and shows the pressure action card with the next valid bid.
+5. AI-generated buyer-facing commentary is normalized before insertion: if a provider confuses cents/yuan or says `4万元` for a `¥400.00` current price, the backend rewrites that money fact to `FormatCents(current_price_cents)` and records `money_normalized` in job safety metadata.
 
 ## Evidence To Capture
 

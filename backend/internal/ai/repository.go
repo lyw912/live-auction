@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -81,7 +82,7 @@ func (r *Repository) CreateListingDraft(ctx context.Context, hostID string, gen 
 		PromptVersion: PromptVersionListingDraft,
 		SchemaName:    "listing_draft",
 		Input:         inputMap,
-		Timeout:       8 * time.Second,
+		Timeout:       25 * time.Second,
 	})
 	status := "SUCCEEDED"
 	errorMessage := ""
@@ -254,7 +255,7 @@ func (r *Repository) CreateCommentary(ctx context.Context, hostID string, gen Ge
 		PromptVersion: PromptVersionCommentary,
 		SchemaName:    "auction_commentary",
 		Input:         inputMap,
-		Timeout:       3 * time.Second,
+		Timeout:       12 * time.Second,
 	})
 	status := "SUCCEEDED"
 	errorMessage := ""
@@ -274,8 +275,9 @@ func (r *Repository) CreateCommentary(ctx context.Context, hostID string, gen Ge
 			Safety: safety,
 		}
 	}
-	body := cleanText(stringValue(result.Output["body"]), 40)
+	body := cleanText(stringValue(result.Output["body"]), 160)
 	style := cleanText(firstNonEmpty(stringValue(result.Output["style"]), "steady"), 20)
+	body, moneyNormalized := normalizeCommentaryMoney(body, req.CurrentPriceCents)
 	if unsafeCommentaryBody(body) {
 		status = "FAILED"
 		errorMessage = firstNonEmpty(errorMessage, "AI provider returned unsafe commentary body")
@@ -287,6 +289,7 @@ func (r *Repository) CreateCommentary(ctx context.Context, hostID string, gen Ge
 		body, style, result.Safety = BuildCommentary(req)
 		result.Provider = "deterministic"
 		result.Model = "fallback-template"
+		moneyNormalized = false
 	}
 	result.Safety = ensureMap(result.Safety)
 	factsUsed := normalizeCommentaryFacts(result.Output["facts_used"])
@@ -296,6 +299,9 @@ func (r *Repository) CreateCommentary(ctx context.Context, hostID string, gen Ge
 	}
 	result.Output = normalizedCommentaryOutput(req, body, style, factsUsed, result.Output["safety_labels"])
 	result.Safety["facts_used"] = factsUsed
+	if moneyNormalized {
+		result.Safety["money_normalized"] = true
+	}
 	if result.Provider == "deterministic" || result.Model == "fallback-template" || status == "FAILED" {
 		result.Safety["fallback"] = true
 	}
@@ -320,6 +326,50 @@ func (r *Repository) CreateCommentary(ctx context.Context, hostID string, gen Ge
 		Output:        result.Output,
 		Safety:        result.Safety,
 		ErrorMessage:  errorMessage,
+		ReviewedBy:    hostID,
+	})
+	return msg, job, err
+}
+
+func (r *Repository) CreateQuickCommentary(ctx context.Context, hostID string, req CommentaryRequest) (SystemMessage, Job, error) {
+	if req.AuctionID == "" || req.RoomID == "" {
+		return SystemMessage{}, Job{}, apierrors.New(apierrors.CodeInvalidArgument, "auction_id and room_id are required", http.StatusBadRequest)
+	}
+	if !IsQuickCommentaryEvent(req.EventType) {
+		return SystemMessage{}, Job{}, apierrors.New(apierrors.CodeInvalidArgument, "unsupported quick commentary event", http.StatusBadRequest)
+	}
+	if err := r.ensureHostRoom(ctx, hostID, req.RoomID); err != nil {
+		return SystemMessage{}, Job{}, err
+	}
+	if req.SourceSeq <= 0 {
+		req.SourceSeq = time.Now().UnixMilli()
+	}
+	inputMap := structToMap(req)
+	body, style, safety := BuildCommentary(req)
+	safety = ensureMap(safety)
+	safety["quick_template"] = true
+	safety["provider"] = "host_quick_template"
+	safety["model"] = "reviewed-live-script"
+	safety["generation_status"] = "SUCCEEDED"
+	factsUsed := stringSlice(safety["facts_used"])
+	output := normalizedCommentaryOutput(req, body, style, factsUsed, []string{"buyer_facing", "host_reviewed"})
+	msg, err := r.InsertSystemMessage(ctx, req.RoomID, req.AuctionID, "HOST_SCRIPT", req.SourceSeq, style, body, inputMap, safety)
+	if err != nil {
+		return SystemMessage{}, Job{}, err
+	}
+	job, err := r.insertJob(ctx, Job{
+		ID:            "aijob_" + uuid.NewString(),
+		RoomID:        req.RoomID,
+		AuctionID:     req.AuctionID,
+		Kind:          "auction_commentary",
+		Status:        "SUCCEEDED",
+		InputHash:     InputHash(inputMap),
+		PromptVersion: PromptVersionCommentary,
+		Provider:      "host_quick_template",
+		Model:         "reviewed-live-script",
+		Input:         inputMap,
+		Output:        output,
+		Safety:        safety,
 		ReviewedBy:    hostID,
 	})
 	return msg, job, err
@@ -378,8 +428,9 @@ func (r *Repository) CreateAutoCommentary(ctx context.Context, gen Generator, re
 			Safety: safety,
 		}
 	}
-	body := cleanText(stringValue(result.Output["body"]), 40)
+	body := cleanText(stringValue(result.Output["body"]), 160)
 	style := cleanText(firstNonEmpty(stringValue(result.Output["style"]), "steady"), 20)
+	body, moneyNormalized := normalizeCommentaryMoney(body, req.CurrentPriceCents)
 	if unsafeCommentaryBody(body) {
 		status = "FAILED"
 		errorMessage = firstNonEmpty(errorMessage, "AI provider returned unsafe commentary body")
@@ -391,6 +442,7 @@ func (r *Repository) CreateAutoCommentary(ctx context.Context, gen Generator, re
 		body, style, result.Safety = BuildCommentary(req)
 		result.Provider = "deterministic"
 		result.Model = "fallback-template"
+		moneyNormalized = false
 	}
 	result.Safety = ensureMap(result.Safety)
 	factsUsed := normalizeCommentaryFacts(result.Output["facts_used"])
@@ -400,6 +452,9 @@ func (r *Repository) CreateAutoCommentary(ctx context.Context, gen Generator, re
 	}
 	result.Output = normalizedCommentaryOutput(req, body, style, factsUsed, result.Output["safety_labels"])
 	result.Safety["facts_used"] = factsUsed
+	if moneyNormalized {
+		result.Safety["money_normalized"] = true
+	}
 	if result.Provider == "deterministic" || result.Model == "fallback-template" || status == "FAILED" {
 		result.Safety["fallback"] = true
 	}
@@ -438,6 +493,29 @@ func normalizedCommentaryOutput(req CommentaryRequest, body string, style string
 		"facts_used":    factsUsed,
 		"safety_labels": limitStrings(stringSlice(safetyLabels), 8, 48),
 	}
+}
+
+func normalizeCommentaryMoney(body string, currentPriceCents int64) (string, bool) {
+	if body == "" || currentPriceCents <= 0 {
+		return body, false
+	}
+	expected := FormatCents(currentPriceCents)
+	changed := false
+	wrongYuan := fmt.Sprintf("%d", currentPriceCents)
+	if strings.Contains(body, wrongYuan+"元") {
+		body = strings.ReplaceAll(body, wrongYuan+"元", expected)
+		changed = true
+	}
+	wrongWan := currentPriceCents / 100
+	if wrongWan > 0 && wrongWan%100 == 0 {
+		unit := wrongWan / 100
+		re := regexp.MustCompile(fmt.Sprintf(`%d\s*万元`, unit))
+		if re.MatchString(body) {
+			body = re.ReplaceAllString(body, expected)
+			changed = true
+		}
+	}
+	return body, changed
 }
 
 func normalizeCommentaryFacts(value any) []string {
@@ -1311,7 +1389,7 @@ func (r *Repository) productQAContext(ctx context.Context, roomID string, auctio
 		_ = json.Unmarshal(outputRaw, &outputMap)
 		turn := ProductQATurn{
 			Question:  cleanText(stringValue(inputMap["question"]), 120),
-			Answer:    cleanText(stringValue(outputMap["answer"]), 180),
+			Answer:    cleanText(stringValue(outputMap["answer"]), 420),
 			FactsUsed: limitStrings(stringSlice(outputMap["facts_used"]), 8, 64),
 		}
 		if turn.Question != "" && turn.Answer != "" {
@@ -1336,7 +1414,7 @@ func normalizeProductQATurns(turns []ProductQATurn) []ProductQATurn {
 	}
 	for _, turn := range turns[start:] {
 		question := cleanText(turn.Question, 120)
-		answer := cleanText(turn.Answer, 180)
+		answer := cleanText(turn.Answer, 420)
 		if question == "" || answer == "" {
 			continue
 		}

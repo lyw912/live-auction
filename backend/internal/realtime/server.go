@@ -11,12 +11,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"nhooyr.io/websocket"
 
 	"live-auction/backend/internal/observability"
 	apierrors "live-auction/backend/internal/platform/errors"
+	"live-auction/backend/internal/redisx"
 )
 
 type Server struct {
@@ -304,6 +306,9 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 	connCtx = conn.CloseRead(connCtx)
 	writeMu := &sync.Mutex{}
 	go s.keepAlive(connCtx, cancelConn, conn, roomID, auctionID, ticket.UserID)
+	connID := uuid.NewString()
+	s.trackPresence(connCtx, roomID, ticket.UserID, connID)
+	defer s.untrackPresence(context.Background(), roomID, connID)
 
 	stageStart = time.Now()
 	slow := make(chan SlowConsumerInfo, 1)
@@ -395,6 +400,49 @@ func (s *Server) ServeWS(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+func (s *Server) trackPresence(ctx context.Context, roomID string, userID string, connID string) {
+	if s.redis == nil || roomID == "" || userID == "" || connID == "" {
+		return
+	}
+	const ttl = 90 * time.Second
+	connKey := redisx.RoomPresenceConnKey(roomID, connID)
+	roomKey := redisx.RoomPresenceKey(roomID)
+	pipe := s.redis.Pipeline()
+	pipe.Set(ctx, connKey, userID, ttl)
+	pipe.SAdd(ctx, roomKey, connID)
+	pipe.Expire(ctx, roomKey, ttl)
+	_, _ = pipe.Exec(ctx)
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				refreshCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+				pipe := s.redis.Pipeline()
+				pipe.Expire(refreshCtx, connKey, ttl)
+				pipe.Expire(refreshCtx, roomKey, ttl)
+				_, _ = pipe.Exec(refreshCtx)
+				cancel()
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+}
+
+func (s *Server) untrackPresence(ctx context.Context, roomID string, connID string) {
+	if s.redis == nil || roomID == "" || connID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	pipe := s.redis.Pipeline()
+	pipe.Del(ctx, redisx.RoomPresenceConnKey(roomID, connID))
+	pipe.SRem(ctx, redisx.RoomPresenceKey(roomID), connID)
+	_, _ = pipe.Exec(ctx)
 }
 
 func (s *Server) keepAlive(ctx context.Context, cancelConn context.CancelFunc, conn *websocket.Conn, roomID string, auctionID string, userID string) {

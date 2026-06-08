@@ -14,11 +14,13 @@ import (
 )
 
 type ChatProviderConfig struct {
-	BaseURL   string
-	Model     string
-	APIKey    string
-	Timeout   time.Duration
-	MaxTokens int
+	BaseURL        string
+	Model          string
+	APIKey         string
+	Timeout        time.Duration
+	MaxTokens      int
+	ResponseFormat string
+	TextOnly       bool
 }
 
 type ChatCompletionsGenerator struct {
@@ -43,6 +45,10 @@ func NewChatCompletionsGenerator(cfg ChatProviderConfig) (ChatCompletionsGenerat
 	if cfg.MaxTokens <= 0 {
 		cfg.MaxTokens = 2048
 	}
+	cfg.ResponseFormat = strings.TrimSpace(cfg.ResponseFormat)
+	if cfg.ResponseFormat == "" {
+		cfg.ResponseFormat = "json_schema"
+	}
 	return ChatCompletionsGenerator{
 		cfg: cfg,
 		client: &http.Client{
@@ -63,17 +69,21 @@ func (g ChatCompletionsGenerator) GenerateStructured(ctx context.Context, req St
 	}
 	payload := map[string]any{
 		"model":       g.cfg.Model,
-		"messages":    chatMessagesForRequest(req),
+		"messages":    g.chatMessagesForRequest(req, schema),
 		"temperature": temperatureForKind(req.Kind),
 		"max_tokens":  g.cfg.MaxTokens,
-		"response_format": map[string]any{
+	}
+	if g.cfg.ResponseFormat == "json_object" {
+		payload["response_format"] = map[string]any{"type": "json_object"}
+	} else {
+		payload["response_format"] = map[string]any{
 			"type": "json_schema",
 			"json_schema": map[string]any{
 				"name":   schema.name,
 				"strict": true,
 				"schema": schema.body,
 			},
-		},
+		}
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -136,7 +146,7 @@ func schemaForRequest(req StructuredRequest) (strictSchema, error) {
 			},
 			"properties": map[string]any{
 				"title_candidates":    stringArraySchema(1, 3),
-				"description":         stringSchema(1, 360),
+				"description":         stringSchema(120, 900),
 				"category":            stringSchema(1, 40),
 				"selling_points":      stringArraySchema(1, 5),
 				"condition_questions": stringArraySchema(1, 5),
@@ -144,7 +154,7 @@ func schemaForRequest(req StructuredRequest) (strictSchema, error) {
 				"requires_evidence":   stringArraySchema(0, 6),
 				"unsupported_claims":  stringArraySchema(0, 6),
 				"confidence":          map[string]any{"type": "number", "minimum": 0, "maximum": 1},
-				"rationale":           stringSchema(1, 160),
+				"rationale":           stringSchema(1, 260),
 				"rule_suggestion": map[string]any{
 					"type":                 "object",
 					"additionalProperties": false,
@@ -174,7 +184,7 @@ func schemaForRequest(req StructuredRequest) (strictSchema, error) {
 				"auction_id":    stringSchema(1, 80),
 				"source_seq":    integerSchema(0, 1<<53-1),
 				"style":         enumSchema([]string{"steady", "heat", "critical", "sold", "calm"}),
-				"body":          stringSchema(1, 40),
+				"body":          stringSchema(40, 160),
 				"facts_used":    stringArraySchema(1, 8),
 				"safety_labels": stringArraySchema(0, 8),
 			},
@@ -197,8 +207,8 @@ func schemaForRequest(req StructuredRequest) (strictSchema, error) {
 							"risk_type":          enumSchema([]string{"single_bidder_price_push", "bid_rule_probe", "sold_unpaid_pressure"}),
 							"severity":           enumSchema([]string{"LOW", "MED", "HIGH"}),
 							"score":              integerSchema(1, 100),
-							"explanation":        stringSchema(1, 160),
-							"recommended_action": stringSchema(1, 120),
+							"explanation":        stringSchema(40, 260),
+							"recommended_action": stringSchema(20, 220),
 							"facts_used":         stringArraySchema(1, 8),
 						},
 					},
@@ -211,9 +221,9 @@ func schemaForRequest(req StructuredRequest) (strictSchema, error) {
 			"additionalProperties": false,
 			"required":             []string{"answer", "facts_used", "safety_note", "follow_up_prompts"},
 			"properties": map[string]any{
-				"answer":            stringSchema(1, 180),
+				"answer":            stringSchema(40, 420),
 				"facts_used":        stringArraySchema(1, 8),
-				"safety_note":       stringSchema(1, 80),
+				"safety_note":       stringSchema(1, 140),
 				"follow_up_prompts": stringArraySchema(0, 3),
 			},
 		}}, nil
@@ -223,25 +233,40 @@ func schemaForRequest(req StructuredRequest) (strictSchema, error) {
 }
 
 func chatMessagesForRequest(req StructuredRequest) []map[string]any {
+	schema, _ := schemaForRequest(req)
+	return ChatCompletionsGenerator{}.chatMessagesForRequest(req, schema)
+}
+
+func (g ChatCompletionsGenerator) chatMessagesForRequest(req StructuredRequest, schema strictSchema) []map[string]any {
 	system := "你是直播竞拍系统的受控助手。只输出符合 JSON schema 的 JSON，不要输出 Markdown。不得编造观众人数、折扣、库存、鉴定结论、隐藏最高价、用户隐私或竞拍结果。竞拍裁判只来自系统事实。"
 	userText := "根据以下已审核输入生成结构化结果。"
 	if req.Kind == "listing_draft" {
-		userText = "为商家生成拍品草稿。必须标出需要人工核验的证据，不得承诺真伪、年代、升值或收益。"
+		userText = "为商家生成可编辑拍品草稿。请站在直播拍卖主持人/商家视角，输出有吸引力但克制的标题候选、120到320字商品描述和卖点。描述要具体到画面可见的颜色、光泽、造型、佩戴/收藏场景、上手观感和直播讲解节奏；可以用温和比喻和口播感，但每句话都必须服务于展示、信任或转化，不要空泛赞美。不得喊“赶快抢购”、不得制造虚假紧迫、不得承诺真伪、年代、材质、证书、升值或收益。凡涉及材质、年代、证书、瑕疵、尺寸、来源，都必须放到 requires_evidence 或 condition_questions，等待商家确认。"
 	}
 	if req.Kind == "auction_commentary" {
-		userText = "生成一条不超过40字的直播系统解说。只能引用输入事实，不得诱导冲动消费，不得制造假紧迫。"
+		userText = "生成一条60到150字的直播拍卖主播提示。要像真实主播口播：先解释当前场景，再给买家一个可执行动作，例如看证据、确认预算、按系统按钮出价、查看规则。只写一条可以直接发给买家的话，不要套话、口号、无事实形容词或技术术语。只能引用输入事实，不得编造观众人数、折扣、库存、鉴定结论、隐藏最高价或成交结果；不得喊赶快抢购或制造虚假紧迫。"
 	}
 	if req.Kind == "sentinel_explanation" {
-		userText = "为主播风控台生成告警解释。只能在 candidates 中已有风险类型内改写解释、建议和分数；不得新增风险类型，不得指控真实身份，不得自动封禁。"
+		userText = "为主播风控台生成告警解释。每条解释要说明为什么影响本场拍卖，建议要给主播可执行动作，例如暂停催拍、提示按预算出价、等待订单状态或查看诊断页。只能在 candidates 中已有风险类型内改写解释、建议和分数；不得新增风险类型，不得指控真实身份，不得自动封禁。"
 	}
 	if req.Kind == "product_qa" {
-		userText = "回答买家关于拍品和竞拍规则的问题。可参考 recent_turns 理解追问，但只能使用 facts 字段里的已审核事实；没有事实就回答未提供；不得承诺真伪、升值收益、隐藏最高价或平台外交易。follow_up_prompts 给出最多3个买家自然追问。"
+		userText = "回答买家关于拍品和竞拍规则的问题。答案要像客服兼场控，先直接回答，再说明依据来自哪个已审核事实，最后提示下一步可做什么；不能只有一句复读。可参考 recent_turns 理解追问，但只能使用 facts 字段里的已审核事实；没有事实就回答未提供；不得承诺真伪、升值收益、隐藏最高价或平台外交易。follow_up_prompts 给出最多3个买家自然追问。"
 	}
 	textInput := req.Input
 	if req.Kind == "listing_draft" {
 		textInput = sanitizedListingTextInput(req.Input)
 	}
-	content := []map[string]any{{"type": "text", "text": userText + "\n输入 JSON:\n" + mustJSON(textInput)}}
+	textContent := userText + "\n输入 JSON:\n" + mustJSON(textInput)
+	if g.cfg.ResponseFormat == "json_object" {
+		textContent += "\n只返回一个 JSON 对象，字段必须匹配这个 JSON Schema，不要返回其他字段：\n" + mustJSON(schema.body)
+	}
+	if g.cfg.TextOnly {
+		return []map[string]any{
+			{"role": "system", "content": system},
+			{"role": "user", "content": textContent},
+		}
+	}
+	content := []map[string]any{{"type": "text", "text": textContent}}
 	if req.Kind == "listing_draft" {
 		for _, imageURL := range stringSlice(req.Input["image_urls"]) {
 			if isProviderImageURL(imageURL) {

@@ -1,0 +1,81 @@
+{
+  "generated_at": "2026-06-08T11:12:04.580Z",
+  "base_url": "https://cc.580ai.net/v1",
+  "model": "qwen-vl-max",
+  "text_base_url": "https://api.deepseek.com/v1",
+  "text_model": "deepseek-v4-flash",
+  "timeout_ms": 45000,
+  "checks": [
+    {
+      "name": "text_chat_json_object_required",
+      "status": "PASS",
+      "duration_ms": 1625,
+      "summary": "text provider returned parseable auction commentary JSON",
+      "body_chars": 27,
+      "facts_used_count": 2
+    },
+    {
+      "name": "models_endpoint_optional",
+      "status": "PASS",
+      "duration_ms": 599,
+      "summary": "/models works, configured model not listed",
+      "sample_model_count": 0,
+      "configured_model_listed": false
+    },
+    {
+      "name": "chat_plain_text_optional",
+      "status": "PASS",
+      "duration_ms": 1398,
+      "summary": "text chat completion returned expected marker",
+      "finish_reason": "stop",
+      "response_chars": 13
+    },
+    {
+      "name": "chat_structured_text_optional",
+      "status": "WARN",
+      "duration_ms": 1717,
+      "error": "response is not JSON: 当前价650元，最后5秒，有人刚出价。"
+    },
+    {
+      "name": "chat_json_schema_optional",
+      "status": "WARN",
+      "duration_ms": 5981,
+      "error": "json_schema response did not match required shape: {\"title\":\"Vintage Ceramic Tea Cup\",\"description\":\"A classic ceramic tea cup in excellent condition, featuring a simple, elegant design. Perfect for daily use or as a collectible piece. Shows minimal s"
+    },
+    {
+      "name": "chat_multimodal_https_optional",
+      "status": "PASS",
+      "duration_ms": 2947,
+      "summary": "HTTPS image_url input produced parseable visual answer",
+      "dominant_color": "yellow",
+      "subject": null,
+      "can_see_image": true
+    },
+    {
+      "name": "chat_json_object_optional",
+      "status": "PASS",
+      "duration_ms": 4467,
+      "summary": "json_object response_format returns parseable listing draft JSON",
+      "keys": [
+        "title",
+        "start_price_cents",
+        "increment_cents",
+        "safety_labels"
+      ]
+    }
+  ],
+  "verdict": "PASS",
+  "development_gate": {
+    "can_start_p0_ai": true,
+    "wire_api": "routed_text_deepseek_plus_vision_relay",
+    "structured_output_mode": "text_json_object; vision_json_schema",
+    "multimodal_input_mode": "chat_completions_https_image_url",
+    "notes": [
+      "Text tasks are verified against the configured DeepSeek-compatible Chat Completions JSON object path.",
+      "For the product UI, users upload images to our backend. The relay probe intentionally checks only Chat Completions with provider-fetchable HTTPS image URLs.",
+      "AI calls must stay outside the bid hot path.",
+      "Persist provider/model/request metadata and validated JSON output.",
+      "Use deterministic fallback when provider times out or returns invalid JSON."
+    ]
+  }
+}

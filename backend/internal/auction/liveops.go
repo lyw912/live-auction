@@ -2,8 +2,11 @@ package auction
 
 import (
 	"context"
+	"encoding/json"
 	"hash/fnv"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -34,6 +37,34 @@ type LiveOpsCampaign struct {
 	UpdatedAt   time.Time        `json:"updated_at"`
 }
 
+type LiveOpsRewardConfig struct {
+	Enabled           bool   `json:"enabled"`
+	Title             string `json:"title"`
+	Description       string `json:"description"`
+	RewardName        string `json:"reward_name"`
+	RewardQuota       int    `json:"reward_quota"`
+	RequiredTaskCount int    `json:"required_task_count"`
+}
+
+type LiveOpsHostSummary struct {
+	Campaign          LiveOpsCampaign      `json:"campaign"`
+	RewardConfig     LiveOpsRewardConfig  `json:"reward_config"`
+	ParticipantCount  int                  `json:"participant_count"`
+	QualifiedCount    int                  `json:"qualified_count"`
+	OpenedCount       int                  `json:"opened_count"`
+	PreferenceSummary []LiveOpsTeam        `json:"preference_summary"`
+	RecentRewards     []LiveOpsRewardEntry `json:"recent_rewards"`
+}
+
+type LiveOpsRewardEntry struct {
+	UserID      string     `json:"user_id"`
+	UserMasked  string     `json:"user_masked"`
+	Status      string     `json:"status"`
+	RewardLabel string     `json:"reward_label,omitempty"`
+	EnteredAt   time.Time  `json:"entered_at"`
+	OpenedAt    *time.Time `json:"opened_at,omitempty"`
+}
+
 type LiveOpsTeam struct {
 	Key   string `json:"key"`
 	Label string `json:"label"`
@@ -54,6 +85,10 @@ type LiveOpsLuckyDraw struct {
 	CompletedTaskCount int        `json:"completed_task_count"`
 	CanEnter           bool       `json:"can_enter"`
 	OpenedAt           *time.Time `json:"opened_at,omitempty"`
+}
+
+type LiveOpsCampaignRuleConfig struct {
+	Reward LiveOpsRewardConfig `json:"reward"`
 }
 
 var liveOpsTaskCatalog = []LiveOpsTask{
@@ -92,6 +127,67 @@ func (r *Repository) GetLiveOpsCampaign(ctx context.Context, roomID string, user
 		return LiveOpsCampaign{}, err
 	}
 	return campaign, nil
+}
+
+func (r *Repository) GetLiveOpsHostSummary(ctx context.Context, roomID string) (LiveOpsHostSummary, error) {
+	if roomID == "" {
+		return LiveOpsHostSummary{}, apierrors.New(apierrors.CodeInvalidArgument, "room_id is required", http.StatusBadRequest)
+	}
+	campaign, err := r.ensureLiveOpsCampaign(ctx, roomID)
+	if err != nil {
+		return LiveOpsHostSummary{}, err
+	}
+	if err := r.attachLiveOpsTeams(ctx, &campaign, ""); err != nil {
+		return LiveOpsHostSummary{}, err
+	}
+	if err := r.attachLiveOpsLuckyDraw(ctx, &campaign, ""); err != nil {
+		return LiveOpsHostSummary{}, err
+	}
+	config, err := r.liveOpsRewardConfig(ctx, campaign.ID)
+	if err != nil {
+		return LiveOpsHostSummary{}, err
+	}
+	qualifiedCount, err := r.liveOpsQualifiedCount(ctx, campaign.ID)
+	if err != nil {
+		return LiveOpsHostSummary{}, err
+	}
+	recentRewards, err := r.liveOpsRecentRewards(ctx, campaign.ID)
+	if err != nil {
+		return LiveOpsHostSummary{}, err
+	}
+	return LiveOpsHostSummary{
+		Campaign:          campaign,
+		RewardConfig:     config,
+		ParticipantCount:  campaign.LuckyDraw.Participants,
+		QualifiedCount:    qualifiedCount,
+		OpenedCount:       liveOpsOpenedRewardCount(recentRewards),
+		PreferenceSummary: campaign.TeamScores,
+		RecentRewards:     recentRewards,
+	}, nil
+}
+
+func (r *Repository) UpdateLiveOpsRewardConfig(ctx context.Context, roomID string, input LiveOpsRewardConfig) (LiveOpsHostSummary, error) {
+	if roomID == "" {
+		return LiveOpsHostSummary{}, apierrors.New(apierrors.CodeInvalidArgument, "room_id is required", http.StatusBadRequest)
+	}
+	campaign, err := r.ensureLiveOpsCampaign(ctx, roomID)
+	if err != nil {
+		return LiveOpsHostSummary{}, err
+	}
+	config := normalizeLiveOpsRewardConfig(input)
+	rules := LiveOpsCampaignRuleConfig{Reward: config}
+	raw, err := json.Marshal(rules)
+	if err != nil {
+		return LiveOpsHostSummary{}, err
+	}
+	if _, err := r.db.Exec(ctx, `
+		UPDATE liveops_campaigns
+		SET title = $1, description = $2, rules_json = $3::jsonb, updated_at = now()
+		WHERE id = $4
+	`, config.Title, config.Description, string(raw), campaign.ID); err != nil {
+		return LiveOpsHostSummary{}, err
+	}
+	return r.GetLiveOpsHostSummary(ctx, roomID)
 }
 
 func (r *Repository) CompleteLiveOpsTask(ctx context.Context, roomID string, userID string, taskKey string) (LiveOpsCampaign, error) {
@@ -147,7 +243,7 @@ func (r *Repository) EnterLiveOpsLuckyDraw(ctx context.Context, roomID string, u
 		return LiveOpsCampaign{}, err
 	}
 	if !campaign.LuckyDraw.CanEnter {
-		return LiveOpsCampaign{}, apierrors.New(apierrors.CodeInvalidArgument, "complete warm-up tasks before entering lucky draw", http.StatusBadRequest)
+		return LiveOpsCampaign{}, apierrors.New(apierrors.CodeInvalidArgument, "complete interaction tasks before entering reward activity", http.StatusBadRequest)
 	}
 	if _, err := r.db.Exec(ctx, `
 		INSERT INTO liveops_lucky_draw_entries (campaign_id, room_id, user_id, entry_status)
@@ -169,9 +265,13 @@ func (r *Repository) OpenLiveOpsLuckyDraw(ctx context.Context, roomID string, us
 		return LiveOpsCampaign{}, err
 	}
 	if campaign.LuckyDraw.MyEntryStatus == "" {
-		return LiveOpsCampaign{}, apierrors.New(apierrors.CodeInvalidArgument, "enter lucky draw before opening", http.StatusBadRequest)
+		return LiveOpsCampaign{}, apierrors.New(apierrors.CodeInvalidArgument, "enter reward activity before opening", http.StatusBadRequest)
 	}
-	rewardKey, rewardLabel := deterministicLuckyDrawReward(campaign.ID, userID)
+	config, err := r.liveOpsRewardConfig(ctx, campaign.ID)
+	if err != nil {
+		return LiveOpsCampaign{}, err
+	}
+	rewardKey, rewardLabel := deterministicLuckyDrawReward(campaign.ID, userID, config)
 	if _, err := r.db.Exec(ctx, `
 		UPDATE liveops_lucky_draw_entries
 		SET entry_status = 'OPENED', reward_key = $1, reward_label = $2, opened_at = COALESCE(opened_at, now())
@@ -200,12 +300,11 @@ func (r *Repository) ensureLiveOpsCampaign(ctx context.Context, roomID string) (
 	id := "loc_" + uuid.NewString()
 	err = r.db.QueryRow(ctx, `
 		INSERT INTO liveops_campaigns (id, room_id, status, title, description, rules_json)
-		VALUES ($1, $2, 'ACTIVE', '开拍前准备', '完成信息查看、关注、问答和榜单确认，帮助自己理解本场规则。',
-		        jsonb_build_object('no_lottery', true, 'no_reward', true, 'no_price_or_winner_impact', true))
+		VALUES ($1, $2, 'ACTIVE', $3, $4, $5::jsonb)
 		ON CONFLICT (room_id) WHERE status = 'ACTIVE'
 		DO UPDATE SET updated_at = liveops_campaigns.updated_at
 		RETURNING id, room_id, status, title, description, updated_at
-	`, id, roomID).Scan(&campaign.ID, &campaign.RoomID, &campaign.Status, &campaign.Title, &campaign.Description, &campaign.UpdatedAt)
+	`, id, roomID, defaultLiveOpsRewardConfig.Title, defaultLiveOpsRewardConfig.Description, defaultLiveOpsRulesJSON()).Scan(&campaign.ID, &campaign.RoomID, &campaign.Status, &campaign.Title, &campaign.Description, &campaign.UpdatedAt)
 	campaign.Disclaimer = liveOpsDisclaimer
 	return campaign, err
 }
@@ -272,8 +371,8 @@ func (r *Repository) attachLiveOpsTeams(ctx context.Context, campaign *LiveOpsCa
 		return err
 	}
 	campaign.TeamScores = []LiveOpsTeam{
-		{Key: "craft", Label: "工艺派", Count: counts["craft"]},
-		{Key: "story", Label: "故事派", Count: counts["story"]},
+		{Key: "craft", Label: "看工艺", Count: counts["craft"]},
+		{Key: "story", Label: "听故事", Count: counts["story"]},
 	}
 	return nil
 }
@@ -287,24 +386,34 @@ func (r *Repository) attachLiveOpsLuckyDraw(ctx context.Context, campaign *LiveO
 	`, campaign.ID).Scan(&participants); err != nil {
 		return err
 	}
+	config, err := r.liveOpsRewardConfig(ctx, campaign.ID)
+	if err != nil {
+		return err
+	}
+	requiredTaskCount := config.RequiredTaskCount
+	if requiredTaskCount <= 0 || requiredTaskCount > len(liveOpsTaskCatalog) {
+		requiredTaskCount = len(liveOpsTaskCatalog)
+	}
 	draw := LiveOpsLuckyDraw{
 		Status:             "READY",
-		Title:              "开拍福袋",
-		Description:        "完成准备后参与，开奖展示演示奖励，不影响价格或中标。",
+		Title:              config.Title,
+		Description:        config.Description,
 		OpensAt:            campaign.UpdatedAt.Add(90 * time.Second),
 		ServerTime:         time.Now().UTC(),
 		Participants:       participants,
-		EligibleTaskCount:  len(liveOpsTaskCatalog),
+		EligibleTaskCount:  requiredTaskCount,
 		CompletedTaskCount: campaign.Progress,
-		CanEnter:           campaign.Progress >= len(liveOpsTaskCatalog),
+		CanEnter:           config.Enabled && campaign.Progress >= requiredTaskCount,
 	}
 	var openedAt *time.Time
-	if err := r.db.QueryRow(ctx, `
-		SELECT entry_status, COALESCE(reward_key, ''), COALESCE(reward_label, ''), opened_at
-		FROM liveops_lucky_draw_entries
-		WHERE campaign_id = $1 AND user_id = $2
-	`, campaign.ID, userID).Scan(&draw.MyEntryStatus, &draw.MyRewardKey, &draw.MyRewardLabel, &openedAt); err != nil && err != pgx.ErrNoRows {
-		return err
+	if userID != "" {
+		if err := r.db.QueryRow(ctx, `
+			SELECT entry_status, COALESCE(reward_key, ''), COALESCE(reward_label, ''), opened_at
+			FROM liveops_lucky_draw_entries
+			WHERE campaign_id = $1 AND user_id = $2
+		`, campaign.ID, userID).Scan(&draw.MyEntryStatus, &draw.MyRewardKey, &draw.MyRewardLabel, &openedAt); err != nil && err != pgx.ErrNoRows {
+			return err
+		}
 	}
 	draw.OpenedAt = openedAt
 	if draw.MyEntryStatus == "OPENED" {
@@ -316,20 +425,138 @@ func (r *Repository) attachLiveOpsLuckyDraw(ctx context.Context, campaign *LiveO
 	return nil
 }
 
+func (r *Repository) liveOpsRewardConfig(ctx context.Context, campaignID string) (LiveOpsRewardConfig, error) {
+	var raw []byte
+	if err := r.db.QueryRow(ctx, `
+		SELECT rules_json
+		FROM liveops_campaigns
+		WHERE id = $1
+	`, campaignID).Scan(&raw); err != nil {
+		return LiveOpsRewardConfig{}, err
+	}
+	var rules LiveOpsCampaignRuleConfig
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &rules)
+	}
+	return normalizeLiveOpsRewardConfig(rules.Reward), nil
+}
+
+func (r *Repository) liveOpsQualifiedCount(ctx context.Context, campaignID string) (int, error) {
+	var count int
+	config, err := r.liveOpsRewardConfig(ctx, campaignID)
+	if err != nil {
+		return 0, err
+	}
+	required := config.RequiredTaskCount
+	if required <= 0 || required > len(liveOpsTaskCatalog) {
+		required = len(liveOpsTaskCatalog)
+	}
+	err = r.db.QueryRow(ctx, `
+		SELECT count(*)
+		FROM (
+		  SELECT user_id
+		  FROM liveops_task_progress
+		  WHERE campaign_id = $1
+		  GROUP BY user_id
+		  HAVING count(DISTINCT task_key) >= $2
+		) q
+	`, campaignID, required).Scan(&count)
+	return count, err
+}
+
+func (r *Repository) liveOpsRecentRewards(ctx context.Context, campaignID string) ([]LiveOpsRewardEntry, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT user_id, entry_status, COALESCE(reward_label, ''), entered_at, opened_at
+		FROM liveops_lucky_draw_entries
+		WHERE campaign_id = $1
+		ORDER BY entered_at DESC
+		LIMIT 20
+	`, campaignID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]LiveOpsRewardEntry, 0)
+	for rows.Next() {
+		var row LiveOpsRewardEntry
+		if err := rows.Scan(&row.UserID, &row.Status, &row.RewardLabel, &row.EnteredAt, &row.OpenedAt); err != nil {
+			return nil, err
+		}
+		row.UserMasked = maskLiveOpsUser(row.UserID)
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
 func validLiveOpsTeam(key string) bool {
 	return key == "craft" || key == "story"
 }
 
-func deterministicLuckyDrawReward(campaignID string, userID string) (string, string) {
-	rewards := []struct{ key, label string }{
-		{"coupon", "下场围观券"},
-		{"badge", "直播间高光入场牌"},
-		{"priority_qa", "主播优先答疑卡"},
+func deterministicLuckyDrawReward(campaignID string, userID string, config LiveOpsRewardConfig) (string, string) {
+	label := strings.TrimSpace(config.RewardName)
+	if label == "" {
+		label = defaultLiveOpsRewardConfig.RewardName
 	}
 	hash := fnv.New32a()
-	_, _ = hash.Write([]byte(campaignID + ":" + userID))
-	reward := rewards[int(hash.Sum32())%len(rewards)]
-	return reward.key, reward.label
+	_, _ = hash.Write([]byte(campaignID + ":" + userID + ":" + label))
+	return "configured_" + strings.ToLower(strconv.FormatUint(uint64(hash.Sum32()), 36)), label
 }
 
-const liveOpsDisclaimer = "福袋和阵营为比赛演示玩法；奖励不影响价格、排名、成交或保证金。"
+const liveOpsDisclaimer = "互动任务只用于直播间氛围和讲解偏好，不影响价格、排名、成交、保证金或订单权益。"
+
+var defaultLiveOpsRewardConfig = LiveOpsRewardConfig{
+	Enabled:           true,
+	Title:             "直播间权益",
+	Description:       "完成互动任务后领取直播间展示权益；当前不发放真实优惠券、奖品或订单权益。",
+	RewardName:        "主播优先答疑",
+	RewardQuota:       20,
+	RequiredTaskCount: 3,
+}
+
+func normalizeLiveOpsRewardConfig(input LiveOpsRewardConfig) LiveOpsRewardConfig {
+	out := input
+	if strings.TrimSpace(out.Title) == "" {
+		out.Title = defaultLiveOpsRewardConfig.Title
+	}
+	if strings.TrimSpace(out.Description) == "" {
+		out.Description = defaultLiveOpsRewardConfig.Description
+	}
+	if strings.TrimSpace(out.RewardName) == "" {
+		out.RewardName = defaultLiveOpsRewardConfig.RewardName
+	}
+	if out.RewardQuota <= 0 || out.RewardQuota > 9999 {
+		out.RewardQuota = defaultLiveOpsRewardConfig.RewardQuota
+	}
+	if out.RequiredTaskCount <= 0 || out.RequiredTaskCount > len(liveOpsTaskCatalog) {
+		out.RequiredTaskCount = defaultLiveOpsRewardConfig.RequiredTaskCount
+	}
+	return out
+}
+
+func defaultLiveOpsRulesJSON() string {
+	raw, err := json.Marshal(LiveOpsCampaignRuleConfig{Reward: defaultLiveOpsRewardConfig})
+	if err != nil {
+		return `{}`
+	}
+	return string(raw)
+}
+
+func liveOpsOpenedRewardCount(rows []LiveOpsRewardEntry) int {
+	count := 0
+	for _, row := range rows {
+		if row.Status == "OPENED" {
+			count++
+		}
+	}
+	return count
+}
+
+func maskLiveOpsUser(userID string) string {
+	if userID == "" {
+		return "-"
+	}
+	if len(userID) <= 4 {
+		return userID
+	}
+	return userID[:2] + "***" + userID[len(userID)-2:]
+}

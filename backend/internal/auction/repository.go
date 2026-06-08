@@ -429,6 +429,59 @@ func (r *Repository) Cancel(ctx context.Context, auctionID string, input CancelI
 	return r.GetAuction(ctx, auctionID)
 }
 
+func (r *Repository) ShortenActiveAuction(ctx context.Context, auctionID string, remainingSeconds int, traceID string) (Auction, error) {
+	if remainingSeconds < 5 || remainingSeconds > 120 {
+		return Auction{}, apierrors.New(apierrors.CodeInvalidArgument, "remaining_seconds must be between 5 and 120", 400)
+	}
+	tx, err := r.beginTx(ctx)
+	if err != nil {
+		return Auction{}, err
+	}
+	defer rollback(ctx, tx)
+
+	var status Status
+	var oldEndAt time.Time
+	if err := tx.QueryRow(ctx, `
+		SELECT status, end_at
+		FROM auctions
+		WHERE id = $1
+		FOR UPDATE
+	`, auctionID).Scan(&status, &oldEndAt); err != nil {
+		return Auction{}, mapNotFound(err)
+	}
+	if status != StatusActive {
+		return Auction{}, apierrors.New(apierrors.CodeInvalidArgument, "only ACTIVE auction can be shortened", 409)
+	}
+	now := time.Now().UTC()
+	newEndAt := now.Add(time.Duration(remainingSeconds) * time.Second)
+	if !newEndAt.Before(oldEndAt) {
+		return Auction{}, apierrors.New(apierrors.CodeInvalidArgument, "auction already ends sooner than requested", 409)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE auctions
+		SET end_at = $2, updated_at = now()
+		WHERE id = $1
+	`, auctionID, newEndAt); err != nil {
+		return Auction{}, mapPGError(err)
+	}
+	if err := upsertSchedulerJob(ctx, tx, "END_AUCTION", "auction", auctionID, "end:"+auctionID, newEndAt); err != nil {
+		return Auction{}, err
+	}
+	if err := appendAuctionEvent(ctx, tx, auctionID, "auction_end_shortened", traceID, map[string]any{
+		"end_at":            newEndAt,
+		"old_end_at":        oldEndAt,
+		"new_end_at":        newEndAt,
+		"remaining_seconds": remainingSeconds,
+		"reason":            "HOST_DEMO_ACCELERATION",
+	}); err != nil {
+		return Auction{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Auction{}, err
+	}
+	return r.GetAuction(ctx, auctionID)
+}
+
 func (r *Repository) NarrateStart(ctx context.Context, auctionID string, traceID string) (Auction, error) {
 	tx, err := r.beginTx(ctx)
 	if err != nil {

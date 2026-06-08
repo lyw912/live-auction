@@ -115,7 +115,7 @@ function drawHighlightFrame(ctx: CanvasRenderingContext2D, recap: ResultRecap, p
   roundedRect(ctx, 82, 625, width - 164, 210, 22, 'rgba(255,255,255,0.15)');
   ctx.fillStyle = '#ffffff';
   ctx.font = '800 32px Arial, sans-serif';
-  ctx.fillText('高光事实', 112, 690);
+  ctx.fillText('成交凭证', 112, 690);
   ctx.fillStyle = '#fff5db';
   ctx.font = '400 28px Arial, sans-serif';
   wrapCanvasText(ctx, recap.facts.join(' · ') || '真实竞拍记录', 112, 755, width - 224, 38, 2);
@@ -230,11 +230,17 @@ export function ResultSheet({
   };
   const defeatedBidders = kind === 'winner' ? Math.max(0, recapHeat.acceptedBidderCount - 1) : 0;
   const knownLeaderboardEntries = Math.max(0, leaderboard?.entries?.length ?? 0);
+  const totalAcceptedBids = Math.max(
+    kind === 'winner' ? 1 : 0,
+    recapHeat.totalAcceptedBids ?? 0,
+    recapHeat.acceptedBids30s ?? 0,
+    knownLeaderboardEntries
+  );
   const sourceFacts = [
     defeatedBidders > 0 ? `击败 ${defeatedBidders} 位有效出价者` : '',
-    settlementSeq && settlementSeq > 0 ? `成交回链 seq ${settlementSeq}` : '',
-    orderID ? `订单回链 ${displayOrderNo(orderID)}` : '',
-    knownLeaderboardEntries > 0 ? `榜单锁定 Top ${knownLeaderboardEntries}` : ''
+    totalAcceptedBids > 0 ? `本场 ${totalAcceptedBids} 次有效出价` : '',
+    orderID ? `订单 ${displayOrderNo(orderID)}` : '',
+    knownLeaderboardEntries > 0 ? `榜单前 ${knownLeaderboardEntries} 名已确认` : ''
   ].filter(Boolean);
   const recap: ResultRecap = buildResultRecap({
     itemTitle: item.title ?? scenario.title,
@@ -269,24 +275,6 @@ export function ResultSheet({
     window.setTimeout(() => URL.revokeObjectURL(url), 250);
     setShareFeedback('已保存');
   };
-  const downloadHighlightVideo = async () => {
-    if (!recap) return;
-    try {
-      const clip = await buildHighlightVideo(recap);
-      const url = URL.createObjectURL(clip.blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = clip.filename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-      setShareFeedback('视频已保存');
-    } catch {
-      setShareFeedback('当前浏览器不支持视频生成');
-    }
-  };
-
   return (
     <section className={`result-sheet ${kind} ${compact ? 'is-compact' : ''}`} data-testid="result-sheet" aria-label={title}>
       {!compact ? <div className="result-cinematic-bg" aria-hidden="true" /> : null}
@@ -330,27 +318,24 @@ export function ResultSheet({
             <button type="button" aria-label="copy-result-recap" onClick={() => void copyRecap()}>
               <Copy size={14} /> 复制
             </button>
-            <button type="button" aria-label="download-highlight-card" onClick={downloadHighlight}>
-              <Download size={14} /> 高光卡
-            </button>
-            <button type="button" aria-label="download-highlight-video" onClick={() => void downloadHighlightVideo()}>
-              <Download size={14} /> 短视频
+            <button type="button" aria-label="download-result-credential" onClick={downloadHighlight}>
+              <Download size={14} /> 保存凭证
             </button>
             {shareFeedback ? <b>{shareFeedback}</b> : null}
           </div>
         </div>
       ) : null}
       {kind === 'winner' ? (
-        <div className="result-climax-card" data-testid="result-climax-card" aria-label="落槌高光">
-          <span>落槌高光</span>
+        <div className="result-climax-card" data-testid="result-climax-card" aria-label="成交凭证">
+          <span>成交凭证</span>
           <strong>{soldPrice}</strong>
-          <p>{Math.max(0, recapHeat.acceptedBidderCount)} 人有效出价 · {Math.max(0, recapHeat.totalAcceptedBids ?? recapHeat.acceptedBids30s)} 次真实出价</p>
+          <p>{Math.max(kind === 'winner' ? 1 : 0, recapHeat.acceptedBidderCount)} 人有效出价 · {totalAcceptedBids} 次真实出价</p>
           {sourceFacts.length ? (
             <div className="result-fact-chips" data-testid="result-fact-chips">
               {sourceFacts.map((fact) => <small key={fact}>{fact}</small>)}
             </div>
           ) : null}
-          <em>战绩卡已生成，先确认成交事实再进入支付</em>
+          <em>成交事实已确认，可继续支付或查看订单</em>
         </div>
       ) : null}
       {kind !== 'winner' && nextAuction ? (

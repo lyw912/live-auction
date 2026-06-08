@@ -60,6 +60,16 @@ type Config struct {
 	AIAPIKey                     string
 	AIRelayTimeout               time.Duration
 	AIRelayMaxTokens             int
+	AITextBaseURL                string
+	AITextModel                  string
+	AITextAPIKey                 string
+	AITextTimeout                time.Duration
+	AITextMaxTokens              int
+	AIVisionBaseURL              string
+	AIVisionModel                string
+	AIVisionAPIKey               string
+	AIVisionTimeout              time.Duration
+	AIVisionMaxTokens            int
 	AICommentaryBackfillLookback time.Duration
 	AICommentaryBatchSize        int
 	AICommentaryTaskTimeout      time.Duration
@@ -142,6 +152,16 @@ func Load() Config {
 		AIAPIKey:                     getEnv("API_KEY", ""),
 		AIRelayTimeout:               getEnvDuration("AI_RELAY_TIMEOUT", getEnvMillisDuration("AI_RELAY_TIMEOUT_MS", 45*time.Second)),
 		AIRelayMaxTokens:             getEnvInt("AI_RELAY_MAX_TOKENS", 2048),
+		AITextBaseURL:                getEnv("AI_TEXT_BASE_URL", "https://api.deepseek.com"),
+		AITextModel:                  getEnv("AI_TEXT_MODEL", "deepseek-v4-flash"),
+		AITextAPIKey:                 getEnvFirst([]string{"AI_TEXT_API_KEY", "DEEPSEEK_API_KEY"}, ""),
+		AITextTimeout:                getEnvDuration("AI_TEXT_TIMEOUT", getEnvMillisDuration("AI_TEXT_TIMEOUT_MS", 20*time.Second)),
+		AITextMaxTokens:              getEnvInt("AI_TEXT_MAX_TOKENS", 1024),
+		AIVisionBaseURL:              getEnv("AI_VISION_BASE_URL", getEnv("AI_RELAY_BASE_URL", "https://api.gptgod.online/v1")),
+		AIVisionModel:                getEnv("AI_VISION_MODEL", getEnv("AI_RELAY_MODEL", "gemini-3.1-flash-image-preview")),
+		AIVisionAPIKey:               getEnv("AI_VISION_API_KEY", getEnv("API_KEY", "")),
+		AIVisionTimeout:              getEnvDuration("AI_VISION_TIMEOUT", getEnvDuration("AI_RELAY_TIMEOUT", getEnvMillisDuration("AI_RELAY_TIMEOUT_MS", 45*time.Second))),
+		AIVisionMaxTokens:            getEnvInt("AI_VISION_MAX_TOKENS", getEnvInt("AI_RELAY_MAX_TOKENS", 2048)),
 		AICommentaryBackfillLookback: getEnvDuration("AI_COMMENTARY_BACKFILL_LOOKBACK", 24*time.Hour),
 		AICommentaryBatchSize:        getEnvInt("AI_COMMENTARY_BATCH_SIZE", 4),
 		AICommentaryTaskTimeout:      getEnvDuration("AI_COMMENTARY_TASK_TIMEOUT", 20*time.Second),
@@ -191,6 +211,15 @@ func getEnv(key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func getEnvFirst(keys []string, fallback string) string {
+	for _, key := range keys {
+		if value := os.Getenv(key); value != "" {
+			return value
+		}
+	}
+	return fallback
 }
 
 func loadDotEnvIfPresent() {

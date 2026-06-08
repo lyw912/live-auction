@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -177,6 +178,74 @@ func TestAICommentarySystemMessagesSentinelRecapAndProductQA(t *testing.T) {
 	}
 	if commentary.Message.Body == "" || commentary.Message.SourceSeq == nil || commentary.Message.Safety["no_hidden_max_bid"] != true {
 		t.Fatalf("bad commentary payload: %#v", commentary.Message)
+	}
+	wrongRoomBody := bytes.NewBufferString(`{"room_id":"room_not_owned_by_payload","auction_id":"forged_auction","source_seq":77,"event_type":"rule_guardrail","item_title":"` + row.Item.Title + `","current_price_cents":15000,"active_bidders_30s":0,"accepted_bids_30s":0}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/host/auctions/"+row.ID+"/commentary", wrongRoomBody)
+	for key, values := range userHeaders("host_1", "host") {
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("commentary should use auction room over body room, status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var normalized struct {
+		Message struct {
+			RoomID    string `json:"room_id"`
+			AuctionID string `json:"auction_id"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &normalized); err != nil {
+		t.Fatalf("decode normalized commentary: %v", err)
+	}
+	if normalized.Message.RoomID != row.RoomID || normalized.Message.AuctionID != row.ID {
+		t.Fatalf("commentary was not normalized to auction scope: %#v", normalized.Message)
+	}
+	manualTopics := []struct {
+		eventType  string
+		wantBody   string
+		wantSource string
+	}{
+		{"product_evidence", "先看证据：证书、实物图和已披露瑕疵都在拍品详情里。喜欢的买家先确认品相，再按自己的预算出价。", "HOST_SCRIPT"},
+		{"rule_guardrail", "这场按服务端规则走：起拍、加价、封顶和保证金都已写清，系统只接受有效价格，大额误触会先确认。", "HOST_SCRIPT"},
+		{"extended", "末段有人出价会自动延时，这是给所有买家补反应时间，不是主播手动拖场；看清倒计时再决定是否跟。", "HOST_SCRIPT"},
+	}
+	for index, topic := range manualTopics {
+		body := bytes.NewBufferString(`{"room_id":"` + row.RoomID + `","auction_id":"` + row.ID + `","source_seq":` + strconv.Itoa(9001+index) + `,"event_type":"` + topic.eventType + `","item_title":"` + row.Item.Title + `","current_price_cents":15000,"active_bidders_30s":0,"accepted_bids_30s":0}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/host/auctions/"+row.ID+"/commentary", body)
+		for key, values := range userHeaders("host_1", "host") {
+			for _, value := range values {
+				req.Header.Add(key, value)
+			}
+		}
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("manual commentary %s status = %d body=%s", topic.eventType, rec.Code, rec.Body.String())
+		}
+		var manual struct {
+			Message struct {
+				Body   string `json:"body"`
+				Source string `json:"source"`
+			} `json:"message"`
+			Job struct {
+				Provider string         `json:"provider"`
+				Safety   map[string]any `json:"safety_json"`
+			} `json:"job"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &manual); err != nil {
+			t.Fatalf("decode manual commentary: %v", err)
+		}
+		if manual.Message.Body != topic.wantBody {
+			t.Fatalf("manual commentary %s body = %q, want %q", topic.eventType, manual.Message.Body, topic.wantBody)
+		}
+		if manual.Message.Source != topic.wantSource || manual.Job.Provider != "host_quick_template" || manual.Job.Safety["quick_template"] != true {
+			t.Fatalf("manual commentary %s should use quick template source/job: %#v", topic.eventType, manual)
+		}
 	}
 	aiRepo := aicap.NewRepository(db)
 	assertAPIStatus(t, router, http.MethodGet, "/api/host/auctions/"+row.ID+"/ai-settings", nil, userHeaders("host_1", "host"), http.StatusOK)

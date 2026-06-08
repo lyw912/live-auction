@@ -108,12 +108,26 @@ func (h AIHandler) CreateCommentary(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
 		return
 	}
+	auctionID := chi.URLParam(r, "id")
+	roomID, err := h.RoomACL.requireHostOwnsAuction(r.Context(), user, auctionID, traceID(r.Context()))
+	if err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
 	var req aicap.CommentaryRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "invalid json body", http.StatusBadRequest))
 		return
 	}
-	msg, job, err := h.Repo.CreateCommentary(r.Context(), user.ID, h.generator(), req)
+	req.AuctionID = auctionID
+	req.RoomID = roomID
+	var msg aicap.SystemMessage
+	var job aicap.Job
+	if aicap.IsQuickCommentaryEvent(req.EventType) {
+		msg, job, err = h.Repo.CreateQuickCommentary(r.Context(), user.ID, req)
+	} else {
+		msg, job, err = h.Repo.CreateCommentary(r.Context(), user.ID, h.generator(), req)
+	}
 	if err != nil {
 		writeResult(w, r, http.StatusOK, nil, err)
 		return

@@ -24,6 +24,8 @@ type liveOpsTestPayload struct {
 	MyTeam     string `json:"my_team"`
 	Disclaimer string `json:"disclaimer"`
 	LuckyDraw  struct {
+		Title              string `json:"title"`
+		Description        string `json:"description"`
 		Status             string `json:"status"`
 		Participants       int    `json:"participants"`
 		MyEntryStatus      string `json:"my_entry_status"`
@@ -44,6 +46,29 @@ type liveOpsTestPayload struct {
 	} `json:"tasks"`
 }
 
+type liveOpsHostPayload struct {
+	RewardConfig struct {
+		Enabled           bool   `json:"enabled"`
+		Title             string `json:"title"`
+		Description       string `json:"description"`
+		RewardName        string `json:"reward_name"`
+		RewardQuota       int    `json:"reward_quota"`
+		RequiredTaskCount int    `json:"required_task_count"`
+	} `json:"reward_config"`
+	ParticipantCount int `json:"participant_count"`
+	QualifiedCount   int `json:"qualified_count"`
+	OpenedCount      int `json:"opened_count"`
+	RecentRewards    []struct {
+		UserMasked  string `json:"user_masked"`
+		Status      string `json:"status"`
+		RewardLabel string `json:"reward_label"`
+	} `json:"recent_rewards"`
+	PreferenceSummary []struct {
+		Key   string `json:"key"`
+		Count int    `json:"count"`
+	} `json:"preference_summary"`
+}
+
 func TestLiveOpsCampaignRoutesPersistTaskProgress(t *testing.T) {
 	db := openMonitorDB(t)
 	rdb := redis.NewClient(&redis.Options{Addr: "localhost:6380"})
@@ -55,7 +80,7 @@ func TestLiveOpsCampaignRoutesPersistTaskProgress(t *testing.T) {
 	}
 	if _, err := db.Exec(context.Background(), `
 		INSERT INTO room_memberships (room_id, user_id, role, status)
-		VALUES ($1, 'user_1', 'viewer', 'ACTIVE')
+		VALUES ($1, 'user_1', 'viewer', 'ACTIVE'), ($1, 'host_1', 'host', 'ACTIVE')
 	`, roomID); err != nil {
 		t.Fatalf("insert membership: %v", err)
 	}
@@ -69,6 +94,17 @@ func TestLiveOpsCampaignRoutesPersistTaskProgress(t *testing.T) {
 	if payload.Disclaimer == "" {
 		t.Fatalf("liveops disclaimer is required")
 	}
+	hostPayload := requestLiveOpsHost(t, router, http.MethodPatch, "/api/host/rooms/"+roomID+"/liveops", bytes.NewBufferString(`{
+		"enabled": true,
+		"title": "证书讲解福利",
+		"description": "完成 2 个互动任务后领取主播优先答疑权益。",
+		"reward_name": "主播优先答疑",
+		"reward_quota": 5,
+		"required_task_count": 2
+	}`), userHeaders("host_1", "host"), http.StatusOK)
+	if hostPayload.RewardConfig.Title != "证书讲解福利" || hostPayload.RewardConfig.RequiredTaskCount != 2 {
+		t.Fatalf("host reward config was not saved: %#v", hostPayload.RewardConfig)
+	}
 
 	payload = requestLiveOps(t, router, http.MethodPost, "/api/rooms/"+roomID+"/liveops/tasks/watch", userHeaders("user_1", "user"), http.StatusOK)
 	if payload.Progress != 1 || !taskCompleted(payload, "watch") {
@@ -81,12 +117,18 @@ func TestLiveOpsCampaignRoutesPersistTaskProgress(t *testing.T) {
 	}
 
 	assertAPIStatus(t, router, http.MethodPost, "/api/rooms/"+roomID+"/liveops/tasks/bad", nil, userHeaders("user_1", "user"), http.StatusBadRequest)
-	assertAPIStatus(t, router, http.MethodPost, "/api/rooms/"+roomID+"/liveops/lucky-draw/enter", nil, userHeaders("user_1", "user"), http.StatusBadRequest)
-	for _, task := range []string{"follow", "ask", "leaderboard"} {
+	if payload.LuckyDraw.CanEnter {
+		t.Fatalf("reward should require 2 tasks after host config: %#v", payload.LuckyDraw)
+	}
+	payload = requestLiveOps(t, router, http.MethodPost, "/api/rooms/"+roomID+"/liveops/tasks/follow", userHeaders("user_1", "user"), http.StatusOK)
+	if !payload.LuckyDraw.CanEnter || payload.LuckyDraw.Title != "证书讲解福利" {
+		t.Fatalf("reward should be enterable after configured task count: %#v", payload.LuckyDraw)
+	}
+	for _, task := range []string{"ask", "leaderboard"} {
 		payload = requestLiveOps(t, router, http.MethodPost, "/api/rooms/"+roomID+"/liveops/tasks/"+task, userHeaders("user_1", "user"), http.StatusOK)
 	}
-	if !payload.LuckyDraw.CanEnter || payload.LuckyDraw.CompletedTaskCount != 4 {
-		t.Fatalf("lucky draw should be enterable after tasks: %#v", payload.LuckyDraw)
+	if !payload.LuckyDraw.CanEnter || payload.LuckyDraw.CompletedTaskCount != 4 || payload.LuckyDraw.EligibleTaskCount != 2 {
+		t.Fatalf("reward eligibility should follow host config: %#v", payload.LuckyDraw)
 	}
 	payload = requestLiveOps(t, router, http.MethodPost, "/api/rooms/"+roomID+"/liveops/lucky-draw/enter", userHeaders("user_1", "user"), http.StatusOK)
 	if payload.LuckyDraw.MyEntryStatus != "ENTERED" || payload.LuckyDraw.Participants != 1 {
@@ -95,6 +137,10 @@ func TestLiveOpsCampaignRoutesPersistTaskProgress(t *testing.T) {
 	payload = requestLiveOps(t, router, http.MethodPost, "/api/rooms/"+roomID+"/liveops/lucky-draw/open", userHeaders("user_1", "user"), http.StatusOK)
 	if payload.LuckyDraw.MyEntryStatus != "OPENED" || payload.LuckyDraw.MyRewardKey == "" || payload.LuckyDraw.MyRewardLabel == "" {
 		t.Fatalf("lucky draw reward not opened: %#v", payload.LuckyDraw)
+	}
+	hostPayload = requestLiveOpsHost(t, router, http.MethodGet, "/api/host/rooms/"+roomID+"/liveops", nil, userHeaders("host_1", "host"), http.StatusOK)
+	if hostPayload.ParticipantCount != 1 || hostPayload.QualifiedCount != 1 || hostPayload.OpenedCount != 1 || len(hostPayload.RecentRewards) != 1 {
+		t.Fatalf("host summary should expose participation and reward results: %#v", hostPayload)
 	}
 	payload = requestLiveOpsWithBody(t, router, http.MethodPost, "/api/rooms/"+roomID+"/liveops/team", bytes.NewBufferString(`{"team_key":"story"}`), userHeaders("user_1", "user"), http.StatusOK)
 	if payload.MyTeam != "story" || teamCount(payload, "story") != 1 {
@@ -106,10 +152,34 @@ func TestLiveOpsCampaignRoutesPersistTaskProgress(t *testing.T) {
 	}
 	assertAPIStatus(t, router, http.MethodPost, "/api/rooms/"+roomID+"/liveops/team", bytes.NewBufferString(`{"team_key":"bad"}`), userHeaders("user_1", "user"), http.StatusBadRequest)
 	assertAPIStatus(t, router, http.MethodGet, "/api/rooms/"+roomID+"/liveops", nil, userHeaders("user_2", "user"), http.StatusForbidden)
+	assertAPIStatus(t, router, http.MethodGet, "/api/host/rooms/"+roomID+"/liveops", nil, userHeaders("user_1", "user"), http.StatusForbidden)
 }
 
 func requestLiveOps(t *testing.T, router http.Handler, method string, path string, headers http.Header, want int) liveOpsTestPayload {
 	return requestLiveOpsWithBody(t, router, method, path, nil, headers, want)
+}
+
+func requestLiveOpsHost(t *testing.T, router http.Handler, method string, path string, body *bytes.Buffer, headers http.Header, want int) liveOpsHostPayload {
+	t.Helper()
+	if body == nil {
+		body = bytes.NewBuffer(nil)
+	}
+	req := httptest.NewRequest(method, path, body)
+	for key, values := range headers {
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
+	}
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != want {
+		t.Fatalf("%s %s status = %d, want %d body=%s", method, path, rec.Code, want, rec.Body.String())
+	}
+	var payload liveOpsHostPayload
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode host liveops payload: %v body=%s", err, rec.Body.String())
+	}
+	return payload
 }
 
 func requestLiveOpsWithBody(t *testing.T, router http.Handler, method string, path string, body *bytes.Buffer, headers http.Header, want int) liveOpsTestPayload {

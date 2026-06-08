@@ -5,8 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"mime"
 	"net/http"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -18,6 +22,7 @@ import (
 	aicap "live-auction/backend/internal/ai"
 	"live-auction/backend/internal/auction"
 	"live-auction/backend/internal/config"
+	"live-auction/backend/internal/demo"
 	"live-auction/backend/internal/observability"
 	apierrors "live-auction/backend/internal/platform/errors"
 	"live-auction/backend/internal/realtime"
@@ -67,6 +72,11 @@ type demoCompetingBidRequest struct {
 	ClientBidID   string `json:"client_bid_id"`
 	AmountCents   int64  `json:"amount_cents"`
 	ClientSeenSeq int64  `json:"client_seen_seq"`
+	Mode          string `json:"mode"`
+}
+
+type demoShortenEndRequest struct {
+	RemainingSeconds int `json:"remaining_seconds"`
 }
 
 type liveOpsTaskRequest struct {
@@ -75,6 +85,15 @@ type liveOpsTaskRequest struct {
 
 type liveOpsTeamRequest struct {
 	TeamKey string `json:"team_key"`
+}
+
+type liveOpsRewardConfigRequest struct {
+	Enabled           bool   `json:"enabled"`
+	Title             string `json:"title"`
+	Description       string `json:"description"`
+	RewardName        string `json:"reward_name"`
+	RewardQuota       int    `json:"reward_quota"`
+	RequiredTaskCount int    `json:"required_task_count"`
 }
 
 type roomSummary struct {
@@ -149,6 +168,56 @@ func (h AuctionHandler) GetLiveOpsCampaign(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusOK, campaign)
+}
+
+func (h AuctionHandler) GetHostLiveOpsSummary(w http.ResponseWriter, r *http.Request) {
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	roomID := chi.URLParam(r, "room_id")
+	if err := h.ACL.requireHostOwnsRoom(r.Context(), user, roomID, traceID(r.Context())); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	summary, err := h.Repo.GetLiveOpsHostSummary(r.Context(), roomID)
+	if err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, summary)
+}
+
+func (h AuctionHandler) UpdateHostLiveOpsReward(w http.ResponseWriter, r *http.Request) {
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	roomID := chi.URLParam(r, "room_id")
+	if err := h.ACL.requireHostOwnsRoom(r.Context(), user, roomID, traceID(r.Context())); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	var req liveOpsRewardConfigRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "invalid json body", http.StatusBadRequest))
+		return
+	}
+	summary, err := h.Repo.UpdateLiveOpsRewardConfig(r.Context(), roomID, auction.LiveOpsRewardConfig{
+		Enabled:           req.Enabled,
+		Title:             req.Title,
+		Description:       req.Description,
+		RewardName:        req.RewardName,
+		RewardQuota:       req.RewardQuota,
+		RequiredTaskCount: req.RequiredTaskCount,
+	})
+	if err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, summary)
 }
 
 func (h AuctionHandler) CompleteLiveOpsTask(w http.ResponseWriter, r *http.Request) {
@@ -269,6 +338,110 @@ func publicObjectURL(useSSL bool, endpoint string, bucket string, objectName str
 		scheme = "https"
 	}
 	return scheme + "://" + endpoint + "/" + bucket + "/" + objectName
+}
+
+func publicMediaURL(objectName string) string {
+	return "/api/media/" + strings.TrimLeft(objectName, "/")
+}
+
+func (h AuctionHandler) UploadItemImage(w http.ResponseWriter, r *http.Request) {
+	if h.Deps == nil || h.Deps.MinIO == nil {
+		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "image storage is not available", http.StatusInternalServerError))
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 12<<20)
+	if err := r.ParseMultipartForm(12 << 20); err != nil {
+		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "image file is too large or invalid", http.StatusBadRequest))
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "file is required", http.StatusBadRequest))
+		return
+	}
+	defer file.Close()
+	contentType := header.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = mime.TypeByExtension(strings.ToLower(filepath.Ext(header.Filename)))
+	}
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	if !strings.HasPrefix(contentType, "image/") {
+		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "only image uploads are supported", http.StatusBadRequest))
+		return
+	}
+	exts, _ := mime.ExtensionsByType(contentType)
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	if ext == "" && len(exts) > 0 {
+		ext = exts[0]
+	}
+	if ext == "" {
+		ext = ".bin"
+	}
+	objectName := fmt.Sprintf("items/%d-%s%s", time.Now().UnixNano(), sanitizeObjectStem(header.Filename), ext)
+	info, err := h.Deps.MinIO.PutObject(r.Context(), h.Deps.Bucket, objectName, file, header.Size, minio.PutObjectOptions{ContentType: contentType})
+	if err != nil {
+		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "image upload failed", http.StatusInternalServerError))
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"bucket":      h.Deps.Bucket,
+		"object_name": objectName,
+		"size":        info.Size,
+		"public_url":  publicMediaURL(objectName),
+	})
+}
+
+func (h AuctionHandler) ServeMedia(w http.ResponseWriter, r *http.Request) {
+	if h.Deps == nil || h.Deps.MinIO == nil {
+		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "image storage is not available", http.StatusInternalServerError))
+		return
+	}
+	objectName := strings.TrimPrefix(chi.URLParam(r, "*"), "/")
+	if objectName == "" || strings.Contains(objectName, "..") || !strings.HasPrefix(objectName, "items/") {
+		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "invalid media path", http.StatusBadRequest))
+		return
+	}
+	object, err := h.Deps.MinIO.GetObject(r.Context(), h.Deps.Bucket, objectName, minio.GetObjectOptions{})
+	if err != nil {
+		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "media not found", http.StatusNotFound))
+		return
+	}
+	defer object.Close()
+	info, err := object.Stat()
+	if err != nil {
+		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "media not found", http.StatusNotFound))
+		return
+	}
+	if info.ContentType != "" {
+		w.Header().Set("Content-Type", info.ContentType)
+	} else if contentType := mime.TypeByExtension(strings.ToLower(filepath.Ext(objectName))); contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	}
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	w.Header().Set("Content-Length", strconv.FormatInt(info.Size, 10))
+	if _, err := io.Copy(w, object); err != nil {
+		return
+	}
+}
+
+func sanitizeObjectStem(filename string) string {
+	stem := strings.TrimSuffix(filepath.Base(filename), filepath.Ext(filename))
+	stem = strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' {
+			return r
+		}
+		return '-'
+	}, stem)
+	stem = strings.Trim(stem, "-_")
+	if stem == "" {
+		return "upload"
+	}
+	if len(stem) > 60 {
+		return stem[:60]
+	}
+	return stem
 }
 
 func (h AuctionHandler) CreateItem(w http.ResponseWriter, r *http.Request) {
@@ -744,14 +917,25 @@ func (h AuctionHandler) DemoCompetingBid(w http.ResponseWriter, r *http.Request)
 		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "invalid json body", 400))
 		return
 	}
+	state, err := h.Repo.GetAuction(r.Context(), auctionID)
+	if err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
 	if req.BidderID == "" {
-		req.BidderID = h.Config.MockUserID
+		req.BidderID = demoBidderForMode(req.Mode, state)
 	}
 	if req.BidderID == "" {
 		req.BidderID = "user_2"
 	}
 	if req.ClientBidID == "" {
 		req.ClientBidID = "host-demo-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	}
+	if req.AmountCents <= 0 {
+		req.AmountCents = demoBidAmountForMode(req.Mode, state)
+	}
+	if req.ClientSeenSeq <= 0 {
+		req.ClientSeenSeq = state.Seq
 	}
 	if _, err := h.ACL.requireActiveMembershipForAuction(r.Context(), AuthUser{ID: req.BidderID, Role: "user"}, auctionID, traceID(r.Context())); err != nil {
 		writeResult(w, r, http.StatusOK, nil, err)
@@ -769,6 +953,97 @@ func (h AuctionHandler) DemoCompetingBid(w http.ResponseWriter, r *http.Request)
 			IdempotencyKey: req.ClientBidID,
 		}, traceID(r.Context()))
 	}
+	writeResult(w, r, http.StatusOK, result, err)
+}
+
+func demoBidderForMode(mode string, state auction.Auction) string {
+	switch mode {
+	case "buyer":
+		return "user_1"
+	case "outbid", "extend", "sold":
+		if state.CurrentWinnerID == nil || *state.CurrentWinnerID != "user_2" {
+			return "user_2"
+		}
+		return "user_3"
+	default:
+		if state.CurrentWinnerID != nil && *state.CurrentWinnerID == "user_2" {
+			return "user_3"
+		}
+		return "user_2"
+	}
+}
+
+func demoBidAmountForMode(mode string, state auction.Auction) int64 {
+	current := state.CurrentPriceCents
+	increment := state.IncrementCents
+	if increment <= 0 {
+		increment = 1
+	}
+	if mode == "reject" {
+		return current + increment + 1
+	}
+	if mode == "sold" && state.CapPriceCents != nil && *state.CapPriceCents > current {
+		return *state.CapPriceCents
+	}
+	next := current + increment
+	if state.AcceptedBidCount == 0 {
+		next = state.StartPriceCents + increment
+	}
+	if state.CapPriceCents != nil && next > *state.CapPriceCents {
+		return *state.CapPriceCents
+	}
+	return next
+}
+
+func (h AuctionHandler) ResetDemoSeed(w http.ResponseWriter, r *http.Request) {
+	if h.Config.AppEnv != "local" && h.Config.AppEnv != "test" {
+		writeError(w, r, apierrors.New(apierrors.CodeForbiddenRoom, "demo seed reset is local/test only", http.StatusForbidden))
+		return
+	}
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	if err := h.ACL.requireHostOwnsRoom(r.Context(), user, "room_main", traceID(r.Context())); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	if err := demo.SeedP0Smoke(r.Context(), h.Deps.Postgres, h.Deps.Redis); err != nil {
+		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "demo seed reset failed: "+err.Error(), http.StatusInternalServerError))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":      "ok",
+		"rooms":       []string{"room_main", "room_side"},
+		"active_room": "room_main",
+		"active_id":   "auc_live",
+	})
+}
+
+func (h AuctionHandler) DemoShortenEnd(w http.ResponseWriter, r *http.Request) {
+	if h.Config.AppEnv != "local" && h.Config.AppEnv != "test" {
+		writeError(w, r, apierrors.New(apierrors.CodeForbiddenRoom, "demo countdown accelerator is local/test only", http.StatusForbidden))
+		return
+	}
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	auctionID := chi.URLParam(r, "id")
+	if _, err := h.ACL.requireHostOwnsAuction(r.Context(), user, auctionID, traceID(r.Context())); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	req := demoShortenEndRequest{RemainingSeconds: 15}
+	if r.Body != nil {
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "invalid json body", http.StatusBadRequest))
+			return
+		}
+	}
+	result, err := h.Repo.ShortenActiveAuction(r.Context(), auctionID, req.RemainingSeconds, traceID(r.Context()))
 	writeResult(w, r, http.StatusOK, result, err)
 }
 

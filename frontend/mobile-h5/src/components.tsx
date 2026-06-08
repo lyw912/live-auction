@@ -10,7 +10,7 @@ import SoundIcon from '@icon-park/react/es/icons/SoundOne';
 import TruckIcon from '@icon-park/react/es/icons/Truck';
 import type { AtmosphereCue, AtmosphereIntensity } from './atmosphere';
 import type { AuctionItem, AuctionState, AuctionSummary, BottomSheetKey, ChatMessage, ConnectionPhase, CountdownPhase, CountdownPhaseState, HeatSnapshot, HistoryRow, LeaderboardPayload, LiveOpsCampaign, MaxBidIntent, MaxBidPhase, PaymentPhase, ProductQAAnswer, ResultSheetKind, Scenario, SoundCapability, SystemMessage } from './domain';
-import { auctionStatusLabel, connectionSyncCopy, demoLiveVideoURL, demoProductImageURL, formatCents, formatClockTime, isDangerousActionDisabled, leaderboardActionCopy, rankBadgeLabel, riskActionCopy, scenarios } from './domain';
+import { auctionStatusLabel, connectionSyncCopy, demoLiveVideoURL, demoProductImageURL, displayMediaURL, formatCents, formatClockTime, isDangerousActionDisabled, leaderboardActionCopy, rankBadgeLabel, riskActionCopy, scenarios } from './domain';
 import { h5Copy } from './copy';
 import { ResultSheet } from './result';
 
@@ -101,7 +101,7 @@ export function LiveStage({
   onLike: () => void;
   onToggleSound: () => void;
 }) {
-  const mediaURL = item.video_poster_url ?? item.videoPosterURL ?? item.image_url ?? item.imageURL ?? '';
+  const mediaURL = displayMediaURL(item.video_poster_url ?? item.videoPosterURL ?? item.image_url ?? item.imageURL);
   const videoURL = demoLiveVideoURL;
   const activeAuction = auctions.find((auction) => auction.id === activeAuctionID);
   const queuedCount = auctions.filter((auction) => auction.id !== activeAuctionID).length;
@@ -109,11 +109,10 @@ export function LiveStage({
   if (item.certificate) proofChips.push({ icon: <CertificateIcon size={13} theme="multi-color" fill={iconParkProofFill} />, label: item.certificate });
   if (item.condition) proofChips.push({ icon: <JewelryIcon size={13} theme="multi-color" fill={iconParkProofFill} />, label: item.condition });
   if (item.shipping) proofChips.push({ icon: <TruckIcon size={13} theme="multi-color" fill={['#00A870', '#2c2c2c', '#F7E6CA', '#D4AF37']} />, label: item.shipping });
-  const cohostMessages = systemMessages.filter((message) => message.source === 'SYSTEM_AI');
-  const barrageMessages = systemMessages.filter((message) => message.source !== 'SYSTEM_AI');
+  const barrageMessages = systemMessages;
   const visibleSystem = barrageMessages.slice(0, 2).map((message) => ({
     id: `sys-${message.id}`,
-    user: '助手',
+    user: message.source === 'SYSTEM_AI' || message.source === 'HOST_SCRIPT' ? '主播提示' : '系统提示',
     body: message.body
   }));
   const visibleChat = [
@@ -125,12 +124,15 @@ export function LiveStage({
     }))
   ].slice(-4);
   const connectionCopy = connectionPhase === 'connected'
-    ? '已连接'
+    ? '直播已连接'
     : connectionPhase === 'recovering'
-      ? h5Copy.loading
+      ? '直播重连中'
       : connectionPhase === 'connecting'
-        ? '连接中'
-        : '已断开';
+        ? '直播连接中'
+        : '直播已断开';
+  const onlineBuyerCopy = heat.watcherCountAvailable && heat.watcherCount != null
+    ? `在线买家 ${heat.watcherCount}`
+    : '在线买家';
   const roomCopy = roomID === 'room_main'
     ? '竞拍专场'
     : roomID.replace(/^room[_-]?/i, '专场 ');
@@ -196,8 +198,9 @@ export function LiveStage({
           <span><strong>{roomCopy}</strong><em>正在直播</em></span>
           <button type="button" className={followed ? 'is-followed' : ''} onClick={onToggleFollow}>{followed ? '已关注' : '关注'}</button>
         </div>
-        <span className="viewer-count avatar-stack" title="真实竞价热度，不展示虚构观看人数"><Users size={13} /> {heat.activeBidders30s > 0 ? `近30秒 ${heat.activeBidders30s} 人` : '等待买家进入'}</span>
-        <span className="viewer-count"><Wifi size={13} /> {connectionCopy}</span>
+        <span className="viewer-count avatar-stack" title="当前直播间在线买家数"><Users size={13} /> {onlineBuyerCopy}</span>
+        {followed ? <span className="viewer-count" title="已关注本直播间"><BadgeCheck size={13} /> 已关注</span> : null}
+        <span className="viewer-count" title="直播间实时连接状态"><Wifi size={13} /> {connectionCopy}</span>
         <button
           className="sound-toggle"
           type="button"
@@ -209,8 +212,22 @@ export function LiveStage({
           {soundEnabled ? <SoundIcon size={14} theme="filled" fill="#fff" /> : <BellOff size={14} />}
         </button>
       </div>
-      <RaceBoard leaderboard={leaderboard} nextBidCents={nextBidCents} forceExpanded={raceBoardExpanded} intensity={atmosphereIntensity} onOpenBid={onOpenBid} />
-      <CohostRibbon messages={cohostMessages} />
+      <RaceBoard
+        leaderboard={leaderboard}
+        nextBidCents={nextBidCents}
+        forceExpanded={raceBoardExpanded}
+        intensity={atmosphereIntensity}
+        atmosphereCue={atmosphereCue}
+        onOpenBid={onOpenBid}
+      />
+      <PressureActionCard
+        atmosphereCue={atmosphereCue}
+        countdownPhase={countdownPhase}
+        leaderboard={leaderboard}
+        nextBidCents={nextBidCents}
+        scenario={scenario}
+        onOpenBid={onOpenBid}
+      />
       <FinalSecondsLayer countdownPhase={countdownPhase} atmosphereCue={atmosphereCue} scenario={scenario} />
       <div className="stage-safe-zone">
         <div className="live-topic-row" aria-label="live-topic">
@@ -263,7 +280,7 @@ export function LiveStage({
         <button type="button" onClick={onOpenProducts} aria-label="商品列表"><ShoppingBagIcon className="action-rail-icon" size={26} theme="outline" fill={iconParkActionFill} strokeWidth={4} /><span className="live-action-badge">{queuedCount + 1}</span></button>
         <button type="button" onClick={onOpenLiveOps} aria-label="直播互动"><CommentIcon className="action-rail-icon" size={26} theme="outline" fill={iconParkActionFill} strokeWidth={4} /></button>
         <button type="button" onClick={onLike} aria-label="点赞"><LikeIcon className="action-rail-icon" size={26} theme="outline" fill={iconParkActionFill} strokeWidth={4} /><span className="live-action-badge">{likeCount}</span></button>
-        <button type="button" onClick={onOpenMore} aria-label="更多"><MoreIcon className="action-rail-icon" size={26} theme="outline" fill={iconParkActionFill} strokeWidth={4} /></button>
+        <button type="button" onClick={onOpenMore} aria-label="我的"><MoreIcon className="action-rail-icon" size={26} theme="outline" fill={iconParkActionFill} strokeWidth={4} /></button>
       </div>
     </section>
   );
@@ -364,7 +381,7 @@ function ClimaxLayer({
       data-testid="climax-layer"
       data-motion={motionEnabled ? 'on' : 'off'}
       aria-live="assertive"
-      aria-label="落槌高潮"
+      aria-label="落槌结果"
     >
       {motionEnabled ? (
         <canvas
@@ -378,11 +395,11 @@ function ClimaxLayer({
       ) : null}
       <div className="climax-spotlight" aria-hidden="true" />
       <div className="climax-card" data-testid="climax-stage-card">
-        <span>{isWinner ? '落槌高光' : '本场落槌'}</span>
+        <span>{isWinner ? '成交凭证' : '本场落槌'}</span>
         <strong>{isWinner ? '中拍！' : '已成交'}</strong>
         <em>{formatCents(terminalPriceCents)}</em>
         <p>{bidderCopy} · {totalBidCopy}</p>
-        <small>{isWinner ? '战绩卡先确认成交事实，再进入支付' : '成交事实已锁定，查看记录继续下一件'}</small>
+        <small>{isWinner ? '先确认成交事实，再进入支付' : '成交事实已锁定，查看记录继续下一件'}</small>
       </div>
     </section>
   );
@@ -433,12 +450,14 @@ function RaceBoard({
   nextBidCents,
   forceExpanded,
   intensity,
+  atmosphereCue,
   onOpenBid
 }: {
   leaderboard: LeaderboardPayload | null;
   nextBidCents: number;
   forceExpanded: boolean;
   intensity: AtmosphereIntensity;
+  atmosphereCue: AtmosphereCue | null;
   onOpenBid: () => void;
 }) {
   const entries = leaderboard?.entries ?? [];
@@ -449,6 +468,7 @@ function RaceBoard({
   const gap = leaderboard?.gap_to_leader_cents ?? (mine && leader ? Math.max(0, leader.amount_cents - mine.amount_cents) : undefined);
   const hasBids = entries.length > 0 || (leaderboard?.accepted_bidder_count ?? 0) > 0;
   const expanded = Boolean(forceExpanded || leaderboard?.burst_mode || (leaderboard?.accepted_bids_30s ?? 0) >= 4 || leaderboard?.state === 'OUTBID');
+  const lastCueKind = atmosphereCue?.user_scope === 'self' ? atmosphereCue.kind : 'none';
   const headline = hasBids && leader
     ? `榜一 ${leader.is_current ? '我' : leader.user_masked} ${formatCents(leader.amount_cents)}`
     : '等你第一手登顶';
@@ -463,6 +483,8 @@ function RaceBoard({
       className={`race-board ${expanded ? 'is-expanded' : 'is-rest'}`}
       data-testid="race-board"
       data-intensity={intensity}
+      data-race-state={leaderboard?.state ?? 'NOT_BID'}
+      data-cue-kind={lastCueKind}
       aria-label="常驻竞速榜"
       aria-live="polite"
     >
@@ -478,7 +500,7 @@ function RaceBoard({
           <span>{(leaderboard?.accepted_bids_30s ?? 0) > 0 ? `近30s ${leaderboard?.accepted_bids_30s} 次` : '最高有效价优先'}</span>
         </div>
         {hasBids ? (
-          <LeaderboardRows entries={top.length > 0 ? top : entries} burstMode={Boolean(leaderboard?.burst_mode)} />
+          <LeaderboardRows entries={top.length > 0 ? top : entries} burstMode={Boolean(leaderboard?.burst_mode)} highlightKind={lastCueKind} />
         ) : (
           <p>等你第一手登顶</p>
         )}
@@ -492,6 +514,61 @@ function RaceBoard({
         ) : null}
       </div>
     </section>
+  );
+}
+
+function PressureActionCard({
+  atmosphereCue,
+  countdownPhase,
+  leaderboard,
+  nextBidCents,
+  scenario,
+  onOpenBid
+}: {
+  atmosphereCue: AtmosphereCue | null;
+  countdownPhase: CountdownPhaseState;
+  leaderboard: LeaderboardPayload | null;
+  nextBidCents: number;
+  scenario: Scenario;
+  onOpenBid: () => void;
+}) {
+  if (scenario.stale || scenario.sold || scenario.status !== 'ACTIVE') return null;
+  const state = leaderboard?.state ?? 'NOT_BID';
+  const isSelfCue = atmosphereCue?.user_scope === 'self';
+  const isOutbid = state === 'OUTBID' || (isSelfCue && atmosphereCue?.kind === 'outbid');
+  const isLeading = state === 'LEADING' || (isSelfCue && atmosphereCue?.kind === 'leading');
+  const isFinal = countdownPhase.phase === 'critical' || countdownPhase.phase === 'hammer';
+  if (!isOutbid && !isLeading && !isFinal) return null;
+
+  const leader = leaderboard?.entries?.[0];
+  const gap = leaderboard?.gap_to_leader_cents;
+  const mode = isOutbid ? 'outbid' : isFinal ? 'final' : 'leading';
+  const title = mode === 'outbid' ? '被超越' : mode === 'final' ? '最后窗口' : '领先中';
+  const detail = mode === 'outbid'
+    ? `${leader?.user_masked ?? '对手'} 当前领先${gap != null && gap > 0 ? `，差 ${formatCents(gap)}` : ''}`
+    : mode === 'final'
+      ? '有效出价会刷新倒计时，别把最后一口让出去'
+      : `当前最高 ${formatCents(leaderboard?.leader_amount_cents ?? leader?.amount_cents ?? nextBidCents)}`;
+  const action = mode === 'outbid'
+    ? `立即反超 ${formatCents(nextBidCents)}`
+    : mode === 'final'
+      ? `抢最后一口 ${formatCents(nextBidCents)}`
+      : '查看出价区';
+
+  return (
+    <div
+      className={`pressure-action-card is-${mode}`}
+      data-testid="pressure-action-card"
+      data-pressure-state={mode}
+      role={mode === 'outbid' ? 'alert' : 'status'}
+      aria-live={mode === 'outbid' ? 'assertive' : 'polite'}
+    >
+      <div>
+        <span>{title}</span>
+        <strong>{detail}</strong>
+      </div>
+      <button type="button" onClick={onOpenBid}>{action}</button>
+    </div>
   );
 }
 
@@ -557,15 +634,8 @@ function BidWaterfall({ chips, intensity }: { chips: WaterfallChip[]; intensity:
   return <canvas className="bid-waterfall" data-testid="bid-waterfall" ref={canvasRef} aria-hidden="true" />;
 }
 
-function CohostRibbon({ messages }: { messages: SystemMessage[] }) {
-  const latest = messages[0];
-  if (!latest) return null;
-  return (
-    <section className="cohost-ribbon" data-testid="cohost-ribbon" aria-label="AI 气氛官" aria-live="polite">
-      <div className="cohost-ribbon-id"><Sparkles size={14} /><strong>气氛官</strong><span>AI</span></div>
-      <p>{latest.body}</p>
-    </section>
-  );
+function systemMessageLabel(message: SystemMessage) {
+  return message.source === 'SYSTEM_AI' || message.source === 'HOST_SCRIPT' ? '主播提示' : '系统提示';
 }
 
 function BarrageLayer({ messages }: { messages: SystemMessage[] }) {
@@ -579,7 +649,7 @@ function BarrageLayer({ messages }: { messages: SystemMessage[] }) {
           key={message.id}
           style={{ '--barrage-lane': index, '--barrage-delay': `${index * 260}ms` } as React.CSSProperties}
         >
-          <strong>助手</strong>
+          <strong>{systemMessageLabel(message)}</strong>
           {message.body}
         </span>
       ))}
@@ -611,6 +681,26 @@ function buyerOrderStatus(status: string) {
     default:
       return '等待确认';
   }
+}
+
+function historyTime(row: HistoryRow) {
+  const raw = String(row.created_at ?? row.updated_at ?? row.paid_at ?? '');
+  if (!raw) return '';
+  const time = new Date(raw);
+  if (Number.isNaN(time.getTime())) return '';
+  return time.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+}
+
+function buyerHistorySecondary(row: HistoryRow) {
+  const time = historyTime(row);
+  const status = buyerHistoryStatus(row);
+  return time ? `${status} · ${time}` : status;
+}
+
+function buyerOrderSecondary(row: HistoryRow) {
+  const time = historyTime(row);
+  const status = buyerOrderStatus(String(row.order_status ?? row.status ?? ''));
+  return time ? `${status} · ${time}` : status;
 }
 
 function displayOrderNo(orderID: string) {
@@ -719,11 +809,11 @@ export function LiveOpsPanel({
       : '关注后点亮入场牌';
   const luckyDraw = liveOpsCampaign?.lucky_draw;
   const drawStatus = luckyDraw?.my_entry_status === 'OPENED'
-    ? `已开出：${luckyDraw.my_reward_label ?? '直播间奖励'}`
+    ? `已领取：${luckyDraw.my_reward_label ?? '直播间权益'}`
     : luckyDraw?.my_entry_status === 'ENTERED'
-      ? `${luckyDraw.participants} 人已参与 · 可开奖`
+      ? `${luckyDraw.participants} 人已领取资格 · 可查看奖励`
       : luckyDraw?.can_enter
-        ? `${luckyDraw.participants} 人已参与 · 现在可参加`
+        ? `${luckyDraw.participants} 人已领取资格 · 现在可参与`
         : `完成 ${luckyDraw?.completed_task_count ?? finishedTasks}/${luckyDraw?.eligible_task_count ?? 4} 后解锁`;
   return (
     <section className="live-ops-panel" data-testid="live-ops-panel" aria-label="live-ops-panel">
@@ -738,14 +828,14 @@ export function LiveOpsPanel({
           <button type="button" className={taskDone('ask') ? 'done' : ''} disabled={liveOpsBusy === 'ask'} onClick={onOpenQA}>问拍品</button>
           <button type="button" className={taskDone('leaderboard') ? 'done' : ''} disabled={liveOpsBusy === 'leaderboard'} onClick={onOpenLeaderboard}>看榜单</button>
         </div>
-        <small>{liveOpsError || liveOpsCampaign?.disclaimer || '只记录互动准备，不抽奖、不承诺中奖或优惠。'}</small>
+        <small>{liveOpsError || liveOpsCampaign?.disclaimer || '只记录互动准备，不承诺真实奖品、优惠或订单权益。'}</small>
       </div>
       <div className="lucky-draw-card" data-testid="lucky-draw-card" data-draw-state={luckyDraw?.my_entry_status ?? 'READY'}>
         <div>
-          <span><Sparkles size={13} /> {luckyDraw?.title ?? '开拍福袋'}</span>
+          <span><Sparkles size={13} /> {luckyDraw?.title ?? '直播间权益'}</span>
           <strong>{drawStatus}</strong>
         </div>
-        <p>{luckyDraw?.description ?? '完成准备后参与，奖励用于直播间互动展示。'}</p>
+        <p>{luckyDraw?.description ?? '完成互动任务后领取直播间权益；当前权益只用于本场互动展示，不抵扣订单金额。'}</p>
         {luckyDraw?.my_entry_status === 'OPENED' ? (
           <div className="lucky-reward-reveal" aria-label="lucky-draw-reward">
             {luckyDraw.my_reward_label ?? '直播间奖励'}
@@ -753,28 +843,28 @@ export function LiveOpsPanel({
         ) : null}
         <div className="lucky-draw-actions">
           {luckyDraw?.my_entry_status === 'ENTERED' ? (
-            <button type="button" onClick={onOpenLuckyDraw}>开奖</button>
+            <button type="button" onClick={onOpenLuckyDraw}>查看奖励</button>
           ) : luckyDraw?.my_entry_status === 'OPENED' ? (
             <button type="button" onClick={onOpenLeaderboard}>查看榜单</button>
           ) : (
-            <button type="button" disabled={!luckyDraw?.can_enter} onClick={onEnterLuckyDraw}>参与福袋</button>
+            <button type="button" disabled={!luckyDraw?.can_enter} onClick={onEnterLuckyDraw}>领取资格</button>
           )}
         </div>
       </div>
       <div className="buyer-pk-card" data-testid="buyer-pk-card">
         <div className="pk-title">
-          <span><Flame size={13} /> 买家阵营</span>
+          <span><Flame size={13} /> 讲解偏好</span>
           <strong>{auctionStatusLabel(scenario.status)}</strong>
         </div>
         <div className="pk-bars" style={{ '--craft-score': `${craftScore}%`, '--story-score': `${storyScore}%` } as React.CSSProperties}>
           <button type="button" className={activeTeam === 'craft' ? 'active' : ''} onClick={() => onSelectTeam('craft')}>
-            <span>工艺派</span><strong>{craftScore}%</strong>
+            <span>看工艺</span><strong>{craftScore}%</strong>
           </button>
           <button type="button" className={activeTeam === 'story' ? 'active' : ''} onClick={() => onSelectTeam('story')}>
-            <span>故事派</span><strong>{storyScore}%</strong>
+            <span>听故事</span><strong>{storyScore}%</strong>
           </button>
         </div>
-        <small>进度来自真实出价热度和阵营选择，不影响价格和成交。</small>
+        <small>投票会汇总给商家，帮助主播下一段讲证书、瑕疵或工艺；不影响价格、排名或成交。</small>
       </div>
       <button type="button" className={`entry-effect-card ${leaderIsMe ? 'is-leader' : followed ? 'is-followed' : ''}`} data-testid="entry-effect-card" onClick={leaderIsMe || followed ? onOpenLeaderboard : onToggleFollow}>
         <span>{leaderIsMe ? <Trophy size={15} /> : <ShieldCheck size={15} />} {entryCopy}</span>
@@ -876,7 +966,7 @@ export function AuctionStatePanel({
       freshness: '结果以服务端终态为准'
     }
     : rankAction;
-  const mediaURL = item.video_poster_url ?? item.videoPosterURL ?? item.image_url ?? item.imageURL ?? '';
+  const mediaURL = displayMediaURL(item.video_poster_url ?? item.videoPosterURL ?? item.image_url ?? item.imageURL);
   const bidHint = (() => {
     if (scenario.sold) {
       return scenario.winner
@@ -1166,15 +1256,26 @@ export function BottomSheet({
   onToggleSound: () => void;
 }) {
   const titleMap: Record<BottomSheetKey, string> = {
-    products: '本场商品',
-    details: '商品与规则',
+    products: '商品袋',
+    details: '规则凭证',
     maxBid: '自动加价',
     leaderboard: '出价榜',
-    history: '我的出价',
-    orders: '我的订单',
+    history: '我的记录',
+    orders: '我的记录',
     qa: '拍品问答',
-    liveops: '互动福利',
-    more: '直播保护'
+    liveops: '直播互动',
+    more: '我的'
+  };
+  const sheetGroups: Record<BottomSheetKey, Array<[BottomSheetKey, string]>> = {
+    products: [['products', '本场拍品'], ['details', '规则凭证'], ['leaderboard', '出价榜']],
+    details: [['products', '本场拍品'], ['details', '规则凭证'], ['leaderboard', '出价榜']],
+    leaderboard: [['products', '本场拍品'], ['details', '规则凭证'], ['leaderboard', '出价榜']],
+    liveops: [['liveops', '互动任务'], ['qa', '拍品问答']],
+    qa: [['liveops', '互动任务'], ['qa', '拍品问答']],
+    more: [['more', '设置与保障'], ['orders', '我的记录']],
+    orders: [['more', '设置与保障'], ['orders', '我的记录']],
+    history: [['more', '设置与保障'], ['orders', '我的记录']],
+    maxBid: [['maxBid', '自动加价']]
   };
   useEffect(() => {
     if (!activeSheet) return undefined;
@@ -1186,6 +1287,8 @@ export function BottomSheet({
   }, [activeSheet, onClose]);
 
   if (!activeSheet) return null;
+  const activeTabs = sheetGroups[activeSheet] ?? [];
+  const selectedTab = activeSheet === 'history' ? 'orders' : activeSheet;
   return (
     <div className="sheet-backdrop" data-testid="bottom-sheet-backdrop" onClick={onClose}>
       <section className="bottom-sheet" data-testid="bottom-sheet" role="dialog" aria-modal="true" aria-label={titleMap[activeSheet]} onClick={(event) => event.stopPropagation()}>
@@ -1194,17 +1297,13 @@ export function BottomSheet({
           <h2>{titleMap[activeSheet]}</h2>
           <button type="button" aria-label="关闭面板" onClick={onClose}>关闭</button>
         </div>
-        <div className="sheet-tabs" role="tablist" aria-label="sheet-tabs">
-          {([
-            ['products', '本场'],
-            ['details', '详情'],
-            ['leaderboard', '出价榜'],
-            ['maxBid', '自动加价'],
-            ['more', '更多']
-          ] as Array<[BottomSheetKey, string]>).map(([key, label]) => (
-            <button type="button" role="tab" aria-selected={activeSheet === key} key={key} onClick={() => onOpenSheet(key)}>{label}</button>
-          ))}
-        </div>
+        {activeTabs.length > 1 ? (
+          <div className="sheet-tabs" role="tablist" aria-label={`${titleMap[activeSheet]}分区`}>
+            {activeTabs.map(([key, label]) => (
+              <button type="button" role="tab" aria-selected={selectedTab === key} key={key} onClick={() => onOpenSheet(key)}>{label}</button>
+            ))}
+          </div>
+        ) : null}
         <div className="sheet-content">
           {activeSheet === 'products' && <ProductListSheet auctions={auctions} activeAuctionID={activeAuctionID} scenario={scenario} />}
           {activeSheet === 'details' && <ProductRuleSheet item={item} auction={auctions.find((row) => row.id === activeAuctionID)} scenario={scenario} />}
@@ -1225,28 +1324,13 @@ export function BottomSheet({
             />
           )}
           {activeSheet === 'leaderboard' && <LeaderboardSheet activeAuctionID={activeAuctionID} leaderboard={leaderboard} nextBidCents={nextBidCents} onRefresh={onRefreshLeaderboard} />}
-          {activeSheet === 'history' && (
-            <HistorySheet
-              title="出价历史"
-              empty="暂无出价"
-              rows={bidHistory}
+          {(activeSheet === 'history' || activeSheet === 'orders') && (
+            <HistoryPanel
+              bidHistory={bidHistory}
               historyError={historyError}
               historyLoading={historyLoading}
+              orderHistory={orderHistory}
               onRefresh={onRefreshHistory}
-              getPrimary={(row) => `出价 ${formatCents(Number(row.amount_cents ?? 0))}`}
-              getSecondary={(row) => buyerHistoryStatus(row)}
-            />
-          )}
-          {activeSheet === 'orders' && (
-            <HistorySheet
-              title="订单"
-              empty="暂无订单"
-              rows={orderHistory}
-              historyError={historyError}
-              historyLoading={historyLoading}
-              onRefresh={onRefreshHistory}
-              getPrimary={(row) => `订单 ${formatCents(Number(row.amount_cents ?? 0))}`}
-              getSecondary={(row) => buyerOrderStatus(String(row.order_status ?? row.status ?? ''))}
             />
           )}
           {activeSheet === 'qa' && (
@@ -1283,10 +1367,7 @@ export function BottomSheet({
           {activeSheet === 'more' && (
             <MoreSheet
               followed={followed}
-              onOpenHistory={() => onOpenSheet('history')}
-              onOpenLiveOps={() => onOpenSheet('liveops')}
-              onOpenOrders={() => onOpenSheet('orders')}
-              onOpenQA={() => onOpenSheet('qa')}
+              onOpenRecords={() => onOpenSheet('orders')}
               onToggleFollow={onToggleFollow}
               soundEnabled={soundEnabled}
               onToggleSound={onToggleSound}
@@ -1327,20 +1408,21 @@ export function ProductListSheet({
 }
 
 export function ProductRuleSheet({ auction, item, scenario }: { auction?: AuctionSummary; item: AuctionItem; scenario: Scenario }) {
-  const mediaURL = item.video_poster_url ?? item.videoPosterURL ?? item.image_url ?? item.imageURL ?? '';
+  const mediaURL = displayMediaURL(item.video_poster_url ?? item.videoPosterURL ?? item.image_url ?? item.imageURL);
   const depositFloor = auction?.rule?.deposit_floor_cents ?? 0;
   const depositCap = auction?.rule?.deposit_cap_cents ?? 0;
   const depositBps = auction?.rule?.deposit_bps ?? 0;
+  const depositPercent = depositBps > 0 ? `${(depositBps / 100).toFixed(depositBps % 100 === 0 ? 0 : 2)}%` : '';
   const depositCopy = depositFloor > 0 || depositBps > 0
-    ? `本场要求保证金，最低 ${formatCents(depositFloor)}${depositCap > 0 ? `，最高 ${formatCents(depositCap)}` : ''}。未中拍或订单完成后按支付链路处理。`
+    ? `本场保证金按成交价${depositPercent ? ` ${depositPercent}` : ''} 预估，最低 ${formatCents(depositFloor)}${depositCap > 0 ? `，最高 ${formatCents(depositCap)}` : ''}。未中拍或订单完成后按支付链路处理。`
     : '本场未展示固定保证金门槛；以服务端出价校验和订单状态为准。';
   const extensionCopy = `最后 ${auction?.rule?.extend_window_seconds ?? 10} 秒内有有效出价，会自动延长 ${auction?.rule?.extend_by_seconds ?? 10} 秒${auction?.rule?.max_extend_count ? `，最多 ${auction.rule.max_extend_count} 次` : ''}，避免最后一秒抢拍。`;
   const capCopy = auction?.cap_price_cents
     ? `价格到达 ${formatCents(auction.cap_price_cents)} 后不再继续抬价。`
     : '本场未设置展示封顶价，仍由服务端规则校验每次出价。';
   const confirmationCopy = auction?.rule?.fat_finger_threshold_cents
-    ? `单次高额跳价达到 ${formatCents(auction.rule.fat_finger_threshold_cents)} 会触发确认，防止误触。`
-    : '高额确认由服务端按风险规则判断。';
+    ? `单次出价达到 ${formatCents(auction.rule.fat_finger_threshold_cents)} 会先弹出确认，防止误触。`
+    : '异常大额出价会先弹出确认，防止误触。';
   const certificateCopy = item.certificate ?? `GID 20260607 · 可核验`;
   const proofItems = [
     ['证书', certificateCopy],
@@ -1386,7 +1468,7 @@ export function ProductRuleSheet({ auction, item, scenario }: { auction?: Auctio
           <p>{extensionCopy}</p>
         </article>
         <article>
-          <strong>误触保护</strong>
+          <strong>大额出价确认</strong>
           <p>{confirmationCopy}</p>
         </article>
         <article>
@@ -1543,7 +1625,7 @@ export function LeaderboardPanel({
   );
 }
 
-function LeaderboardRows({ entries, burstMode = false }: { entries: NonNullable<LeaderboardPayload['entries']>; burstMode?: boolean }) {
+function LeaderboardRows({ entries, burstMode = false, highlightKind = 'none' }: { entries: NonNullable<LeaderboardPayload['entries']>; burstMode?: boolean; highlightKind?: AtmosphereCue['kind'] | 'none' }) {
   const rowRefs = useRef(new Map<string, HTMLDivElement>());
   const previousRectsRef = useRef(new Map<string, DOMRect>());
   const lastAnimatedAtRef = useRef(0);
@@ -1587,6 +1669,8 @@ function LeaderboardRows({ entries, burstMode = false }: { entries: NonNullable<
             className={`leaderboard-row ${entry.is_current ? 'is-current' : ''}`}
             key={key}
             data-rank={entry.rank}
+            data-current={entry.is_current ? 'true' : 'false'}
+            data-highlight={entry.is_current ? highlightKind : entry.rank === 1 ? 'leader' : 'none'}
             data-flip-key={key}
             ref={(node) => {
               if (node) rowRefs.current.set(key, node);
@@ -1606,19 +1690,13 @@ function LeaderboardRows({ entries, burstMode = false }: { entries: NonNullable<
 
 export function MoreSheet({
   followed,
-  onOpenHistory,
-  onOpenLiveOps,
-  onOpenOrders,
-  onOpenQA,
+  onOpenRecords,
   onToggleFollow,
   soundEnabled,
   onToggleSound
 }: {
   followed: boolean;
-  onOpenHistory: () => void;
-  onOpenLiveOps: () => void;
-  onOpenOrders: () => void;
-  onOpenQA: () => void;
+  onOpenRecords: () => void;
   onToggleFollow: () => void;
   soundEnabled: boolean;
   onToggleSound: () => void;
@@ -1641,21 +1719,9 @@ export function MoreSheet({
         {soundEnabled ? <BellOff size={16} /> : <Bell size={16} />}
         {soundEnabled ? '关闭提示音' : '开启提示音'}
       </button>
-      <button type="button" onClick={onOpenQA}>
-        <MessageCircle size={16} />
-        拍品问答
-      </button>
-      <button type="button" onClick={onOpenLiveOps}>
-        <Sparkles size={16} />
-        互动福利
-      </button>
-      <button type="button" onClick={onOpenHistory}>
+      <button type="button" onClick={onOpenRecords}>
         <History size={16} />
-        我的出价
-      </button>
-      <button type="button" onClick={onOpenOrders}>
-        <CreditCard size={16} />
-        我的订单
+        我的出价与订单
       </button>
       <p>保护说明只披露买家可验证事实；不会承诺库存预留、相似拍品优先权或虚构人气。</p>
     </div>
@@ -1713,15 +1779,15 @@ export function HistoryPanel({
           title="出价"
           empty="暂无出价"
           rows={bidHistory}
-          getPrimary={(row) => String(row.auction_id ?? row.bid_id ?? '-')}
-          getSecondary={(row) => buyerHistoryStatus(row)}
+          getPrimary={(row) => `出价 ${formatCents(Number(row.amount_cents ?? 0))}`}
+          getSecondary={buyerHistorySecondary}
         />
         <HistoryList
           title="订单"
           empty="暂无订单"
           rows={orderHistory}
           getPrimary={(row) => `订单 ${formatCents(Number(row.amount_cents ?? 0))}`}
-          getSecondary={(row) => buyerOrderStatus(String(row.order_status ?? row.status ?? ''))}
+          getSecondary={buyerOrderSecondary}
         />
       </div>
     </section>
@@ -1753,7 +1819,7 @@ export function ChatPanel({
       <div className="chat-list">
         {systemMessages.slice(0, 3).map((message) => (
           <div className="chat-row system" key={`sys-${message.id}`}>
-            <strong>助手</strong>
+            <strong>{systemMessageLabel(message)}</strong>
             <span>{message.body}</span>
           </div>
         ))}
@@ -1807,6 +1873,7 @@ export function ProductQASheet({
         <span>可问拍品详情、竞拍规则和履约保障</span>
         <button type="button" disabled={!draft.trim() || loading} onClick={onAsk}>{loading ? '查询中' : '提问'}</button>
       </div>
+      <div className="qa-safety-note">回答只基于商家已上架信息；未披露的真伪、来源、升值或隐藏出价不会回答。</div>
       <div className="chat-input-row">
         <input
           aria-label="product-qa-input"
@@ -1830,7 +1897,7 @@ export function ProductQASheet({
               <div className="qa-answer">
                 <strong>{turn.answer}</strong>
                 <span>{turn.safety_note}</span>
-                {turn.facts_used.length ? <em>来自已展示信息</em> : <em>未找到已提供信息</em>}
+                {turn.facts_used.length ? <em>来自商家已上架信息</em> : <em>未找到商家已提供信息</em>}
               </div>
             </div>
           ))}
@@ -1862,17 +1929,24 @@ export function HistoryList({
   getPrimary: (row: HistoryRow) => string;
   getSecondary: (row: HistoryRow) => string;
 }) {
+  const visibleRows = rows.slice(0, 12);
+  const hiddenCount = Math.max(0, rows.length - visibleRows.length);
   return (
     <div className="history-list">
-      <h3>{title}</h3>
+      <h3>{title}{rows.length > 0 ? <small>{rows.length} 条</small> : null}</h3>
       {rows.length === 0 ? (
         <p>{empty}</p>
-      ) : rows.map((row, index) => (
-        <div className="history-row" key={`${title}-${index}`}>
-          <strong>{getPrimary(row)}</strong>
-          <span>{getSecondary(row)}</span>
-        </div>
-      ))}
+      ) : (
+        <>
+          {visibleRows.map((row, index) => (
+            <div className="history-row" key={`${title}-${index}`}>
+              <strong>{getPrimary(row)}</strong>
+              <span>{getSecondary(row)}</span>
+            </div>
+          ))}
+          {hiddenCount > 0 ? <p className="history-more">已收起更早 {hiddenCount} 条记录</p> : null}
+        </>
+      )}
     </div>
   );
 }

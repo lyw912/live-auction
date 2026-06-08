@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -105,6 +106,35 @@ func TestChatCompletionsGeneratorListingDraftUsesStrictSchemaAndImages(t *testin
 	}
 }
 
+func TestFallbackListingDraftUsesHostCopyWithoutTruncatedTitle(t *testing.T) {
+	draft := BuildFallbackListingDraft(ListingDraftRequest{
+		SellerNotes:    "红宝石戒指，主石红色明亮，戒臂有细节，适合晚宴佩戴。证书和尺寸待商家确认。",
+		TargetCategory: "珠宝",
+		ImageURLs:      []string{"/api/media/items/ruby.jpg"},
+	})
+
+	if len(draft.TitleCandidates) == 0 {
+		t.Fatal("missing title candidates")
+	}
+	for _, title := range draft.TitleCandidates {
+		if strings.Contains(title, "适") || strings.Contains(title, "待商家确认") {
+			t.Fatalf("title should use item name, got %q", title)
+		}
+		if !strings.Contains(title, "红宝石戒指") {
+			t.Fatalf("title should keep item name, got %q", title)
+		}
+	}
+	if !strings.Contains(draft.Description, "各位先看这件红宝石戒指") {
+		t.Fatalf("description should use host voice, got %q", draft.Description)
+	}
+	if !strings.Contains(draft.Description, "主石红色明亮") || !strings.Contains(draft.Description, "适合晚宴佩戴") {
+		t.Fatalf("description should expand seller facts, got %q", draft.Description)
+	}
+	if strings.Contains(draft.Description, "保真") || strings.Contains(draft.Description, "赶快抢购") {
+		t.Fatalf("description should avoid unsupported pressure or authenticity claims, got %q", draft.Description)
+	}
+}
+
 func TestChatCompletionsGeneratorRejectsMalformedContent(t *testing.T) {
 	gen, err := NewChatCompletionsGenerator(ChatProviderConfig{
 		BaseURL: "https://relay.example.test/v1",
@@ -136,6 +166,64 @@ func TestChatCompletionsGeneratorRejectsMalformedContent(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected malformed JSON error")
+	}
+}
+
+func TestChatCompletionsGeneratorJSONObjectModeIncludesSchemaInTextPrompt(t *testing.T) {
+	var captured map[string]any
+	gen, err := NewChatCompletionsGenerator(ChatProviderConfig{
+		BaseURL:        "https://api.deepseek.example",
+		Model:          "deepseek-v4-flash",
+		APIKey:         "test-key",
+		Timeout:        time.Second,
+		ResponseFormat: "json_object",
+		TextOnly:       true,
+	})
+	if err != nil {
+		t.Fatalf("new generator: %v", err)
+	}
+	gen.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		return chatJSONResponse(t, map[string]any{
+			"auction_id":    "auc_1",
+			"source_seq":    3,
+			"style":         "steady",
+			"body":          "证书和瑕疵已披露，请按实物状态出价。",
+			"facts_used":    []string{"event_type"},
+			"safety_labels": []string{},
+		}), nil
+	})
+	result, err := gen.GenerateStructured(context.Background(), StructuredRequest{
+		Kind:          "auction_commentary",
+		PromptVersion: PromptVersionCommentary,
+		Input: map[string]any{
+			"auction_id":          "auc_1",
+			"source_seq":          3,
+			"event_type":          "product_evidence",
+			"current_price_cents": 35000,
+		},
+		Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if result.Model != "deepseek-v4-flash" || result.Output["body"] == "" {
+		t.Fatalf("bad result: %#v", result)
+	}
+	responseFormat := captured["response_format"].(map[string]any)
+	if responseFormat["type"] != "json_object" {
+		t.Fatalf("response_format = %#v", responseFormat)
+	}
+	messages := captured["messages"].([]any)
+	user := messages[1].(map[string]any)
+	text, ok := user["content"].(string)
+	if !ok {
+		t.Fatalf("json_object text provider should use string content: %#v", user["content"])
+	}
+	if !bytes.Contains([]byte(text), []byte(`"required":["auction_id","source_seq","style","body","facts_used","safety_labels"]`)) {
+		t.Fatalf("prompt does not include required schema: %s", text)
 	}
 }
 

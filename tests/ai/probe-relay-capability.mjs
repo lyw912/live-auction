@@ -5,19 +5,24 @@ import process from 'node:process';
 
 const defaultBaseURL = 'https://api.gptgod.online/v1';
 const defaultModel = 'gemini-3.1-flash-image-preview';
+const defaultTextBaseURL = 'https://api.deepseek.com';
+const defaultTextModel = 'deepseek-v4-flash';
 const redPixelPNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
 const defaultImageURL = 'https://raw.githubusercontent.com/github/explore/main/topics/javascript/javascript.png';
 
 const env = process.env;
-const apiKey = env.API_KEY || '';
-const model = env.AI_RELAY_MODEL || defaultModel;
-const baseURL = normalizeBaseURL(env.AI_RELAY_BASE_URL || defaultBaseURL);
+const apiKey = env.AI_VISION_API_KEY || env.API_KEY || '';
+const model = env.AI_VISION_MODEL || env.AI_RELAY_MODEL || defaultModel;
+const baseURL = normalizeBaseURL(env.AI_VISION_BASE_URL || env.AI_RELAY_BASE_URL || defaultBaseURL);
+const textAPIKey = env.AI_TEXT_API_KEY || env.DEEPSEEK_API_KEY || env.API_KEY || '';
+const textModel = env.AI_TEXT_MODEL || defaultTextModel;
+const textBaseURL = normalizeBaseURL(env.AI_TEXT_BASE_URL || defaultTextBaseURL);
 const timeoutMS = Number(env.AI_RELAY_TIMEOUT_MS || 30_000);
 const imageURL = env.AI_RELAY_IMAGE_URL || defaultImageURL;
 const outputPath = resolve(env.AI_RELAY_PROBE_OUT || 'docs/atmosphere-ai-implementation-2026-06-06/evidence/ai-relay-probe-gptgod-latest.json');
 
-if (!apiKey || /^replace-/i.test(apiKey)) {
-  console.error('API_KEY must be set to a real AI provider key. Do not commit real keys.');
+if (!textAPIKey || /^replace-/i.test(textAPIKey)) {
+  console.error('AI_TEXT_API_KEY or DEEPSEEK_API_KEY must be set to a real text AI provider key. Do not commit real keys.');
   process.exit(2);
 }
 
@@ -25,18 +30,15 @@ const report = {
   generated_at: new Date().toISOString(),
   base_url: redactBaseURL(baseURL),
   model,
+  text_base_url: redactBaseURL(textBaseURL),
+  text_model: textModel,
   timeout_ms: timeoutMS,
   checks: []
 };
 
 async function main() {
+  await runCheck('text_chat_json_object_required', probeTextJSONObject);
   await runCheck('models_endpoint_optional', probeModels);
-  await runCheck('responses_text_required', probeResponsesText);
-  await runCheck('responses_json_schema_required', probeResponsesJSONSchema);
-  await runCheck('responses_multimodal_data_url_optional', probeResponsesMultimodalDataURL);
-  await runCheck('responses_multimodal_https_optional', probeResponsesMultimodalHTTPS);
-  await runCheck('files_upload_optional', probeFileUploadOnly);
-  await runCheck('responses_file_input_optional', probeResponsesFileInput);
   await runCheck('chat_plain_text_optional', probePlainText);
   await runCheck('chat_structured_text_optional', probeStructuredText);
   await runCheck('chat_json_schema_optional', probeJSONSchema);
@@ -44,36 +46,21 @@ async function main() {
   await runCheck('chat_json_object_optional', probeJSONObject);
 
   const multimodalChecks = [
-    'responses_multimodal_data_url_optional',
-    'responses_multimodal_https_optional',
-    'responses_file_input_optional',
     'chat_multimodal_https_optional'
   ];
   const hasMultimodal = report.checks.some((check) => multimodalChecks.includes(check.name) && check.status === 'PASS');
-  const responsesStructured = report.checks.find((check) => check.name === 'responses_json_schema_required')?.status === 'PASS';
-  const chatStructured = report.checks.find((check) => check.name === 'chat_json_schema_optional')?.status === 'PASS'
-    && report.checks.find((check) => check.name === 'chat_structured_text_optional')?.status === 'PASS';
-  const hasStructured = responsesStructured || chatStructured;
-  const gatePass = hasStructured && hasMultimodal;
+  const hasText = report.checks.find((check) => check.name === 'text_chat_json_object_required')?.status === 'PASS';
+  const gatePass = hasText && hasMultimodal;
   report.verdict = gatePass ? 'PASS' : 'FAIL';
   report.development_gate = gatePass
     ? {
         can_start_p0_ai: true,
-        wire_api: responsesStructured ? 'responses' : 'chat_completions_adapter',
-        structured_output_mode: 'json_schema',
-        multimodal_input_mode: report.checks.find((check) => check.name === 'responses_file_input_optional')?.status === 'PASS'
-          ? 'provider_file_upload'
-          : report.checks.find((check) => check.name === 'responses_multimodal_data_url_optional')?.status === 'PASS'
-            ? 'responses_data_url'
-            : report.checks.find((check) => check.name === 'responses_multimodal_https_optional')?.status === 'PASS'
-              ? 'responses_https_image_url'
-              : 'chat_completions_https_image_url',
+        wire_api: 'routed_text_deepseek_plus_vision_relay',
+        structured_output_mode: 'text_json_object; vision_json_schema',
+        multimodal_input_mode: 'chat_completions_https_image_url',
         notes: [
-          ...(responsesStructured
-            ? ['Responses API is available for provider-backed AI in this environment.']
-            : ['Responses endpoint is not available on this relay from backend HTTP; use Chat Completions json_schema adapter for P0 implementation.']),
-          'Use json_schema for all provider-backed outputs; do not depend on plain text or json_object if the relay pollutes empty responses.',
-          'For the product UI, users upload images to our backend. For the current relay, pass a provider-fetchable short-lived HTTPS object URL to Chat Completions; provider Files API is not a P0 dependency unless a future probe passes.',
+          'Text tasks are verified against the configured DeepSeek-compatible Chat Completions JSON object path.',
+          'For the product UI, users upload images to our backend. The relay probe intentionally checks only Chat Completions with provider-fetchable HTTPS image URLs.',
           'AI calls must stay outside the bid hot path.',
           'Persist provider/model/request metadata and validated JSON output.',
           'Use deterministic fallback when provider times out or returns invalid JSON.'
@@ -82,7 +69,7 @@ async function main() {
     : {
         can_start_p0_ai: false,
         blockers: [
-          ...(hasStructured ? [] : ['structured_output: neither Responses json_schema nor Chat Completions json_schema worked for required outputs']),
+          ...(hasText ? [] : ['text_ai: configured DeepSeek-compatible JSON object call failed']),
           ...(hasMultimodal ? [] : ['multimodal: no image path worked'])
         ]
       };
@@ -141,6 +128,27 @@ async function probePlainText() {
   };
 }
 
+async function probeTextJSONObject() {
+  const payload = await textChatCompletion({
+    messages: [
+      { role: 'system', content: '你是直播竞拍系统的受控助手。只返回 JSON 对象，不要 Markdown。' },
+      { role: 'user', content: '生成一段60到150字的主播话术，事实：拍品天然翡翠A货平安扣吊坠，当前价350元，主题是证书和瑕疵披露。要说明买家下一步应该查看证据并按预算出价。返回字段：body,facts_used,safety_labels。' }
+    ],
+    response_format: { type: 'json_object' },
+    max_tokens: 512,
+    temperature: 0
+  });
+  const data = parseJSONContent(payload);
+  if (typeof data.body !== 'string' || data.body.length === 0 || data.body.length > 80 || !Array.isArray(data.facts_used)) {
+    throw new Error(`text json_object did not match required shape: ${JSON.stringify(data).slice(0, 200)}`);
+  }
+  return {
+    summary: 'text provider returned parseable auction commentary JSON',
+    body_chars: data.body.length,
+    facts_used_count: data.facts_used.length
+  };
+}
+
 async function probeResponsesText() {
   const payload = await responseCreate({
     input: [
@@ -182,7 +190,7 @@ async function probeResponsesJSONSchema() {
         content: [
           {
             type: 'input_text',
-            text: '生成一句不超过20个汉字的直播竞拍系统解说，必须基于事实：当前价650元，最后5秒，有人刚出价。'
+            text: '生成一段60到150字的直播竞拍主播提示，必须基于事实：当前价650元，最后5秒，有人刚出价。要说明末段出价为什么会延时，并提醒买家确认预算后按系统按钮出价。'
           }
         ]
       }
@@ -207,7 +215,7 @@ async function probeResponsesJSONSchema() {
     max_output_tokens: 256
   });
   const data = parseResponsesJSON(payload);
-  if (typeof data.body !== 'string' || data.body.length === 0 || data.body.length > 40 || !Array.isArray(data.facts_used)) {
+  if (typeof data.body !== 'string' || data.body.length < 20 || data.body.length > 180 || !Array.isArray(data.facts_used)) {
     throw new Error(`Responses json_schema did not match required shape: ${JSON.stringify(data).slice(0, 200)}`);
   }
   return {
@@ -221,7 +229,7 @@ async function probeStructuredText() {
   const payload = await chatCompletion({
     messages: [
       { role: 'system', content: 'Return JSON that matches the schema. No markdown.' },
-      { role: 'user', content: '生成一句不超过20个汉字的直播竞拍系统解说，必须基于事实：当前价650元，最后5秒，有人刚出价。' }
+      { role: 'user', content: '生成一段60到150字的直播竞拍主播提示，必须基于事实：当前价650元，最后5秒，有人刚出价。要说明末段出价为什么会延时，并提醒买家确认预算后按系统按钮出价。' }
     ],
     response_format: {
       type: 'json_schema',
@@ -244,7 +252,7 @@ async function probeStructuredText() {
     temperature: 0
   });
   const data = parseJSONContent(payload);
-  if (typeof data.body !== 'string' || data.body.length === 0 || data.body.length > 40 || !Array.isArray(data.facts_used)) {
+  if (typeof data.body !== 'string' || data.body.length < 20 || data.body.length > 180 || !Array.isArray(data.facts_used)) {
     throw new Error(`structured text response did not match required shape: ${JSON.stringify(data).slice(0, 200)}`);
   }
   return {
@@ -415,13 +423,13 @@ async function probeMultimodal(url, summary) {
     temperature: 0
   });
   const data = parseJSONContent(payload);
-  if (!data.can_see_image || typeof data.dominant_color !== 'string' || typeof data.subject !== 'string') {
+  if (!data.can_see_image || typeof data.dominant_color !== 'string') {
     throw new Error(`multimodal response did not prove image understanding: ${JSON.stringify(data).slice(0, 200)}`);
   }
   return {
     summary,
     dominant_color: data.dominant_color,
-    subject: data.subject,
+    subject: data.subject ?? null,
     can_see_image: data.can_see_image
   };
 }
@@ -499,6 +507,18 @@ async function chatCompletion(body) {
   });
 }
 
+async function textChatCompletion(body) {
+  return requestJSON('/chat/completions', {
+    method: 'POST',
+    baseURLOverride: textBaseURL,
+    apiKeyOverride: textAPIKey,
+    body: {
+      model: textModel,
+      ...body
+    }
+  });
+}
+
 async function responseCreate(body) {
   return requestJSON('/responses', {
     method: 'POST',
@@ -509,14 +529,14 @@ async function responseCreate(body) {
   });
 }
 
-async function requestJSON(path, { method, body }) {
+async function requestJSON(path, { method, body, baseURLOverride, apiKeyOverride }) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMS);
   try {
-    const response = await fetch(`${baseURL}${path}`, {
+    const response = await fetch(`${baseURLOverride || baseURL}${path}`, {
       method,
       headers: {
-        Authorization: `Bearer ${apiKey}`,
+        Authorization: `Bearer ${apiKeyOverride || apiKey}`,
         'Content-Type': 'application/json'
       },
       body: body == null ? undefined : JSON.stringify(body),

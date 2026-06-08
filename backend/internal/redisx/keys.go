@@ -60,6 +60,14 @@ func WSTicketKey(token string) string {
 	return "ws_ticket:" + token
 }
 
+func RoomPresenceKey(roomID string) string {
+	return fmt.Sprintf("presence:room:%s", roomID)
+}
+
+func RoomPresenceConnKey(roomID string, connID string) string {
+	return fmt.Sprintf("presence:room:%s:conn:%s", roomID, connID)
+}
+
 // AuthSessionKey caches an authenticated AuthUser keyed by token hash.
 // TTL is capped at 5 minutes so revoked sessions expire quickly.
 func AuthSessionKey(tokenHash string) string {

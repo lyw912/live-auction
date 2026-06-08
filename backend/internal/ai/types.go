@@ -42,6 +42,25 @@ type Generator interface {
 	GenerateStructured(ctx context.Context, req StructuredRequest) (StructuredResult, error)
 }
 
+type RoutedGenerator struct {
+	Text        Generator
+	Vision      Generator
+	NeedsVision func(req StructuredRequest) bool
+}
+
+func (g RoutedGenerator) GenerateStructured(ctx context.Context, req StructuredRequest) (StructuredResult, error) {
+	if g.NeedsVision != nil && g.NeedsVision(req) && g.Vision != nil {
+		return g.Vision.GenerateStructured(ctx, req)
+	}
+	if g.Text != nil {
+		return g.Text.GenerateStructured(ctx, req)
+	}
+	if g.Vision != nil {
+		return g.Vision.GenerateStructured(ctx, req)
+	}
+	return StructuredResult{}, ErrDisabled
+}
+
 type ListingDraftRequest struct {
 	RoomID         string   `json:"room_id"`
 	ImageURLs      []string `json:"image_urls"`
@@ -224,15 +243,15 @@ func InputHash(v any) string {
 func NormalizeListingDraft(raw map[string]any, req ListingDraftRequest) ListingDraft {
 	draft := ListingDraft{
 		TitleCandidates:     stringSlice(raw["title_candidates"]),
-		Description:         cleanText(stringValue(raw["description"]), 360),
+		Description:         cleanText(stringValue(raw["description"]), 900),
 		Category:            cleanText(firstNonEmpty(stringValue(raw["category"]), req.TargetCategory, "非标拍品"), 40),
-		SellingPoints:       limitStrings(stringSlice(raw["selling_points"]), 5, 28),
-		ConditionQuestions:  limitStrings(stringSlice(raw["condition_questions"]), 5, 36),
-		ComplianceFlags:     limitStrings(stringSlice(raw["compliance_flags"]), 6, 36),
-		RequiresEvidence:    limitStrings(stringSlice(raw["requires_evidence"]), 6, 36),
-		UnsupportedClaims:   limitStrings(stringSlice(raw["unsupported_claims"]), 6, 36),
+		SellingPoints:       limitStrings(stringSlice(raw["selling_points"]), 5, 60),
+		ConditionQuestions:  limitStrings(stringSlice(raw["condition_questions"]), 5, 80),
+		ComplianceFlags:     limitStrings(stringSlice(raw["compliance_flags"]), 6, 80),
+		RequiresEvidence:    limitStrings(stringSlice(raw["requires_evidence"]), 6, 80),
+		UnsupportedClaims:   limitStrings(stringSlice(raw["unsupported_claims"]), 6, 80),
 		Confidence:          clampFloat(floatValue(raw["confidence"]), 0, 1),
-		Rationale:           cleanText(stringValue(raw["rationale"]), 160),
+		Rationale:           cleanText(stringValue(raw["rationale"]), 260),
 		HumanReviewRequired: true,
 	}
 	if len(draft.TitleCandidates) == 0 {
@@ -262,10 +281,10 @@ func NormalizeListingDraft(raw map[string]any, req ListingDraftRequest) ListingD
 
 func BuildFallbackListingDraft(req ListingDraftRequest) ListingDraft {
 	return NormalizeListingDraft(map[string]any{
-		"title_candidates": []string{titleFromNotes(req.SellerNotes, req.TargetCategory)},
-		"description":      descriptionFromNotes(req.SellerNotes, req.TargetCategory),
+		"title_candidates": titleCandidatesFromNotes(req.SellerNotes, req.TargetCategory),
+		"description":      hostDescriptionFromNotes(req.SellerNotes, req.TargetCategory, len(req.ImageURLs)+len(req.ImageDataURLs) > 0),
 		"category":         firstNonEmpty(req.TargetCategory, "非标拍品"),
-		"selling_points":   []string{"直播间可展示细节", "规则建议需人工确认"},
+		"selling_points":   sellingPointsFromNotes(req.SellerNotes, len(req.ImageURLs)+len(req.ImageDataURLs) > 0),
 		"condition_questions": []string{
 			"是否有证书或购买凭证",
 			"是否存在修复、磕碰或明显瑕疵",
@@ -281,10 +300,14 @@ func BuildCommentary(req CommentaryRequest) (body string, style string, safety m
 	switch req.EventType {
 	case "bid_accepted":
 		style = "heat"
-		body = "价格来到" + FormatCents(req.CurrentPriceCents) + "，榜首已刷新。"
+		body = "刚刚有有效出价，价格来到" + FormatCents(req.CurrentPriceCents) + "。想继续的买家先确认预算和加价规则，下一口按系统按钮出价。"
+	case "product_evidence":
+		body = "先看证据：证书、实物图和已披露瑕疵都在拍品详情里。喜欢的买家先确认品相，再按自己的预算出价。"
+	case "rule_guardrail":
+		body = "这场按服务端规则走：起拍、加价、封顶和保证金都已写清，系统只接受有效价格，大额误触会先确认。"
 	case "extended":
-		style = "critical"
-		body = "最后窗口继续加时，先看真实倒计时。"
+		style = "heat"
+		body = "末段有人出价会自动延时，这是给所有买家补反应时间，不是主播手动拖场；看清倒计时再决定是否跟。"
 	case "auction_sold", "sold":
 		style = "sold"
 		body = "落锤成交：" + req.ItemTitle + " " + FormatCents(req.CurrentPriceCents) + "。"
@@ -302,10 +325,19 @@ func BuildCommentary(req CommentaryRequest) (body string, style string, safety m
 			body = "当前价" + FormatCents(req.CurrentPriceCents) + "，按规则出价。"
 		}
 	}
-	return cleanText(body, 40), style, map[string]any{
+	return cleanText(body, 160), style, map[string]any{
 		"facts_used":        []string{"auction_id", "source_seq", "current_price_cents", "event_type"},
 		"no_hidden_max_bid": true,
 		"no_fake_urgency":   true,
+	}
+}
+
+func IsQuickCommentaryEvent(eventType string) bool {
+	switch eventType {
+	case "product_evidence", "rule_guardrail", "extended":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -334,8 +366,8 @@ func NormalizeSentinelAlerts(raw map[string]any, input SentinelEvaluationInput) 
 		}
 		base.Score = score
 		base.Severity = normalizeSeverity(firstNonEmpty(stringValue(itemMap["severity"]), base.Severity))
-		base.Explanation = cleanText(firstNonEmpty(stringValue(itemMap["explanation"]), base.Explanation), 160)
-		base.RecommendedAction = cleanText(firstNonEmpty(stringValue(itemMap["recommended_action"]), base.RecommendedAction), 120)
+		base.Explanation = cleanText(firstNonEmpty(stringValue(itemMap["explanation"]), base.Explanation), 260)
+		base.RecommendedAction = cleanText(firstNonEmpty(stringValue(itemMap["recommended_action"]), base.RecommendedAction), 220)
 		base.Features = ensureMap(base.Features)
 		base.Features["provider_reviewed"] = true
 		base.Features["facts_used"] = limitStrings(stringSlice(itemMap["facts_used"]), 8, 48)
@@ -352,10 +384,10 @@ func NormalizeProductQAAnswer(raw map[string]any, fallback ProductQAAnswer, allo
 		AuctionID:        fallback.AuctionID,
 		ThreadID:         fallback.ThreadID,
 		Question:         fallback.Question,
-		Answer:           cleanText(stringValue(raw["answer"]), 180),
+		Answer:           cleanText(stringValue(raw["answer"]), 420),
 		FactsUsed:        limitStrings(stringSlice(raw["facts_used"]), 8, 64),
-		SafetyNote:       cleanText(firstNonEmpty(stringValue(raw["safety_note"]), "只回答已审核拍品和规则信息。"), 80),
-		FollowUpPrompts:  limitStrings(stringSlice(raw["follow_up_prompts"]), 3, 28),
+		SafetyNote:       cleanText(firstNonEmpty(stringValue(raw["safety_note"]), "只回答已审核拍品和规则信息。"), 140),
+		FollowUpPrompts:  limitStrings(stringSlice(raw["follow_up_prompts"]), 3, 50),
 		ContextTurnCount: fallback.ContextTurnCount,
 	}
 	if answer.Answer == "" {
@@ -419,7 +451,7 @@ func AnswerFromFacts(auctionID string, question string, itemTitle string, descri
 		facts = append(facts, "item.title")
 	}
 	if (strings.Contains(q, "描述") || strings.Contains(q, "瑕疵") || strings.Contains(q, "来源")) && strings.TrimSpace(description) != "" {
-		answers = append(answers, cleanText(description, 120))
+		answers = append(answers, cleanText(description, 220))
 		facts = append(facts, "item.description")
 	}
 	if strings.Contains(q, "加价") {
@@ -440,7 +472,7 @@ func AnswerFromFacts(auctionID string, question string, itemTitle string, descri
 	if len(answers) == 0 {
 		return ProductQAAnswer{AuctionID: auctionID, Question: cleanText(question, 120), Answer: "未提供", FactsUsed: []string{}, SafetyNote: "只回答已审核拍品和规则信息。", FollowUpPrompts: defaultProductQAFollowUps(description, rules)}
 	}
-	answer := cleanText(strings.Join(answers, "；"), 180)
+	answer := cleanText(strings.Join(answers, "；"), 420)
 	return ProductQAAnswer{AuctionID: auctionID, Question: cleanText(question, 120), Answer: answer, FactsUsed: facts, SafetyNote: "不提供真伪、投资收益或隐藏出价信息。", FollowUpPrompts: defaultProductQAFollowUps(description, rules)}
 }
 
@@ -452,7 +484,7 @@ func defaultProductQAFollowUps(description string, rules map[string]any) []strin
 	if int64Value(rules["cap_price_cents"]) > 0 {
 		prompts = append(prompts, "封顶价是多少？")
 	}
-	return limitStrings(prompts, 3, 28)
+	return limitStrings(prompts, 3, 50)
 }
 
 func normalizeSeverity(value string) string {
@@ -619,11 +651,23 @@ func maxInt64(a int64, b int64) int64 {
 }
 
 func titleFromNotes(notes string, category string) string {
-	notes = cleanText(notes, 18)
-	if notes == "" {
-		notes = firstNonEmpty(category, "精选拍品")
+	base := itemNameFromNotes(notes, category)
+	if base == "" {
+		base = firstNonEmpty(category, "精选拍品")
 	}
-	return notes + "直播竞拍"
+	return cleanText(base+"直播竞拍", 32)
+}
+
+func titleCandidatesFromNotes(notes string, category string) []string {
+	base := itemNameFromNotes(notes, category)
+	if base == "" {
+		base = firstNonEmpty(category, "精选拍品")
+	}
+	return []string{
+		cleanText(base+" · 直播主推", 32),
+		cleanText(base+"上手细节专场", 32),
+		cleanText("今晚重点看这件"+base, 32),
+	}
 }
 
 func descriptionFromNotes(notes string, category string) string {
@@ -632,6 +676,107 @@ func descriptionFromNotes(notes string, category string) string {
 		notes = firstNonEmpty(category, "非标拍品") + "，请主播补充证书、尺寸、瑕疵和来源后上架。"
 	}
 	return notes + "。本内容为 AI 草稿，发布前需主播确认。"
+}
+
+func hostDescriptionFromNotes(notes string, category string, hasImage bool) string {
+	name := itemNameFromNotes(notes, category)
+	base := notesForHostCopy(notes)
+	if base == "" {
+		base = firstNonEmpty(name, category, "精选拍品")
+	}
+	if name == "" {
+		name = firstNonEmpty(category, "这件拍品")
+	}
+	visual := "这件拍品适合先给近景，再切侧面和上手效果，让买家看清轮廓、光泽和细节。"
+	if hasImage {
+		visual = "从画面先带大家看整体轮廓、颜色层次和反光细节，再补一组近景确认边缘、镶嵌和使用痕迹。"
+	}
+	return cleanText("各位先看这件"+name+"。商家备注里最值得展开的是："+base+"。直播讲解可以先抓住第一眼观感，再讲佩戴或收藏场景，把买家的注意力带到颜色、轮廓、光泽和细节层次上。"+visual+"证书、材质、年代、尺寸、瑕疵和来源不做口头承诺，确认凭证后再写进正式拍品页。", 900)
+}
+
+func sellingPointsFromNotes(notes string, hasImage bool) []string {
+	facts := noteFactPhrases(notes)
+	points := make([]string, 0, 5)
+	for _, fact := range facts {
+		points = append(points, cleanText("可讲："+fact, 60))
+		if len(points) >= 2 {
+			break
+		}
+	}
+	points = append(points, []string{
+		"先讲整体观感，再拉近展示细节",
+		"适合补充上手佩戴或收藏场景",
+		"价格规则和保证金需商家确认后发布",
+	}...)
+	if hasImage {
+		points = append([]string{"图片可辅助描述颜色、轮廓和光泽"}, points...)
+	}
+	return limitStrings(points, 5, 60)
+}
+
+func itemNameFromNotes(notes string, category string) string {
+	phrases := splitNotePhrases(notes)
+	for _, phrase := range phrases {
+		if isEvidencePhrase(phrase) {
+			continue
+		}
+		phrase = strings.Trim(phrase, "：:；;，,。.!！?？ ")
+		runes := []rune(phrase)
+		if len(runes) > 14 {
+			phrase = string(runes[:14])
+		}
+		if phrase != "" {
+			return cleanText(phrase, 14)
+		}
+	}
+	return cleanText(firstNonEmpty(category, "精选拍品"), 14)
+}
+
+func notesForHostCopy(notes string) string {
+	phrases := noteFactPhrases(notes)
+	if len(phrases) == 0 {
+		return ""
+	}
+	return strings.Join(limitStrings(phrases, 4, 32), "、")
+}
+
+func noteFactPhrases(notes string) []string {
+	out := []string{}
+	for i, phrase := range splitNotePhrases(notes) {
+		if i == 0 || isEvidencePhrase(phrase) {
+			continue
+		}
+		phrase = cleanText(strings.Trim(phrase, "：:；;，,。.!！?？ "), 32)
+		if phrase != "" {
+			out = append(out, phrase)
+		}
+	}
+	return out
+}
+
+func splitNotePhrases(notes string) []string {
+	notes = cleanText(notes, 220)
+	parts := regexp.MustCompile(`[，,。.!！?？；;、\n]+`).Split(notes, -1)
+	out := []string{}
+	for _, part := range parts {
+		part = cleanText(part, 48)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func isEvidencePhrase(value string) bool {
+	return strings.Contains(value, "证书") ||
+		strings.Contains(value, "真伪") ||
+		strings.Contains(value, "鉴定") ||
+		strings.Contains(value, "年代") ||
+		strings.Contains(value, "尺寸") ||
+		strings.Contains(value, "瑕疵") ||
+		strings.Contains(value, "来源") ||
+		strings.Contains(value, "待确认") ||
+		strings.Contains(value, "待商家确认")
 }
 
 var unsafeClaimPattern = regexp.MustCompile(`(?i)(真品|保真|绝对|官方认证|升值|稳赚|guaranteed|authentic|certified)`)
