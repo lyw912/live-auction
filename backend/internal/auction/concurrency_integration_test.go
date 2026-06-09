@@ -66,7 +66,7 @@ func TestCancelCapRaceProducesExactlyOneTerminalState(t *testing.T) {
 			return err
 		}
 		input := BidInput{ClientBidID: "cap-race-bid", AmountCents: capPrice}
-		resp, err := repo.PlaceBid(ctx, row.ID, "user_1", input.ClientBidID, input, "tr_cancel_cap")
+		resp, err := repo.PlaceBidPostgresLegacyForTests(ctx, row.ID, "user_1", input.ClientBidID, input, "tr_cancel_cap")
 		if err != nil {
 			return err
 		}
@@ -125,7 +125,7 @@ func TestConcurrentFinalSecondBidsKeepContinuousSeqAndOneWinner(t *testing.T) {
 		userID := fmt.Sprintf("user_final_%d", i)
 		amount := int64(15_000 + i*5_000)
 		input := BidInput{ClientBidID: fmt.Sprintf("final-bid-%d", i), AmountCents: amount}
-		_, err := repo.PlaceBid(ctx, row.ID, userID, input.ClientBidID, input, "tr_final_second")
+		_, err := repo.PlaceBidPostgresLegacyForTests(ctx, row.ID, userID, input.ClientBidID, input, "tr_final_second")
 		return err
 	})
 	for _, err := range errs {

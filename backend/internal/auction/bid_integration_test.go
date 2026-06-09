@@ -19,7 +19,7 @@ func TestPlaceBidAcceptedWritesTruthRowsAndIdempotency(t *testing.T) {
 	auction := createActiveAuction(t, repo, db, nil)
 
 	input := BidInput{ClientBidID: "bid-accepted-1", AmountCents: 15_000}
-	resp, err := repo.PlaceBid(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_bid")
+	resp, err := repo.PlaceBidPostgresLegacyForTests(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_bid")
 	if err != nil {
 		t.Fatalf("PlaceBid: %v", err)
 	}
@@ -31,7 +31,7 @@ func TestPlaceBidAcceptedWritesTruthRowsAndIdempotency(t *testing.T) {
 	}
 	assertBidTruthRows(t, db, auction.ID, 1, 1, 1, 1)
 
-	replay, err := repo.PlaceBid(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_bid")
+	replay, err := repo.PlaceBidPostgresLegacyForTests(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_bid")
 	if err != nil {
 		t.Fatalf("PlaceBid replay: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestPlaceBidAcceptedWritesTruthRowsAndIdempotency(t *testing.T) {
 	assertBidTruthRows(t, db, auction.ID, 1, 1, 1, 1)
 
 	changed := BidInput{ClientBidID: input.ClientBidID, AmountCents: 20_000}
-	_, err = repo.PlaceBid(ctx, auction.ID, "user_1", changed.ClientBidID, changed, "tr_bid")
+	_, err = repo.PlaceBidPostgresLegacyForTests(ctx, auction.ID, "user_1", changed.ClientBidID, changed, "tr_bid")
 	if !hasCode(err, apierrors.CodeIdempotencyKeyReusedWithDifferentRequest) {
 		t.Fatalf("PlaceBid changed idempotency err = %v, want key reused with different request", err)
 	}
@@ -54,7 +54,7 @@ func TestPlaceBidOrdinaryRejectIsStoredForAuditWithoutRealtimeOutbox(t *testing.
 	auction := createActiveAuction(t, repo, db, nil)
 
 	input := BidInput{ClientBidID: "bid-low-1", AmountCents: 1_000}
-	resp, err := repo.PlaceBid(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_bid")
+	resp, err := repo.PlaceBidPostgresLegacyForTests(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_bid")
 	if err != nil {
 		t.Fatalf("PlaceBid reject: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestPlaceBidOrdinaryRejectIsStoredForAuditWithoutRealtimeOutbox(t *testing.
 	assertBidRealtimeRows(t, db, auction.ID, "bid_rejected", 0)
 	assertRejectedBidAuditRow(t, db, auction.ID, input.ClientBidID, false)
 
-	replay, err := repo.PlaceBid(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_bid")
+	replay, err := repo.PlaceBidPostgresLegacyForTests(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_bid")
 	if err != nil {
 		t.Fatalf("PlaceBid reject replay: %v", err)
 	}
@@ -86,12 +86,12 @@ func TestPlaceBidPolicyRejectStillUsesDurableRealtime(t *testing.T) {
 	auction := createActiveAuction(t, repo, db, nil)
 
 	first := BidInput{ClientBidID: "bid-leading-1", AmountCents: 15_000}
-	accepted, err := repo.PlaceBid(ctx, auction.ID, "user_1", first.ClientBidID, first, "tr_bid")
+	accepted, err := repo.PlaceBidPostgresLegacyForTests(ctx, auction.ID, "user_1", first.ClientBidID, first, "tr_bid")
 	if err != nil {
 		t.Fatalf("PlaceBid accepted: %v", err)
 	}
 	second := BidInput{ClientBidID: "bid-self-leading-1", AmountCents: 20_000}
-	rejected, err := repo.PlaceBid(ctx, auction.ID, "user_1", second.ClientBidID, second, "tr_bid")
+	rejected, err := repo.PlaceBidPostgresLegacyForTests(ctx, auction.ID, "user_1", second.ClientBidID, second, "tr_bid")
 	if err != nil {
 		t.Fatalf("PlaceBid self leading reject: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestFatFingerConfirmTokenThenConfirmBid(t *testing.T) {
 	})
 
 	input := BidInput{ClientBidID: "bid-fat-finger-1", AmountCents: 50_000}
-	pending, err := repo.PlaceBid(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_fat")
+	pending, err := repo.PlaceBidPostgresLegacyForTests(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_fat")
 	if err != nil {
 		t.Fatalf("PlaceBid fat finger: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestFatFingerConfirmTokenThenConfirmBid(t *testing.T) {
 	}
 	assertBidTruthRows(t, db, auction.ID, 0, 0, 0, 1)
 
-	confirmed, err := repo.ConfirmBid(ctx, auction.ID, "user_1", input.ClientBidID, ConfirmBidInput{
+	confirmed, err := repo.ConfirmBidPostgresLegacyForTests(ctx, auction.ID, "user_1", input.ClientBidID, ConfirmBidInput{
 		ConfirmToken:   pending.ConfirmToken,
 		IdempotencyKey: input.ClientBidID,
 	}, "tr_fat_confirm")
@@ -138,7 +138,7 @@ func TestFatFingerConfirmTokenThenConfirmBid(t *testing.T) {
 	}
 	assertBidTruthRows(t, db, auction.ID, 1, 1, 1, 1)
 
-	replay, err := repo.ConfirmBid(ctx, auction.ID, "user_1", input.ClientBidID, ConfirmBidInput{
+	replay, err := repo.ConfirmBidPostgresLegacyForTests(ctx, auction.ID, "user_1", input.ClientBidID, ConfirmBidInput{
 		ConfirmToken:   pending.ConfirmToken,
 		IdempotencyKey: input.ClientBidID,
 	}, "tr_fat_confirm_reuse")
@@ -159,7 +159,7 @@ func TestPlaceBidCapSoldCreatesOrderAndPaymentIsIdempotent(t *testing.T) {
 	auction := createActiveAuction(t, repo, db, &capPrice)
 
 	input := BidInput{ClientBidID: "bid-cap-1", AmountCents: 20_000}
-	resp, err := repo.PlaceBid(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_bid")
+	resp, err := repo.PlaceBidPostgresLegacyForTests(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_bid")
 	if err != nil {
 		t.Fatalf("PlaceBid cap: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestPaymentWaitsForSettlementConvergence(t *testing.T) {
 	auction := createActiveAuction(t, repo, db, &capPrice)
 
 	input := BidInput{ClientBidID: "bid-cap-convergence-gate", AmountCents: 20_000}
-	if _, err := repo.PlaceBid(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_bid_convergence_gate"); err != nil {
+	if _, err := repo.PlaceBidPostgresLegacyForTests(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_bid_convergence_gate"); err != nil {
 		t.Fatalf("PlaceBid cap: %v", err)
 	}
 	var orderID string
@@ -259,7 +259,7 @@ func TestPaymentWaitsForOpenRedisEngineSettlement(t *testing.T) {
 	auction := createActiveAuction(t, repo, db, &capPrice)
 
 	input := BidInput{ClientBidID: "bid-cap-open-settlement-gate", AmountCents: 20_000}
-	if _, err := repo.PlaceBid(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_bid_open_settlement_gate"); err != nil {
+	if _, err := repo.PlaceBidPostgresLegacyForTests(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_bid_open_settlement_gate"); err != nil {
 		t.Fatalf("PlaceBid cap: %v", err)
 	}
 	var orderID string
@@ -299,7 +299,7 @@ func TestPlaceBidTriggersAutoMaxBidWithinSameTransaction(t *testing.T) {
 	}
 
 	input := BidInput{ClientBidID: "bid-auto-trigger-1", AmountCents: 15_000}
-	resp, err := repo.PlaceBid(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_auto")
+	resp, err := repo.PlaceBidPostgresLegacyForTests(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_auto")
 	if err != nil {
 		t.Fatalf("PlaceBid: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestPlaceBidTriggersAutoMaxBidWithinSameTransaction(t *testing.T) {
 	assertMaxBidIntentApplied(t, db, intent.ID)
 	assertPublicAutoPayloadDoesNotLeakMax(t, db, auction.ID)
 
-	replay, err := repo.PlaceBid(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_auto_replay")
+	replay, err := repo.PlaceBidPostgresLegacyForTests(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_auto_replay")
 	if err != nil {
 		t.Fatalf("PlaceBid replay: %v", err)
 	}
@@ -366,7 +366,7 @@ func TestAutoMaxBidDefendsEqualMaxByEarlierIntent(t *testing.T) {
 	}
 
 	input := BidInput{ClientBidID: "bid-equal-max-1", AmountCents: 15_000}
-	resp, err := repo.PlaceBid(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_equal_max")
+	resp, err := repo.PlaceBidPostgresLegacyForTests(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_equal_max")
 	if err != nil {
 		t.Fatalf("PlaceBid: %v", err)
 	}
@@ -389,7 +389,7 @@ func TestAutoMaxBidCapCreatesSingleSoldOrder(t *testing.T) {
 	}
 
 	input := BidInput{ClientBidID: "bid-auto-cap-1", AmountCents: 20_000}
-	resp, err := repo.PlaceBid(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_auto_cap")
+	resp, err := repo.PlaceBidPostgresLegacyForTests(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_auto_cap")
 	if err != nil {
 		t.Fatalf("PlaceBid: %v", err)
 	}
@@ -422,7 +422,7 @@ func TestListBidAndOrderHistoryRows(t *testing.T) {
 	userID := createTestUser(t, db)
 
 	input := BidInput{ClientBidID: "bid-history-1", AmountCents: 20_000}
-	if _, err := repo.PlaceBid(ctx, auction.ID, userID, input.ClientBidID, input, "tr_history"); err != nil {
+	if _, err := repo.PlaceBidPostgresLegacyForTests(ctx, auction.ID, userID, input.ClientBidID, input, "tr_history"); err != nil {
 		t.Fatalf("PlaceBid: %v", err)
 	}
 	bids, err := repo.ListBidHistory(ctx, userID)
@@ -458,7 +458,7 @@ func TestCancelActiveThenLaterBidRejects(t *testing.T) {
 	}
 
 	input := BidInput{ClientBidID: "bid-after-cancel-1", AmountCents: 15_000}
-	resp, err := repo.PlaceBid(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_bid")
+	resp, err := repo.PlaceBidPostgresLegacyForTests(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_bid")
 	if err != nil {
 		t.Fatalf("PlaceBid after cancel: %v", err)
 	}
@@ -641,7 +641,7 @@ func createPendingOrder(t *testing.T, repo *Repository, db *pgxpool.Pool) (strin
 	capPrice := int64(20_000)
 	auction := createActiveAuction(t, repo, db, &capPrice)
 	input := BidInput{ClientBidID: "bid-order-" + uuid.NewString(), AmountCents: 20_000}
-	if _, err := repo.PlaceBid(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_order"); err != nil {
+	if _, err := repo.PlaceBidPostgresLegacyForTests(ctx, auction.ID, "user_1", input.ClientBidID, input, "tr_order"); err != nil {
 		t.Fatalf("PlaceBid cap: %v", err)
 	}
 	var orderID string

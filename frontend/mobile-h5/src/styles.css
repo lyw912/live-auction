@@ -278,7 +278,7 @@ button {
   left: 14px;
   right: 72px;
   top: calc(58px + var(--safe-area-top));
-  z-index: 6;
+  z-index: 7;
   color: #fff;
   pointer-events: auto;
 }
@@ -337,10 +337,10 @@ button {
   margin-top: 6px;
   border: 1px solid rgba(255, 255, 255, .18);
   border-radius: var(--radius-md);
-  padding: 7px 8px;
-  background: rgba(12, 18, 24, .78);
-  backdrop-filter: blur(14px);
-  box-shadow: 0 16px 32px rgba(0, 0, 0, .26);
+  padding: 8px;
+  background: linear-gradient(180deg, rgba(10, 17, 24, .9), rgba(12, 18, 24, .76));
+  backdrop-filter: blur(16px);
+  box-shadow: 0 18px 34px rgba(0, 0, 0, .3);
 }
 
 .race-board.is-expanded .race-board-expanded {
@@ -452,7 +452,7 @@ button {
   position: absolute;
   left: 14px;
   right: 72px;
-  top: calc(154px + var(--safe-area-top));
+  top: calc(138px + var(--safe-area-top));
   z-index: 6;
   min-height: 58px;
   border: 1px solid rgba(255, 255, 255, .18);
@@ -469,6 +469,10 @@ button {
   pointer-events: auto;
   overflow: hidden;
   animation: pressure-card-in 240ms cubic-bezier(.2, .8, .2, 1) both;
+}
+
+.video-stage[data-race-board="expanded"] .pressure-action-card {
+  top: calc(224px + var(--safe-area-top));
 }
 
 .pressure-action-card::before {
@@ -535,12 +539,13 @@ button {
 }
 
 .pressure-action-card.is-leading {
-  border-color: rgba(255, 209, 102, .44);
-  background: linear-gradient(135deg, rgba(75, 57, 13, .84), rgba(9, 56, 43, .8));
+  border-color: rgba(94, 234, 212, .42);
+  background: linear-gradient(135deg, rgba(10, 72, 62, .86), rgba(17, 31, 44, .82));
 }
 
 .pressure-action-card.is-leading button {
-  background: rgba(255, 255, 255, .18);
+  color: #d8fff8;
+  background: rgba(94, 234, 212, .18);
 }
 
 .pressure-action-card.is-final {
@@ -2511,11 +2516,29 @@ button {
 }
 
 .history-row {
+  width: 100%;
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
   min-height: 42px;
   display: grid;
   gap: 3px;
   padding: 7px 0;
   border-top: 1px solid var(--color-line-soft);
+}
+
+.history-row:not(:disabled) {
+  cursor: pointer;
+}
+
+.history-row:not(:disabled)::after {
+  content: "查看详情";
+  color: var(--color-primary);
+  font-size: 11px;
+  font-weight: 900;
 }
 
 .history-row:first-of-type {
@@ -3208,6 +3231,51 @@ button {
   overflow-wrap: anywhere;
 }
 
+.max-bid-input {
+  display: grid;
+  gap: 6px;
+}
+
+.max-bid-input > span,
+.max-bid-range span {
+  color: var(--color-muted-strong);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.max-bid-input div {
+  height: 54px;
+  border: 1px solid rgba(29, 78, 216, .22);
+  border-radius: var(--radius-md);
+  background: #fff;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  padding: 0 12px;
+}
+
+.max-bid-input em {
+  color: #1d4ed8;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.max-bid-input input {
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  color: #111827;
+  font-family: var(--font-auction-tabular);
+  font-size: 24px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 900;
+}
+
+.max-bid-range {
+  display: grid;
+  gap: 4px;
+}
+
 .max-bid-stepper {
   height: 48px;
   border: 1px solid var(--color-line);
@@ -3625,4 +3693,201 @@ button {
 
 .qa-prompts button:disabled {
   opacity: 0.55;
+}
+
+.buyer-order-detail {
+  margin-top: 12px;
+  border: 1px solid rgba(217, 48, 78, .2);
+  border-radius: var(--radius-lg);
+  background: #fff;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.buyer-order-detail-head,
+.buyer-order-product {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.buyer-order-detail-head span,
+.buyer-order-grid span,
+.buyer-order-section span {
+  color: var(--color-muted-strong);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.buyer-order-detail-head strong {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--font-auction-tabular);
+  font-size: 15px;
+}
+
+.buyer-order-detail-head button {
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-1);
+  color: var(--color-muted-strong);
+  font-weight: 900;
+  padding: 8px 10px;
+}
+
+.buyer-order-product {
+  grid-template-columns: 58px minmax(0, 1fr);
+  border: 1px solid var(--color-line-soft);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-1);
+  padding: 8px;
+}
+
+.buyer-order-thumb {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(135deg, #303443, #111827);
+  display: grid;
+  place-items: center;
+}
+
+.buyer-order-thumb.has-media {
+  background-image: var(--buyer-order-media-url);
+  background-size: cover;
+  background-position: center;
+}
+
+.buyer-order-product strong,
+.buyer-order-product em {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.buyer-order-product em {
+  margin-top: 4px;
+  color: var(--color-muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.buyer-order-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.buyer-order-grid div {
+  min-height: 56px;
+  border: 1px solid var(--color-line-soft);
+  border-radius: var(--radius-md);
+  padding: 8px;
+  display: grid;
+  gap: 4px;
+}
+
+.buyer-order-grid strong {
+  font-family: var(--font-auction-tabular);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.buyer-order-section {
+  border: 1px solid var(--color-line-soft);
+  border-radius: var(--radius-md);
+  padding: 10px;
+}
+
+.buyer-order-section p {
+  margin: 6px 0 0;
+  color: var(--color-muted-strong);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.payment-confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(15, 23, 42, .56);
+  display: grid;
+  place-items: end center;
+  padding: 16px;
+}
+
+.payment-confirm-card {
+  width: min(100%, 390px);
+  border-radius: 18px;
+  background: #fff;
+  color: #111827;
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+  box-shadow: 0 22px 48px rgba(15, 23, 42, .24);
+}
+
+.payment-confirm-head {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.payment-confirm-head span,
+.payment-confirm-grid span {
+  color: var(--color-muted-strong);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.payment-confirm-head strong {
+  display: block;
+  font-family: var(--font-auction-tabular);
+  font-size: 26px;
+}
+
+.payment-confirm-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.payment-confirm-grid div {
+  border: 1px solid var(--color-line-soft);
+  border-radius: var(--radius-md);
+  padding: 9px;
+  display: grid;
+  gap: 4px;
+}
+
+.payment-confirm-card p {
+  margin: 0;
+  color: var(--color-muted-strong);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.payment-confirm-actions {
+  display: grid;
+  grid-template-columns: 100px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.payment-confirm-actions button {
+  min-height: 44px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-1);
+  color: var(--color-muted-strong);
+  font-weight: 900;
+}
+
+.payment-confirm-actions button:last-child {
+  border: 0;
+  background: var(--color-bid-red);
+  color: #fff;
 }

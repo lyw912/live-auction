@@ -99,6 +99,7 @@ export type BidResponse = {
     engine_seq?: number;
   };
   current_price_cents?: number;
+  next_valid_bid_cents?: number;
   current_winner_id?: string;
   leader_user_masked?: string;
   end_at?: string;
@@ -123,9 +124,9 @@ export type PendingBidRequest = {
 
 export function isBidConfirmationPending(payload?: BidResponse | null) {
   return payload?.result === 'BID_CONFIRMATION_PENDING'
+    || payload?.result === 'PROCESSING_RETRY_LATER'
     || payload?.decision_status === 'PENDING_DURABILITY'
-    || payload?.durability_status === 'KAFKA_UNKNOWN'
-    || (Boolean(payload?.result?.startsWith('ENGINE_')) && payload?.settlement_status === 'PENDING');
+    || payload?.durability_status === 'KAFKA_UNKNOWN';
 }
 
 export function isEngineRejected(payload?: BidResponse | null) {
@@ -156,6 +157,7 @@ export type AuctionRealtimeEvent = {
     reason?: string;
     order_status?: string;
     deposit_status?: string;
+    bid_source?: string;
   };
 };
 
@@ -329,7 +331,7 @@ export type LeaderboardPayload = {
   gap_to_leader_cents?: number;
   gap_to_next_rank_cents?: number;
   next_valid_bid_cents?: number;
-  state?: 'NOT_BID' | 'OUTBID' | 'LEADING';
+  state?: 'NOT_BID' | 'OUTBID' | 'LEADING' | 'RECOVERING';
   leader_amount_cents: number;
   accepted_bidder_count: number;
   active_bidders_30s?: number;
@@ -512,6 +514,7 @@ export function responseServerTimeMS(response: Response) {
 }
 
 export function leaderboardCopy(payload: LeaderboardPayload | null) {
+  if (payload?.state === 'RECOVERING') return '竞拍状态校对中';
   if (!payload || !payload.entries?.length) return h5Copy.noBids;
   if (payload.my_rank === 1) return '你正在领先';
   if (payload.my_rank && payload.gap_to_leader_cents != null) {
@@ -522,6 +525,13 @@ export function leaderboardCopy(payload: LeaderboardPayload | null) {
 
 export function leaderboardActionCopy(payload: LeaderboardPayload | null, fallbackBidCents: number) {
   const nextBid = payload?.next_valid_bid_cents ?? fallbackBidCents;
+  if (payload?.state === 'RECOVERING') {
+    return {
+      headline: '竞拍状态校对中',
+      action: h5Copy.loading,
+      freshness: '以服务端修复后的榜单为准'
+    };
+  }
   if (!payload || !payload.entries?.length) {
     return {
       headline: h5Copy.noBids,
@@ -532,13 +542,14 @@ export function leaderboardActionCopy(payload: LeaderboardPayload | null, fallba
   if (payload.my_rank === 1 || payload.state === 'LEADING') {
     return {
       headline: '第 1 名 · 正在领先',
-      action: `守住领先 · 下一口 ${formatCents(nextBid)}`,
+      action: '等待其他买家出价',
       freshness: `刚刚更新 · ${payload.accepted_bidder_count} 人入局`
     };
   }
-  if (payload.my_rank && payload.gap_to_next_rank_cents != null) {
+  if (payload.my_rank && (payload.gap_to_leader_cents != null || payload.gap_to_next_rank_cents != null)) {
+    const gap = payload.gap_to_leader_cents ?? payload.gap_to_next_rank_cents ?? 0;
     return {
-      headline: `第 ${payload.my_rank} 名 · 差 ${formatCents(payload.gap_to_next_rank_cents)}`,
+      headline: `第 ${payload.my_rank} 名 · 差 ${formatCents(gap)}`,
       action: `下一口 ${formatCents(nextBid)}`,
       freshness: `刚刚更新 · 近30秒 ${payload.accepted_bids_30s ?? 0} 次出价`
     };
@@ -910,11 +921,16 @@ export function rejectCopy(code?: string | null) {
     case 'BID_CONFIRMATION_PENDING':
       return '已进入确认队列';
     case 'BID_TOO_LOW':
-      return '出价低于最低可出价';
+    case 'ENGINE_REJECTED':
+      return '价格已刷新，请按最新价格出价';
     case 'BID_INCREMENT_MISMATCH':
       return '请按加价幅度出价';
+    case 'BID_ABOVE_CAP':
+      return '出价超过封顶价';
     case 'REJECTED_SELF_LEADING':
       return '你已领先，无需重复出价';
+    case 'AUCTION_NOT_ACTIVE':
+      return '当前拍品不在竞拍中';
     case 'BID_AUCTION_TOO_HOT':
     case 'BID_RETRY_LATER':
     case 'RATE_LIMITED':
@@ -925,6 +941,7 @@ export function rejectCopy(code?: string | null) {
       return '操作未确认，请重新出价';
     case 'AUCTION_ENDED':
       return '竞拍已结束，正在确认结果';
+    case 'ACL_FORBIDDEN':
     case 'FORBIDDEN_ROOM':
       return '无法进入该直播间';
     case 'NETWORK_ERROR':
@@ -967,7 +984,12 @@ export function riskActionCopy(code?: string | null) {
       return '上一笔结果不确定，请用新的出价请求重试';
     case 'BID_INCREMENT_MISMATCH':
     case 'BID_TOO_LOW':
+    case 'ENGINE_REJECTED':
       return '按服务端给出的最低有效价和加价幅度调整';
+    case 'BID_ABOVE_CAP':
+      return '封顶价已限制继续加价，等待成交结果';
+    case 'AUCTION_NOT_ACTIVE':
+      return '刷新当前拍品状态后再操作';
     case 'AUCTION_ENDED':
       return '等待服务端确认结果，当前不要继续提交';
     case 'NETWORK_ERROR':
@@ -1018,7 +1040,9 @@ export function isTestMatrixEnabled() {
 
 export function roomIDFromPath() {
   const match = window.location.pathname.match(/^\/rooms\/([^/?#]+)/);
-  return match ? decodeURIComponent(match[1]) : 'room_main';
+  if (match) return decodeURIComponent(match[1]);
+  const params = new URLSearchParams(window.location.search);
+  return params.get('room_id') || params.get('room') || 'room_main';
 }
 
 export function auctionPriority(auction: AuctionSummary) {

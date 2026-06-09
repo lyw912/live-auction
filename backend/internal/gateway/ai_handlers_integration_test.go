@@ -355,7 +355,7 @@ func TestAICommentarySystemMessagesSentinelRecapAndProductQA(t *testing.T) {
 
 	for i := 0; i < 5; i++ {
 		bidID := "ai-sentinel-" + uuid.NewString()
-		if _, err := repo.PlaceBid(req.Context(), row.ID, "user_1", bidID, auction.BidInput{
+		if _, err := repo.PlaceBidPostgresLegacyForTests(req.Context(), row.ID, "user_1", bidID, auction.BidInput{
 			ClientBidID:   bidID,
 			AmountCents:   1,
 			ClientSeenSeq: row.Seq,
@@ -616,7 +616,7 @@ func TestSentinelAndProductQAUseProviderWithFactGuards(t *testing.T) {
 	aiRepo := aicap.NewRepository(db)
 	for i := 0; i < 5; i++ {
 		bidID := "ai-provider-sentinel-" + uuid.NewString()
-		if _, err := repo.PlaceBid(context.Background(), row.ID, "user_1", bidID, auction.BidInput{
+		if _, err := repo.PlaceBidPostgresLegacyForTests(context.Background(), row.ID, "user_1", bidID, auction.BidInput{
 			ClientBidID:   bidID,
 			AmountCents:   1,
 			ClientSeenSeq: row.Seq,

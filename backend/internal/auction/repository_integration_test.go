@@ -3,6 +3,7 @@ package auction
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 
@@ -173,13 +174,13 @@ func TestRepositoryLeaderboardActionMetrics(t *testing.T) {
 	user2 := createTestUser(t, db)
 	user3 := createTestUser(t, db)
 
-	if _, err := repo.PlaceBid(ctx, auction.ID, user2, "lb-bid-1", BidInput{ClientBidID: "lb-bid-1", AmountCents: 15_000}, "tr_lb"); err != nil {
+	if _, err := repo.PlaceBidPostgresLegacyForTests(ctx, auction.ID, user2, "lb-bid-1", BidInput{ClientBidID: "lb-bid-1", AmountCents: 15_000}, "tr_lb"); err != nil {
 		t.Fatalf("PlaceBid user2: %v", err)
 	}
-	if _, err := repo.PlaceBid(ctx, auction.ID, user3, "lb-bid-2", BidInput{ClientBidID: "lb-bid-2", AmountCents: 20_000}, "tr_lb"); err != nil {
+	if _, err := repo.PlaceBidPostgresLegacyForTests(ctx, auction.ID, user3, "lb-bid-2", BidInput{ClientBidID: "lb-bid-2", AmountCents: 20_000}, "tr_lb"); err != nil {
 		t.Fatalf("PlaceBid user3: %v", err)
 	}
-	if _, err := repo.PlaceBid(ctx, auction.ID, "user_1", "lb-bid-3", BidInput{ClientBidID: "lb-bid-3", AmountCents: 25_000}, "tr_lb"); err != nil {
+	if _, err := repo.PlaceBidPostgresLegacyForTests(ctx, auction.ID, "user_1", "lb-bid-3", BidInput{ClientBidID: "lb-bid-3", AmountCents: 25_000}, "tr_lb"); err != nil {
 		t.Fatalf("PlaceBid user1: %v", err)
 	}
 
@@ -201,6 +202,16 @@ func TestRepositoryLeaderboardActionMetrics(t *testing.T) {
 	}
 	if board.MyRank == nil || *board.MyRank != 3 {
 		t.Fatalf("my_rank = %v, want 3", board.MyRank)
+	}
+	var myEntry *LeaderboardEntry
+	for i := range board.Entries {
+		if board.Entries[i].IsCurrent {
+			myEntry = &board.Entries[i]
+			break
+		}
+	}
+	if myEntry == nil || myEntry.UserMasked != "匿名用户 1" {
+		t.Fatalf("current entry = %#v, want stable anonymous label for first bidder", myEntry)
 	}
 	if board.GapToLeaderCents == nil || *board.GapToLeaderCents != 10_000 {
 		t.Fatalf("gap_to_leader = %v, want 10000", board.GapToLeaderCents)
@@ -225,6 +236,119 @@ func TestRepositoryLeaderboardActionMetrics(t *testing.T) {
 	if leading.GapToLeaderCents == nil || *leading.GapToLeaderCents != 0 {
 		t.Fatalf("leading gap_to_leader = %v, want 0", leading.GapToLeaderCents)
 	}
+}
+
+func TestRepositoryLeaderboardIncludesCurrentUserOutsideTopLimit(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	repo := NewRepository(db)
+	auction := createActiveAuction(t, repo, db, nil)
+	viewer := "user_1"
+	if _, err := repo.PlaceBidPostgresLegacyForTests(ctx, auction.ID, viewer, "lb-self-outside-top", BidInput{ClientBidID: "lb-self-outside-top", AmountCents: 15_000}, "tr_lb_self"); err != nil {
+		t.Fatalf("PlaceBid viewer: %v", err)
+	}
+	for i, amount := range []int64{20_000, 25_000, 30_000} {
+		userID := createTestUser(t, db)
+		clientBidID := fmt.Sprintf("lb-other-%d", i)
+		if _, err := repo.PlaceBidPostgresLegacyForTests(ctx, auction.ID, userID, clientBidID, BidInput{ClientBidID: clientBidID, AmountCents: amount}, "tr_lb_self"); err != nil {
+			t.Fatalf("PlaceBid other %d: %v", i, err)
+		}
+	}
+
+	board, err := repo.GetLeaderboard(ctx, auction.ID, viewer, 2)
+	if err != nil {
+		t.Fatalf("GetLeaderboard: %v", err)
+	}
+	if board.MyRank == nil || *board.MyRank != 4 {
+		t.Fatalf("my_rank = %v, want 4", board.MyRank)
+	}
+	var foundCurrent bool
+	for _, entry := range board.Entries {
+		if entry.IsCurrent {
+			foundCurrent = true
+			if entry.Rank != 4 || entry.UserMasked != "匿名用户 1" {
+				t.Fatalf("current entry = %#v, want rank 4 stable anonymous user 1", entry)
+			}
+		}
+	}
+	if !foundCurrent {
+		t.Fatalf("leaderboard entries did not include current user outside top limit: %#v", board.Entries)
+	}
+}
+
+func TestRepositoryLeaderboardMarksInconsistentAuctionStateRecovering(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	repo := NewRepository(db)
+	auction := createActiveAuction(t, repo, db, nil)
+
+	disableAuctionProjectionTriggersForTest(t, db)
+	if _, err := db.Exec(ctx, `
+		UPDATE auctions
+		SET current_price_cents = 35000,
+		    current_winner_id = 'user_2',
+		    accepted_bid_count = 1,
+		    seq = 41
+		WHERE id = $1
+	`, auction.ID); err != nil {
+		t.Fatalf("corrupt auction state: %v", err)
+	}
+
+	board, err := repo.GetLeaderboard(ctx, auction.ID, "user_1", 5)
+	if err != nil {
+		t.Fatalf("GetLeaderboard: %v", err)
+	}
+	if board.State != "RECOVERING" {
+		t.Fatalf("state = %s, want RECOVERING for winner without accepted bid row", board.State)
+	}
+	if board.LeaderAmountCents != 35000 {
+		t.Fatalf("leader_amount_cents = %d, want fallback current price", board.LeaderAmountCents)
+	}
+	if len(board.Entries) != 0 {
+		t.Fatalf("entries = %#v, want no fabricated leaderboard rows", board.Entries)
+	}
+}
+
+func TestRepositoryAuctionProjectionConstraintRejectsMissingAcceptedBidFact(t *testing.T) {
+	db := openIntegrationDB(t)
+	ctx := context.Background()
+	repo := NewRepository(db)
+	auction := createActiveAuction(t, repo, db, nil)
+
+	_, err := db.Exec(ctx, `
+		UPDATE auctions
+		SET current_price_cents = 35000,
+		    current_winner_id = 'user_2',
+		    accepted_bid_count = 1,
+		    seq = 41
+		WHERE id = $1
+	`, auction.ID)
+	if err == nil {
+		t.Fatalf("corrupt auction projection update succeeded, want constraint violation")
+	}
+}
+
+func disableAuctionProjectionTriggersForTest(t *testing.T, db *pgxpool.Pool) {
+	t.Helper()
+	ctx := context.Background()
+	for _, stmt := range []string{
+		`ALTER TABLE auctions DISABLE TRIGGER auctions_projection_matches_bid_facts`,
+		`ALTER TABLE bids DISABLE TRIGGER bids_projection_matches_auction`,
+	} {
+		if _, err := db.Exec(ctx, stmt); err != nil {
+			t.Fatalf("disable auction projection trigger: %v", err)
+		}
+	}
+	t.Cleanup(func() {
+		for _, stmt := range []string{
+			`ALTER TABLE bids ENABLE TRIGGER bids_projection_matches_auction`,
+			`ALTER TABLE auctions ENABLE TRIGGER auctions_projection_matches_bid_facts`,
+		} {
+			if _, err := db.Exec(context.Background(), stmt); err != nil {
+				t.Fatalf("enable auction projection trigger: %v", err)
+			}
+		}
+	})
 }
 
 func openIntegrationDB(t *testing.T) *pgxpool.Pool {

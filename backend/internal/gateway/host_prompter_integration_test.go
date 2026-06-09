@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -38,7 +37,7 @@ func TestHostPrompterPromptsRequireHostAndUseRealAuctionEvents(t *testing.T) {
 	}
 	for i := 0; i < 3; i++ {
 		clientBidID := "prompt-low-" + uuid.NewString()
-		_, err := repo.PlaceBid(ctx, row.ID, "user_1", clientBidID, auction.BidInput{
+		_, err := repo.PlaceBidPostgresLegacyForTests(ctx, row.ID, "user_1", clientBidID, auction.BidInput{
 			ClientBidID:   clientBidID,
 			AmountCents:   1,
 			ClientSeenSeq: row.Seq,
@@ -102,22 +101,52 @@ func TestHostPrompterSoldUnpaidPrompt(t *testing.T) {
 	rdb := openMonitorRedis(t)
 	deps := &storage.Dependencies{Postgres: db, Redis: rdb}
 	repo := auction.NewRepository(db)
-	row := createMonitorAuction(t, repo, db)
 	ctx := context.Background()
-	orderID := "ord_prompt_" + uuid.NewString()
-	if _, err := db.Exec(ctx, `
-		UPDATE auctions
-		SET status = 'SOLD', current_winner_id = 'user_1'
-		WHERE id = $1
-	`, row.ID); err != nil {
-		t.Fatalf("update sold auction: %v", err)
+	roomID := "room_prompt_sold_" + uuid.NewString()
+	if _, err := db.Exec(ctx, `INSERT INTO rooms (id, host_id, status) VALUES ($1, 'host_1', 'OPEN')`, roomID); err != nil {
+		t.Fatalf("insert room: %v", err)
 	}
-	if _, err := db.Exec(ctx, `
-		INSERT INTO orders (id, auction_id, winner_id, amount_cents, status, deposit_cents, deposit_status, expire_at)
-		VALUES ($1, $2, 'user_1', $3, 'ORDER_PENDING', 1000, 'HELD', $4)
-		ON CONFLICT (auction_id) DO UPDATE SET status = 'ORDER_PENDING', expire_at = EXCLUDED.expire_at
-	`, orderID, row.ID, row.CurrentPriceCents, time.Now().UTC().Add(10*time.Minute)); err != nil {
-		t.Fatalf("insert pending order: %v", err)
+	item, err := repo.CreateItem(ctx, auction.CreateItemInput{Title: "Prompt Sold Item"})
+	if err != nil {
+		t.Fatalf("CreateItem: %v", err)
+	}
+	capAmount := int64(15_000)
+	row, err := repo.CreateAuction(ctx, auction.CreateAuctionInput{
+		RoomID:          roomID,
+		ItemID:          item.ID,
+		StartPriceCents: 10_000,
+		IncrementCents:  5_000,
+		CapPriceCents:   &capAmount,
+		Rule: auction.Rule{
+			DurationSeconds:     60,
+			ExtendWindowSeconds: 10,
+			ExtendBySeconds:     10,
+			MaxExtendCount:      3,
+			DepositBPS:          1000,
+			DepositFloorCents:   1000,
+			DepositCapCents:     100_000_000,
+		},
+	}, "tr_prompt_sold_create")
+	if err != nil {
+		t.Fatalf("CreateAuction: %v", err)
+	}
+	if _, err := repo.Schedule(ctx, row.ID, nil, "tr_prompt_sold_schedule"); err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	row, err = repo.Start(ctx, row.ID, "tr_prompt_sold_start")
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	bidID := "prompt-sold-" + uuid.NewString()
+	resp, err := repo.PlaceBidPostgresLegacyForTests(ctx, row.ID, "user_1", bidID, auction.BidInput{
+		ClientBidID: bidID,
+		AmountCents: capAmount,
+	}, "tr_prompt_sold")
+	if err != nil {
+		t.Fatalf("place sold bid: %v", err)
+	}
+	if resp.Result != auction.BidResultAcceptedSold {
+		t.Fatalf("sold bid result = %s, want %s", resp.Result, auction.BidResultAcceptedSold)
 	}
 
 	router := NewRouter(testConfig(), deps, slog.Default())

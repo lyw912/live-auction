@@ -33,7 +33,7 @@ func TestRoomMembershipACLRejectsForeignAndBannedViewer(t *testing.T) {
 	bidBody := `{"client_bid_id":"acl-bid-1","amount_cents":15000,"client_seen_seq":0}`
 	headers := userHeaders("user_1", "user")
 	headers.Set("Idempotency-Key", "acl-bid-1")
-	assertAPIStatus(t, router, http.MethodPost, "/api/auctions/"+foreign.ID+"/bids", bytes.NewBufferString(bidBody), headers, http.StatusServiceUnavailable)
+	assertAPIStatus(t, router, http.MethodPost, "/api/auctions/"+foreign.ID+"/bids", bytes.NewBufferString(bidBody), headers, http.StatusForbidden)
 
 	ticketBody := `{"room_id":"` + foreign.RoomID + `","auction_id":"` + foreign.ID + `"}`
 	assertAPIStatus(t, router, http.MethodPost, "/api/auth/ws-ticket", bytes.NewBufferString(ticketBody), userHeaders("user_1", "user"), http.StatusForbidden)

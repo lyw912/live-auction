@@ -95,10 +95,12 @@ func main() {
 			CPUs:       runtime.NumCPU(),
 			Database:   "PostgreSQL via DATABASE_URL",
 			RedisAddr:  cfg.RedisAddr,
-			NativeTool: "go run ./cmd/p0loadsmoke",
+			NativeTool: "go run ./cmd/p0loadsmoke (legacy PostgreSQL smoke)",
 		},
 		KnownLimits: []string{
+			"legacy PostgreSQL repository smoke only; not the current Redis/Kafka hot-engine path",
 			"local smoke baseline only; not a QPS/P99/fanout capacity claim",
+			"do not use this command as S1-S5, PTS-1B, kafka_ack, or bid capacity evidence",
 			"k6 is not installed in this environment",
 			"single process, small workload, local Docker infra",
 		},
@@ -139,7 +141,7 @@ func runBidBurst(ctx context.Context, db *pgxpool.Pool, repo *auction.Repository
 				ClientSeenSeq: 0,
 			}
 			bidStart := time.Now()
-			resp, err := repo.PlaceBid(ctx, auctionID, userID, bid.ClientBidID, bid, "p0load")
+			resp, err := repo.PlaceBidPostgresLegacyForTests(ctx, auctionID, userID, bid.ClientBidID, bid, "p0load")
 			latencies[i] = time.Since(bidStart)
 			if err != nil {
 				errors.Add(1)

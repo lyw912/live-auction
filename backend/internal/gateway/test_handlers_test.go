@@ -8,10 +8,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"live-auction/backend/internal/auction"
+	"live-auction/backend/internal/redisengine"
+	"live-auction/backend/internal/redisx"
 	"live-auction/backend/internal/storage"
 )
 
@@ -55,8 +59,17 @@ func TestDemoCompetingBidIsLocalHostScopedAndWritesRealBid(t *testing.T) {
 	rdb := openMonitorRedis(t)
 	deps := &storage.Dependencies{Postgres: db, Redis: rdb}
 	repo := auction.NewRepository(db)
-	router := NewRouter(testConfig(), deps, slog.Default())
+	cfg := testConfig()
+	cfg.BidEngineResponseDurability = "kafka_ack"
+	ledger := redisengine.NewMemoryLedger()
+	worker := redisengine.NewWorker(db, rdb, ledger, "gateway-demo-bid-"+uuid.NewString())
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go worker.Run(ctx, 10*time.Millisecond)
+	router := NewRouterWithRealtimeAndLedger(cfg, deps, slog.Default(), nil, ledger)
 	row := createACLAuction(t, repo, db, "room_demo_bid_"+uuid.NewString(), "host_1", "user_2", "ACTIVE")
+	seedAdmissionACL(t, rdb, row, "user_1")
+	seedAdmissionACL(t, rdb, row, "user_2")
 
 	body := bytes.NewBufferString(`{"bidder_id":"user_2","client_bid_id":"demo-bid-1","amount_cents":15000,"client_seen_seq":0}`)
 	assertAPIStatus(t, router, http.MethodPost, "/api/demo/auctions/"+row.ID+"/competing-bid", body, userHeaders("user_1", "user"), http.StatusForbidden)
@@ -84,14 +97,31 @@ func TestDemoCompetingBidIsLocalHostScopedAndWritesRealBid(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode demo bid: %v", err)
 	}
-	if payload.Result != auction.BidResultAccepted || payload.CurrentPriceCents != 15000 {
+	if payload.Result != auction.BidResultEngineAccepted || payload.CurrentPriceCents != 15000 {
 		t.Fatalf("demo bid payload = %#v", payload)
 	}
-	var count int
-	if err := db.QueryRow(context.Background(), `SELECT count(*) FROM bids WHERE auction_id = $1 AND user_id = 'user_2' AND status = 'ACCEPTED'`, row.ID).Scan(&count); err != nil {
-		t.Fatalf("count demo bid: %v", err)
+	if state, err := rdb.HGetAll(context.Background(), redisx.BidEngineStateKey(row.ID)).Result(); err != nil {
+		t.Fatalf("read redis engine state: %v", err)
+	} else if state["current_winner_id"] != "user_2" || state["current_price_cents"] != "15000" {
+		t.Fatalf("redis engine state = %#v, want user_2 at 15000", state)
 	}
-	if count != 1 {
-		t.Fatalf("accepted demo bids = %d, want 1", count)
+	waitForAcceptedBidCount(t, db, row.ID, "user_2", 1)
+}
+
+func waitForAcceptedBidCount(t *testing.T, db *pgxpool.Pool, auctionID string, userID string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var count int
+		if err := db.QueryRow(context.Background(), `SELECT count(*) FROM bids WHERE auction_id = $1 AND user_id = $2 AND status = 'ACCEPTED'`, auctionID, userID).Scan(&count); err != nil {
+			t.Fatalf("count accepted bid: %v", err)
+		}
+		if count == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("accepted bids = %d, want %d for auction=%s user=%s", count, want, auctionID, userID)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

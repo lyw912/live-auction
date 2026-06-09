@@ -29,14 +29,14 @@ func TestRelayPublishesPendingOutboxToRedisInOrder(t *testing.T) {
 	quiesceOutboxExcept(t, db, auctionRow.ID)
 
 	bid1 := auction.BidInput{ClientBidID: "relay-bid-1", AmountCents: 15_000}
-	if _, err := repo.PlaceBid(ctx, auctionRow.ID, "user_1", bid1.ClientBidID, bid1, "tr_relay"); err != nil {
+	if _, err := repo.PlaceBidPostgresLegacyForTests(ctx, auctionRow.ID, "user_1", bid1.ClientBidID, bid1, "tr_relay"); err != nil {
 		t.Fatalf("PlaceBid 1: %v", err)
 	}
 	if _, err := db.Exec(ctx, `INSERT INTO users (id, role, display_name) VALUES ('user_2', 'user', 'Relay User 2') ON CONFLICT DO NOTHING`); err != nil {
 		t.Fatalf("insert user_2: %v", err)
 	}
 	bid2 := auction.BidInput{ClientBidID: "relay-bid-2", AmountCents: 20_000}
-	if _, err := repo.PlaceBid(ctx, auctionRow.ID, "user_2", bid2.ClientBidID, bid2, "tr_relay"); err != nil {
+	if _, err := repo.PlaceBidPostgresLegacyForTests(ctx, auctionRow.ID, "user_2", bid2.ClientBidID, bid2, "tr_relay"); err != nil {
 		t.Fatalf("PlaceBid 2: %v", err)
 	}
 	prioritizeOutboxForAuction(t, db, auctionRow.ID)
@@ -137,7 +137,7 @@ func TestRelayStreamEpochStableAcrossEventsAndSnapshot(t *testing.T) {
 	}
 	quiesceOutboxExcept(t, db, auctionRow.ID)
 	bid := auction.BidInput{ClientBidID: "epoch-bid-1", AmountCents: 15_000}
-	if _, err := repo.PlaceBid(ctx, auctionRow.ID, "user_1", bid.ClientBidID, bid, "tr_epoch"); err != nil {
+	if _, err := repo.PlaceBidPostgresLegacyForTests(ctx, auctionRow.ID, "user_1", bid.ClientBidID, bid, "tr_epoch"); err != nil {
 		t.Fatalf("PlaceBid: %v", err)
 	}
 	prioritizeOutboxForAuction(t, db, auctionRow.ID)
@@ -203,7 +203,7 @@ func TestRelayRedisUnavailableRemainsRetriableAfterMaxAttempts(t *testing.T) {
 	auctionRow := createActiveAuctionForRelay(t, repo, db)
 	quiesceOutboxExcept(t, db, auctionRow.ID)
 	bid := auction.BidInput{ClientBidID: "redis-retry-bid-1", AmountCents: 15_000}
-	if _, err := repo.PlaceBid(ctx, auctionRow.ID, "user_1", bid.ClientBidID, bid, "tr_redis_retry"); err != nil {
+	if _, err := repo.PlaceBidPostgresLegacyForTests(ctx, auctionRow.ID, "user_1", bid.ClientBidID, bid, "tr_redis_retry"); err != nil {
 		t.Fatalf("PlaceBid: %v", err)
 	}
 	var targetOutboxID int64
@@ -326,7 +326,7 @@ func TestRelayInvalidEnvelopeDeadLettersWithoutRetry(t *testing.T) {
 	auctionRow := createActiveAuctionForRelay(t, repo, db)
 	quiesceOutboxExcept(t, db, auctionRow.ID)
 	bid := auction.BidInput{ClientBidID: "invalid-envelope-bid-1", AmountCents: 15_000}
-	if _, err := repo.PlaceBid(ctx, auctionRow.ID, "user_1", bid.ClientBidID, bid, "tr_invalid_envelope"); err != nil {
+	if _, err := repo.PlaceBidPostgresLegacyForTests(ctx, auctionRow.ID, "user_1", bid.ClientBidID, bid, "tr_invalid_envelope"); err != nil {
 		t.Fatalf("PlaceBid: %v", err)
 	}
 	var targetOutboxID int64
@@ -442,7 +442,7 @@ func TestRelayWatermarkTracksAckPendingAndRedelivery(t *testing.T) {
 	auctionRow := createActiveAuctionForRelay(t, repo, db)
 	quiesceOutboxExcept(t, db, auctionRow.ID)
 	bid := auction.BidInput{ClientBidID: "watermark-redelivery-bid-1", AmountCents: 15_000}
-	if _, err := repo.PlaceBid(ctx, auctionRow.ID, "user_1", bid.ClientBidID, bid, "tr_watermark_redelivery"); err != nil {
+	if _, err := repo.PlaceBidPostgresLegacyForTests(ctx, auctionRow.ID, "user_1", bid.ClientBidID, bid, "tr_watermark_redelivery"); err != nil {
 		t.Fatalf("PlaceBid: %v", err)
 	}
 	prioritizeOutboxForAuction(t, db, auctionRow.ID)
@@ -499,7 +499,7 @@ func TestRelayReclaimsExpiredPublishingLease(t *testing.T) {
 	auctionRow := createActiveAuctionForRelay(t, repo, db)
 	quiesceOutboxExcept(t, db, auctionRow.ID)
 	bid := auction.BidInput{ClientBidID: "lease-bid-1", AmountCents: 15_000}
-	if _, err := repo.PlaceBid(ctx, auctionRow.ID, "user_1", bid.ClientBidID, bid, "tr_lease"); err != nil {
+	if _, err := repo.PlaceBidPostgresLegacyForTests(ctx, auctionRow.ID, "user_1", bid.ClientBidID, bid, "tr_lease"); err != nil {
 		t.Fatalf("PlaceBid: %v", err)
 	}
 	if _, err := db.Exec(ctx, `
@@ -542,14 +542,14 @@ func TestRelayDoesNotSkipBlockedAuctionHead(t *testing.T) {
 	auctionRow := createActiveAuctionForRelay(t, repo, db)
 	quiesceOutboxExcept(t, db, auctionRow.ID)
 	bid1 := auction.BidInput{ClientBidID: "blocked-head-bid-1", AmountCents: 15_000}
-	if _, err := repo.PlaceBid(ctx, auctionRow.ID, "user_1", bid1.ClientBidID, bid1, "tr_blocked_head"); err != nil {
+	if _, err := repo.PlaceBidPostgresLegacyForTests(ctx, auctionRow.ID, "user_1", bid1.ClientBidID, bid1, "tr_blocked_head"); err != nil {
 		t.Fatalf("PlaceBid 1: %v", err)
 	}
 	if _, err := db.Exec(ctx, `INSERT INTO users (id, role, display_name) VALUES ('user_blocked_head_2', 'user', 'Blocked Head 2') ON CONFLICT DO NOTHING`); err != nil {
 		t.Fatalf("insert user: %v", err)
 	}
 	bid2 := auction.BidInput{ClientBidID: "blocked-head-bid-2", AmountCents: 20_000}
-	if _, err := repo.PlaceBid(ctx, auctionRow.ID, "user_blocked_head_2", bid2.ClientBidID, bid2, "tr_blocked_head"); err != nil {
+	if _, err := repo.PlaceBidPostgresLegacyForTests(ctx, auctionRow.ID, "user_blocked_head_2", bid2.ClientBidID, bid2, "tr_blocked_head"); err != nil {
 		t.Fatalf("PlaceBid 2: %v", err)
 	}
 	prioritizeOutboxForAuction(t, db, auctionRow.ID)
@@ -720,7 +720,7 @@ func TestRelayProcessBatchDrainsMultipleEvents(t *testing.T) {
 			t.Fatalf("insert user %d: %v", i, err)
 		}
 		bid := auction.BidInput{ClientBidID: "batch-bid-" + uuid.NewString(), AmountCents: 15_000 + int64(i)*5_000}
-		if _, err := repo.PlaceBid(ctx, auctionRow.ID, userID, bid.ClientBidID, bid, "tr_batch"); err != nil {
+		if _, err := repo.PlaceBidPostgresLegacyForTests(ctx, auctionRow.ID, userID, bid.ClientBidID, bid, "tr_batch"); err != nil {
 			t.Fatalf("PlaceBid %d: %v", i, err)
 		}
 	}
@@ -766,7 +766,7 @@ func TestRelayShardLeasePreventsDuplicateOwnersAndAllowsFailover(t *testing.T) {
 	auctionRow := createActiveAuctionForRelay(t, repo, db)
 	quiesceOutboxExcept(t, db, auctionRow.ID)
 	bid := auction.BidInput{ClientBidID: "shard-lease-bid-1", AmountCents: 15_000}
-	if _, err := repo.PlaceBid(ctx, auctionRow.ID, "user_1", bid.ClientBidID, bid, "tr_shard_lease"); err != nil {
+	if _, err := repo.PlaceBidPostgresLegacyForTests(ctx, auctionRow.ID, "user_1", bid.ClientBidID, bid, "tr_shard_lease"); err != nil {
 		t.Fatalf("PlaceBid: %v", err)
 	}
 	prioritizeOutboxForAuction(t, db, auctionRow.ID)
@@ -824,7 +824,7 @@ func TestRelayRunWakesFromPostgresNotify(t *testing.T) {
 	auctionRow := createActiveAuctionForRelay(t, repo, db)
 	quiesceOutboxExcept(t, db, auctionRow.ID)
 	bid := auction.BidInput{ClientBidID: "notify-bid-1", AmountCents: 15_000}
-	if _, err := repo.PlaceBid(context.Background(), auctionRow.ID, "user_1", bid.ClientBidID, bid, "tr_notify"); err != nil {
+	if _, err := repo.PlaceBidPostgresLegacyForTests(context.Background(), auctionRow.ID, "user_1", bid.ClientBidID, bid, "tr_notify"); err != nil {
 		t.Fatalf("PlaceBid: %v", err)
 	}
 	prioritizeOutboxForAuction(t, db, auctionRow.ID)

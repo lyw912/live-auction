@@ -162,7 +162,15 @@ type OrderHistoryRow struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
-func (r *Repository) PlaceBid(ctx context.Context, auctionID string, userID string, idempotencyKey string, input BidInput, traceID string) (BidResponse, error) {
+// PlaceBidPostgresLegacyForTests is the pre-Redis PostgreSQL decision path.
+//
+// Do not use this for runtime bid entrypoints or performance evidence. Current
+// user-visible bidding must go through redisengine.Engine so the decision is
+// atomic in Redis, logged to the Redis stream, and acknowledged by the Kafka
+// durability boundary before being reported to clients. This legacy path remains
+// only for repository-level tests that still exercise old PG transaction rules
+// until those tests are migrated.
+func (r *Repository) PlaceBidPostgresLegacyForTests(ctx context.Context, auctionID string, userID string, idempotencyKey string, input BidInput, traceID string) (BidResponse, error) {
 	start := time.Now()
 	resultLabel := "error"
 	reasonLabel := ""
@@ -253,7 +261,9 @@ func (r *Repository) PlaceBid(ctx context.Context, auctionID string, userID stri
 	return finalResponse, nil
 }
 
-func (r *Repository) ConfirmBid(ctx context.Context, auctionID string, userID string, idempotencyKey string, input ConfirmBidInput, traceID string) (BidResponse, error) {
+// ConfirmBidPostgresLegacyForTests confirms a fat-finger bid on the legacy
+// PostgreSQL decision path. Runtime confirmations must use redisengine.Engine.
+func (r *Repository) ConfirmBidPostgresLegacyForTests(ctx context.Context, auctionID string, userID string, idempotencyKey string, input ConfirmBidInput, traceID string) (BidResponse, error) {
 	if input.ConfirmToken == "" || input.IdempotencyKey == "" || idempotencyKey == "" || idempotencyKey != input.IdempotencyKey {
 		return BidResponse{}, apierrors.New(apierrors.CodeInvalidArgument, "confirm_token and matching Idempotency-Key are required", http.StatusBadRequest)
 	}
@@ -1384,6 +1394,13 @@ func ensurePaymentConvergenceReady(ctx context.Context, tx pgx.Tx, auctionID str
 }
 
 func (r *Repository) ListOrders(ctx context.Context, userID string, role string) ([]Order, error) {
+	return r.ListOrdersFiltered(ctx, userID, role, "", 100)
+}
+
+func (r *Repository) ListOrdersFiltered(ctx context.Context, userID string, role string, auctionID string, limit int) ([]Order, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
 	var query string
 	var args []any
 	if role == "host" {
@@ -1396,9 +1413,11 @@ func (r *Repository) ListOrders(ctx context.Context, userID string, role string)
 			JOIN auctions a ON a.id = o.auction_id
 			JOIN rooms rm ON rm.id = a.room_id
 			WHERE rm.host_id = $1
+			  AND ($2 = '' OR o.auction_id = $2)
 			ORDER BY o.created_at DESC
+			LIMIT $3
 		`
-		args = []any{userID}
+		args = []any{userID, auctionID, limit}
 	} else {
 		query = `
 			SELECT id, auction_id, winner_id, amount_cents, status,
@@ -1406,9 +1425,11 @@ func (r *Repository) ListOrders(ctx context.Context, userID string, role string)
 			       provider_payment_id, created_at
 			FROM orders
 			WHERE winner_id = $1
+			  AND ($2 = '' OR auction_id = $2)
 			ORDER BY created_at DESC
+			LIMIT $3
 		`
-		args = []any{userID}
+		args = []any{userID, auctionID, limit}
 	}
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
@@ -1427,13 +1448,21 @@ func (r *Repository) ListOrders(ctx context.Context, userID string, role string)
 }
 
 func (r *Repository) ListBidHistory(ctx context.Context, userID string) ([]BidHistoryRow, error) {
+	return r.ListBidHistoryFiltered(ctx, userID, "", defaultBidHistoryLimit)
+}
+
+func (r *Repository) ListBidHistoryFiltered(ctx context.Context, userID string, auctionID string, limit int) ([]BidHistoryRow, error) {
+	if limit <= 0 || limit > defaultBidHistoryLimit {
+		limit = defaultBidHistoryLimit
+	}
 	rows, err := r.db.Query(ctx, `
 		SELECT id, auction_id, amount_cents, COALESCE(response_json->>'result', status), created_at
 		FROM bids
 		WHERE user_id = $1
+		  AND ($2 = '' OR auction_id = $2)
 		ORDER BY created_at DESC
-		LIMIT $2
-	`, userID, defaultBidHistoryLimit)
+		LIMIT $3
+	`, userID, auctionID, limit)
 	if err != nil {
 		return nil, err
 	}

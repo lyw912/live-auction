@@ -130,14 +130,19 @@ func (r *Repository) GetLeaderboard(ctx context.Context, auctionID string, userI
 
 	rows, err := r.db.Query(ctx, `
 		WITH best AS (
-			SELECT user_id, max(amount_cents) AS amount_cents, count(*) AS bid_count, max(created_at) AS last_bid_at
+			SELECT user_id,
+			       max(amount_cents) AS amount_cents,
+			       count(*) AS bid_count,
+			       max(created_at) AS last_bid_at,
+			       min(created_at) AS first_bid_at
 			FROM bids
 			WHERE auction_id = $1 AND status = 'ACCEPTED'
 			GROUP BY user_id
 		),
 		ranked AS (
 			SELECT user_id, amount_cents, bid_count, last_bid_at,
-			       row_number() OVER (ORDER BY amount_cents DESC, last_bid_at ASC, user_id ASC) AS rank
+			       row_number() OVER (ORDER BY amount_cents DESC, last_bid_at ASC, user_id ASC) AS rank,
+			       row_number() OVER (ORDER BY first_bid_at ASC, user_id ASC) AS anonymous_no
 			FROM best
 		),
 		selected AS (
@@ -145,7 +150,7 @@ func (r *Repository) GetLeaderboard(ctx context.Context, auctionID string, userI
 			UNION
 			SELECT * FROM ranked WHERE user_id = $3
 		)
-		SELECT rank, user_id, amount_cents, bid_count, last_bid_at
+		SELECT rank, user_id, amount_cents, bid_count, last_bid_at, anonymous_no
 		FROM selected
 		ORDER BY rank
 	`, auctionID, limit, userID)
@@ -157,10 +162,11 @@ func (r *Repository) GetLeaderboard(ctx context.Context, auctionID string, userI
 	entries := make([]LeaderboardEntry, 0, limit)
 	for rows.Next() {
 		var entry LeaderboardEntry
-		if err := rows.Scan(&entry.Rank, &entry.UserID, &entry.AmountCents, &entry.BidCount, &entry.LastBidAt); err != nil {
+		var anonymousNo int
+		if err := rows.Scan(&entry.Rank, &entry.UserID, &entry.AmountCents, &entry.BidCount, &entry.LastBidAt, &anonymousNo); err != nil {
 			return Leaderboard{}, err
 		}
-		entry.UserMasked = maskUserID(entry.UserID)
+		entry.UserMasked = anonymousUserLabel(anonymousNo)
 		entry.IsCurrent = entry.UserID == userID
 		if entry.IsCurrent {
 			rank := entry.Rank
@@ -168,7 +174,7 @@ func (r *Repository) GetLeaderboard(ctx context.Context, auctionID string, userI
 			board.MyRank = &rank
 			board.MyBestAmountCents = &amount
 		}
-		if entry.Rank <= limit {
+		if entry.Rank <= limit || entry.IsCurrent {
 			entries = append(entries, entry)
 		}
 	}
@@ -197,6 +203,12 @@ func (r *Repository) GetLeaderboard(ctx context.Context, auctionID string, userI
 			}
 		}
 	}
+	if leaderboardInconsistent(board, entries) {
+		board.State = "RECOVERING"
+		if board.LeaderAmountCents == 0 {
+			board.LeaderAmountCents = board.CurrentPriceCents
+		}
+	}
 	if err := r.db.QueryRow(ctx, `
 		SELECT count(DISTINCT user_id)
 		FROM bids
@@ -221,6 +233,16 @@ func (r *Repository) GetLeaderboard(ctx context.Context, auctionID string, userI
 		return Leaderboard{}, err
 	}
 	return board, nil
+}
+
+func leaderboardInconsistent(board Leaderboard, entries []LeaderboardEntry) bool {
+	if board.CurrentWinnerID == nil || *board.CurrentWinnerID == "" {
+		return len(entries) > 0 && entries[0].AmountCents != board.CurrentPriceCents
+	}
+	if len(entries) == 0 {
+		return true
+	}
+	return entries[0].UserID != *board.CurrentWinnerID || entries[0].AmountCents != board.CurrentPriceCents
 }
 
 func (r *Repository) gapToNextRank(ctx context.Context, auctionID string, myRank int, myBestAmount int64) (int64, error) {
@@ -844,13 +866,9 @@ func coalesceInt64(value int64, fallback int64) int64 {
 	return value
 }
 
-func maskUserID(userID string) string {
-	userID = strings.TrimSpace(userID)
-	if userID == "" {
+func anonymousUserLabel(no int) string {
+	if no <= 0 {
 		return "匿名用户"
 	}
-	if len(userID) <= 2 {
-		return userID + "**"
-	}
-	return userID[:2] + "**"
+	return fmt.Sprintf("匿名用户 %d", no)
 }

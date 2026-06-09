@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { Button, Layout, Message, Modal } from '@arco-design/web-react';
 import '@arco-design/web-react/dist/css/arco.css';
 
-import { AICopilotDrawer, AuctionCommandPanel, AuctionControlSummary, AuctionQueue, ConsoleNav, DiagnosticsPanel, EventTimeline, FlightRecorderDrawer, HealthRibbon, InventoryLotsPanel, ItemCreatePanel, LiveAssistRail, LiveHealthPanel, OrderDetailDrawer, OrdersPanel, RuleEditor } from './components';
+import { AICopilotDrawer, AuctionCommandPanel, AuctionControlSummary, AuctionQueue, ConsoleNav, CurrentAuctionOrderCard, DiagnosticsPanel, EventTimeline, FlightRecorderDrawer, HealthRibbon, InventoryLotsPanel, ItemCreatePanel, LiveAssistRail, LiveHealthPanel, OrderDetailDrawer, OrdersPanel, RuleEditor } from './components';
 import type { Auction, AuctionAISettings, AuctionRecap, AuthUser, FlightRecorderPayload, HeatSummary, HighlightAsset, HostPrompt, HostPromptsPayload, Item, ListingDraftJob, LiveOpsHostSummary, LiveOpsRewardConfig, MonitorPayload, Order, RedisEngineMonitorPayload, Room, RuleAPIError, RuleDraft, SentinelAlert, SignalRequest, SystemMessage } from './domain';
 import { activeAuction, auctionStatusLabel, createRuleDraft, defaultRoomID, depositPreview, ensureDemoSession, liveHealthSummary, monitorQuery, narratingAuction, readJSON, rulePayload, signalCopy, sortedAuctions, validateRule } from './domain';
 import './styles.css';
@@ -15,6 +15,10 @@ function auctionDisplayName(auction?: Auction) {
 
 function businessErrorMessage(code?: string, fallback = '操作失败') {
   switch (code) {
+    case 'ENGINE_PAUSED':
+      return '出价确认已暂停，请先在运行监控查看引擎暂停原因并恢复后再操作。';
+    case 'RECONCILING':
+      return '竞拍状态正在校对，暂不能演示出价。请等待恢复或在运行监控处理。';
     case 'FORBIDDEN_ROOM':
       return '当前账号无权操作这场拍品，请刷新商家身份后重试。';
     case 'UNAUTHORIZED':
@@ -86,6 +90,7 @@ function App() {
   const [listingNotes, setListingNotes] = useState('');
   const [listingCategory, setListingCategory] = useState('collectibles');
   const [listingDraftJob, setListingDraftJob] = useState<ListingDraftJob | undefined>();
+  const [selectedListingDraftTitle, setSelectedListingDraftTitle] = useState('');
   const [listingDraftLoading, setListingDraftLoading] = useState(false);
   const [copilotImageFile, setCopilotImageFile] = useState<File | null>(null);
   const [copilotImagePreviewURL, setCopilotImagePreviewURL] = useState('');
@@ -119,6 +124,7 @@ function App() {
   const [sessionReady, setSessionReady] = useState(false);
   const [now, setNow] = useState(Date.now());
   const skipNextAutoLoad = useRef(false);
+  const selectedAuctionRef = useRef<Auction | undefined>();
   const selectedAuction = useMemo(() => auctions.find((auction) => auction.id === selectedAuctionID) ?? sortedAuctions(auctions)[0], [auctions, selectedAuctionID]);
   const pinnedActiveAuction = useMemo(() => activeAuction(auctions), [auctions]);
   const currentNarratingAuction = useMemo(() => narratingAuction(auctions), [auctions]);
@@ -198,6 +204,34 @@ function App() {
       : { active: false, title: '工作台已刷新', detail: '拍品、订单和直播数据已同步。', tone: 'ok' });
   };
 
+  const refreshAuctionRows = async (targetRoomID = roomID, preferredAuctionID = selectedAuctionID) => {
+    if (!sessionReady || !targetRoomID) return;
+    try {
+      const { response, payload } = await fetchJSONWithTimeout<Auction[]>(
+        `/api/auctions?room_id=${targetRoomID}`,
+        undefined,
+        6000
+      );
+      if (!response.ok) return;
+      setAuctions(payload);
+      setItems(payload.map((auction) => auction.item).filter(Boolean));
+      const visibleAuctionID = preferredAuctionID && payload.some((auction) => auction.id === preferredAuctionID)
+        ? preferredAuctionID
+        : payload.find((auction) => auction.status === 'ACTIVE')?.id ?? payload[0]?.id ?? '';
+      if (visibleAuctionID) {
+        setSelectedAuctionID(visibleAuctionID);
+        const ordersResult = await fetchJSONWithTimeout<Order[]>(
+          `/api/orders?auction_id=${encodeURIComponent(visibleAuctionID)}&limit=20`,
+          undefined,
+          6000
+        );
+        if (ordersResult.response.ok) setOrders(ordersResult.payload);
+      }
+    } catch {
+      // Full refresh surfaces errors; the live price poll should stay quiet.
+    }
+  };
+
   const loadAll = async (
     preferredRoomID = roomID,
     force = false,
@@ -221,13 +255,9 @@ function App() {
         ?? roomRows[0]?.id
         ?? preferredRoomID;
       setWorkbenchTask({ active: true, title: '正在刷新商家工作台', detail: '正在读取拍品、竞拍和订单。', tone: 'loading' });
-      const [auctionRows, orderRows, liveOps] = await Promise.all([
+      const [auctionRows, liveOps] = await Promise.all([
         fetchJSONWithTimeout<Auction[]>(`/api/auctions?room_id=${nextRoomID}`).then(({ response, payload }) => {
           if (!response.ok) throw new Error('auctions failed');
-          return payload;
-        }),
-        fetchJSONWithTimeout<Order[]>('/api/orders').then(({ response, payload }) => {
-          if (!response.ok) throw new Error('orders failed');
           return payload;
         }),
         fetchJSONWithTimeout<LiveOpsHostSummary>(`/api/host/rooms/${nextRoomID}/liveops`).then(({ response, payload }) => {
@@ -235,6 +265,17 @@ function App() {
           return payload;
         }).catch(() => undefined)
       ]);
+      const nextSelected = auctionRows.find((row) => row.id === preferredAuctionID)?.id
+        ?? auctionRows.find((row) => row.id === selectedAuctionID)?.id
+        ?? auctionRows.find((row) => row.status === 'ACTIVE')?.id
+        ?? sortedAuctions(auctionRows)[0]?.id
+        ?? '';
+      const orderRows = nextSelected
+        ? await fetchJSONWithTimeout<Order[]>(`/api/orders?auction_id=${encodeURIComponent(nextSelected)}&limit=20`).then(({ response, payload }) => {
+          if (!response.ok) throw new Error('orders failed');
+          return payload;
+        })
+        : [];
       setWorkbenchTask({ active: true, title: '正在刷新商家工作台', detail: '正在更新页面。', tone: 'loading' });
       setRooms(roomRows);
       if (nextRoomID !== roomID) setRoomID(nextRoomID);
@@ -244,11 +285,6 @@ function App() {
         setLiveOpsSummary(liveOps);
         setLiveOpsDraft(liveOps.reward_config);
       }
-      const nextSelected = auctionRows.find((row) => row.id === preferredAuctionID)?.id
-        ?? auctionRows.find((row) => row.id === selectedAuctionID)?.id
-        ?? auctionRows.find((row) => row.status === 'ACTIVE')?.id
-        ?? sortedAuctions(auctionRows)[0]?.id
-        ?? '';
       setSelectedAuctionID(nextSelected);
       setItems(auctionRows.map((auction) => auction.item).filter(Boolean));
       const nextAuction = auctionRows.find((row) => row.id === nextSelected) ?? sortedAuctions(auctionRows)[0];
@@ -349,6 +385,16 @@ function App() {
   }, [sessionReady, roomID, monitorFilter.type, monitorFilter.auctionID, monitorFilter.userID, monitorFilter.traceID]);
 
   useEffect(() => {
+    if (!sessionReady || !roomID) return undefined;
+    const timer = window.setInterval(() => {
+      const activeID = selectedAuctionRef.current?.id || selectedAuctionID;
+      void refreshAuctionRows(roomID, activeID);
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [roomID, selectedAuctionID, sessionReady]);
+
+  useEffect(() => {
+    selectedAuctionRef.current = selectedAuction;
     if (selectedAuction) {
       setRule(createRuleDraft(selectedAuction));
       setRuleSaveState('idle');
@@ -700,7 +746,10 @@ function App() {
     });
   };
 
-  const driveDemoBid = async (mode: 'reject' | 'buyer' | 'outbid' | 'extend' | 'sold' | 'duel') => {
+  const driveDemoBid = async (
+    mode: 'reject' | 'stale_low' | 'outbid' | 'challenge' | 'extend' | 'sold' | 'rival_max_bid',
+    options: { amountCents?: number } = {}
+  ) => {
     if (!selectedAuction || selectedAuction.status !== 'ACTIVE') {
       Message.warning('请选择开拍中的拍品后再演示');
       return;
@@ -711,36 +760,45 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           mode: stepMode,
+          amount_cents: options.amountCents,
           client_bid_id: `host-demo-${stepMode}-${Date.now()}-${index}`
         })
       });
-      const payload = await readJSON<{ result?: string; reject_reason?: string; message?: string; current_price_cents?: number; current_winner_id?: string }>(response);
-      if (!response.ok || (payload.reject_reason && stepMode !== 'reject')) {
-        throw new Error(payload.message ?? payload.reject_reason ?? '演示出价失败');
+      const payload = await readJSON<{ result?: string; reject_reason?: string; code?: string; message?: string; current_price_cents?: number; current_winner_id?: string }>(response);
+      const proxyDefenseAccepted = payload.reject_reason === 'BID_TOO_LOW' &&
+        stepMode !== 'reject' &&
+        stepMode !== 'stale_low' &&
+        payload.current_winner_id === 'user_1' &&
+        Number(payload.current_price_cents ?? 0) > Number(selectedAuction.current_price_cents ?? 0);
+      if (!response.ok || (payload.reject_reason && stepMode !== 'reject' && stepMode !== 'stale_low' && !proxyDefenseAccepted)) {
+        throw new Error(businessErrorMessage(payload.code ?? payload.reject_reason, payload.message ?? payload.reject_reason ?? '演示出价失败'));
       }
       return payload;
     };
     try {
       await ensureHostSession();
-      if (mode === 'duel') {
-        await runOne('buyer', 0);
-        await new Promise((resolve) => window.setTimeout(resolve, 420));
-        await runOne('outbid', 1);
-        await new Promise((resolve) => window.setTimeout(resolve, 420));
-        await runOne('buyer', 2);
-        Message.success('连续竞价已写入：买家领先、被超越、再反超');
+      if (mode === 'rival_max_bid') {
+        await runOne(mode);
+        Message.success(`已为演示对手设置自动加价${options.amountCents ? `：¥${(options.amountCents / 100).toFixed(2)}` : ''}`);
       } else {
         const payload = await runOne(mode);
-        const copy = mode === 'buyer'
-          ? '买家已真实反超'
+        const proxyDefenseAccepted = payload.reject_reason === 'BID_TOO_LOW' &&
+          payload.current_winner_id === 'user_1' &&
+          Number(payload.current_price_cents ?? 0) > Number(selectedAuction.current_price_cents ?? 0);
+        const copy = proxyDefenseAccepted
+          ? `买家自动代理已防守到 ¥${((payload.current_price_cents ?? 0) / 100).toFixed(2)}`
           : mode === 'outbid'
             ? '对手已真实压过买家'
+            : mode === 'challenge'
+              ? '第三方挑战已写入'
             : mode === 'extend'
               ? '末段延时出价已写入'
               : mode === 'sold'
                 ? '封顶成交已写入'
-                : '无效出价已写入';
-        Message.success(`${copy}：${payload.result ?? mode}`);
+                : mode === 'stale_low'
+                  ? '旧价请求已被热引擎拒绝'
+                  : '无效出价已写入';
+        Message.success(proxyDefenseAccepted ? `${copy}：代理防守成功` : `${copy}：${payload.result ?? mode}`);
       }
       void loadAll(roomID, false, false, selectedAuction.id, { includeDiagnostics: false, suppressFailure: true });
     } catch (error) {
@@ -775,6 +833,7 @@ function App() {
   const generateListingDraft = async () => {
     setListingDraftLoading(true);
     setListingDraftJob(undefined);
+    setSelectedListingDraftTitle('');
     try {
       await ensureHostSession();
       let imageURL = copilotImageURL.trim() || itemDraft.imageURL.trim();
@@ -809,6 +868,7 @@ function App() {
         return;
       }
       setListingDraftJob(payload);
+      setSelectedListingDraftTitle(payload.output_json?.title_candidates?.[0] ?? '');
       if (imageURL && providerImageURLs.length === 0 && providerImageDataURLs.length === 0) {
         Message.warning('图片已保存到拍品表单；智能草稿未读取大图，请在备注里补充关键信息');
       }
@@ -823,10 +883,10 @@ function App() {
   const applyListingDraft = async () => {
     const output = listingDraftJob?.output_json;
     if (!listingDraftJob || !output) return;
-    const firstTitle = output.title_candidates?.[0];
+    const selectedTitle = selectedListingDraftTitle || output.title_candidates?.[0];
     setItemDraft((current) => ({
       ...current,
-      title: firstTitle || current.title,
+      title: selectedTitle || current.title,
       description: output.description || current.description
     }));
     const suggestion = output.rule_suggestion;
@@ -1125,8 +1185,14 @@ function App() {
                 <h1>订单记录</h1>
                 <p>成交后自动生成，金额右对齐、买家脱敏，技术编号只在详情和事件回放中追溯。</p>
               </div>
-              <span>{orders.length ? `${orders.length} 条订单` : '暂无订单'}</span>
+              <span>{selectedAuction ? `${auctionDisplayName(selectedAuction)} · ${orders.length || 0} 条` : '暂无订单'}</span>
             </div>
+            <CurrentAuctionOrderCard
+              auction={selectedAuction}
+              orders={orders}
+              onOpenFlightRecorder={openFlightRecorder}
+              onOpenOrder={setOrderDetailID}
+            />
             <OrdersPanel orders={orders} onOpenFlightRecorder={openFlightRecorder} onOpenOrder={setOrderDetailID} />
           </section>
         )}
@@ -1164,6 +1230,7 @@ function App() {
           }}
         />
         <OrderDetailDrawer
+          auction={selectedAuction}
           order={orders.find((order) => order.id === orderDetailID)}
           visible={Boolean(orderDetailID)}
           onClose={() => setOrderDetailID('')}
@@ -1177,6 +1244,7 @@ function App() {
           draft={listingDraftJob}
           loading={listingDraftLoading}
           notes={listingNotes}
+          selectedTitle={selectedListingDraftTitle}
           visible={listingCopilotOpen}
           onApply={applyListingDraft}
           onCategoryChange={setListingCategory}
@@ -1188,6 +1256,7 @@ function App() {
           }}
           onImageURLChange={setCopilotImageURL}
           onNotesChange={setListingNotes}
+          onSelectedTitleChange={setSelectedListingDraftTitle}
         />
       </Layout.Content>
     </Layout>

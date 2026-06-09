@@ -315,7 +315,7 @@ func createMonitorAuction(t *testing.T, repo *auction.Repository, db *pgxpool.Po
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	if _, err := repo.PlaceBid(context.Background(), started.ID, "user_1", "monitor-low", auction.BidInput{
+	if _, err := repo.PlaceBidPostgresLegacyForTests(context.Background(), started.ID, "user_1", "monitor-low", auction.BidInput{
 		ClientBidID:   "monitor-low",
 		AmountCents:   1,
 		ClientSeenSeq: started.Seq,

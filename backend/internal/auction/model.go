@@ -108,8 +108,9 @@ type MaxBidIntentInput struct {
 }
 
 type MaxBidIntentResponse struct {
-	Result string       `json:"result"`
-	Intent MaxBidIntent `json:"intent"`
+	Result     string       `json:"result"`
+	Intent     MaxBidIntent `json:"intent"`
+	TriggerBid *BidResponse `json:"trigger_bid,omitempty"`
 }
 
 type LeaderboardEntry struct {

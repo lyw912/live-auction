@@ -3,6 +3,7 @@ package realtime
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -139,17 +140,22 @@ func (s *Server) buildLeaderboardDelta(ctx context.Context, auctionID string, ev
 	delta.NextValidBidCents += delta.CurrentPriceCents
 	rows, err := s.db.Query(ctx, `
 		WITH best AS (
-			SELECT user_id, max(amount_cents) AS amount_cents, count(*) AS bid_count, max(created_at) AS last_bid_at
+			SELECT user_id,
+			       max(amount_cents) AS amount_cents,
+			       count(*) AS bid_count,
+			       max(created_at) AS last_bid_at,
+			       min(created_at) AS first_bid_at
 			FROM bids
 			WHERE auction_id = $1 AND status = 'ACCEPTED'
 			GROUP BY user_id
 		),
 		ranked AS (
 			SELECT user_id, amount_cents, bid_count, last_bid_at,
-			       row_number() OVER (ORDER BY amount_cents DESC, last_bid_at ASC, user_id ASC) AS rank
+			       row_number() OVER (ORDER BY amount_cents DESC, last_bid_at ASC, user_id ASC) AS rank,
+			       row_number() OVER (ORDER BY first_bid_at ASC, user_id ASC) AS anonymous_no
 			FROM best
 		)
-		SELECT rank, user_id, amount_cents, bid_count, last_bid_at
+		SELECT rank, user_id, amount_cents, bid_count, last_bid_at, anonymous_no
 		FROM ranked
 		WHERE rank <= $2
 		ORDER BY rank
@@ -161,10 +167,11 @@ func (s *Server) buildLeaderboardDelta(ctx context.Context, auctionID string, ev
 	delta.Entries = make([]leaderboardDeltaEntry, 0, leaderboardDeltaTopLimit)
 	for rows.Next() {
 		var entry leaderboardDeltaEntry
-		if err := rows.Scan(&entry.Rank, &entry.UserID, &entry.AmountCents, &entry.BidCount, &entry.LastBidAt); err != nil {
+		var anonymousNo int
+		if err := rows.Scan(&entry.Rank, &entry.UserID, &entry.AmountCents, &entry.BidCount, &entry.LastBidAt, &anonymousNo); err != nil {
 			return leaderboardDelta{}, err
 		}
-		entry.UserMasked = maskLeaderboardUserID(entry.UserID)
+		entry.UserMasked = anonymousLeaderboardLabel(anonymousNo)
 		delta.Entries = append(delta.Entries, entry)
 	}
 	if err := rows.Err(); err != nil {
@@ -208,12 +215,9 @@ func observePublishStats(kind string, stats PublishStats) {
 	}
 }
 
-func maskLeaderboardUserID(userID string) string {
-	if userID == "" {
-		return "匿名"
+func anonymousLeaderboardLabel(no int) string {
+	if no <= 0 {
+		return "匿名用户"
 	}
-	if len(userID) <= 2 {
-		return userID + "**"
-	}
-	return userID[:2] + "**"
+	return "匿名用户 " + strconv.Itoa(no)
 }

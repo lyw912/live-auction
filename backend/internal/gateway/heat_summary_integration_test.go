@@ -24,7 +24,7 @@ func TestHeatSummaryRequiresHostAndAggregatesRealThirtySecondSignals(t *testing.
 	ctx := context.Background()
 
 	acceptedID := "heat-accepted-" + uuid.NewString()
-	if _, err := repo.PlaceBid(ctx, row.ID, "user_1", acceptedID, auction.BidInput{
+	if _, err := repo.PlaceBidPostgresLegacyForTests(ctx, row.ID, "user_1", acceptedID, auction.BidInput{
 		ClientBidID:   acceptedID,
 		AmountCents:   row.CurrentPriceCents + row.IncrementCents,
 		ClientSeenSeq: row.Seq,
@@ -32,7 +32,7 @@ func TestHeatSummaryRequiresHostAndAggregatesRealThirtySecondSignals(t *testing.
 		t.Fatalf("PlaceBid accepted: %v", err)
 	}
 	rejectedID := "heat-rejected-" + uuid.NewString()
-	if _, err := repo.PlaceBid(ctx, row.ID, "user_2", rejectedID, auction.BidInput{
+	if _, err := repo.PlaceBidPostgresLegacyForTests(ctx, row.ID, "user_2", rejectedID, auction.BidInput{
 		ClientBidID:   rejectedID,
 		AmountCents:   1,
 		ClientSeenSeq: row.Seq,

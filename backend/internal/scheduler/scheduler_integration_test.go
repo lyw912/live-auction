@@ -73,7 +73,7 @@ func TestEndAuctionWinnerMarksSoldAndCreatesOrder(t *testing.T) {
 	repo := auction.NewRepository(db)
 	row := createActiveAuction(t, repo, db)
 	bid := auction.BidInput{ClientBidID: "end-winner-" + uuid.NewString(), AmountCents: 15_000}
-	if _, err := repo.PlaceBid(ctx, row.ID, "user_1", bid.ClientBidID, bid, "tr_scheduler"); err != nil {
+	if _, err := repo.PlaceBidPostgresLegacyForTests(ctx, row.ID, "user_1", bid.ClientBidID, bid, "tr_scheduler"); err != nil {
 		t.Fatalf("PlaceBid: %v", err)
 	}
 	forceAuctionEndAt(t, db, row.ID, time.Now().UTC().Add(-time.Second))
@@ -160,7 +160,7 @@ func TestOrderExpireMarksPendingOrderOnceAndPaymentRejects(t *testing.T) {
 	repo := auction.NewRepository(db)
 	row := createActiveAuction(t, repo, db)
 	bid := auction.BidInput{ClientBidID: "order-expire-" + uuid.NewString(), AmountCents: 15_000}
-	if _, err := repo.PlaceBid(ctx, row.ID, "user_1", bid.ClientBidID, bid, "tr_scheduler"); err != nil {
+	if _, err := repo.PlaceBidPostgresLegacyForTests(ctx, row.ID, "user_1", bid.ClientBidID, bid, "tr_scheduler"); err != nil {
 		t.Fatalf("PlaceBid: %v", err)
 	}
 	forceAuctionEndAt(t, db, row.ID, time.Now().UTC().Add(-time.Second))
@@ -486,7 +486,7 @@ func TestEndAuctionSoldCallsFencer(t *testing.T) {
 	repo := auction.NewRepository(db)
 	row := createActiveAuction(t, repo, db)
 	bid := auction.BidInput{ClientBidID: "fencer-sold-" + uuid.NewString(), AmountCents: 15_000}
-	if _, err := repo.PlaceBid(ctx, row.ID, "user_1", bid.ClientBidID, bid, "tr_fencer_sold"); err != nil {
+	if _, err := repo.PlaceBidPostgresLegacyForTests(ctx, row.ID, "user_1", bid.ClientBidID, bid, "tr_fencer_sold"); err != nil {
 		t.Fatalf("PlaceBid: %v", err)
 	}
 	forceAuctionEndAt(t, db, row.ID, time.Now().UTC().Add(-time.Second))

@@ -913,10 +913,27 @@ export function LiveAssistRail({
   systemMessages: SystemMessage[];
   onDismissPrompt: (promptID: string) => void;
   onShortenCountdown: () => void;
-  onDriveDemoBid: (mode: 'reject' | 'buyer' | 'outbid' | 'extend' | 'sold' | 'duel') => void;
+  onDriveDemoBid: (mode: 'reject' | 'stale_low' | 'outbid' | 'challenge' | 'extend' | 'sold' | 'rival_max_bid', options?: { amountCents?: number }) => void;
 }) {
   const [demoDrawerOpen, setDemoDrawerOpen] = useState(false);
   const [opsDrawerOpen, setOpsDrawerOpen] = useState(false);
+  const currentPriceCents = selectedAuction?.current_price_cents ?? 0;
+  const incrementCents = selectedAuction?.increment_cents ?? 5000;
+  const acceptedBidCount = selectedAuction?.accepted_bid_count ?? 0;
+  const startPriceCents = selectedAuction?.start_price_cents ?? 35000;
+  const defaultRivalMaxBidCents = Math.min(
+    selectedAuction?.cap_price_cents ?? currentPriceCents + incrementCents * 3,
+    Math.max(
+      currentPriceCents + incrementCents * 2,
+      acceptedBidCount > 0
+        ? currentPriceCents + incrementCents * 2
+        : startPriceCents + incrementCents * 3
+    )
+  );
+  const [rivalMaxBidCents, setRivalMaxBidCents] = useState(defaultRivalMaxBidCents);
+  React.useEffect(() => {
+    setRivalMaxBidCents(defaultRivalMaxBidCents);
+  }, [defaultRivalMaxBidCents]);
   if (!selectedAuction) {
     return (
       <aside className="assist-rail">
@@ -1042,10 +1059,10 @@ export function LiveAssistRail({
         </div>
         <div className="demo-driver-entry" data-testid="demo-driver">
           <div className="heat-summary-head">
-            <span>竞价演示助手</span>
-            <strong>{selectedAuction.status === 'ACTIVE' ? '可触发' : '开拍后'}</strong>
+            <span>真实场景驱动器</span>
+            <strong>{selectedAuction.status === 'ACTIVE' ? '可分步触发' : '开拍后'}</strong>
           </div>
-          <Button size="small" onClick={() => setDemoDrawerOpen(true)}>打开竞价演示</Button>
+          <Button size="small" onClick={() => setDemoDrawerOpen(true)}>打开场景演示</Button>
         </div>
       </div>
       <Drawer
@@ -1057,19 +1074,37 @@ export function LiveAssistRail({
       >
         <div className="demo-driver drawer-demo-driver">
           <div className="heat-summary-head">
-            <span>录屏加速用 · 走真实后端接口</span>
-            <strong>{selectedAuction.status === 'ACTIVE' ? '可触发' : '开拍后可用'}</strong>
+            <span>录屏加速用 · demo 买家账号走真实热引擎</span>
+            <strong>{selectedAuction.status === 'ACTIVE' ? '可一来一回演示' : '开拍后可用'}</strong>
           </div>
           <div className="demo-driver-grid">
             <Button disabled={selectedAuction.status !== 'ACTIVE'} onClick={() => onDriveDemoBid('reject')}>模拟无效出价</Button>
-            <Button disabled={selectedAuction.status !== 'ACTIVE'} onClick={() => onDriveDemoBid('buyer')}>买家反超一手</Button>
+            <Button disabled={selectedAuction.status !== 'ACTIVE'} onClick={() => onDriveDemoBid('stale_low')}>旧价请求被拒绝</Button>
             <Button disabled={selectedAuction.status !== 'ACTIVE'} onClick={() => onDriveDemoBid('outbid')}>对手压过买家</Button>
-            <Button disabled={selectedAuction.status !== 'ACTIVE'} onClick={() => onDriveDemoBid('duel')}>连续竞价 3 手</Button>
+            <Button disabled={selectedAuction.status !== 'ACTIVE'} onClick={() => onDriveDemoBid('challenge')}>第三方强挑战</Button>
             <Button disabled={selectedAuction.status !== 'ACTIVE'} onClick={onShortenCountdown}>倒计时缩到 15 秒</Button>
             <Button disabled={selectedAuction.status !== 'ACTIVE'} onClick={() => onDriveDemoBid('extend')}>触发末段延时</Button>
             <Button status="danger" disabled={selectedAuction.status !== 'ACTIVE'} onClick={() => onDriveDemoBid('sold')}>触发封顶成交</Button>
           </div>
-          <small>这些按钮不会前端假改状态；后端会按最新竞价规则计算下一口，写入真实出价、事件和订单。</small>
+          <div className="demo-max-bid-control">
+            <span>对手自动加价上限</span>
+            <InputNumber
+              aria-label="rival-max-bid-yuan"
+              disabled={selectedAuction.status !== 'ACTIVE'}
+              min={0}
+              precision={2}
+              prefix="¥"
+              value={Number((rivalMaxBidCents / 100).toFixed(2))}
+              onChange={(value) => setRivalMaxBidCents(Math.round((Number(value) || 0) * 100))}
+            />
+            <Button
+              disabled={selectedAuction.status !== 'ACTIVE'}
+              onClick={() => onDriveDemoBid('rival_max_bid', { amountCents: rivalMaxBidCents })}
+            >
+              设置对手自动加价
+            </Button>
+          </div>
+          <small>这些按钮不会前端假改状态；它们只驱动 demo 买家账号。你可以在 H5 手动出价，再回 PC 触发对手或代理场景，所有结果都来自同一服务端序列。</small>
         </div>
       </Drawer>
       <Drawer
@@ -1275,6 +1310,7 @@ export function AICopilotDrawer({
   loading,
   notes,
   category,
+  selectedTitle,
   visible,
   onApply,
   onCategoryChange,
@@ -1282,7 +1318,8 @@ export function AICopilotDrawer({
   onGenerate,
   onImageFileChange,
   onImageURLChange,
-  onNotesChange
+  onNotesChange,
+  onSelectedTitleChange
 }: {
   draft?: ListingDraftJob;
   imageFile: File | null;
@@ -1291,6 +1328,7 @@ export function AICopilotDrawer({
   loading: boolean;
   notes: string;
   category: string;
+  selectedTitle: string;
   visible: boolean;
   onApply: () => void;
   onCategoryChange: (category: string) => void;
@@ -1299,6 +1337,7 @@ export function AICopilotDrawer({
   onImageFileChange: (file: File | null) => void;
   onImageURLChange: (url: string) => void;
   onNotesChange: (notes: string) => void;
+  onSelectedTitleChange: (title: string) => void;
 }) {
   const output = draft?.output_json;
   const imageCanReachProvider = Boolean(imageFile) || imageURL.trim().startsWith('https://');
@@ -1390,7 +1429,17 @@ export function AICopilotDrawer({
             <section>
               <h3>标题候选</h3>
               <div className="draft-chip-row">
-                {(output?.title_candidates ?? []).map((title) => <Tag key={title}>{title}</Tag>)}
+                {(output?.title_candidates ?? []).map((title) => (
+                  <button
+                    type="button"
+                    className={`draft-title-option${title === selectedTitle ? ' selected' : ''}`}
+                    aria-pressed={title === selectedTitle}
+                    key={title}
+                    onClick={() => onSelectedTitleChange(title)}
+                  >
+                    {title}
+                  </button>
+                ))}
               </div>
             </section>
             <section>
@@ -1597,6 +1646,69 @@ export function OrdersPanel({ orders, onOpenFlightRecorder, onOpenOrder }: { ord
       {hiddenCount > 0 ? (
         <div className="order-collapsed-note">已收起 {hiddenCount} 条历史订单；演示时默认只展示最近 8 条。</div>
       ) : null}
+    </div>
+  );
+}
+
+export function CurrentAuctionOrderCard({
+  auction,
+  orders,
+  onOpenFlightRecorder,
+  onOpenOrder
+}: {
+  auction?: Auction;
+  orders: Order[];
+  onOpenFlightRecorder: (auctionID: string) => void;
+  onOpenOrder: (orderID: string) => void;
+}) {
+  const currentOrder = auction ? orders.find((order) => order.auction_id === auction.id) : undefined;
+  return (
+    <div className="rule-panel current-order-card" data-testid="current-order-card">
+      <div className="panel-heading order-heading">
+        <div>
+          <h2>当前拍品成交详情</h2>
+          <span>{auction ? auctionDisplayName(auction) : '未选择拍品'}</span>
+        </div>
+        {auction ? <Tag color={auction.status === 'SOLD' ? 'green' : 'blue'}>{auctionStatusLabel(auction.status)}</Tag> : null}
+      </div>
+      {!auction ? (
+        <div className="empty-state compact-empty">选择拍品后查看成交详情</div>
+      ) : currentOrder ? (
+        <div className="current-order-summary">
+          <div>
+            <span>订单号</span>
+            <strong>{displayOrderNo(currentOrder)}</strong>
+          </div>
+          <div>
+            <span>成交价</span>
+            <strong>{formatCents(currentOrder.amount_cents)}</strong>
+          </div>
+          <div>
+            <span>中拍买家</span>
+            <strong>买家 {maskUser(currentOrder.winner_id)}</strong>
+          </div>
+          <div>
+            <span>状态</span>
+            <strong>{orderStatusLabel(currentOrder.status)}</strong>
+          </div>
+          <div>
+            <span>保证金</span>
+            <strong>{depositStatusLabel(currentOrder.deposit_status)}</strong>
+          </div>
+          <div>
+            <span>支付截止</span>
+            <strong>{formatOrderTime(currentOrder.expire_at)}</strong>
+          </div>
+          <div className="current-order-actions">
+            <Button type="primary" size="small" onClick={() => onOpenOrder(currentOrder.id)}>查看详情</Button>
+            <Button size="small" icon={<ExternalLink size={13} />} onClick={() => onOpenFlightRecorder(currentOrder.auction_id)}>事件回放</Button>
+          </div>
+        </div>
+      ) : (
+        <div className="empty-state compact-empty">
+          {auction.status === 'SOLD' ? '成交订单正在生成或等待刷新' : '当前拍品尚未成交'}
+        </div>
+      )}
     </div>
   );
 }
@@ -1857,11 +1969,13 @@ export function HealthMetric({ label, value, status }: { label: string; value: R
 }
 
 export function OrderDetailDrawer({
+  auction,
   order,
   visible,
   onClose,
   onOpenFlightRecorder
 }: {
+  auction?: Auction;
   order?: Order;
   visible: boolean;
   onClose: () => void;
@@ -1890,6 +2004,20 @@ export function OrderDetailDrawer({
             <Tag color={order.status === 'PAID' ? 'green' : order.status === 'ORDER_EXPIRED' ? 'red' : 'orange'}>{orderStatusLabel(order.status)}</Tag>
           </div>
 
+          {auction ? (
+            <div className="order-detail-product">
+              <span
+                className={`order-detail-thumb ${displayMediaURL(auction.item?.image_url) ? 'has-media' : ''}`}
+                style={displayMediaURL(auction.item?.image_url) ? { '--order-detail-media-url': `url("${displayMediaURL(auction.item.image_url)}")` } as React.CSSProperties : undefined}
+              />
+              <div>
+                <span>成交商品</span>
+                <strong>{auction.item?.title ?? auctionDisplayName(auction)}</strong>
+                <p>{auction.item?.description ?? '商品详情以拍品、证书和实物图为准。'}</p>
+              </div>
+            </div>
+          ) : null}
+
           <div className="order-detail-grid">
             <div><span>成交价</span><strong>{formatCents(order.amount_cents)}</strong></div>
             <div><span>中标人</span><strong>{maskUser(order.winner_id)}</strong></div>
@@ -1897,6 +2025,8 @@ export function OrderDetailDrawer({
             <div><span>保证金状态</span><strong>{depositStatusLabel(order.deposit_status)}</strong></div>
             <div><span>支付截止</span><strong>{order.expire_at ? new Date(order.expire_at).toLocaleString() : '-'}</strong></div>
             <div><span>支付完成</span><strong>{order.paid_at ? new Date(order.paid_at).toLocaleString() : '-'}</strong></div>
+            {auction ? <div><span>起拍价</span><strong>{formatCents(auction.start_price_cents)}</strong></div> : null}
+            {auction ? <div><span>封顶价</span><strong>{formatCents(auction.cap_price_cents ?? order.amount_cents)}</strong></div> : null}
           </div>
 
           <div className="order-detail-section">

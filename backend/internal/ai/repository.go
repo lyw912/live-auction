@@ -82,7 +82,6 @@ func (r *Repository) CreateListingDraft(ctx context.Context, hostID string, gen 
 		PromptVersion: PromptVersionListingDraft,
 		SchemaName:    "listing_draft",
 		Input:         inputMap,
-		Timeout:       25 * time.Second,
 	})
 	status := "SUCCEEDED"
 	errorMessage := ""

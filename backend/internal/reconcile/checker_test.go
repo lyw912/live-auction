@@ -22,7 +22,7 @@ func TestCheckerReportsCleanRelayProjectionAndDetectsSeqDrift(t *testing.T) {
 	auctionRow := createActiveAuctionForReconcile(t, repo, db)
 
 	bid := auction.BidInput{ClientBidID: "reconcile-bid-1", AmountCents: 15_000}
-	if _, err := repo.PlaceBid(ctx, auctionRow.ID, "user_1", bid.ClientBidID, bid, "tr_reconcile"); err != nil {
+	if _, err := repo.PlaceBidPostgresLegacyForTests(ctx, auctionRow.ID, "user_1", bid.ClientBidID, bid, "tr_reconcile"); err != nil {
 		t.Fatalf("PlaceBid: %v", err)
 	}
 	prioritizeReconcileOutbox(t, db, auctionRow.ID)

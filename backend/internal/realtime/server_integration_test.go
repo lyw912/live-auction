@@ -361,7 +361,7 @@ func TestPublishAuctionEventAlsoPublishesLeaderboardDelta(t *testing.T) {
 		ClientBidID: "lb-delta-" + uuid.NewString(),
 		AmountCents: 15_000,
 	}
-	bid, err := repo.PlaceBid(context.Background(), auctionRow.ID, "user_1", input.ClientBidID, input, "tr_lb_delta")
+	bid, err := repo.PlaceBidPostgresLegacyForTests(context.Background(), auctionRow.ID, "user_1", input.ClientBidID, input, "tr_lb_delta")
 	if err != nil {
 		t.Fatalf("PlaceBid: %v", err)
 	}
@@ -403,6 +403,7 @@ func TestPublishAuctionEventAlsoPublishesLeaderboardDelta(t *testing.T) {
 		Entries             []struct {
 			Rank        int    `json:"rank"`
 			UserID      string `json:"user_id"`
+			UserMasked  string `json:"user_masked"`
 			AmountCents int64  `json:"amount_cents"`
 			BidCount    int64  `json:"bid_count"`
 		} `json:"entries"`
@@ -416,7 +417,7 @@ func TestPublishAuctionEventAlsoPublishesLeaderboardDelta(t *testing.T) {
 	if delta.CurrentPriceCents != 15_000 || delta.AcceptedBidderCount != 1 || len(delta.Entries) != 1 {
 		t.Fatalf("unexpected delta body: %#v", delta)
 	}
-	if got := delta.Entries[0]; got.Rank != 1 || got.UserID != "user_1" || got.AmountCents != 15_000 || got.BidCount != 1 {
+	if got := delta.Entries[0]; got.Rank != 1 || got.UserID != "user_1" || got.UserMasked != "匿名用户 1" || got.AmountCents != 15_000 || got.BidCount != 1 {
 		t.Fatalf("unexpected top entry: %#v", got)
 	}
 }

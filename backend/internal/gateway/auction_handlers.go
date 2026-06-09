@@ -813,6 +813,18 @@ func (h AuctionHandler) PlaceBid(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	stageStart = time.Now()
+	_, stageSpan = apptracing.Start(traceCtx, "bid.acl", attribute.String("auction.id", auctionID))
+	if _, err := h.ACL.requireActiveMembershipForAuction(r.Context(), user, auctionID, traceID(r.Context())); err != nil {
+		handlerErr = err
+		apptracing.End(stageSpan, err)
+		recordBidGatewayStage("acl", mode, "error", time.Since(stageStart))
+		writeBidAdmissionResult(w, r, auction.BidResponse{}, err)
+		return
+	}
+	apptracing.End(stageSpan, nil)
+	recordBidGatewayStage("acl", mode, "ok", time.Since(stageStart))
+
+	stageStart = time.Now()
 	_, stageSpan = apptracing.Start(traceCtx, "bid.redis_engine", attribute.String("auction.id", auctionID))
 	result, err := h.Engine.PlaceBid(r.Context(), auctionID, user.ID, r.Header.Get("Idempotency-Key"), req, traceID(r.Context()),
 		redisx.ACLMembershipKey(auctionID, user.ID))
@@ -922,6 +934,15 @@ func (h AuctionHandler) DemoCompetingBid(w http.ResponseWriter, r *http.Request)
 		writeResult(w, r, http.StatusOK, nil, err)
 		return
 	}
+	if req.Mode == "rival_max_bid" {
+		if err := h.ensureDemoBidderReady(r.Context(), auctionID, "user_2"); err != nil {
+			writeResult(w, r, http.StatusOK, nil, err)
+			return
+		}
+		result, err := h.setDemoRivalMaxBid(r.Context(), auctionID, state, req.AmountCents)
+		writeResult(w, r, http.StatusOK, result, err)
+		return
+	}
 	if req.BidderID == "" {
 		req.BidderID = demoBidderForMode(req.Mode, state)
 	}
@@ -933,6 +954,19 @@ func (h AuctionHandler) DemoCompetingBid(w http.ResponseWriter, r *http.Request)
 	}
 	if req.AmountCents <= 0 {
 		req.AmountCents = demoBidAmountForMode(req.Mode, state)
+	}
+	if err := h.ensureDemoBidderReady(r.Context(), auctionID, req.BidderID); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	if req.Mode == "stale_low" {
+		req.AmountCents = state.CurrentPriceCents
+		if state.AcceptedBidCount == 0 {
+			req.AmountCents = state.StartPriceCents
+		}
+		if state.Seq > 0 {
+			req.ClientSeenSeq = state.Seq - 1
+		}
 	}
 	if req.ClientSeenSeq <= 0 {
 		req.ClientSeenSeq = state.Seq
@@ -946,9 +980,15 @@ func (h AuctionHandler) DemoCompetingBid(w http.ResponseWriter, r *http.Request)
 		AmountCents:   req.AmountCents,
 		ClientSeenSeq: req.ClientSeenSeq,
 	}
-	result, err := h.Repo.PlaceBid(r.Context(), auctionID, req.BidderID, req.ClientBidID, input, traceID(r.Context()))
+	if h.Engine == nil {
+		err := apierrors.New(apierrors.CodeEnginePaused, "redis/kafka hot engine is required", http.StatusServiceUnavailable)
+		writeBidAdmissionResult(w, r, auction.BidResponse{}, err)
+		return
+	}
+	result, err := h.Engine.PlaceBid(r.Context(), auctionID, req.BidderID, req.ClientBidID, input, traceID(r.Context()),
+		redisx.ACLMembershipKey(auctionID, req.BidderID))
 	if err == nil && result.Result == string(apierrors.CodeFatFingerConfirmRequired) && result.ConfirmToken != "" {
-		result, err = h.Repo.ConfirmBid(r.Context(), auctionID, req.BidderID, req.ClientBidID, auction.ConfirmBidInput{
+		result, err = h.Engine.ConfirmBid(r.Context(), auctionID, req.BidderID, req.ClientBidID, auction.ConfirmBidInput{
 			ConfirmToken:   result.ConfirmToken,
 			IdempotencyKey: req.ClientBidID,
 		}, traceID(r.Context()))
@@ -956,10 +996,78 @@ func (h AuctionHandler) DemoCompetingBid(w http.ResponseWriter, r *http.Request)
 	writeResult(w, r, http.StatusOK, result, err)
 }
 
+func (h AuctionHandler) ensureDemoBidderReady(ctx context.Context, auctionID string, userID string) error {
+	if h.Deps == nil || h.Deps.Postgres == nil || userID == "" {
+		return nil
+	}
+	var roomID string
+	if err := h.Deps.Postgres.QueryRow(ctx, `SELECT room_id FROM auctions WHERE id = $1`, auctionID).Scan(&roomID); err != nil {
+		if err == pgx.ErrNoRows {
+			return apierrors.New(apierrors.CodeAuctionNotFound, "auction not found", http.StatusNotFound)
+		}
+		return err
+	}
+	displayName := "演示对手"
+	if userID == "user_3" {
+		displayName = "演示挑战者"
+	}
+	if _, err := h.Deps.Postgres.Exec(ctx, `
+		INSERT INTO users (id, role, display_name)
+		VALUES ($1, 'user', $2)
+		ON CONFLICT (id) DO NOTHING
+	`, userID, displayName); err != nil {
+		return err
+	}
+	_, err := h.Deps.Postgres.Exec(ctx, `
+		INSERT INTO room_memberships (room_id, user_id, role, status)
+		VALUES ($1, $2, 'viewer', 'ACTIVE')
+		ON CONFLICT (room_id, user_id)
+		DO UPDATE SET role = 'viewer',
+		              status = 'ACTIVE'
+	`, roomID, userID)
+	if err != nil {
+		return err
+	}
+	if h.Deps.Redis != nil {
+		_ = h.Deps.Redis.Set(ctx, redisx.ACLMembershipKey(auctionID, userID), roomID, 30*time.Minute).Err()
+	}
+	return nil
+}
+
+func (h AuctionHandler) setDemoRivalMaxBid(ctx context.Context, auctionID string, state auction.Auction, requestedMaxAmount int64) (auction.MaxBidIntentResponse, error) {
+	userID := "user_2"
+	maxAmount := state.CurrentPriceCents + state.IncrementCents*3
+	if state.AcceptedBidCount == 0 {
+		maxAmount = state.StartPriceCents + state.IncrementCents*3
+	}
+	if requestedMaxAmount > 0 {
+		maxAmount = requestedMaxAmount
+	}
+	if state.CapPriceCents != nil && maxAmount > *state.CapPriceCents {
+		maxAmount = *state.CapPriceCents
+	}
+	if maxAmount <= state.CurrentPriceCents {
+		return auction.MaxBidIntentResponse{}, apierrors.New(apierrors.CodeMaxBidTooLow, "demo max bid has no room above current price", http.StatusConflict)
+	}
+	intentKey := "host-demo-max-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	result, err := h.Repo.PutMaxBidIntent(ctx, auctionID, userID, intentKey, auction.MaxBidIntentInput{
+		MaxAmountCents: maxAmount,
+		Source:         auction.MaxBidIntentSourceMaxBid,
+	})
+	return result, err
+}
+
 func demoBidderForMode(mode string, state auction.Auction) string {
 	switch mode {
 	case "buyer":
 		return "user_1"
+	case "stale_low":
+		return "user_1"
+	case "challenge":
+		if state.CurrentWinnerID != nil && *state.CurrentWinnerID == "user_3" {
+			return "user_2"
+		}
+		return "user_3"
 	case "outbid", "extend", "sold":
 		if state.CurrentWinnerID == nil || *state.CurrentWinnerID != "user_2" {
 			return "user_2"
@@ -988,6 +1096,12 @@ func demoBidAmountForMode(mode string, state auction.Auction) int64 {
 	next := current + increment
 	if state.AcceptedBidCount == 0 {
 		next = state.StartPriceCents + increment
+	}
+	if mode == "challenge" {
+		next = current + increment*2
+		if state.AcceptedBidCount == 0 {
+			next = state.StartPriceCents + increment*2
+		}
 	}
 	if state.CapPriceCents != nil && next > *state.CapPriceCents {
 		return *state.CapPriceCents
@@ -1137,8 +1251,41 @@ func (h AuctionHandler) PutMaxBidIntent(w http.ResponseWriter, r *http.Request) 
 	result, err := h.Repo.PutMaxBidIntent(r.Context(), auctionID, user.ID, r.Header.Get("Idempotency-Key"), req)
 	if err == nil {
 		h.invalidateMaxBidIntentSnapshotCache(r.Context(), auctionID, user.ID)
+		if trigger, ok := h.triggerMaxBidIntentNow(r.Context(), auctionID, user.ID, req, traceID(r.Context())); ok {
+			result.TriggerBid = &trigger
+		}
 	}
 	writeResult(w, r, http.StatusOK, result, err)
+}
+
+func (h AuctionHandler) triggerMaxBidIntentNow(ctx context.Context, auctionID string, userID string, req auction.MaxBidIntentInput, traceID string) (auction.BidResponse, bool) {
+	if h.Engine == nil || h.Repo == nil {
+		return auction.BidResponse{}, false
+	}
+	state, err := h.Repo.GetAuction(ctx, auctionID)
+	if err != nil || state.Status != auction.StatusActive || (state.CurrentWinnerID != nil && *state.CurrentWinnerID == userID) {
+		return auction.BidResponse{}, false
+	}
+	next := state.CurrentPriceCents + state.IncrementCents
+	if state.AcceptedBidCount <= 0 {
+		next = state.StartPriceCents + state.IncrementCents
+	}
+	if req.MaxAmountCents < next {
+		return auction.BidResponse{}, false
+	}
+	if state.CapPriceCents != nil && *state.CapPriceCents > 0 && next > *state.CapPriceCents {
+		next = *state.CapPriceCents
+	}
+	clientBidID := fmt.Sprintf("auto-intent:%s:%s:%d", userID, auctionID, time.Now().UTC().UnixNano())
+	resp, err := h.Engine.PlaceAutoMaxBid(ctx, auctionID, userID, clientBidID, auction.BidInput{
+		ClientBidID:   clientBidID,
+		AmountCents:   next,
+		ClientSeenSeq: state.Seq,
+	}, traceID, redisx.ACLMembershipKey(auctionID, userID))
+	if err != nil || (resp.Result != auction.BidResultEngineAccepted && resp.Result != auction.BidResultEngineSold) {
+		return auction.BidResponse{}, false
+	}
+	return resp, true
 }
 
 func (h AuctionHandler) DeleteMaxBidIntent(w http.ResponseWriter, r *http.Request) {
@@ -1198,7 +1345,7 @@ func (h AuctionHandler) ListOrders(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
 		return
 	}
-	result, err := h.Repo.ListOrders(r.Context(), user.ID, user.Role)
+	result, err := h.Repo.ListOrdersFiltered(r.Context(), user.ID, user.Role, r.URL.Query().Get("auction_id"), parsePositiveQueryInt(r, "limit", 100))
 	writeResult(w, r, http.StatusOK, result, err)
 }
 
@@ -1208,7 +1355,7 @@ func (h AuctionHandler) ListUserOrders(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
 		return
 	}
-	result, err := h.Repo.ListOrders(r.Context(), user.ID, user.Role)
+	result, err := h.Repo.ListOrdersFiltered(r.Context(), user.ID, user.Role, r.URL.Query().Get("auction_id"), parsePositiveQueryInt(r, "limit", 100))
 	if err != nil {
 		writeResult(w, r, http.StatusOK, nil, err)
 		return
@@ -1222,8 +1369,20 @@ func (h AuctionHandler) ListBidHistory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
 		return
 	}
-	result, err := h.Repo.ListBidHistory(r.Context(), user.ID)
+	result, err := h.Repo.ListBidHistoryFiltered(r.Context(), user.ID, r.URL.Query().Get("auction_id"), parsePositiveQueryInt(r, "limit", 20))
 	writeResult(w, r, http.StatusOK, map[string]any{"items": result}, err)
+}
+
+func parsePositiveQueryInt(r *http.Request, key string, fallback int) int {
+	value := strings.TrimSpace(r.URL.Query().Get(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
 }
 
 func (h AuctionHandler) CreateWSTicket(w http.ResponseWriter, r *http.Request) {

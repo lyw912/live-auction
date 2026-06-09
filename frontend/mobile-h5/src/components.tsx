@@ -466,17 +466,23 @@ function RaceBoard({
   const leader = top[0];
   const myRank = mine?.rank ?? leaderboard?.my_rank;
   const gap = leaderboard?.gap_to_leader_cents ?? (mine && leader ? Math.max(0, leader.amount_cents - mine.amount_cents) : undefined);
+  const recovering = leaderboard?.state === 'RECOVERING';
   const hasBids = entries.length > 0 || (leaderboard?.accepted_bidder_count ?? 0) > 0;
   const expanded = Boolean(forceExpanded || leaderboard?.burst_mode || (leaderboard?.accepted_bids_30s ?? 0) >= 4 || leaderboard?.state === 'OUTBID');
   const lastCueKind = atmosphereCue?.user_scope === 'self' ? atmosphereCue.kind : 'none';
-  const headline = hasBids && leader
-    ? `榜一 ${leader.is_current ? '我' : leader.user_masked} ${formatCents(leader.amount_cents)}`
+  const bidderLabel = (entry: NonNullable<LeaderboardPayload['entries']>[number]) => entry.is_current ? `我（${entry.user_masked}）` : entry.user_masked;
+  const headline = recovering
+    ? '竞拍状态校对中'
+    : hasBids && leader
+    ? `榜一 ${bidderLabel(leader)} ${formatCents(leader.amount_cents)}`
     : '等你第一手登顶';
   const mineCopy = myRank
     ? myRank === 1
       ? '我 #1 正在领先'
       : `我 #${myRank}${gap != null ? ` 差 ${formatCents(gap)}` : ''}`
-    : `下一口 ${formatCents(nextBidCents)}`;
+    : recovering
+      ? '等待服务端确认'
+      : `下一口 ${formatCents(nextBidCents)}`;
 
   return (
     <section
@@ -499,7 +505,9 @@ function RaceBoard({
           <strong>竞速榜</strong>
           <span>{(leaderboard?.accepted_bids_30s ?? 0) > 0 ? `近30s ${leaderboard?.accepted_bids_30s} 次` : '最高有效价优先'}</span>
         </div>
-        {hasBids ? (
+        {recovering ? (
+          <p>竞拍状态校对中，以服务端修复后的榜单为准</p>
+        ) : hasBids ? (
           <LeaderboardRows entries={top.length > 0 ? top : entries} burstMode={Boolean(leaderboard?.burst_mode)} highlightKind={lastCueKind} />
         ) : (
           <p>等你第一手登顶</p>
@@ -553,7 +561,7 @@ function PressureActionCard({
     ? `立即反超 ${formatCents(nextBidCents)}`
     : mode === 'final'
       ? `抢最后一口 ${formatCents(nextBidCents)}`
-      : '查看出价区';
+      : '查看出价榜';
 
   return (
     <div
@@ -707,6 +715,54 @@ function displayOrderNo(orderID: string) {
   if (!orderID) return h5Copy.loading;
   const compact = orderID.replace(/^ord[_-]?/i, '').replace(/[^a-z0-9]/gi, '').slice(-8).toUpperCase();
   return `JP${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${compact || '00000000'}`;
+}
+
+function orderIDFromRow(row: HistoryRow) {
+  return String(row.order_id ?? row.id ?? '');
+}
+
+function orderAmount(row?: HistoryRow) {
+  return Number(row?.amount_cents ?? 0);
+}
+
+function orderStatus(row?: HistoryRow) {
+  return buyerOrderStatus(String(row?.order_status ?? row?.status ?? ''));
+}
+
+function PaymentConfirmDialog({
+  amountCents,
+  orderID,
+  onCancel,
+  onConfirm
+}: {
+  amountCents: number;
+  orderID: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="payment-confirm-backdrop" data-testid="payment-confirm-dialog" role="dialog" aria-modal="true" aria-label="确认支付">
+      <section className="payment-confirm-card">
+        <div className="payment-confirm-head">
+          <CreditCard size={20} />
+          <div>
+            <span>确认支付</span>
+            <strong>{formatCents(amountCents)}</strong>
+          </div>
+        </div>
+        <div className="payment-confirm-grid">
+          <div><span>订单号</span><strong>{displayOrderNo(orderID)}</strong></div>
+          <div><span>支付方式</span><strong>演示支付</strong></div>
+          <div><span>支付结果</span><strong>确认后写入服务端订单状态</strong></div>
+        </div>
+        <p>这里不接真实资金通道，但会调用订单支付接口，更新订单为已支付并回到订单详情。</p>
+        <div className="payment-confirm-actions">
+          <button type="button" onClick={onCancel}>稍后支付</button>
+          <button type="button" onClick={onConfirm}>确认支付 {formatCents(amountCents)}</button>
+        </div>
+      </section>
+    </div>
+  );
 }
 
 export function ChatComposer({
@@ -1167,12 +1223,16 @@ export function BottomSheet({
   item,
   leaderboard,
   maxBidAmountCents,
+  maxBidAmountText,
   maxBidFeedback,
   maxBidIntent,
   maxBidPhase,
   minimumNextBidCents,
   nextBidCents,
   orderHistory,
+  paymentConfirmOpen,
+  payableOrderAmountCents,
+  payableOrderID,
   qaAnswer,
   qaHistory,
   qaDraft,
@@ -1187,9 +1247,12 @@ export function BottomSheet({
   liveOpsError,
   soundEnabled,
   onCancelMaxBid,
+  onChangeMaxBidAmountText,
   onClose,
+  onClosePaymentConfirm,
   onDecreaseMaxBid,
   onIncreaseMaxBid,
+  onOpenOrderDetail,
   onOpenLeaderboard,
   onOpenProducts,
   onOpenSheet,
@@ -1203,6 +1266,8 @@ export function BottomSheet({
   onQADraftChange,
   onSelectTeam,
   onSubmitMaxBid,
+  onConfirmPay,
+  selectedOrderID,
   onToggleFollow,
   onToggleSound
 }: {
@@ -1216,12 +1281,16 @@ export function BottomSheet({
   item: AuctionItem;
   leaderboard: LeaderboardPayload | null;
   maxBidAmountCents: number;
+  maxBidAmountText: string;
   maxBidFeedback: string;
   maxBidIntent: MaxBidIntent | null;
   maxBidPhase: MaxBidPhase;
   minimumNextBidCents: number;
   nextBidCents: number;
   orderHistory: HistoryRow[];
+  paymentConfirmOpen: boolean;
+  payableOrderAmountCents: number;
+  payableOrderID: string;
   qaAnswer?: ProductQAAnswer;
   qaHistory: ProductQAAnswer[];
   qaDraft: string;
@@ -1236,9 +1305,12 @@ export function BottomSheet({
   liveOpsError: string;
   soundEnabled: boolean;
   onCancelMaxBid: () => void;
+  onChangeMaxBidAmountText: (value: string) => void;
   onClose: () => void;
+  onClosePaymentConfirm: () => void;
   onDecreaseMaxBid: () => void;
   onIncreaseMaxBid: () => void;
+  onOpenOrderDetail: (orderID: string) => void;
   onOpenLeaderboard?: () => void;
   onOpenProducts?: () => void;
   onOpenSheet: (sheet: BottomSheetKey) => void;
@@ -1252,6 +1324,8 @@ export function BottomSheet({
   onQADraftChange: (draft: string) => void;
   onSelectTeam: (team: 'craft' | 'story') => void;
   onSubmitMaxBid: () => void;
+  onConfirmPay: () => void;
+  selectedOrderID: string;
   onToggleFollow: () => void;
   onToggleSound: () => void;
 }) {
@@ -1286,7 +1360,16 @@ export function BottomSheet({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [activeSheet, onClose]);
 
-  if (!activeSheet) return null;
+  if (!activeSheet) {
+    return paymentConfirmOpen ? (
+      <PaymentConfirmDialog
+        amountCents={payableOrderAmountCents}
+        orderID={payableOrderID}
+        onCancel={onClosePaymentConfirm}
+        onConfirm={onConfirmPay}
+      />
+    ) : null;
+  }
   const activeTabs = sheetGroups[activeSheet] ?? [];
   const selectedTab = activeSheet === 'history' ? 'orders' : activeSheet;
   return (
@@ -1310,12 +1393,15 @@ export function BottomSheet({
           {activeSheet === 'maxBid' && (
             <MaxBidSheet
               amountCents={maxBidAmountCents}
+              amountText={maxBidAmountText}
               connectionPhase={connectionPhase}
               feedback={maxBidFeedback}
               intent={maxBidIntent}
+              maxAmountCents={auctions.find((row) => row.id === activeAuctionID)?.cap_price_cents ?? 0}
               minimumNextBidCents={minimumNextBidCents}
               phase={maxBidPhase}
               scenario={scenario}
+              onAmountTextChange={onChangeMaxBidAmountText}
               onCancel={onCancelMaxBid}
               onDecrease={onDecreaseMaxBid}
               onIncrease={onIncreaseMaxBid}
@@ -1329,7 +1415,11 @@ export function BottomSheet({
               bidHistory={bidHistory}
               historyError={historyError}
               historyLoading={historyLoading}
+              item={item}
               orderHistory={orderHistory}
+              selectedOrderID={selectedOrderID}
+              activeAuction={auctions.find((row) => row.id === activeAuctionID)}
+              onOpenOrderDetail={onOpenOrderDetail}
               onRefresh={onRefreshHistory}
             />
           )}
@@ -1375,6 +1465,14 @@ export function BottomSheet({
           )}
         </div>
       </section>
+      {paymentConfirmOpen ? (
+        <PaymentConfirmDialog
+          amountCents={payableOrderAmountCents}
+          orderID={payableOrderID}
+          onCancel={onClosePaymentConfirm}
+          onConfirm={onConfirmPay}
+        />
+      ) : null}
     </div>
   );
 }
@@ -1482,12 +1580,15 @@ export function ProductRuleSheet({ auction, item, scenario }: { auction?: Auctio
 
 export function MaxBidSheet({
   amountCents,
+  amountText,
   connectionPhase,
   feedback,
   intent,
+  maxAmountCents,
   minimumNextBidCents,
   phase,
   scenario,
+  onAmountTextChange,
   onCancel,
   onDecrease,
   onIncrease,
@@ -1495,20 +1596,29 @@ export function MaxBidSheet({
   onSubmit
 }: {
   amountCents: number;
+  amountText: string;
   connectionPhase: ConnectionPhase;
   feedback: string;
   intent: MaxBidIntent | null;
+  maxAmountCents: number;
   minimumNextBidCents: number;
   phase: MaxBidPhase;
   scenario: Scenario;
+  onAmountTextChange: (value: string) => void;
   onCancel: () => void;
   onDecrease: () => void;
   onIncrease: () => void;
   onRefresh: () => void;
   onSubmit: () => void;
 }) {
-  const disabled = isDangerousActionDisabled(scenario, connectionPhase) || phase === 'pending' || phase === 'canceling';
+  const settingDisabled = scenario.stale || scenario.sold || connectionPhase === 'connecting' || connectionPhase === 'recovering' || connectionPhase === 'disconnected' || phase === 'pending' || phase === 'canceling';
+  const cancelDisabled = connectionPhase === 'connecting' || connectionPhase === 'recovering' || connectionPhase === 'disconnected' || phase === 'pending' || phase === 'canceling';
   const active = intent?.status === 'ACTIVE';
+  const requiredAmount = maxAmountCents > 0 ? Math.min(minimumNextBidCents, maxAmountCents) : minimumNextBidCents;
+  const submittedAmount = maxAmountCents > 0
+    ? Math.min(Math.max(amountCents, requiredAmount), maxAmountCents)
+    : Math.max(amountCents, requiredAmount);
+  const invalid = amountCents < requiredAmount || (maxAmountCents > 0 && amountCents > maxAmountCents);
   return (
     <div className="max-bid-sheet" data-testid="max-bid-sheet">
       <div className="max-bid-status">
@@ -1516,10 +1626,29 @@ export function MaxBidSheet({
         <strong>{active ? `${formatCents(intent.max_amount_cents)} · 仅自己可见` : '未启用'}</strong>
         <em>{feedback}</em>
       </div>
+      <label className="max-bid-input" htmlFor="max-bid-yuan">
+        <span>最高愿付价</span>
+        <div>
+          <em>¥</em>
+          <input
+            id="max-bid-yuan"
+            aria-label="max-bid-yuan"
+            inputMode="decimal"
+            disabled={settingDisabled}
+            value={amountText}
+            placeholder={(requiredAmount / 100).toFixed(2)}
+            onChange={(event) => onAmountTextChange(event.target.value)}
+          />
+        </div>
+      </label>
+      <div className="max-bid-range">
+        <span>不能低于当前可设置价 {formatCents(requiredAmount)}</span>
+        {maxAmountCents > 0 ? <span>不能高于封顶价 {formatCents(maxAmountCents)}</span> : null}
+      </div>
       <div className="max-bid-stepper" aria-label="max-bid-amount">
-        <button type="button" aria-label="decrease-max-bid" disabled={disabled || amountCents <= minimumNextBidCents} onClick={onDecrease}>-</button>
-        <span>{formatCents(Math.max(amountCents, minimumNextBidCents))}</span>
-        <button type="button" aria-label="increase-max-bid" disabled={disabled} onClick={onIncrease}><ChevronUp size={18} /></button>
+        <button type="button" aria-label="decrease-max-bid" disabled={settingDisabled || amountCents <= requiredAmount} onClick={onDecrease}>-</button>
+        <span>快捷调整到 {formatCents(submittedAmount)}</span>
+        <button type="button" aria-label="increase-max-bid" disabled={settingDisabled || (maxAmountCents > 0 && amountCents >= maxAmountCents)} onClick={onIncrease}><ChevronUp size={18} /></button>
       </div>
       <div className="max-bid-rules">
         <span>仅当前账号可见，不进入公开榜单或房间消息。</span>
@@ -1527,10 +1656,10 @@ export function MaxBidSheet({
         <span>网络恢复、提交中或本场结束时会暂停设置和取消。</span>
       </div>
       <div className="max-bid-actions">
-        <button type="button" onClick={onSubmit} disabled={disabled || Math.max(amountCents, minimumNextBidCents) < minimumNextBidCents}>
-          {phase === 'pending' ? '提交中' : active ? '更新自动加价' : '设置自动加价'}
+        <button type="button" onClick={onSubmit} disabled={settingDisabled || invalid}>
+          {phase === 'pending' ? '提交中' : active ? `更新为 ${formatCents(submittedAmount)}` : `设置 ${formatCents(submittedAmount)}`}
         </button>
-        <button type="button" onClick={onCancel} disabled={disabled || !active}>
+        <button type="button" onClick={onCancel} disabled={cancelDisabled || !active}>
           {phase === 'canceling' ? '取消中' : '取消'}
         </button>
         <button type="button" onClick={onRefresh} disabled={phase === 'pending' || phase === 'canceling'}>刷新</button>
@@ -1678,7 +1807,7 @@ function LeaderboardRows({ entries, burstMode = false, highlightKind = 'none' }:
             }}
           >
             <span>{rankBadgeLabel(entry.rank)}</span>
-            <strong>{entry.is_current ? '我' : entry.user_masked}</strong>
+            <strong>{entry.is_current ? `我（${entry.user_masked}）` : entry.user_masked}</strong>
             <em>{formatCents(entry.amount_cents)}</em>
             <small>{entry.bid_count} 次</small>
           </div>
@@ -1752,22 +1881,31 @@ export function StateMatrixTabs({
 }
 
 export function HistoryPanel({
+  activeAuction,
   bidHistory,
   historyError,
   historyLoading,
+  item,
   orderHistory,
+  selectedOrderID,
+  onOpenOrderDetail,
   onRefresh
 }: {
+  activeAuction?: AuctionSummary;
   bidHistory: HistoryRow[];
   historyError: string;
   historyLoading: boolean;
+  item: AuctionItem;
   orderHistory: HistoryRow[];
+  selectedOrderID: string;
+  onOpenOrderDetail: (orderID: string) => void;
   onRefresh: () => void;
 }) {
+  const selectedOrder = orderHistory.find((row) => orderIDFromRow(row) === selectedOrderID);
   return (
     <section className="history-panel" data-testid="history-panel">
       <div className="history-title">
-        <h2><History size={16} /> 我的历史</h2>
+        <h2><History size={16} /> 我的记录</h2>
         <button type="button" onClick={onRefresh} disabled={historyLoading}>
           <RefreshCw size={14} />
           {historyLoading ? '刷新中' : '刷新'}
@@ -1786,11 +1924,73 @@ export function HistoryPanel({
           title="订单"
           empty="暂无订单"
           rows={orderHistory}
-          getPrimary={(row) => `订单 ${formatCents(Number(row.amount_cents ?? 0))}`}
+          getPrimary={(row) => `以 ${formatCents(orderAmount(row))} 拍下`}
           getSecondary={buyerOrderSecondary}
+          onRowClick={(row) => onOpenOrderDetail(orderIDFromRow(row))}
         />
       </div>
+      {selectedOrder ? (
+        <BuyerOrderDetail
+          auction={activeAuction}
+          item={item}
+          order={selectedOrder}
+          onClose={() => onOpenOrderDetail('')}
+        />
+      ) : null}
     </section>
+  );
+}
+
+function BuyerOrderDetail({
+  auction,
+  item,
+  order,
+  onClose
+}: {
+  auction?: AuctionSummary;
+  item: AuctionItem;
+  order: HistoryRow;
+  onClose: () => void;
+}) {
+  const amount = orderAmount(order);
+  const mediaURL = displayMediaURL(item.image_url ?? item.imageURL ?? item.video_poster_url ?? item.videoPosterURL);
+  const depositBPS = auction?.rule?.deposit_bps ?? 0;
+  const depositFloor = auction?.rule?.deposit_floor_cents ?? 0;
+  const depositCap = auction?.rule?.deposit_cap_cents ?? 0;
+  const estimateDeposit = Math.max(depositFloor, Math.round(amount * depositBPS / 10_000));
+  const deposit = depositCap > 0 ? Math.min(estimateDeposit, depositCap) : estimateDeposit;
+  return (
+    <div className="buyer-order-detail" data-testid="buyer-order-detail">
+      <div className="buyer-order-detail-head">
+        <div>
+          <span>订单详情</span>
+          <strong>{displayOrderNo(orderIDFromRow(order))}</strong>
+        </div>
+        <button type="button" onClick={onClose}>收起</button>
+      </div>
+      <div className="buyer-order-product">
+        <span className={`buyer-order-thumb ${mediaURL ? 'has-media' : ''}`} style={mediaURL ? { '--buyer-order-media-url': `url("${mediaURL}")` } as React.CSSProperties : undefined}>
+          {!mediaURL && <ShoppingBagIcon size={20} theme="multi-color" fill={iconParkActionFill} />}
+        </span>
+        <div>
+          <strong>{item.title ?? '本场拍品'}</strong>
+          <em>{item.certificate ?? '证书待核验'} · {item.condition ?? '实物状态以拍品页为准'}</em>
+        </div>
+      </div>
+      <div className="buyer-order-grid">
+        <div><span>拍下金额</span><strong>{formatCents(amount)}</strong></div>
+        <div><span>订单状态</span><strong>{orderStatus(order)}</strong></div>
+        <div><span>保证金</span><strong>{deposit > 0 ? formatCents(deposit) : '按服务端订单处理'}</strong></div>
+        <div><span>支付截止</span><strong>{historyTime({ created_at: order.expire_at }) || '以订单为准'}</strong></div>
+        <div><span>加价阶梯</span><strong>{formatCents(auction?.increment_cents ?? 0)}</strong></div>
+        <div><span>封顶价</span><strong>{formatCents(auction?.cap_price_cents ?? amount)}</strong></div>
+      </div>
+      <div className="buyer-order-section">
+        <span>商品详情</span>
+        <p>{item.description ?? item.return_policy ?? '成交商品以本场拍品信息、证书和实物图为准。'}</p>
+        <p>{item.shipping ?? '物流以商家履约配置为准'} · {item.return_policy ?? h5Copy.returnPolicy}</p>
+      </div>
+    </div>
   );
 }
 
@@ -1921,13 +2121,15 @@ export function HistoryList({
   empty,
   rows,
   getPrimary,
-  getSecondary
+  getSecondary,
+  onRowClick
 }: {
   title: string;
   empty: string;
   rows: HistoryRow[];
   getPrimary: (row: HistoryRow) => string;
   getSecondary: (row: HistoryRow) => string;
+  onRowClick?: (row: HistoryRow) => void;
 }) {
   const visibleRows = rows.slice(0, 12);
   const hiddenCount = Math.max(0, rows.length - visibleRows.length);
@@ -1939,10 +2141,16 @@ export function HistoryList({
       ) : (
         <>
           {visibleRows.map((row, index) => (
-            <div className="history-row" key={`${title}-${index}`}>
+            <button
+              type="button"
+              className="history-row"
+              key={`${title}-${index}`}
+              onClick={() => onRowClick?.(row)}
+              disabled={!onRowClick}
+            >
               <strong>{getPrimary(row)}</strong>
               <span>{getSecondary(row)}</span>
-            </div>
+            </button>
           ))}
           {hiddenCount > 0 ? <p className="history-more">已收起更早 {hiddenCount} 条记录</p> : null}
         </>

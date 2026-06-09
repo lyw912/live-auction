@@ -69,7 +69,7 @@ func driveToSOLD(t *testing.T, repo *Repository, winnerID string, cap int64) str
 	db := repo.db
 	a := createActiveAuction(t, repo, db, &cap)
 	input := BidInput{ClientBidID: "bid-sold-" + uuid.NewString(), AmountCents: cap}
-	if _, err := repo.PlaceBid(context.Background(), a.ID, winnerID, input.ClientBidID, input, "tr_m3"); err != nil {
+	if _, err := repo.PlaceBidPostgresLegacyForTests(context.Background(), a.ID, winnerID, input.ClientBidID, input, "tr_m3"); err != nil {
 		t.Fatalf("PlaceBid cap: %v", err)
 	}
 	return a.ID
@@ -80,7 +80,7 @@ func driveToSOLDInRoom(t *testing.T, repo *Repository, db *pgxpool.Pool, roomID,
 	t.Helper()
 	a := createActiveAuctionInRoom(t, repo, db, roomID, &cap)
 	input := BidInput{ClientBidID: "bid-sold-" + uuid.NewString(), AmountCents: cap}
-	if _, err := repo.PlaceBid(context.Background(), a.ID, winnerID, input.ClientBidID, input, "tr_m3"); err != nil {
+	if _, err := repo.PlaceBidPostgresLegacyForTests(context.Background(), a.ID, winnerID, input.ClientBidID, input, "tr_m3"); err != nil {
 		t.Fatalf("PlaceBid cap in room: %v", err)
 	}
 	return a.ID

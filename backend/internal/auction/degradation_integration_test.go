@@ -24,7 +24,7 @@ func TestBidDBLockTimeoutReturnsRetryLaterWithoutDuplicate(t *testing.T) {
 	}
 
 	input := BidInput{ClientBidID: "lock-timeout-bid", AmountCents: 15_000}
-	_, err = repo.PlaceBid(ctx, row.ID, "user_1", input.ClientBidID, input, "tr_lock_timeout")
+	_, err = repo.PlaceBidPostgresLegacyForTests(ctx, row.ID, "user_1", input.ClientBidID, input, "tr_lock_timeout")
 	if !hasCode(err, apierrors.CodeBidRetryLater) {
 		t.Fatalf("PlaceBid err = %v, want BID_RETRY_LATER", err)
 	}
@@ -51,7 +51,7 @@ func TestExpiredProcessingIdempotencyReturnsTimeoutAndMarksFailed(t *testing.T) 
 		t.Fatalf("insert stuck idempotency: %v", err)
 	}
 
-	_, err := repo.PlaceBid(ctx, row.ID, "user_1", input.ClientBidID, input, "tr_idem_timeout")
+	_, err := repo.PlaceBidPostgresLegacyForTests(ctx, row.ID, "user_1", input.ClientBidID, input, "tr_idem_timeout")
 	if !hasCode(err, apierrors.CodeIdempotencyTimeout) {
 		t.Fatalf("PlaceBid err = %v, want IDEMPOTENCY_TIMEOUT", err)
 	}

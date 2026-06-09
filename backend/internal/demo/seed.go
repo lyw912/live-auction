@@ -19,6 +19,7 @@ func SeedP0Smoke(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client) error
 		SELECT id
 		FROM auctions
 		WHERE room_id IN ('room_main', 'room_side')
+		   OR room_id IN (SELECT id FROM rooms WHERE host_id = 'host_1')
 		   OR id IN ('auc_live', 'auc_side');
 
 		CREATE TEMP TABLE p0_demo_items ON COMMIT DROP AS
@@ -133,10 +134,10 @@ func SeedP0Smoke(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client) error
 		)
 		VALUES (
 		  'auc_live', 'room_main', 'item_live', 'ACTIVE', true,
-		  35000, 'user_2',
-		  10000, 5000, 60000,
+		  35000, NULL,
+		  35000, 5000, 60000,
 		  now() - interval '1 minute', now() + interval '10 minutes',
-		  1, 41, 1,
+		  1, 0, 0,
 		  0, 1, now()
 		);
 

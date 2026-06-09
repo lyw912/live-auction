@@ -79,6 +79,40 @@ func TestBidAdmissionCompletedReplayBypassesRedisLimiter(t *testing.T) {
 	}
 }
 
+func TestBidAdmissionWarmsMissingRedisACLFromDBMembership(t *testing.T) {
+	db := openMonitorDB(t)
+	rdb := openMonitorRedis(t)
+	ctx := context.Background()
+	auctionRow := createAdmissionAuction(t, db, "user_1")
+	cfg := admissionTestConfig()
+	router := newAdmissionHotRouter(t, cfg, db, rdb)
+
+	aclKey := redisx.ACLMembershipKey(auctionRow.ID, "user_1")
+	if err := rdb.Del(ctx, aclKey).Err(); err != nil {
+		t.Fatalf("clear hot-engine ACL: %v", err)
+	}
+
+	body := `{"client_bid_id":"admission-warm-acl","amount_cents":15000,"client_seen_seq":0}`
+	rec := performBid(router, auctionRow.ID, body, "admission-warm-acl", "user_1")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bid status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp auction.BidResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Result != auction.BidResultEngineAccepted {
+		t.Fatalf("result = %s, want ENGINE_ACCEPTED body=%s", resp.Result, rec.Body.String())
+	}
+	roomID, err := rdb.Get(ctx, aclKey).Result()
+	if err != nil {
+		t.Fatalf("read warmed hot-engine ACL: %v", err)
+	}
+	if roomID != auctionRow.RoomID {
+		t.Fatalf("warmed ACL room = %q, want %q", roomID, auctionRow.RoomID)
+	}
+}
+
 func TestBidAdmissionRedisDownFailsOpenAndRecordsAnomaly(t *testing.T) {
 	t.Skip("legacy PG-lane fallback check; the current hot engine fails closed when Redis is unavailable")
 	db := openMonitorDB(t)
@@ -556,7 +590,7 @@ func TestRedisGuardStaleProjectionRejectsAtOrBelowOldCurrentPrice(t *testing.T) 
 	cfg.BidRedisGuardMaxStaleness = 50 * time.Millisecond
 	repo := auction.NewRepository(db)
 	first := auction.BidInput{ClientBidID: "guard-stale-reject-first", AmountCents: 15_000}
-	if _, err := repo.PlaceBid(context.Background(), auctionRow.ID, "user_1", first.ClientBidID, first, "tr_guard_stale_reject_first"); err != nil {
+	if _, err := repo.PlaceBidPostgresLegacyForTests(context.Background(), auctionRow.ID, "user_1", first.ClientBidID, first, "tr_guard_stale_reject_first"); err != nil {
 		t.Fatalf("seed first bid: %v", err)
 	}
 	if _, err := db.Exec(context.Background(), `INSERT INTO users (id, role, display_name) VALUES ('user_2', 'user', 'Guard User 2') ON CONFLICT DO NOTHING`); err != nil {
@@ -631,7 +665,7 @@ func TestRedisGuardStaleProjectionFallsThroughWhenBidMightStillWin(t *testing.T)
 	cfg.BidRedisGuardMaxStaleness = 50 * time.Millisecond
 	repo := auction.NewRepository(db)
 	first := auction.BidInput{ClientBidID: "guard-stale-first", AmountCents: 15_000}
-	if _, err := repo.PlaceBid(context.Background(), auctionRow.ID, "user_1", first.ClientBidID, first, "tr_guard_stale_first"); err != nil {
+	if _, err := repo.PlaceBidPostgresLegacyForTests(context.Background(), auctionRow.ID, "user_1", first.ClientBidID, first, "tr_guard_stale_first"); err != nil {
 		t.Fatalf("seed first bid: %v", err)
 	}
 

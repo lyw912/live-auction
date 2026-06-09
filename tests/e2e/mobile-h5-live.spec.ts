@@ -21,7 +21,7 @@ test('H5 covers live backend REST, fat-finger confirm, cap SOLD order, payment, 
   expect(snapshot.ok()).toBeTruthy();
   expect(await snapshot.json()).toEqual(expect.objectContaining({
     id: 'auc_live',
-    seq: 41,
+    seq: 0,
     current_price_cents: 35000
   }));
 

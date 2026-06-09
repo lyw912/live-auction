@@ -32,6 +32,20 @@ function normalizeStageItem(item: AuctionItem, fallbackTitle?: string): AuctionI
   };
 }
 
+function yuanInputToCents(value: string) {
+  const normalized = value.replace(/[^\d.]/g, '');
+  if (!normalized) return 0;
+  const amount = Number(normalized);
+  if (!Number.isFinite(amount)) return 0;
+  return Math.round(amount * 100);
+}
+
+function clampMaxBidAmount(amountCents: number, minimumCents: number, capCents?: number | null) {
+  const next = Math.max(amountCents || 0, minimumCents);
+  if (capCents && capCents > 0) return Math.min(next, capCents);
+  return next;
+}
+
 function App() {
   const showStateMatrix = useMemo(isTestMatrixEnabled, []);
   const roomID = useMemo(roomIDFromPath, []);
@@ -51,12 +65,14 @@ function App() {
   const [confirmAmountCents, setConfirmAmountCents] = useState(0);
   const [maxBidIntent, setMaxBidIntent] = useState<MaxBidIntent | null>(null);
   const [maxBidAmountCents, setMaxBidAmountCents] = useState(0);
+  const [maxBidAmountText, setMaxBidAmountText] = useState('');
   const [maxBidPhase, setMaxBidPhase] = useState<MaxBidPhase>('idle');
   const [maxBidFeedback, setMaxBidFeedback] = useState('仅自己可见，服务端按加价阶梯代出价');
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState('');
   const [bidHistory, setBidHistory] = useState<HistoryRow[]>([]);
   const [orderHistory, setOrderHistory] = useState<HistoryRow[]>([]);
+  const [selectedOrderID, setSelectedOrderID] = useState('');
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatDraft, setChatDraft] = useState('');
   const [chatSending, setChatSending] = useState(false);
@@ -79,6 +95,7 @@ function App() {
   const [activeIncrementCents, setActiveIncrementCents] = useState(5_000);
   const [payableOrderID, setPayableOrderID] = useState('');
   const [payableOrderAmountCents, setPayableOrderAmountCents] = useState(0);
+  const [paymentConfirmOpen, setPaymentConfirmOpen] = useState(false);
   const [terminalPriceCents, setTerminalPriceCents] = useState(0);
   const [terminalWinnerID, setTerminalWinnerID] = useState('');
   const [terminalWinnerMasked, setTerminalWinnerMasked] = useState('');
@@ -123,6 +140,7 @@ function App() {
   const leaderMaskedRef = useRef(leaderMasked);
   const activeAuctionIDRef = useRef(activeAuctionID);
   const activeIncrementCentsRef = useRef(activeIncrementCents);
+  const roomAuctionsRef = useRef<AuctionSummary[]>(roomAuctions);
   const maxBidAmountCentsRef = useRef(maxBidAmountCents);
   const auctionEndAtRef = useRef(auctionEndAt);
   const serverTimeMSRef = useRef(serverTimeMS);
@@ -177,7 +195,15 @@ function App() {
   }, [activeIncrementCents]);
 
   useEffect(() => {
+    roomAuctionsRef.current = roomAuctions;
+  }, [roomAuctions]);
+
+  useEffect(() => {
     maxBidAmountCentsRef.current = maxBidAmountCents;
+  }, [maxBidAmountCents]);
+
+  useEffect(() => {
+    setMaxBidAmountText(maxBidAmountCents > 0 ? (maxBidAmountCents / 100).toFixed(2) : '');
   }, [maxBidAmountCents]);
 
   useEffect(() => {
@@ -255,6 +281,17 @@ function App() {
   }), [countdownPhase.remainingMS, heat.acceptedBids30s, heat.priceVelocityCentsPerMin, selected]);
   const bidCooldownRemainingMS = Math.max(0, bidCooldownUntilMS - nowMS);
   const raceBoardExpanded = raceBoardExpandedUntil > nowMS;
+  const isCurrentUserLeading = Boolean(
+    selected === 'active_bids' &&
+    activeAuctionID &&
+    leaderboard?.auction_id === activeAuctionID &&
+    currentUserID &&
+    (
+      leaderboard?.state === 'LEADING' ||
+      leaderboard?.my_rank === 1 ||
+      leaderboard?.current_winner_id === currentUserID
+    )
+  );
   const countdownExpired = useMemo(() => (
     selected === 'active_bids' &&
     connectionPhase === 'connected' &&
@@ -311,6 +348,7 @@ function App() {
     };
     leaderboardRef.current = nextLeaderboard;
     setLeaderboard(nextLeaderboard);
+    syncBidPhaseFromLeaderboard(nextLeaderboard);
     setCurrentPriceCents(delta.current_price_cents);
     setMinimumNextBidCents(delta.next_valid_bid_cents ?? delta.current_price_cents + activeIncrementCentsRef.current);
     setNextBidCents((prepared) => Math.max(delta.next_valid_bid_cents ?? delta.current_price_cents + activeIncrementCentsRef.current, prepared));
@@ -358,6 +396,58 @@ function App() {
     if (!delta.burst_mode && soundEnabledRef.current && audioContextRef.current && soundCapabilityRef.current === 'ready') {
       playLayeredCue(audioContextRef.current, 'rank_change', soundPackRef.current);
     }
+  };
+
+  const syncBidPhaseFromLeaderboard = (payload: LeaderboardPayload) => {
+    if (!payload || payload.auction_id !== activeAuctionIDRef.current) return;
+    if (payload.state === 'LEADING' || payload.my_rank === 1 || payload.current_winner_id === currentUserIDRef.current) {
+      if (payload.current_winner_id === currentUserIDRef.current || payload.state === 'LEADING') {
+        setBidPhase((phase) => phase === 'pending' || phase === 'confirming' || phase === 'confirm_required' ? phase : 'accepted');
+        setRiskCode('');
+        setBidFeedback('你已领先，出价已确认');
+      }
+      return;
+    }
+    if (payload.state === 'OUTBID' || (payload.my_rank != null && payload.my_rank > 1) || (payload.current_winner_id && payload.current_winner_id !== currentUserIDRef.current)) {
+      pendingBidRef.current = null;
+      setBidPhase((phase) => phase === 'pending' || phase === 'confirming' || phase === 'confirm_required' ? phase : 'idle');
+      setConfirmToken('');
+      setConfirmIdempotencyKey('');
+      setConfirmAmountCents(0);
+      setRiskCode('');
+      const nextBid = payload.next_valid_bid_cents ?? (payload.current_price_cents + activeIncrementCentsRef.current);
+      setBidFeedback(`被超越，下一口 ${formatCents(nextBid)}`);
+      setOverlayMode('bid');
+      return;
+    }
+    if (payload.state === 'RECOVERING') {
+      setBidPhase((phase) => phase === 'pending' || phase === 'confirming' || phase === 'confirm_required' ? phase : 'idle');
+      setRiskCode('RECOVERING');
+      setBidFeedback('竞拍状态正在校对，以服务端最新结果为准');
+      setConnectionPhase('recovering');
+    }
+  };
+
+  const normalizeLeaderboardPayload = (payload: LeaderboardPayload, previous?: LeaderboardPayload | null): LeaderboardPayload => {
+    const entries = (payload.entries ?? []).map((entry) => ({
+      ...entry,
+      is_current: entry.user_id === currentUserIDRef.current
+    }));
+    const mine = entries.find((entry) => entry.user_id === currentUserIDRef.current);
+    const leader = entries[0];
+    const leaderAmount = payload.leader_amount_cents || leader?.amount_cents || payload.current_price_cents;
+    const myBestAmount = mine?.amount_cents;
+    const gapToLeader = myBestAmount != null ? Math.max(0, leaderAmount - myBestAmount) : undefined;
+    return {
+      ...previous,
+      ...payload,
+      entries,
+      leader_amount_cents: leaderAmount,
+      my_rank: mine?.rank ?? (previous?.auction_id === payload.auction_id ? previous.my_rank : payload.my_rank),
+      my_best_amount_cents: myBestAmount ?? (previous?.auction_id === payload.auction_id ? previous.my_best_amount_cents : payload.my_best_amount_cents),
+      gap_to_leader_cents: gapToLeader ?? (previous?.auction_id === payload.auction_id ? previous.gap_to_leader_cents : payload.gap_to_leader_cents),
+      state: payload.state === 'RECOVERING' ? 'RECOVERING' : mine?.rank === 1 ? 'LEADING' : mine ? 'OUTBID' : 'NOT_BID'
+    };
   };
 
   const applyLeaderboardDelta = (delta: LeaderboardPayload) => {
@@ -677,6 +767,21 @@ function App() {
         stale: true
       };
     }
+    if (leaderboard?.state === 'RECOVERING') {
+      return {
+        key: 'recovering',
+        title: '状态校对中',
+        status: 'RECOVERING',
+        price: formatCents(currentPriceCents),
+        leader: '等待服务端确认',
+        feedback: '竞拍状态正在校对，以服务端最新结果为准',
+        countdown: countdownCopy,
+        cta: h5Copy.loading,
+        ctaDisabled: true,
+        stale: true,
+        staleCopy: '竞拍状态校对中'
+      };
+    }
     if (bidCooldownRemainingMS > 0) {
       const remainingSeconds = Math.ceil(bidCooldownRemainingMS / 1000);
       return {
@@ -761,6 +866,19 @@ function App() {
         ctaDisabled: false
       };
     }
+    if (isCurrentUserLeading) {
+      return {
+        key: 'self_leading' as AuctionState,
+        title: '领先中',
+        status: 'ACTIVE',
+        price: formatCents(currentPriceCents),
+        leader: '你已领先',
+        feedback: bidFeedback || '等待其他买家出价',
+        countdown: countdownCopy,
+        cta: '等待其他买家',
+        ctaDisabled: true
+      };
+    }
     if (bidPhase === 'accepted') {
       return {
         key: 'self_leading' as AuctionState,
@@ -768,9 +886,9 @@ function App() {
         status: 'ACTIVE',
         price: formatCents(currentPriceCents),
         leader: '你已领先',
-        feedback: bidFeedback || '出价已确认',
+        feedback: bidFeedback || '等待其他买家出价',
         countdown: countdownCopy,
-        cta: '已领先',
+        cta: '等待其他买家',
         ctaDisabled: true
       };
     }
@@ -813,7 +931,7 @@ function App() {
       cta: countdownExpired ? h5Copy.loading : `出一手 ${formatCents(nextBidCents)}`,
       ctaDisabled: countdownExpired
     };
-  }, [activeAuctionID, bidCooldownRemainingMS, bidFeedback, bidderRequirement, bidPhase, confirmAmountCents, connectionPhase, countdownCopy, countdownExpired, currentPriceCents, lastSeq, leaderMasked, minimumNextBidCents, nextBidCents, payableOrderAmountCents, payableOrderID, paymentPhase, recoveryPhase, selected, terminalPriceCents, terminalWinnerID]);
+  }, [activeAuctionID, bidCooldownRemainingMS, bidFeedback, bidderRequirement, bidPhase, confirmAmountCents, connectionPhase, countdownCopy, countdownExpired, currentPriceCents, isCurrentUserLeading, lastSeq, leaderMasked, leaderboard?.state, minimumNextBidCents, nextBidCents, payableOrderAmountCents, payableOrderID, paymentPhase, recoveryPhase, selected, terminalPriceCents, terminalWinnerID]);
   const atmosphereGate = useMemo(() => shouldGateAtmosphere({
     recovering: recoveryPhase !== 'idle' || connectionPhase === 'recovering',
     stale: scenario.stale || countdownPhase.phase === 'stale' || selected === 'recovering',
@@ -862,6 +980,13 @@ function App() {
     }
     if (isEngineRejected(payload)) {
       const code = payload.reject_reason ?? 'ENGINE_REJECTED';
+      const refreshedNextBid = payload.next_valid_bid_cents ?? (
+        payload.current_price_cents != null ? payload.current_price_cents + activeIncrementCents : undefined
+      );
+      if (refreshedNextBid != null) {
+        setMinimumNextBidCents(refreshedNextBid);
+        setNextBidCents((prepared) => Math.max(refreshedNextBid, prepared));
+      }
       setRiskCode(code);
       setBidFeedback(`${rejectCopy(code)}，请按当前价格重新确认`);
       setBidPhase('rejected');
@@ -953,7 +1078,7 @@ function App() {
   const loadPayableOrderForAuction = async (auctionID: string) => {
     if (!auctionID) return null;
     try {
-      const response = await fetch('/api/users/me/orders');
+      const response = await fetch(`/api/users/me/orders?auction_id=${encodeURIComponent(auctionID)}&limit=5`);
       const payload = await readJSON<{ items?: OrderRow[] }>(response);
       if (!response.ok) return null;
       const pendingOrder = (payload?.items ?? []).find((row) => (
@@ -1057,13 +1182,14 @@ function App() {
     if (snapshot.increment_cents != null) setActiveIncrementCents(increment);
     if (nextEndAt) setAuctionEndAt(nextEndAt);
     if (nextServerTimeMS) syncServerTimeMS(nextServerTimeMS);
+    const snapshotCap = roomAuctionsRef.current.find((row) => row.id === (snapshotAuctionID || activeAuctionIDRef.current))?.cap_price_cents ?? 0;
     setCurrentPriceCents(price);
     setMinimumNextBidCents(price + increment);
     setNextBidCents(price + increment);
-    setMaxBidAmountCents((amount) => Math.max(amount || 0, price + increment));
+    setMaxBidAmountCents((amount) => clampMaxBidAmount(amount, price + increment, snapshotCap));
     if (snapshot.max_bid_intent) {
       setMaxBidIntent(snapshot.max_bid_intent);
-      setMaxBidAmountCents(Math.max(snapshot.max_bid_intent.max_amount_cents, price + increment));
+      setMaxBidAmountCents(clampMaxBidAmount(snapshot.max_bid_intent.max_amount_cents, price + increment, snapshotCap));
       setMaxBidFeedback(maxBidStatusCopy(snapshot.max_bid_intent));
     } else {
       setMaxBidIntent(null);
@@ -1159,10 +1285,12 @@ function App() {
     const previousEndAt = auctionEndAtRef.current;
     const previousWinnerID = leaderboardRef.current?.current_winner_id;
     const winnerID = detail.payload?.current_winner_id ?? detail.payload?.user_id ?? '';
+    const isAutoMaxBid = detail.payload?.bid_source === 'AUTO_MAX_BID';
     setCurrentPriceCents(price);
     setMinimumNextBidCents(price + increment);
     setNextBidCents((prepared) => Math.max(price + increment, prepared));
-    setMaxBidAmountCents((amount) => Math.max(amount || 0, price + increment));
+    const eventCap = roomAuctionsRef.current.find((row) => row.id === detail.auction_id)?.cap_price_cents ?? 0;
+    setMaxBidAmountCents((amount) => clampMaxBidAmount(amount, price + increment, eventCap));
     setLastSeq(detail.seq);
     if (nextEndAt) setAuctionEndAt(nextEndAt);
     if (nextServerTimeMS) syncServerTimeMS(nextServerTimeMS);
@@ -1198,7 +1326,9 @@ function App() {
       showAtmosphere({
         kind: 'sold',
         title: winnerID === currentUserID ? '成交！' : '已成交',
-        detail: winnerID === currentUserID ? '你已中拍，订单待支付' : '本场已落槌',
+        detail: winnerID === currentUserID
+          ? (isAutoMaxBid ? `自动加价防守到 ${formatCents(price)} 并成交` : '你已中拍，订单待支付')
+          : '本场已落槌',
         auction_id: detail.auction_id,
         cause_seq: detail.seq,
         event_type: detail.event_type,
@@ -1233,17 +1363,18 @@ function App() {
       setBidFeedback('订单已超时');
     } else if (winnerID === currentUserIDRef.current || detail.payload?.current_winner_id === currentUserIDRef.current) {
       setBidPhase('accepted');
-      setBidFeedback('你已领先，出价已确认');
+      setBidFeedback(isAutoMaxBid ? `自动加价已防守到 ${formatCents(price)}` : '你已领先，出价已确认');
       showAtmosphere({
         kind: 'leading',
-        title: '领先！',
-        detail: `${formatCents(price)} 已确认`,
+        title: isAutoMaxBid ? '自动防守成功' : '领先！',
+        detail: isAutoMaxBid ? `系统已按阶梯代你出到 ${formatCents(price)}` : `${formatCents(price)} 已确认`,
         auction_id: detail.auction_id,
         cause_seq: detail.seq,
         event_type: detail.event_type,
         user_scope: 'self'
       });
     } else if (winnerID && winnerID !== currentUserIDRef.current) {
+      pendingBidRef.current = null;
       if (previousWinnerID === currentUserIDRef.current || bidPhase === 'accepted') {
         showAtmosphere({
           kind: 'outbid',
@@ -1555,6 +1686,13 @@ function App() {
       }
       if (!response.ok || (payload.reject_reason && !isEngineRejected(payload)) || payload.code) {
         const code = payload.reject_reason ?? payload.code ?? '';
+        const refreshedNextBid = payload.next_valid_bid_cents ?? (
+          payload.current_price_cents != null ? payload.current_price_cents + activeIncrementCentsRef.current : undefined
+        );
+        if (refreshedNextBid != null) {
+          setMinimumNextBidCents(refreshedNextBid);
+          setNextBidCents((prepared) => Math.max(refreshedNextBid, prepared));
+        }
         const retryMS = retryAfterMS(response, payload);
         if (retryMS > 0) {
           setBidCooldownUntilMS(Date.now() + retryMS);
@@ -1637,7 +1775,8 @@ function App() {
       const payload = await readJSON<MaxBidIntent>(response);
       if (!response.ok || !payload) return;
       setMaxBidIntent(payload);
-      setMaxBidAmountCents(Math.max(payload.max_amount_cents, minimumNextBidCents));
+      const cap = roomAuctionsRef.current.find((row) => row.id === auctionID)?.cap_price_cents ?? 0;
+      setMaxBidAmountCents(clampMaxBidAmount(payload.max_amount_cents, minimumNextBidCents, cap));
       setMaxBidFeedback(maxBidStatusCopy(payload));
     } catch {
       setMaxBidFeedback('自动加价状态读取失败');
@@ -1646,8 +1785,29 @@ function App() {
 
   const submitMaxBidIntent = async () => {
     const auctionID = activeAuctionIDRef.current;
-    if (!auctionID || (maxBidPhase !== 'idle' && maxBidPhase !== 'error') || isDangerousActionDisabled(scenario, connectionPhase)) return;
-    const amount = Math.max(maxBidAmountCentsRef.current || 0, minimumNextBidCents);
+    if (
+      !auctionID ||
+      (maxBidPhase !== 'idle' && maxBidPhase !== 'error') ||
+      scenario.stale ||
+      scenario.sold ||
+      connectionPhase === 'connecting' ||
+      connectionPhase === 'recovering' ||
+      connectionPhase === 'disconnected'
+    ) return;
+    const parsedAmount = yuanInputToCents(maxBidAmountText);
+    const cap = roomAuctions.find((row) => row.id === auctionID)?.cap_price_cents ?? 0;
+    const requiredMaxBidCents = cap > 0 ? Math.min(minimumNextBidCents, cap) : minimumNextBidCents;
+    if (parsedAmount < requiredMaxBidCents) {
+      setMaxBidPhase('error');
+      setMaxBidFeedback(`自动加价上限不能低于当前可设置价 ${formatCents(requiredMaxBidCents)}`);
+      return;
+    }
+    if (cap > 0 && parsedAmount > cap) {
+      setMaxBidPhase('error');
+      setMaxBidFeedback(`自动加价上限不能高于封顶价 ${formatCents(cap)}`);
+      return;
+    }
+    const amount = parsedAmount;
     setMaxBidPhase('pending');
     setMaxBidFeedback('正在确认自动加价');
     try {
@@ -1665,7 +1825,7 @@ function App() {
           source: 'MAX_BID'
         })
       });
-      const payload = await readJSON<{ intent?: MaxBidIntent; code?: string; message?: string }>(response);
+      const payload = await readJSON<{ intent?: MaxBidIntent; trigger_bid?: BidResponse; code?: string; message?: string }>(response);
       if (!response.ok || !payload?.intent) {
         setMaxBidPhase('error');
         setMaxBidFeedback(maxBidErrorCopy(payload?.code ?? payload?.message));
@@ -1674,6 +1834,24 @@ function App() {
       setMaxBidIntent(payload.intent);
       setMaxBidAmountCents(Math.max(payload.intent.max_amount_cents, minimumNextBidCents));
       setMaxBidFeedback(maxBidStatusCopy(payload.intent));
+      if (payload.trigger_bid) {
+        applyAcceptedBid(payload.trigger_bid);
+        const triggerPrice = payload.trigger_bid.current_price_cents ?? currentPriceRef.current;
+        if (payload.trigger_bid.current_winner_id === currentUserIDRef.current) {
+          const sold = payload.trigger_bid.result === 'ENGINE_SOLD' || payload.trigger_bid.result === 'ACCEPTED_SOLD';
+          setBidFeedback(sold ? `自动加价防守到 ${formatCents(triggerPrice)} 并成交` : `自动加价已防守到 ${formatCents(triggerPrice)}`);
+          setMaxBidFeedback(`自动加价已生效，已代你防守到 ${formatCents(triggerPrice)}`);
+          showAtmosphere({
+            kind: sold ? 'sold' : 'leading',
+            title: sold ? '自动成交' : '自动防守成功',
+            detail: sold ? `系统已按阶梯代你出到 ${formatCents(triggerPrice)} 并成交` : `系统已按阶梯代你出到 ${formatCents(triggerPrice)}`,
+            auction_id: payload.trigger_bid.auction_id ?? auctionID,
+            cause_seq: payload.trigger_bid.engine_seq ?? payload.trigger_bid.seq ?? lastSeqRef.current,
+            event_type: payload.trigger_bid.result ?? 'AUTO_MAX_BID',
+            user_scope: 'self'
+          });
+        }
+      }
       setMaxBidPhase('idle');
     } catch {
       setMaxBidPhase('error');
@@ -1683,7 +1861,15 @@ function App() {
 
   const cancelMaxBidIntent = async () => {
     const auctionID = activeAuctionIDRef.current;
-    if (!auctionID || !maxBidIntent || maxBidPhase !== 'idle' || isDangerousActionDisabled(scenario, connectionPhase)) return;
+    if (
+      !auctionID ||
+      !maxBidIntent ||
+      maxBidIntent.status !== 'ACTIVE' ||
+      maxBidPhase !== 'idle' ||
+      connectionPhase === 'connecting' ||
+      connectionPhase === 'recovering' ||
+      connectionPhase === 'disconnected'
+    ) return;
     setMaxBidPhase('canceling');
     setMaxBidFeedback('正在取消自动加价');
     try {
@@ -1700,6 +1886,7 @@ function App() {
       }
       setMaxBidIntent(payload.intent);
       setMaxBidFeedback(maxBidStatusCopy(payload.intent));
+      await loadMaxBidIntent(auctionID);
       setMaxBidPhase('idle');
     } catch {
       setMaxBidPhase('error');
@@ -1753,8 +1940,10 @@ function App() {
           if (payload.auction_id === current?.auction_id && payload.seq != null && current.seq != null && payload.seq < current.seq) {
             return previous;
           }
-          leaderboardRef.current = payload;
-          return payload;
+          const normalized = normalizeLeaderboardPayload(payload, current);
+          leaderboardRef.current = normalized;
+          syncBidPhaseFromLeaderboard(normalized);
+          return normalized;
         });
       }
     } catch {
@@ -1782,7 +1971,7 @@ function App() {
 
   const handlePrimaryAction = () => {
     if (selected === 'sold_winner') {
-      void payOrder();
+      setPaymentConfirmOpen(true);
       return;
     }
     if (bidPhase === 'confirm_required') {
@@ -1807,12 +1996,25 @@ function App() {
 
   const decreaseMaxBidAmount = () => {
     setMaxBidPhase((phase) => phase === 'error' ? 'idle' : phase);
-    setMaxBidAmountCents((amount) => Math.max(minimumNextBidCents, amount - activeIncrementCents));
+    const cap = roomAuctionsRef.current.find((row) => row.id === activeAuctionIDRef.current)?.cap_price_cents ?? 0;
+    const required = cap > 0 ? Math.min(minimumNextBidCents, cap) : minimumNextBidCents;
+    setMaxBidAmountCents((amount) => Math.max(required, amount - activeIncrementCents));
   };
 
   const increaseMaxBidAmount = () => {
     setMaxBidPhase((phase) => phase === 'error' ? 'idle' : phase);
-    setMaxBidAmountCents((amount) => Math.max(minimumNextBidCents, amount + activeIncrementCents));
+    const cap = roomAuctionsRef.current.find((row) => row.id === activeAuctionIDRef.current)?.cap_price_cents ?? 0;
+    setMaxBidAmountCents((amount) => clampMaxBidAmount(amount + activeIncrementCents, minimumNextBidCents, cap));
+  };
+
+  const changeMaxBidAmountText = (value: string) => {
+    setMaxBidPhase((phase) => phase === 'error' ? 'idle' : phase);
+    const cleaned = value.replace(/[^\d.]/g, '');
+    const parts = cleaned.split('.');
+    const normalized = parts.length > 1 ? `${parts[0]}.${parts.slice(1).join('').slice(0, 2)}` : parts[0];
+    setMaxBidAmountText(normalized);
+    const cents = yuanInputToCents(normalized);
+    if (cents > 0) setMaxBidAmountCents(cents);
   };
 
   const loadHistory = async () => {
@@ -1820,14 +2022,15 @@ function App() {
     setHistoryError('');
     try {
       await ensureBuyerSession();
+      const currentAuctionID = activeAuctionIDRef.current;
+      const scopedQuery = currentAuctionID ? `?auction_id=${encodeURIComponent(currentAuctionID)}&limit=20` : '?limit=20';
       const [bids, orders] = await Promise.all([
-        fetch('/api/users/me/bids').then((response) => response.json()),
-        fetch('/api/users/me/orders').then((response) => response.json())
+        fetch(`/api/users/me/bids${scopedQuery}`).then((response) => response.json()),
+        fetch(`/api/users/me/orders${scopedQuery}`).then((response) => response.json())
       ]);
       setBidHistory(Array.isArray(bids.items) ? bids.items : []);
       const orderRows = Array.isArray(orders.items) ? orders.items : [];
       setOrderHistory(orderRows);
-      const currentAuctionID = activeAuctionIDRef.current;
       const pendingOrder = orderRows.find((row: HistoryRow) => (
         String(row.order_status ?? '') === 'ORDER_PENDING' && String(row.auction_id ?? '') === currentAuctionID
       ));
@@ -2071,7 +2274,7 @@ function App() {
             else if (sheet === 'leaderboard') openWarmupSheet('leaderboard', 'leaderboard');
             else setActiveSheet(sheet);
           }}
-          onPay={payOrder}
+          onPay={() => setPaymentConfirmOpen(true)}
           onPrimaryAction={handlePrimaryAction}
         />
       )}
@@ -2097,7 +2300,7 @@ function App() {
             else if (resultSheetKind === 'loser') setActiveSheet('history');
             else openWarmupSheet('products', 'watch');
           }}
-          onPay={payOrder}
+          onPay={() => setPaymentConfirmOpen(true)}
         />
       ) : null}
       {showStateMatrix && (
@@ -2121,12 +2324,16 @@ function App() {
           item={stageItem}
           leaderboard={leaderboard}
           maxBidAmountCents={maxBidAmountCents}
+          maxBidAmountText={maxBidAmountText}
           maxBidFeedback={maxBidFeedback}
           maxBidIntent={maxBidIntent}
           maxBidPhase={maxBidPhase}
           minimumNextBidCents={minimumNextBidCents}
           nextBidCents={nextBidCents}
           orderHistory={orderHistory}
+          paymentConfirmOpen={paymentConfirmOpen}
+          payableOrderAmountCents={payableOrderAmountCents}
+          payableOrderID={payableOrderID}
           qaAnswer={qaAnswer}
           qaHistory={qaHistory}
           qaDraft={qaDraft}
@@ -2141,9 +2348,15 @@ function App() {
           liveOpsCampaign={liveOpsCampaign}
           liveOpsError={liveOpsError}
           soundEnabled={soundEnabled}
-          onClose={() => setActiveSheet(null)}
+          onClose={() => {
+            if (activeSheet === 'maxBid' && (maxBidPhase === 'pending' || maxBidPhase === 'canceling')) return;
+            setActiveSheet(null);
+          }}
           onCancelMaxBid={cancelMaxBidIntent}
+          onChangeMaxBidAmountText={changeMaxBidAmountText}
+          onClosePaymentConfirm={() => setPaymentConfirmOpen(false)}
           onDecreaseMaxBid={decreaseMaxBidAmount}
+          onOpenOrderDetail={setSelectedOrderID}
           onIncreaseMaxBid={increaseMaxBidAmount}
           onOpenLeaderboard={() => openWarmupSheet('leaderboard', 'leaderboard')}
           onOpenProducts={() => openWarmupSheet('products', 'watch')}
@@ -2162,6 +2375,11 @@ function App() {
           onQADraftChange={setQADraft}
           onSelectTeam={(team) => void selectBuyerTeam(team)}
           onSubmitMaxBid={submitMaxBidIntent}
+          onConfirmPay={() => {
+            setPaymentConfirmOpen(false);
+            void payOrder();
+          }}
+          selectedOrderID={selectedOrderID}
           onToggleFollow={toggleFollow}
           onToggleSound={() => void toggleSound()}
         />

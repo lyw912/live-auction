@@ -265,7 +265,7 @@ end
 if now_ms > end_at_ms then
   return reject('AUCTION_ENDED')
 end
-if current_winner ~= '' and current_winner == user_id then
+if current_winner ~= '' and current_winner == user_id and bid_source ~= 'AUTO_MAX_BID' then
   return reject('REJECTED_SELF_LEADING')
 end
 if increment <= 0 then
@@ -303,7 +303,7 @@ end
 -- Strictly mirrors the PG lane's ClassifyBidAmount fat-finger branch:
 --   amount - current_price >= fat_finger_threshold (where current_price == base).
 -- pending_confirm key holds (amount, token, expires_at_ms) for the confirmBid script.
-if fat_finger_threshold > 0 and (amount - base) >= fat_finger_threshold then
+if bid_source ~= 'AUTO_MAX_BID' and fat_finger_threshold > 0 and (amount - base) >= fat_finger_threshold then
   local pc_key = 'bid:{' .. auction_id .. '}:engine:pending_confirm:' .. user_id .. ':' .. client_bid_id
   local pc = redis.call('HMGET', pc_key, 'amount', 'token', 'expires_at_ms')
   local token
@@ -925,6 +925,13 @@ func (e *Engine) PlaceBid(ctx context.Context, auctionID string, userID string, 
 	return e.placeBidWithSource(ctx, auctionID, userID, idempotencyKey, input, traceID, auction.BidSourceManual, aclKey...)
 }
 
+// PlaceAutoMaxBid executes an automatic max-bid step through the same hot
+// engine and ledger path as a manual bid, but records the bid source as
+// AUTO_MAX_BID so ranking, history, audit, and demo evidence remain honest.
+func (e *Engine) PlaceAutoMaxBid(ctx context.Context, auctionID string, userID string, idempotencyKey string, input auction.BidInput, traceID string, aclKey ...string) (auction.BidResponse, error) {
+	return e.placeBidWithSource(ctx, auctionID, userID, idempotencyKey, input, traceID, auction.BidSourceAutoMaxBid, aclKey...)
+}
+
 func (e *Engine) placeBidWithSource(ctx context.Context, auctionID string, userID string, idempotencyKey string, input auction.BidInput, traceID string, source string, aclKey ...string) (auction.BidResponse, error) {
 	acl := ""
 	if len(aclKey) > 0 {
@@ -943,6 +950,15 @@ func (e *Engine) placeBidWithSource(ctx context.Context, auctionID string, userI
 	traceCtx := ctx
 	var stageErr error
 	var stageSpan trace.Span
+
+	if source != auction.BidSourceAutoMaxBid {
+		if resp, ok := e.preemptHotProxyChallenger(ctx, auctionID, userID, input, traceID); ok && resp.CurrentPriceCents >= input.AmountCents {
+			reason := "BID_TOO_LOW"
+			resp.Result = auction.BidResultEngineRejected
+			resp.RejectReason = &reason
+			return resp, nil
+		}
+	}
 
 	nowMS := time.Now().UTC().UnixMilli()
 	bidID := "bid_" + uuid.NewString()
@@ -1391,6 +1407,73 @@ func (e *Engine) placeBidWithSnapshot(
 	}
 	recordHTTPStage("total", result.Result, "ok", time.Since(totalStart))
 	return responseResult, nil
+}
+
+func (e *Engine) preemptHotProxyChallenger(ctx context.Context, auctionID string, challengerUserID string, input auction.BidInput, traceID string) (auction.BidResponse, bool) {
+	state, err := e.redis.HGetAll(ctx, redisx.BidEngineStateKey(auctionID)).Result()
+	if err != nil || len(state) == 0 || state["status"] != "ACTIVE" || state["paused"] == "1" {
+		return auction.BidResponse{}, false
+	}
+	currentWinner := state["current_winner_id"]
+	if currentWinner == challengerUserID {
+		return auction.BidResponse{}, false
+	}
+	currentPrice := parseInt64(state["current_price_cents"])
+	startPrice := parseInt64(state["start_price_cents"])
+	increment := parseInt64(state["increment_cents"])
+	capPrice := parseInt64(state["cap_price_cents"])
+	acceptedCount := parseInt64(state["accepted_bid_count"])
+	engineSeq := parseInt64(state["engine_seq"])
+	minimum := currentPrice + increment
+	if acceptedCount <= 0 {
+		minimum = startPrice + increment
+	}
+	if input.AmountCents < minimum {
+		return auction.BidResponse{}, false
+	}
+	intents, err := e.loadHotProxyIntents(ctx, auctionID)
+	if err != nil || len(intents) == 0 {
+		return auction.BidResponse{}, false
+	}
+	challengerIntent := hotProxyIntent{UserID: challengerUserID, MaxAmountCents: input.AmountCents, CreatedAt: time.Now().UTC(), ID: input.ClientBidID}
+	var defender *hotProxyIntent
+	for i := range intents {
+		intent := &intents[i]
+		if intent.UserID == challengerUserID || intent.MaxAmountCents < minimum {
+			continue
+		}
+		if hotProxyDefenderBeatsOrTies(*intent, challengerIntent) {
+			defender = intent
+			break
+		}
+	}
+	if defender == nil {
+		return auction.BidResponse{}, false
+	}
+	amount := input.AmountCents
+	if defender.MaxAmountCents > input.AmountCents {
+		amount = input.AmountCents + increment
+	}
+	if amount > defender.MaxAmountCents {
+		amount = defender.MaxAmountCents
+	}
+	if capPrice > 0 && amount > capPrice {
+		amount = capPrice
+	}
+	if amount < minimum {
+		return auction.BidResponse{}, false
+	}
+	clientBidID := fmt.Sprintf("auto-preempt:%s:%d:%d", defender.ID, engineSeq, time.Now().UTC().UnixNano())
+	resp, err := e.placeBidWithSource(ctx, auctionID, defender.UserID, clientBidID, auction.BidInput{
+		ClientBidID:   clientBidID,
+		AmountCents:   amount,
+		ClientSeenSeq: engineSeq,
+	}, traceID, auction.BidSourceAutoMaxBid)
+	if err != nil || (resp.Result != auction.BidResultEngineAccepted && resp.Result != auction.BidResultEngineSold) {
+		return auction.BidResponse{}, false
+	}
+	_ = e.markHotProxyIntentApplied(ctx, defender.ID, resp.EngineSeq)
+	return resp, true
 }
 
 // runColdStart performs the safety checks and snapshot load that must precede
@@ -3025,10 +3108,7 @@ func (w *Worker) settleAcceptedBatchPrefix(ctx context.Context, messages []Ledge
 	}
 	n, err := w.settleAcceptedBatch(ctx, auctionID, decoded)
 	if err != nil {
-		if isTransientSettlementError(err) || isSettlementIdentityConflictError(err) {
-			return 0, 0, nil
-		}
-		return 0, 0, err
+		return 0, 0, nil
 	}
 	return n, n, nil
 }
@@ -3859,6 +3939,9 @@ func (w *Worker) settlePayload(ctx context.Context, auctionID string, ledgerID s
 	if result.EngineSeq > dbSeq+1 {
 		_ = markSettlementDelayed(ctx, tx, auctionID, ledgerID, fmt.Sprintf("engine seq waiting for predecessor redis=%d db_next=%d", result.EngineSeq, dbSeq+1))
 		_ = tx.Commit(ctx)
+		if attempt.attempts >= maxSettleAttempts {
+			return permanentSettlementError{err: fmt.Errorf("engine seq predecessor missing after %d attempts auction=%s redis=%d db_next=%d", attempt.attempts, auctionID, result.EngineSeq, dbSeq+1)}
+		}
 		return transientSettlementError{err: fmt.Errorf("engine seq waiting for predecessor auction=%s redis=%d db_next=%d", auctionID, result.EngineSeq, dbSeq+1)}
 	}
 	if result.EngineSeq <= dbSeq {
@@ -4220,6 +4303,9 @@ func settleAccepted(ctx context.Context, tx pgx.Tx, result engineResult) (int64,
 		"decision_status":     auction.DecisionStatusDecided,
 		"durability_status":   auction.DurabilityStatusKafkaAcked,
 		"decision_basis":      result.DecisionBasis,
+	}
+	if result.Source == auction.BidSourceAutoMaxBid {
+		payload["bid_source"] = auction.BidSourceAutoMaxBid
 	}
 	if result.Result == resultSold {
 		orderID, err := createOrder(ctx, tx, result.AuctionID, result.UserID, result.AmountCents)

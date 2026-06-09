@@ -100,7 +100,7 @@ func TestRedisLedgerHotStateDoesNotLoadPostgresSnapshot(t *testing.T) {
 	rdb := openStreamsRedis(t)
 	ledger := NewMemoryLedger()
 	engine := New(db, rdb, ledger)
-	auctionID := createEngineAuction(t, db, 0)
+	auctionID := createEngineAuction(t, db, 30_000)
 
 	if _, err := engine.PlaceBid(ctx, auctionID, "user_1", "redis-ledger-hot-state-seed", auction.BidInput{
 		ClientBidID:   "redis-ledger-hot-state-seed",
@@ -1284,6 +1284,63 @@ func TestRedisLedgerHotProxyAutoOutbidsThroughSameCAS(t *testing.T) {
 	}
 }
 
+func TestRedisLedgerHotProxyEqualMaxPreemptsLaterCapChallenge(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 30_000)
+	repo := auction.NewRepository(db)
+
+	first, err := engine.PlaceBid(ctx, auctionID, "user_1", "equal-proxy-first", auction.BidInput{
+		ClientBidID:   "equal-proxy-first",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_equal_proxy")
+	if err != nil || first.Result != auction.BidResultEngineAccepted {
+		t.Fatalf("first bid = %#v err=%v", first, err)
+	}
+	if _, err := repo.PutMaxBidIntent(ctx, auctionID, "user_1", "equal-proxy-intent", auction.MaxBidIntentInput{
+		MaxAmountCents: 30_000,
+		Source:         auction.MaxBidIntentSourceMaxBid,
+	}); err != nil {
+		t.Fatalf("PutMaxBidIntent: %v", err)
+	}
+
+	resp, err := engine.PlaceBid(ctx, auctionID, "user_3", "equal-proxy-cap-challenge", auction.BidInput{
+		ClientBidID:   "equal-proxy-cap-challenge",
+		AmountCents:   30_000,
+		ClientSeenSeq: first.EngineSeq,
+	}, "tr_equal_proxy")
+	if err != nil {
+		t.Fatalf("cap challenge: %v", err)
+	}
+	if resp.CurrentWinnerID == nil || *resp.CurrentWinnerID != "user_1" || resp.CurrentPriceCents != 30_000 || resp.Result != auction.BidResultEngineRejected {
+		t.Fatalf("challenge response = %#v, want rejected after user_1 proxy sold/leading at equal max", resp)
+	}
+	ensureLedgerMessages(t, ctx, worker, 1)
+	if _, err := worker.ProcessKafka(ctx, 10); err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+	var winner string
+	var price int64
+	if err := db.QueryRow(ctx, `SELECT current_winner_id, current_price_cents FROM auctions WHERE id = $1`, auctionID).Scan(&winner, &price); err != nil {
+		t.Fatalf("load auction: %v", err)
+	}
+	if winner != "user_1" || price != 30_000 {
+		t.Fatalf("auction winner=%s price=%d, want user_1/30000", winner, price)
+	}
+	var orders int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM orders WHERE auction_id = $1 AND winner_id = 'user_1' AND amount_cents = 30000`, auctionID).Scan(&orders); err != nil {
+		t.Fatalf("count orders: %v", err)
+	}
+	if orders != 1 {
+		t.Fatalf("orders = %d, want user_1 sold order", orders)
+	}
+}
+
 func TestRedisLedgerHotProxyBatchReplayAfterWorkerCrashIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
@@ -1535,6 +1592,95 @@ func TestRedisLedgerHotProxyIgnoresCancelledIntent(t *testing.T) {
 	}
 	assertAuctionEngineSeq(t, db, auctionID, 1, 15_000, "ACTIVE")
 	assertMaxBidIntentState(t, db, intent.ID, auction.MaxBidIntentStatusCancelled, nil)
+}
+
+func TestRedisLedgerHotProxyCancelAfterDefensePreventsLaterDefense(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+	repo := auction.NewRepository(db)
+
+	if _, err := engine.PlaceBid(ctx, auctionID, "user_1", "proxy-cancel-after-defense-first", auction.BidInput{
+		ClientBidID:   "proxy-cancel-after-defense-first",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_proxy_cancel_after_defense_first"); err != nil {
+		t.Fatalf("first bid: %v", err)
+	}
+	if _, err := engine.PlaceBid(ctx, auctionID, "user_2", "proxy-cancel-after-defense-rival", auction.BidInput{
+		ClientBidID:   "proxy-cancel-after-defense-rival",
+		AmountCents:   20_000,
+		ClientSeenSeq: 1,
+	}, "tr_proxy_cancel_after_defense_rival"); err != nil {
+		t.Fatalf("rival bid: %v", err)
+	}
+	intent, err := repo.UpsertMaxBidIntent(ctx, auctionID, "user_1", auction.MaxBidIntentInput{
+		MaxAmountCents: 40_000,
+		Source:         auction.MaxBidIntentSourceMaxBid,
+	})
+	if err != nil {
+		t.Fatalf("UpsertMaxBidIntent: %v", err)
+	}
+
+	defended, err := engine.PlaceBid(ctx, auctionID, "user_3", "proxy-cancel-after-defense-trigger", auction.BidInput{
+		ClientBidID:   "proxy-cancel-after-defense-trigger",
+		AmountCents:   25_000,
+		ClientSeenSeq: 2,
+	}, "tr_proxy_cancel_after_defense_trigger")
+	if err != nil {
+		t.Fatalf("trigger bid: %v", err)
+	}
+	if defended.Result != auction.BidResultEngineRejected || defended.CurrentWinnerID == nil || *defended.CurrentWinnerID != "user_1" || defended.CurrentPriceCents != 30_000 || defended.EngineSeq != 3 {
+		t.Fatalf("defended response = %#v, want user_1 proxy defense at 30000 seq 3", defended)
+	}
+	ensureLedgerMessages(t, ctx, worker, 3)
+	if _, err := worker.ProcessKafka(ctx, 10); err != nil {
+		t.Fatalf("settle first defense: %v", err)
+	}
+	assertAuctionEngineSeq(t, db, auctionID, 3, 30_000, "ACTIVE")
+	assertMaxBidIntentState(t, db, intent.ID, auction.MaxBidIntentStatusActive, int64Ptr(3))
+
+	cancelled, err := repo.CancelMaxBidIntent(ctx, auctionID, "user_1")
+	if err != nil {
+		t.Fatalf("CancelMaxBidIntent: %v", err)
+	}
+	if cancelled.Status != auction.MaxBidIntentStatusCancelled {
+		t.Fatalf("cancelled intent status = %s, want CANCELLED", cancelled.Status)
+	}
+
+	afterCancel, err := engine.PlaceBid(ctx, auctionID, "user_3", "proxy-cancel-after-defense-next", auction.BidInput{
+		ClientBidID:   "proxy-cancel-after-defense-next",
+		AmountCents:   35_000,
+		ClientSeenSeq: 3,
+	}, "tr_proxy_cancel_after_defense_next")
+	if err != nil {
+		t.Fatalf("post-cancel challenger bid: %v", err)
+	}
+	if afterCancel.Result != auction.BidResultEngineAccepted || afterCancel.CurrentWinnerID == nil || *afterCancel.CurrentWinnerID != "user_3" || afterCancel.CurrentPriceCents != 35_000 || afterCancel.EngineSeq != 4 {
+		t.Fatalf("post-cancel response = %#v, want user_3 accepted at 35000 without proxy defense", afterCancel)
+	}
+	ensureLedgerMessages(t, ctx, worker, 4)
+	if _, err := worker.ProcessKafka(ctx, 10); err != nil {
+		t.Fatalf("settle post-cancel bid: %v", err)
+	}
+	assertAuctionEngineSeq(t, db, auctionID, 4, 35_000, "ACTIVE")
+	assertMaxBidIntentState(t, db, intent.ID, auction.MaxBidIntentStatusCancelled, int64Ptr(3))
+
+	var autoBids int
+	if err := db.QueryRow(ctx, `
+		SELECT count(*)
+		FROM bids
+		WHERE auction_id = $1 AND source = $2
+	`, auctionID, auction.BidSourceAutoMaxBid).Scan(&autoBids); err != nil {
+		t.Fatalf("count proxy bids: %v", err)
+	}
+	if autoBids != 1 {
+		t.Fatalf("auto proxy bids = %d, want exactly 1 before cancellation", autoBids)
+	}
 }
 
 func TestRedisLedgerHotProxyExhaustsIntentBelowNextBid(t *testing.T) {

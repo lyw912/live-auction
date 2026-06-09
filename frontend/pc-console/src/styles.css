@@ -956,6 +956,45 @@ body {
   overflow-x: auto;
 }
 
+.current-order-card {
+  margin-bottom: 14px;
+}
+
+.current-order-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.current-order-summary > div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  padding: 10px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-0);
+}
+
+.current-order-summary span {
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.current-order-summary strong {
+  color: var(--color-ink-950);
+  overflow-wrap: anywhere;
+}
+
+.current-order-actions {
+  display: flex !important;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .order-table {
   min-width: 860px;
   display: grid;
@@ -1056,6 +1095,40 @@ body {
 .order-detail-head strong {
   color: var(--color-ink-950);
   overflow-wrap: anywhere;
+}
+
+.order-detail-product {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 12px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-0);
+  padding: 10px;
+}
+
+.order-detail-thumb {
+  width: 64px;
+  height: 64px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(135deg, #1f2937, #64748b);
+}
+
+.order-detail-thumb.has-media {
+  background-image: var(--order-detail-media-url);
+  background-size: cover;
+  background-position: center;
+}
+
+.order-detail-product strong,
+.order-detail-product p {
+  overflow-wrap: anywhere;
+}
+
+.order-detail-product p {
+  margin: 6px 0 0;
+  color: var(--color-muted-strong);
+  line-height: 1.45;
 }
 
 .order-detail-grid {
@@ -2504,4 +2577,28 @@ button.ai-image-drop {
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+}
+
+.draft-title-option {
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-0);
+  color: #1d2939;
+  cursor: pointer;
+  font: inherit;
+  line-height: 1.4;
+  padding: 4px 10px;
+  text-align: left;
+}
+
+.draft-title-option:hover {
+  border-color: #2f80ed;
+  color: #175cd3;
+}
+
+.draft-title-option.selected {
+  border-color: #2f80ed;
+  background: #eff6ff;
+  color: #175cd3;
+  font-weight: 700;
 }

@@ -34,7 +34,7 @@ const pc = await bundle('frontend/pc-console/src/domain.ts', 'pc-domain');
 
 assert.equal(h5.formatCents(12345), '¥123.45');
 assert.equal(h5.deriveCountdown('2026-06-05T10:00:10.000Z', Date.parse('2026-06-05T10:00:00.000Z'), Date.parse('2026-06-05T10:00:05.000Z'), Date.parse('2026-06-05T10:00:00.000Z'), false, false, false), '剩余 00:05.0');
-assert.equal(h5.deriveCountdown('', 0, Date.now(), 0, false, true, false), '剩余时间待同步');
+assert.equal(h5.deriveCountdown('', 0, Date.now(), 0, false, true, false), '剩余时间确认中');
 {
   const endAt = '2099-05-22T14:00:00Z';
   const base = Date.parse('2099-05-22T13:59:50Z');
@@ -66,12 +66,12 @@ assert.equal(typeof h5.playAuctionSound, 'function');
     },
     extendCount: 2
   });
-  assert.equal(recap.status, '已拍中');
+  assert.equal(recap.status, '已中拍');
   assert.equal(recap.price, '¥880.00');
   assert.match(recap.shareCopy, /3 人有效出价/);
   const card = h5.buildHighlightCard({ ...recap, title: '青瓷<茶盏>&特别版' });
   assert.equal(card.mimeType, 'image/svg+xml;charset=utf-8');
-  assert.match(card.filename, /青瓷-茶盏-特别版-highlight\.svg/);
+  assert.match(card.filename, /青瓷-茶盏-特别版-credential\.svg/);
   assert.match(card.content, /3 人有效出价/);
   assert.match(card.content, /青瓷&lt;茶盏&gt;&amp;特别版/);
   assert.doesNotMatch(card.content, /青瓷<茶盏>&特别版/);
@@ -79,7 +79,8 @@ assert.equal(typeof h5.playAuctionSound, 'function');
 assert.equal(h5.isDangerousActionDisabled({ ctaDisabled: false, stale: false, sold: false }, 'connected'), false);
 assert.equal(h5.isDangerousActionDisabled({ ctaDisabled: false, stale: true, sold: false }, 'connected'), true);
 assert.equal(h5.isEngineRejected({ result: 'ENGINE_REJECTED' }), true);
-assert.equal(h5.isBidConfirmationPending({ result: 'ENGINE_ACCEPTED', settlement_status: 'PENDING' }), true);
+assert.equal(h5.isBidConfirmationPending({ result: 'ENGINE_ACCEPTED', settlement_status: 'PENDING' }), false);
+assert.equal(h5.isBidConfirmationPending({ result: 'BID_CONFIRMATION_PENDING' }), true);
 
 const validRule = {
   startPriceCents: 10000,
