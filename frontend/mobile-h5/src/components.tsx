@@ -729,6 +729,26 @@ function orderStatus(row?: HistoryRow) {
   return buyerOrderStatus(String(row?.order_status ?? row?.status ?? ''));
 }
 
+function orderItem(row?: HistoryRow, fallback?: AuctionItem): AuctionItem {
+  const item = row?.item && typeof row.item === 'object' ? row.item as AuctionItem : null;
+  return item ?? fallback ?? {};
+}
+
+function orderRule(row?: HistoryRow, fallback?: AuctionSummary) {
+  const rule = row?.rule && typeof row.rule === 'object' ? row.rule as NonNullable<AuctionSummary['rule']> : null;
+  return rule ?? fallback?.rule ?? {};
+}
+
+function orderMediaURL(row?: HistoryRow, fallback?: AuctionItem) {
+  const item = orderItem(row, fallback);
+  return displayMediaURL(item.image_url ?? item.imageURL ?? item.video_poster_url ?? item.videoPosterURL);
+}
+
+function orderTitle(row?: HistoryRow, fallback?: AuctionItem) {
+  const item = orderItem(row, fallback);
+  return item.title ?? '本场拍品';
+}
+
 function PaymentConfirmDialog({
   amountCents,
   orderID,
@@ -1612,8 +1632,8 @@ export function MaxBidSheet({
   onSubmit: () => void;
 }) {
   const settingDisabled = scenario.stale || scenario.sold || connectionPhase === 'connecting' || connectionPhase === 'recovering' || connectionPhase === 'disconnected' || phase === 'pending' || phase === 'canceling';
-  const cancelDisabled = connectionPhase === 'connecting' || connectionPhase === 'recovering' || connectionPhase === 'disconnected' || phase === 'pending' || phase === 'canceling';
   const active = intent?.status === 'ACTIVE';
+  const cancelDisabled = !active || connectionPhase === 'connecting' || connectionPhase === 'recovering' || connectionPhase === 'disconnected' || phase !== 'idle';
   const requiredAmount = maxAmountCents > 0 ? Math.min(minimumNextBidCents, maxAmountCents) : minimumNextBidCents;
   const submittedAmount = maxAmountCents > 0
     ? Math.min(Math.max(amountCents, requiredAmount), maxAmountCents)
@@ -1659,7 +1679,7 @@ export function MaxBidSheet({
         <button type="button" onClick={onSubmit} disabled={settingDisabled || invalid}>
           {phase === 'pending' ? '提交中' : active ? `更新为 ${formatCents(submittedAmount)}` : `设置 ${formatCents(submittedAmount)}`}
         </button>
-        <button type="button" onClick={onCancel} disabled={cancelDisabled || !active}>
+        <button type="button" onClick={onCancel} disabled={cancelDisabled}>
           {phase === 'canceling' ? '取消中' : '取消'}
         </button>
         <button type="button" onClick={onRefresh} disabled={phase === 'pending' || phase === 'canceling'}>刷新</button>
@@ -1920,13 +1940,13 @@ export function HistoryPanel({
           getPrimary={(row) => `出价 ${formatCents(Number(row.amount_cents ?? 0))}`}
           getSecondary={buyerHistorySecondary}
         />
-        <HistoryList
-          title="订单"
+        <OrderCardList
+          activeAuction={activeAuction}
           empty="暂无订单"
+          fallbackItem={item}
           rows={orderHistory}
-          getPrimary={(row) => `以 ${formatCents(orderAmount(row))} 拍下`}
-          getSecondary={buyerOrderSecondary}
-          onRowClick={(row) => onOpenOrderDetail(orderIDFromRow(row))}
+          selectedOrderID={selectedOrderID}
+          onOpenOrderDetail={onOpenOrderDetail}
         />
       </div>
       {selectedOrder ? (
@@ -1953,12 +1973,16 @@ function BuyerOrderDetail({
   onClose: () => void;
 }) {
   const amount = orderAmount(order);
-  const mediaURL = displayMediaURL(item.image_url ?? item.imageURL ?? item.video_poster_url ?? item.videoPosterURL);
-  const depositBPS = auction?.rule?.deposit_bps ?? 0;
-  const depositFloor = auction?.rule?.deposit_floor_cents ?? 0;
-  const depositCap = auction?.rule?.deposit_cap_cents ?? 0;
+  const detailItem = orderItem(order, item);
+  const mediaURL = orderMediaURL(order, item);
+  const rule = orderRule(order, auction);
+  const depositBPS = Number(rule.deposit_bps ?? 0);
+  const depositFloor = Number(rule.deposit_floor_cents ?? 0);
+  const depositCap = Number(rule.deposit_cap_cents ?? 0);
   const estimateDeposit = Math.max(depositFloor, Math.round(amount * depositBPS / 10_000));
-  const deposit = depositCap > 0 ? Math.min(estimateDeposit, depositCap) : estimateDeposit;
+  const ruleDeposit = depositCap > 0 ? Math.min(estimateDeposit, depositCap) : estimateDeposit;
+  const deposit = Number(order.deposit_cents ?? 0) || ruleDeposit;
+  const providerPaymentID = String(order.provider_payment_id ?? '');
   return (
     <div className="buyer-order-detail" data-testid="buyer-order-detail">
       <div className="buyer-order-detail-head">
@@ -1973,8 +1997,8 @@ function BuyerOrderDetail({
           {!mediaURL && <ShoppingBagIcon size={20} theme="multi-color" fill={iconParkActionFill} />}
         </span>
         <div>
-          <strong>{item.title ?? '本场拍品'}</strong>
-          <em>{item.certificate ?? '证书待核验'} · {item.condition ?? '实物状态以拍品页为准'}</em>
+          <strong>{detailItem.title ?? '本场拍品'}</strong>
+          <em>{detailItem.certificate ?? '证书待核验'} · {detailItem.condition ?? '实物状态以拍品页为准'}</em>
         </div>
       </div>
       <div className="buyer-order-grid">
@@ -1982,14 +2006,72 @@ function BuyerOrderDetail({
         <div><span>订单状态</span><strong>{orderStatus(order)}</strong></div>
         <div><span>保证金</span><strong>{deposit > 0 ? formatCents(deposit) : '按服务端订单处理'}</strong></div>
         <div><span>支付截止</span><strong>{historyTime({ created_at: order.expire_at }) || '以订单为准'}</strong></div>
-        <div><span>加价阶梯</span><strong>{formatCents(auction?.increment_cents ?? 0)}</strong></div>
-        <div><span>封顶价</span><strong>{formatCents(auction?.cap_price_cents ?? amount)}</strong></div>
+        <div><span>加价阶梯</span><strong>{formatCents(Number(order.increment_cents ?? auction?.increment_cents ?? 0))}</strong></div>
+        <div><span>封顶价</span><strong>{formatCents(Number(order.cap_price_cents ?? auction?.cap_price_cents ?? amount))}</strong></div>
+        <div><span>支付状态</span><strong>{String(order.deposit_status ?? '以服务端为准')}</strong></div>
+        <div><span>支付流水</span><strong>{providerPaymentID ? providerPaymentID : '待支付后生成'}</strong></div>
       </div>
       <div className="buyer-order-section">
         <span>商品详情</span>
-        <p>{item.description ?? item.return_policy ?? '成交商品以本场拍品信息、证书和实物图为准。'}</p>
-        <p>{item.shipping ?? '物流以商家履约配置为准'} · {item.return_policy ?? h5Copy.returnPolicy}</p>
+        <p>{detailItem.description ?? detailItem.return_policy ?? '成交商品以本场拍品信息、证书和实物图为准。'}</p>
+        <p>{detailItem.shipping ?? '物流以商家履约配置为准'} · {detailItem.return_policy ?? h5Copy.returnPolicy}</p>
       </div>
+    </div>
+  );
+}
+
+function OrderCardList({
+  activeAuction,
+  empty,
+  fallbackItem,
+  rows,
+  selectedOrderID,
+  onOpenOrderDetail
+}: {
+  activeAuction?: AuctionSummary;
+  empty: string;
+  fallbackItem: AuctionItem;
+  rows: HistoryRow[];
+  selectedOrderID: string;
+  onOpenOrderDetail: (orderID: string) => void;
+}) {
+  const visibleRows = rows.slice(0, 12);
+  const hiddenCount = Math.max(0, rows.length - visibleRows.length);
+  return (
+    <div className="history-list order-card-list">
+      <h3>订单{rows.length > 0 ? <small>{rows.length} 条</small> : null}</h3>
+      {rows.length === 0 ? (
+        <p>{empty}</p>
+      ) : (
+        <>
+          {visibleRows.map((row, index) => {
+            const orderID = orderIDFromRow(row);
+            const mediaURL = orderMediaURL(row, fallbackItem);
+            const selected = orderID !== '' && orderID === selectedOrderID;
+            return (
+              <button
+                type="button"
+                className={`order-card ${selected ? 'selected' : ''}`}
+                key={orderID || `order-${index}`}
+                onClick={() => onOpenOrderDetail(orderID)}
+              >
+                <span className={`order-card-thumb ${mediaURL ? 'has-media' : ''}`} style={mediaURL ? { '--order-card-media-url': `url("${mediaURL}")` } as React.CSSProperties : undefined}>
+                  {!mediaURL && <ShoppingBagIcon size={18} theme="multi-color" fill={iconParkActionFill} />}
+                </span>
+                <span className="order-card-body">
+                  <strong>{orderTitle(row, fallbackItem)}</strong>
+                  <em>{displayOrderNo(orderID)}</em>
+                </span>
+                <span className="order-card-side">
+                  <strong>{formatCents(orderAmount(row))}</strong>
+                  <em>{buyerOrderSecondary(row)}</em>
+                </span>
+              </button>
+            );
+          })}
+          {hiddenCount > 0 ? <p className="history-more">已收起更早 {hiddenCount} 条记录</p> : null}
+        </>
+      )}
     </div>
   );
 }

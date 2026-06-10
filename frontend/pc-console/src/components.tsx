@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
 import { Button, DatePicker, Drawer, Form, Input, InputNumber, Layout, Message, Modal, Space, Table, Tabs, Tag, Upload } from '@arco-design/web-react';
-import { Activity, AlertTriangle, Bell, BellOff, Bot, CheckCircle2, ClipboardList, Clock3, Database, ExternalLink, Gavel, ImageIcon, Play, RadioTower, RefreshCw, ShieldCheck, Sparkles, Square, Upload as UploadIcon, Wifi } from 'lucide-react';
+import { Activity, AlertTriangle, Bell, BellOff, Bot, CheckCircle2, ClipboardList, Clock3, Database, ExternalLink, Gavel, ImageIcon, PanelLeftClose, PanelLeftOpen, Play, RadioTower, RefreshCw, ShieldCheck, Sparkles, Square, Upload as UploadIcon, Wifi } from 'lucide-react';
 import type { Auction, AuctionRecap, FlightRecorderPayload, FlightRecorderTimelineRow, HeatSummary, HostPrompt, Item, ListingDraftJob, LiveOpsHostSummary, LiveOpsRewardConfig, MonitorPayload, Order, RedisEngineSummary, Room, RuleDraft, SentinelAlert, SignalRequest, SystemMessage } from './domain';
 import { anomalyKey, anomalySeverity, auctionScopedRows, auctionStatusLabel, connectionLabel, createRuleDraft, depositPreview, displayMediaURL, formatCents, formatRemaining, formatSeconds, isAckedAlert, liveHealthSummary, maskUser, monitorCount, monitorItems, orderStatusLabel, overallCopy, promptSeverityClass, queueGroups, redisEngineSummary, riskQueue, rowAuctionID, rowSourceURL, severityTagColor, signalCopy, signalTargetID, signalType, sortedAuctions, statusTagColor, terminalStatus, timelineImpact, timelineNextAction, timelineTone, validateRule, visibleAnomalies } from './domain';
 
 const demoLiveVideoURL = '/demo/jade-live-loop.mp4';
 
-export function ConsoleNav({ activeTab, onSelect }: { activeTab: string; onSelect: (tab: string) => void }) {
+export function ConsoleNav({ activeTab, collapsed, onSelect, onToggle }: { activeTab: string; collapsed: boolean; onSelect: (tab: string) => void; onToggle: () => void }) {
   const rows = [
     { key: 'rules', label: '开播中控', icon: <RadioTower size={16} /> },
     { key: 'inventory', label: '拍品与规则', icon: <ClipboardList size={16} /> },
@@ -15,16 +15,29 @@ export function ConsoleNav({ activeTab, onSelect }: { activeTab: string; onSelec
   ];
   return (
     <>
-      <div className="brand">直播竞拍台</div>
+      <div className="brand">
+        <span className="brand-text">{collapsed ? '竞' : '直播竞拍台'}</span>
+        <button
+          type="button"
+          className="sider-toggle"
+          aria-label={collapsed ? '展开侧边栏' : '收起侧边栏'}
+          title={collapsed ? '展开侧边栏' : '收起侧边栏'}
+          onClick={onToggle}
+        >
+          {collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+        </button>
+      </div>
       <nav>
         {rows.map((row) => (
           <button
             type="button"
             className={activeTab === row.key ? 'active' : ''}
             key={row.key}
+            title={row.label}
             onClick={() => onSelect(row.key)}
           >
-            {row.icon} {row.label}
+            <span className="nav-icon">{row.icon}</span>
+            <span className="nav-label">{row.label}</span>
           </button>
         ))}
       </nav>

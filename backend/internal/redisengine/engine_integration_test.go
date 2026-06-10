@@ -1752,7 +1752,7 @@ func TestRedisLedgerHotProxyCanReachCapAndSell(t *testing.T) {
 		t.Fatalf("settle: %v", err)
 	}
 	assertAuctionEngineSeq(t, db, auctionID, 2, 25_000, "SOLD")
-	assertMaxBidIntentState(t, db, intent.ID, auction.MaxBidIntentStatusActive, int64Ptr(2))
+	assertMaxBidIntentState(t, db, intent.ID, auction.MaxBidIntentStatusTerminal, int64Ptr(2))
 	var orders int
 	if err := db.QueryRow(ctx, `SELECT count(*) FROM orders WHERE auction_id = $1 AND user_id = 'user_2' AND amount_cents = 25000`, auctionID).Scan(&orders); err != nil {
 		t.Fatalf("count proxy cap orders: %v", err)

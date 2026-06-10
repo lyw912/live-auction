@@ -1180,6 +1180,9 @@ func (e *Engine) resolveHotMaxBids(ctx context.Context, auctionID string, trigge
 			return last, applied
 		}
 		_ = e.markHotProxyIntentApplied(ctx, step.ID, resp.EngineSeq)
+		if resp.Result == auction.BidResultEngineSold {
+			_ = e.markHotProxyIntentsTerminal(ctx, auctionID)
+		}
 		last = resp
 		applied = true
 		trigger = engineResult{AuctionID: auctionID, EngineSeq: resp.EngineSeq}
@@ -1219,6 +1222,17 @@ func (e *Engine) markHotProxyIntentApplied(ctx context.Context, intentID string,
 		    version = version + 1
 		WHERE id = $1 AND status = 'ACTIVE'
 	`, intentID, engineSeq)
+	return err
+}
+
+func (e *Engine) markHotProxyIntentsTerminal(ctx context.Context, auctionID string) error {
+	_, err := e.db.Exec(ctx, `
+		UPDATE max_bid_intents
+		SET status = 'TERMINAL',
+		    updated_at = now(),
+		    version = version + 1
+		WHERE auction_id = $1 AND status = 'ACTIVE'
+	`, auctionID)
 	return err
 }
 
@@ -1473,6 +1487,9 @@ func (e *Engine) preemptHotProxyChallenger(ctx context.Context, auctionID string
 		return auction.BidResponse{}, false
 	}
 	_ = e.markHotProxyIntentApplied(ctx, defender.ID, resp.EngineSeq)
+	if resp.Result == auction.BidResultEngineSold {
+		_ = e.markHotProxyIntentsTerminal(ctx, auctionID)
+	}
 	return resp, true
 }
 

@@ -283,6 +283,16 @@ export type OrderRow = {
   auction_id?: string;
   amount_cents?: number;
   order_status?: string;
+  deposit_cents?: number;
+  deposit_status?: string;
+  expire_at?: string;
+  paid_at?: string;
+  provider_payment_id?: string;
+  created_at?: string;
+  increment_cents?: number;
+  cap_price_cents?: number;
+  item?: AuctionItem;
+  rule?: AuctionSummary['rule'];
 };
 export type AuctionSummary = {
   id: string;
@@ -1018,9 +1028,11 @@ export function maxBidErrorCopy(code?: string | null) {
     case 'MAX_BID_ABOVE_CAP':
       return '最高价超过本场封顶价';
     case 'PROCESSING_RETRY_LATER':
-      return '上一笔自动加价仍在确认';
+      return '上一笔自动加价正在确认，稍后刷新后再取消';
     case 'AUCTION_NOT_ACTIVE':
-      return '当前拍品暂不能设置自动加价';
+      return '当前拍品已结束，自动加价不会再执行';
+    case 'AUCTION_NOT_FOUND':
+      return '没有找到可取消的自动加价，请刷新状态';
     default:
       return '自动加价未确认，请重试';
   }

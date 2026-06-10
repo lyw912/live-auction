@@ -193,7 +193,7 @@ func (r *Repository) CancelMaxBidIntent(ctx context.Context, auctionID string, u
 }
 
 func (r *Repository) cancelMaxBidIntentTx(ctx context.Context, tx pgx.Tx, auctionID string, userID string) (MaxBidIntent, error) {
-	if _, err := lockAuctionForMaxBidIntent(ctx, tx, auctionID); err != nil {
+	if err := lockAuctionForMaxBidIntentCancel(ctx, tx, auctionID); err != nil {
 		return MaxBidIntent{}, err
 	}
 
@@ -213,12 +213,34 @@ func (r *Repository) cancelMaxBidIntentTx(ctx context.Context, tx pgx.Tx, auctio
 		&intent.CreatedAt, &intent.UpdatedAt, &intent.CancelledAt, &intent.ExhaustedAt, &intent.LastAppliedSeq, &intent.Version,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return MaxBidIntent{}, apierrors.New(apierrors.CodeAuctionNotFound, "active max bid intent not found", http.StatusNotFound)
+		err = tx.QueryRow(ctx, `
+			SELECT id, auction_id, user_id, max_amount_cents, status, source,
+			       created_at, updated_at, cancelled_at, exhausted_at, last_applied_seq, version
+			FROM max_bid_intents
+			WHERE auction_id = $1 AND user_id = $2
+		`, auctionID, userID).Scan(
+			&intent.ID, &intent.AuctionID, &intent.UserID, &intent.MaxAmountCents, &intent.Status, &intent.Source,
+			&intent.CreatedAt, &intent.UpdatedAt, &intent.CancelledAt, &intent.ExhaustedAt, &intent.LastAppliedSeq, &intent.Version,
+		)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return MaxBidIntent{}, apierrors.New(apierrors.CodeAuctionNotFound, "active max bid intent not found", http.StatusNotFound)
+		}
 	}
 	if err != nil {
 		return MaxBidIntent{}, err
 	}
 	return intent, nil
+}
+
+func lockAuctionForMaxBidIntentCancel(ctx context.Context, tx pgx.Tx, auctionID string) error {
+	var id string
+	err := tx.QueryRow(ctx, `
+		SELECT id
+		FROM auctions
+		WHERE id = $1
+		FOR UPDATE
+	`, auctionID).Scan(&id)
+	return mapNotFound(err)
 }
 
 func (r *Repository) ListActiveMaxBidIntentsForAuction(ctx context.Context, tx pgx.Tx, auctionID string, limit int) ([]MaxBidIntent, error) {

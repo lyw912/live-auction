@@ -173,10 +173,16 @@ func TestMaxBidIntentRoutesRejectUnsafeAmountsAndTerminalAuctions(t *testing.T) 
 	}
 	assertAPIErrorCode(t, terminalPut, apierrors.CodeAuctionNotActive)
 	terminalDelete := performMaxBidIntent(router, http.MethodDelete, row.ID, "", "max-intent-terminal-delete", "user_1")
-	if terminalDelete.Code != http.StatusConflict {
-		t.Fatalf("terminal DELETE status = %d, want 409 body=%s", terminalDelete.Code, terminalDelete.Body.String())
+	if terminalDelete.Code != http.StatusOK {
+		t.Fatalf("terminal DELETE status = %d, want 200 body=%s", terminalDelete.Code, terminalDelete.Body.String())
 	}
-	assertAPIErrorCode(t, terminalDelete, apierrors.CodeAuctionNotActive)
+	var terminalDeleteResp auction.MaxBidIntentResponse
+	if err := json.Unmarshal(terminalDelete.Body.Bytes(), &terminalDeleteResp); err != nil {
+		t.Fatalf("decode terminal DELETE response: %v body=%s", err, terminalDelete.Body.String())
+	}
+	if terminalDeleteResp.Intent.Status != auction.MaxBidIntentStatusCancelled {
+		t.Fatalf("terminal DELETE intent status = %s, want CANCELLED", terminalDeleteResp.Intent.Status)
+	}
 }
 
 func TestMaxBidIntentRoutesBoundProcessingAndChurn(t *testing.T) {

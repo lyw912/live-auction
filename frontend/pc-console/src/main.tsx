@@ -64,6 +64,10 @@ async function fetchJSONWithTimeout<T>(url: string, options?: RequestInit, timeo
   }
 }
 
+function asArray<T>(value: T[] | null | undefined): T[] {
+  return Array.isArray(value) ? value : [];
+}
+
 function App() {
   const [items, setItems] = useState<Item[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
@@ -114,6 +118,7 @@ function App() {
   const [auctionActionPending, setAuctionActionPending] = useState('');
   const [ruleSaveState, setRuleSaveState] = useState<'idle' | 'saved' | 'error'>('idle');
   const [workspaceTab, setWorkspaceTab] = useState('rules');
+  const [siderCollapsed, setSiderCollapsed] = useState(false);
   const [backendRuleError, setBackendRuleError] = useState('');
   const [backendSuggestions, setBackendSuggestions] = useState<number[]>([]);
   const [itemDraft, setItemDraft] = useState({ title: '新拍品', description: '本场直播竞拍拍品', imageURL: '' });
@@ -213,11 +218,12 @@ function App() {
         6000
       );
       if (!response.ok) return;
-      setAuctions(payload);
-      setItems(payload.map((auction) => auction.item).filter(Boolean));
-      const visibleAuctionID = preferredAuctionID && payload.some((auction) => auction.id === preferredAuctionID)
+      const auctionRows = asArray(payload);
+      setAuctions(auctionRows);
+      setItems(auctionRows.map((auction) => auction.item).filter(Boolean));
+      const visibleAuctionID = preferredAuctionID && auctionRows.some((auction) => auction.id === preferredAuctionID)
         ? preferredAuctionID
-        : payload.find((auction) => auction.status === 'ACTIVE')?.id ?? payload[0]?.id ?? '';
+        : auctionRows.find((auction) => auction.status === 'ACTIVE')?.id ?? auctionRows[0]?.id ?? '';
       if (visibleAuctionID) {
         setSelectedAuctionID(visibleAuctionID);
         const ordersResult = await fetchJSONWithTimeout<Order[]>(
@@ -225,7 +231,7 @@ function App() {
           undefined,
           6000
         );
-        if (ordersResult.response.ok) setOrders(ordersResult.payload);
+        if (ordersResult.response.ok) setOrders(asArray(ordersResult.payload));
       }
     } catch {
       // Full refresh surfaces errors; the live price poll should stay quiet.
@@ -249,13 +255,13 @@ function App() {
       await withTimeout(ensureDemoSession('host'), 10000, 'auth timeout');
       const { response: roomResponse, payload: roomPayload } = await fetchJSONWithTimeout<{ items?: Room[] }>('/api/rooms', undefined, 10000);
       if (!roomResponse.ok) throw new Error('rooms failed');
-      const roomRows = roomPayload.items ?? [];
+      const roomRows = asArray(roomPayload.items);
       const nextRoomID = roomRows.find((room) => room.id === preferredRoomID)?.id
         ?? roomRows.find((room) => room.id === defaultRoomID)?.id
         ?? roomRows[0]?.id
         ?? preferredRoomID;
       setWorkbenchTask({ active: true, title: '正在刷新商家工作台', detail: '正在读取拍品、竞拍和订单。', tone: 'loading' });
-      const [auctionRows, liveOps] = await Promise.all([
+      const [auctionPayload, liveOps] = await Promise.all([
         fetchJSONWithTimeout<Auction[]>(`/api/auctions?room_id=${nextRoomID}`).then(({ response, payload }) => {
           if (!response.ok) throw new Error('auctions failed');
           return payload;
@@ -265,6 +271,7 @@ function App() {
           return payload;
         }).catch(() => undefined)
       ]);
+      const auctionRows = asArray(auctionPayload);
       const nextSelected = auctionRows.find((row) => row.id === preferredAuctionID)?.id
         ?? auctionRows.find((row) => row.id === selectedAuctionID)?.id
         ?? auctionRows.find((row) => row.status === 'ACTIVE')?.id
@@ -273,7 +280,7 @@ function App() {
       const orderRows = nextSelected
         ? await fetchJSONWithTimeout<Order[]>(`/api/orders?auction_id=${encodeURIComponent(nextSelected)}&limit=20`).then(({ response, payload }) => {
           if (!response.ok) throw new Error('orders failed');
-          return payload;
+          return asArray(payload);
         })
         : [];
       setWorkbenchTask({ active: true, title: '正在刷新商家工作台', detail: '正在更新页面。', tone: 'loading' });
@@ -612,6 +619,18 @@ function App() {
 
   const saveRule = async () => {
     if (!ruleValidation.valid || !selectedAuction) return;
+    if (selectedAuction.status !== 'DRAFT') {
+      const statusCopy = auctionStatusLabel(selectedAuction.status);
+      setRuleSaveState('error');
+      setBackendRuleError(`当前拍品为“${statusCopy}”，规则已冻结。请先取消排期回到草稿，或新建草稿拍品后再修改规则。`);
+      setWorkbenchTask({
+        active: false,
+        title: '规则已冻结',
+        detail: `当前拍品为“${statusCopy}”，后端只允许草稿拍品修改竞拍规则。`,
+        tone: 'error'
+      });
+      return;
+    }
     setSavingRule(true);
     setRuleSaveState('idle');
     setBackendRuleError('');
@@ -631,10 +650,16 @@ function App() {
       }, 12000);
       if (!response.ok) {
         const errorPayload = payload as RuleAPIError;
+        const frozen = errorPayload.code === 'RULE_FROZEN_AFTER_SCHEDULED';
+        const message = frozen
+          ? '当前拍品规则已冻结。只有草稿拍品可以保存规则，请先取消排期或新建草稿。'
+          : errorPayload.code === 'INVALID_AUCTION_RULE_CAP_UNREACHABLE'
+            ? '后端拒绝：封顶价不可达'
+            : errorPayload.message ?? '规则保存失败';
         setRuleSaveState('error');
-        setBackendRuleError(errorPayload.code === 'INVALID_AUCTION_RULE_CAP_UNREACHABLE' ? '后端拒绝：封顶价不可达' : errorPayload.message ?? '规则保存失败');
+        setBackendRuleError(message);
         setBackendSuggestions(errorPayload.details?.suggested_caps ?? []);
-        setWorkbenchTask({ active: false, title: '规则未保存', detail: errorPayload.message ?? '请按提示调整价格、封顶或倒计时规则。', tone: 'error' });
+        setWorkbenchTask({ active: false, title: frozen ? '规则已冻结' : '规则未保存', detail: message, tone: 'error' });
         return;
       }
       const updated = payload as Auction;
@@ -1033,9 +1058,14 @@ function App() {
   };
 
   return (
-    <Layout className="console-shell">
-      <Layout.Sider className="sider" width={224}>
-        <ConsoleNav activeTab={workspaceTab} onSelect={setWorkspaceTab} />
+    <Layout className={`console-shell${siderCollapsed ? ' nav-collapsed' : ''}`}>
+      <Layout.Sider className="sider" width={siderCollapsed ? 72 : 224}>
+        <ConsoleNav
+          activeTab={workspaceTab}
+          collapsed={siderCollapsed}
+          onSelect={setWorkspaceTab}
+          onToggle={() => setSiderCollapsed((current) => !current)}
+        />
       </Layout.Sider>
       <Layout.Content className="content">
         <HealthRibbon

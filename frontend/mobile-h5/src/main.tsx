@@ -46,6 +46,24 @@ function clampMaxBidAmount(amountCents: number, minimumCents: number, capCents?:
   return next;
 }
 
+// Bound every hot-path bid request. Without a timeout a stalled network (the
+// classic "request left, response never came back" weak-network case) leaves the
+// fetch promise pending forever, so bidInFlightRef stays true and the CTA is stuck
+// on "确认中" with no escape. Aborting on timeout surfaces through the existing
+// catch -> 'uncertain' branch; because the same client_bid_id is reused on retry,
+// re-sending is idempotent and safe (the engine dedupes by request hash).
+const BID_REQUEST_TIMEOUT_MS = 8000;
+
+async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = BID_REQUEST_TIMEOUT_MS): Promise<Response> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
 function App() {
   const showStateMatrix = useMemo(isTestMatrixEnabled, []);
   const roomID = useMemo(roomIDFromPath, []);
@@ -272,6 +290,11 @@ function App() {
     });
   }, [activeAuctionID, auctionEndAt, connectionPhase, nowMS, recoveryPhase, selected, serverTimeMS]);
   const activeAuction = useMemo(() => roomAuctions.find((auction) => auction.id === activeAuctionID), [activeAuctionID, roomAuctions]);
+  const visibleMaxBidIntent = useMemo(
+    () => maxBidIntent && maxBidIntent.auction_id === activeAuctionID ? maxBidIntent : null,
+    [activeAuctionID, maxBidIntent]
+  );
+  const visibleMaxBidFeedback = visibleMaxBidIntent ? maxBidFeedback : '仅自己可见，服务端按加价阶梯代出价';
   const heat = useMemo(() => ({ ...heatSnapshot(leaderboard, activeAuction), ...(presenceHeat ?? {}) }), [activeAuction, leaderboard, presenceHeat]);
   const atmosphereIntensity = useMemo(() => calculateAtmosphereIntensity({
     acceptedBids30s: heat.acceptedBids30s,
@@ -1114,6 +1137,9 @@ function App() {
     setAtmosphereCue(null);
     setWaterfallChips([]);
     setLeaderboard(null);
+    setMaxBidIntent(null);
+    setMaxBidPhase('idle');
+    setMaxBidFeedback('仅自己可见，服务端按加价阶梯代出价');
     leaderboardRef.current = null;
     pendingLeaderboardDeltaRef.current = null;
     selectedRef.current = 'active_bids';
@@ -1141,10 +1167,13 @@ function App() {
     setBidderRequirement(selectedAuction.bidder_requirement ?? null);
     const price = selectedAuction.current_price_cents ?? currentPriceRef.current;
     const increment = selectedAuction.increment_cents ?? activeIncrementCentsRef.current;
+    const cap = selectedAuction.cap_price_cents ?? 0;
+    const nextMaxBidAmount = clampMaxBidAmount(price + increment, price + increment, cap);
     setActiveIncrementCents(increment);
     setCurrentPriceCents(price);
     setMinimumNextBidCents(price + increment);
     setNextBidCents(price + increment);
+    setMaxBidAmountCents(nextMaxBidAmount);
     setLastSeq(selectedAuction.seq ?? lastSeqRef.current);
     setAuctionEndAt(selectedAuction.end_at ?? '');
     syncServerTimeMS(selectedAuction.server_time_ms ?? 0);
@@ -1187,7 +1216,7 @@ function App() {
     setMinimumNextBidCents(price + increment);
     setNextBidCents(price + increment);
     setMaxBidAmountCents((amount) => clampMaxBidAmount(amount, price + increment, snapshotCap));
-    if (snapshot.max_bid_intent) {
+    if (snapshot.max_bid_intent && snapshot.max_bid_intent.auction_id === (snapshotAuctionID || activeAuctionIDRef.current)) {
       setMaxBidIntent(snapshot.max_bid_intent);
       setMaxBidAmountCents(clampMaxBidAmount(snapshot.max_bid_intent.max_amount_cents, price + increment, snapshotCap));
       setMaxBidFeedback(maxBidStatusCopy(snapshot.max_bid_intent));
@@ -1635,6 +1664,11 @@ function App() {
   }, [activeAuctionID, sessionReady]);
 
   useEffect(() => {
+    if (!sessionReady || !activeAuctionID || activeSheet !== 'maxBid') return;
+    void loadMaxBidIntent(activeAuctionID);
+  }, [activeAuctionID, activeSheet, sessionReady]);
+
+  useEffect(() => {
     if (!sessionReady || !activeAuctionID || selected !== 'active_bids') return undefined;
     if (connectionPhase === 'connected' && recoveryPhase === 'idle' && !countdownExpired) return undefined;
     const timer = window.setInterval(() => {
@@ -1662,7 +1696,7 @@ function App() {
     setBidPhase('pending');
     try {
       await ensureBuyerSession();
-      const response = await fetch(`/api/auctions/${auctionID}/bids`, {
+      const response = await fetchWithTimeout(`/api/auctions/${auctionID}/bids`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1728,7 +1762,7 @@ function App() {
     setBidPhase('confirming');
     try {
       await ensureBuyerSession();
-      const response = await fetch(`/api/auctions/${auctionID}/bids/confirm`, {
+      const response = await fetchWithTimeout(`/api/auctions/${auctionID}/bids/confirm`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1767,6 +1801,7 @@ function App() {
     if (!auctionID) return;
     try {
       const response = await fetch(`/api/auctions/${auctionID}/max-bid-intent`);
+      if (auctionID !== activeAuctionIDRef.current) return;
       if (response.status === 404) {
         setMaxBidIntent(null);
         setMaxBidFeedback('仅自己可见，服务端按加价阶梯代出价');
@@ -1774,6 +1809,7 @@ function App() {
       }
       const payload = await readJSON<MaxBidIntent>(response);
       if (!response.ok || !payload) return;
+      if (payload.auction_id !== activeAuctionIDRef.current) return;
       setMaxBidIntent(payload);
       const cap = roomAuctionsRef.current.find((row) => row.id === auctionID)?.cap_price_cents ?? 0;
       setMaxBidAmountCents(clampMaxBidAmount(payload.max_amount_cents, minimumNextBidCents, cap));
@@ -1860,11 +1896,13 @@ function App() {
   };
 
   const cancelMaxBidIntent = async () => {
+    const intent = visibleMaxBidIntent;
     const auctionID = activeAuctionIDRef.current;
     if (
       !auctionID ||
-      !maxBidIntent ||
-      maxBidIntent.status !== 'ACTIVE' ||
+      !intent ||
+      intent.auction_id !== auctionID ||
+      intent.status !== 'ACTIVE' ||
       maxBidPhase !== 'idle' ||
       connectionPhase === 'connecting' ||
       connectionPhase === 'recovering' ||
@@ -1880,13 +1918,19 @@ function App() {
       });
       const payload = await readJSON<{ intent?: MaxBidIntent; code?: string; message?: string }>(response);
       if (!response.ok || !payload?.intent) {
+        if (response.status === 404 || payload?.code === 'AUCTION_NOT_FOUND') {
+          setMaxBidIntent(null);
+          setMaxBidPhase('idle');
+          setMaxBidFeedback('没有找到可取消的自动加价，已刷新本地状态');
+          void loadMaxBidIntent(activeAuctionIDRef.current);
+          return;
+        }
         setMaxBidPhase('error');
         setMaxBidFeedback(maxBidErrorCopy(payload?.code ?? payload?.message));
         return;
       }
       setMaxBidIntent(payload.intent);
       setMaxBidFeedback(maxBidStatusCopy(payload.intent));
-      await loadMaxBidIntent(auctionID);
       setMaxBidPhase('idle');
     } catch {
       setMaxBidPhase('error');
@@ -2325,8 +2369,8 @@ function App() {
           leaderboard={leaderboard}
           maxBidAmountCents={maxBidAmountCents}
           maxBidAmountText={maxBidAmountText}
-          maxBidFeedback={maxBidFeedback}
-          maxBidIntent={maxBidIntent}
+          maxBidFeedback={visibleMaxBidFeedback}
+          maxBidIntent={visibleMaxBidIntent}
           maxBidPhase={maxBidPhase}
           minimumNextBidCents={minimumNextBidCents}
           nextBidCents={nextBidCents}

@@ -141,8 +141,9 @@ async function confirmH5PaymentAndOrderDetail(page) {
   await page.screenshot({ path: path.join(outDir, '08-h5-payment-confirm.png'), fullPage: true });
   await dialog.getByRole('button', { name: /确认支付 ¥600\.00/ }).click();
   await page.getByTestId('history-panel').waitFor({ timeout: 12000 });
-  await page.getByTestId('history-panel').getByText('以 ¥600.00 拍下').waitFor({ timeout: 12000 });
-  await page.getByTestId('history-panel').getByText('以 ¥600.00 拍下').click();
+  const orderCard = page.getByTestId('history-panel').locator('.order-card').filter({ hasText: '¥600.00' }).first();
+  await orderCard.waitFor({ timeout: 12000 });
+  await orderCard.click();
   await page.getByTestId('buyer-order-detail').waitFor({ timeout: 12000 });
   const detail = await page.getByTestId('buyer-order-detail').textContent();
   if (!detail?.includes('订单详情') || !detail.includes('拍下金额') || !detail.includes('商品详情') || !detail.includes('¥600.00')) {

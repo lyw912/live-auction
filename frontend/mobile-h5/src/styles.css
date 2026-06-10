@@ -2490,7 +2490,7 @@ button {
 
 .history-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
 }
 
@@ -2532,6 +2532,98 @@ button {
 
 .history-row:not(:disabled) {
   cursor: pointer;
+}
+
+.order-card-list {
+  display: grid;
+  gap: 8px;
+}
+
+.order-card {
+  width: 100%;
+  min-height: 72px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: #fff;
+  color: var(--color-ink-900);
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) 84px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  text-align: left;
+  box-shadow: 0 8px 18px rgba(17, 24, 39, .06);
+}
+
+.order-card.selected {
+  border-color: rgba(217, 48, 78, .48);
+  box-shadow: 0 0 0 2px rgba(217, 48, 78, .1), 0 10px 22px rgba(17, 24, 39, .08);
+}
+
+.order-card-thumb {
+  width: 52px;
+  height: 56px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(135deg, #303443, #111827);
+  display: grid;
+  place-items: center;
+}
+
+.order-card-thumb.has-media {
+  background-image: var(--order-card-media-url);
+  background-size: cover;
+  background-position: center;
+}
+
+.order-card-body,
+.order-card-side {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.order-card-body strong,
+.order-card-body em,
+.order-card-body small,
+.order-card-side strong,
+.order-card-side em,
+.order-card-side small {
+  display: block;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  word-break: keep-all;
+}
+
+.order-card-body strong {
+  font-size: 13px;
+  line-height: 1.28;
+}
+
+.order-card-body em,
+.order-card-body small,
+.order-card-side em,
+.order-card-side small {
+  color: var(--color-muted);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.order-card-side {
+  justify-items: end;
+  min-width: 84px;
+  text-align: right;
+}
+
+.order-card-side strong {
+  color: var(--color-bid-red);
+  font-family: var(--font-auction-tabular);
+  font-size: 13px;
 }
 
 .history-row:not(:disabled)::after {

@@ -119,17 +119,21 @@ type ProviderPaymentWebhook struct {
 }
 
 type Order struct {
-	ID            string     `json:"id"`
-	AuctionID     string     `json:"auction_id"`
-	WinnerID      string     `json:"winner_id"`
-	AmountCents   int64      `json:"amount_cents"`
-	Status        string     `json:"status"`
-	DepositCents  int64      `json:"deposit_cents"`
-	DepositStatus string     `json:"deposit_status"`
-	ExpireAt      time.Time  `json:"expire_at"`
-	PaidAt        *time.Time `json:"paid_at,omitempty"`
-	ProviderID    *string    `json:"provider_payment_id,omitempty"`
-	CreatedAt     time.Time  `json:"created_at"`
+	ID             string     `json:"id"`
+	AuctionID      string     `json:"auction_id"`
+	WinnerID       string     `json:"winner_id"`
+	AmountCents    int64      `json:"amount_cents"`
+	Status         string     `json:"status"`
+	DepositCents   int64      `json:"deposit_cents"`
+	DepositStatus  string     `json:"deposit_status"`
+	ExpireAt       time.Time  `json:"expire_at"`
+	PaidAt         *time.Time `json:"paid_at,omitempty"`
+	ProviderID     *string    `json:"provider_payment_id,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	IncrementCents int64      `json:"increment_cents"`
+	CapPriceCents  *int64     `json:"cap_price_cents,omitempty"`
+	Item           Item       `json:"item"`
+	Rule           Rule       `json:"rule"`
 }
 
 type PaymentResponse struct {
@@ -155,11 +159,20 @@ type BidHistoryRow struct {
 }
 
 type OrderHistoryRow struct {
-	OrderID     string    `json:"order_id"`
-	AuctionID   string    `json:"auction_id"`
-	AmountCents int64     `json:"amount_cents"`
-	OrderStatus string    `json:"order_status"`
-	CreatedAt   time.Time `json:"created_at"`
+	OrderID        string     `json:"order_id"`
+	AuctionID      string     `json:"auction_id"`
+	AmountCents    int64      `json:"amount_cents"`
+	OrderStatus    string     `json:"order_status"`
+	DepositCents   int64      `json:"deposit_cents"`
+	DepositStatus  string     `json:"deposit_status"`
+	ExpireAt       time.Time  `json:"expire_at"`
+	PaidAt         *time.Time `json:"paid_at,omitempty"`
+	ProviderID     *string    `json:"provider_payment_id,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	IncrementCents int64      `json:"increment_cents"`
+	CapPriceCents  *int64     `json:"cap_price_cents,omitempty"`
+	Item           Item       `json:"item"`
+	Rule           Rule       `json:"rule"`
 }
 
 // PlaceBidPostgresLegacyForTests is the pre-Redis PostgreSQL decision path.
@@ -1408,10 +1421,18 @@ func (r *Repository) ListOrdersFiltered(ctx context.Context, userID string, role
 		query = `
 			SELECT o.id, o.auction_id, o.winner_id, o.amount_cents, o.status,
 			       o.deposit_cents, o.deposit_status, o.expire_at, o.paid_at,
-			       o.provider_payment_id, o.created_at
+			       o.provider_payment_id, o.created_at,
+			       a.increment_cents, a.cap_price_cents,
+			       i.id, i.title, i.image_url, i.description, i.status, i.created_at,
+			       ar.duration_seconds, ar.extend_window_seconds, ar.extend_by_seconds,
+			       ar.max_extend_count, ar.fat_finger_threshold_cents,
+			       ar.deposit_bps, ar.deposit_floor_cents, ar.deposit_cap_cents,
+			       ar.frozen_at
 			FROM orders o
 			JOIN auctions a ON a.id = o.auction_id
 			JOIN rooms rm ON rm.id = a.room_id
+			JOIN items i ON i.id = a.item_id
+			JOIN auction_rules ar ON ar.auction_id = a.id AND ar.rule_version = a.rule_version
 			WHERE rm.host_id = $1
 			  AND ($2 = '' OR o.auction_id = $2)
 			ORDER BY o.created_at DESC
@@ -1420,13 +1441,22 @@ func (r *Repository) ListOrdersFiltered(ctx context.Context, userID string, role
 		args = []any{userID, auctionID, limit}
 	} else {
 		query = `
-			SELECT id, auction_id, winner_id, amount_cents, status,
-			       deposit_cents, deposit_status, expire_at, paid_at,
-			       provider_payment_id, created_at
-			FROM orders
-			WHERE winner_id = $1
-			  AND ($2 = '' OR auction_id = $2)
-			ORDER BY created_at DESC
+			SELECT o.id, o.auction_id, o.winner_id, o.amount_cents, o.status,
+			       o.deposit_cents, o.deposit_status, o.expire_at, o.paid_at,
+			       o.provider_payment_id, o.created_at,
+			       a.increment_cents, a.cap_price_cents,
+			       i.id, i.title, i.image_url, i.description, i.status, i.created_at,
+			       ar.duration_seconds, ar.extend_window_seconds, ar.extend_by_seconds,
+			       ar.max_extend_count, ar.fat_finger_threshold_cents,
+			       ar.deposit_bps, ar.deposit_floor_cents, ar.deposit_cap_cents,
+			       ar.frozen_at
+			FROM orders o
+			JOIN auctions a ON a.id = o.auction_id
+			JOIN items i ON i.id = a.item_id
+			JOIN auction_rules ar ON ar.auction_id = a.id AND ar.rule_version = a.rule_version
+			WHERE o.winner_id = $1
+			  AND ($2 = '' OR o.auction_id = $2)
+			ORDER BY o.created_at DESC
 			LIMIT $3
 		`
 		args = []any{userID, auctionID, limit}
@@ -1439,7 +1469,17 @@ func (r *Repository) ListOrdersFiltered(ctx context.Context, userID string, role
 	orders := []Order{}
 	for rows.Next() {
 		var order Order
-		if err := rows.Scan(&order.ID, &order.AuctionID, &order.WinnerID, &order.AmountCents, &order.Status, &order.DepositCents, &order.DepositStatus, &order.ExpireAt, &order.PaidAt, &order.ProviderID, &order.CreatedAt); err != nil {
+		if err := rows.Scan(
+			&order.ID, &order.AuctionID, &order.WinnerID, &order.AmountCents, &order.Status,
+			&order.DepositCents, &order.DepositStatus, &order.ExpireAt, &order.PaidAt,
+			&order.ProviderID, &order.CreatedAt, &order.IncrementCents, &order.CapPriceCents,
+			&order.Item.ID, &order.Item.Title, &order.Item.ImageURL, &order.Item.Description,
+			&order.Item.Status, &order.Item.CreatedAt,
+			&order.Rule.DurationSeconds, &order.Rule.ExtendWindowSeconds, &order.Rule.ExtendBySeconds,
+			&order.Rule.MaxExtendCount, &order.Rule.FatFingerThresholdCents,
+			&order.Rule.DepositBPS, &order.Rule.DepositFloorCents, &order.Rule.DepositCapCents,
+			&order.Rule.FrozenAt,
+		); err != nil {
 			return nil, err
 		}
 		orders = append(orders, order)
@@ -1482,11 +1522,20 @@ func ToOrderHistoryRows(orders []Order) []OrderHistoryRow {
 	rows := make([]OrderHistoryRow, 0, len(orders))
 	for _, order := range orders {
 		rows = append(rows, OrderHistoryRow{
-			OrderID:     order.ID,
-			AuctionID:   order.AuctionID,
-			AmountCents: order.AmountCents,
-			OrderStatus: order.Status,
-			CreatedAt:   order.CreatedAt,
+			OrderID:        order.ID,
+			AuctionID:      order.AuctionID,
+			AmountCents:    order.AmountCents,
+			OrderStatus:    order.Status,
+			DepositCents:   order.DepositCents,
+			DepositStatus:  order.DepositStatus,
+			ExpireAt:       order.ExpireAt,
+			PaidAt:         order.PaidAt,
+			ProviderID:     order.ProviderID,
+			CreatedAt:      order.CreatedAt,
+			IncrementCents: order.IncrementCents,
+			CapPriceCents:  order.CapPriceCents,
+			Item:           order.Item,
+			Rule:           order.Rule,
 		})
 	}
 	return rows
