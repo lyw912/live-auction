@@ -43,7 +43,7 @@ type Runner struct {
 // unrelayed/unsettled decisions or if Redis and PG disagree on price/winner/end.
 type AuctionFencer interface {
 	FenceAuction(ctx context.Context, auctionID string, reason string)
-	FenceAuctionForScheduler(ctx context.Context, auctionID string, terminalStatus string, pgEndAt time.Time, pgPrice int64, pgWinnerID *string) (time.Time, error)
+	FenceAuctionForScheduler(ctx context.Context, auctionID string, terminalStatus string, pgEndAt time.Time, pgPrice int64, pgWinnerID *string) (time.Time, bool, error)
 }
 
 // WithFencer attaches a hot-engine fencer so the scheduler fences Redis
@@ -236,10 +236,13 @@ func (r *Runner) processEndAuction(ctx context.Context, job Job) error {
 		return r.rescheduleTx(ctx, tx, job.ID, endAt)
 	}
 	if r.fencer != nil {
-		nextRunAt, err := r.fencer.FenceAuctionForScheduler(ctx, job.TargetID, "SCHEDULER_ENDING", endAt, price, winnerID)
+		nextRunAt, syncEndAt, err := r.fencer.FenceAuctionForScheduler(ctx, job.TargetID, "SCHEDULER_ENDING", endAt, price, winnerID)
 		if err != nil {
 			if nextRunAt.IsZero() {
 				nextRunAt = r.now().Add(500 * time.Millisecond)
+			}
+			if syncEndAt && nextRunAt.After(endAt) {
+				return r.rescheduleEndAuctionTx(ctx, tx, job.ID, job.TargetID, nextRunAt)
 			}
 			return r.rescheduleTx(ctx, tx, job.ID, nextRunAt)
 		}
@@ -416,6 +419,19 @@ func (r *Runner) rescheduleTx(ctx context.Context, tx pgx.Tx, jobID string, runA
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+func (r *Runner) rescheduleEndAuctionTx(ctx context.Context, tx pgx.Tx, jobID string, auctionID string, runAt time.Time) error {
+	if _, err := tx.Exec(ctx, `
+		UPDATE auctions
+		SET end_at = $2, updated_at = now()
+		WHERE id = $1
+		  AND status = 'ACTIVE'
+		  AND end_at < $2
+	`, auctionID, runAt); err != nil {
+		return err
+	}
+	return r.rescheduleTx(ctx, tx, jobID, runAt)
 }
 
 func (r *Runner) beginTx(ctx context.Context) (pgx.Tx, error) {

@@ -1,5 +1,0 @@
-﻿     type     | count 
---------------+-------
- RATE_LIMITED |  5106
-(1 row)
-

@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RUNTIME_DIR="${PTS_RUNTIME_DIR:-/tmp/live-auction-pts}"
 GEN_DIR="$RUNTIME_DIR/s3-room-fanout-generated"
-OUT_DIR="$ROOT_DIR/docs/perf/pts/inputs/s1-s5"
+OUT_DIR="$ROOT_DIR/tests/pts/inputs/s1-s5"
 DB_CONTAINER="${DB_CONTAINER:-live-auction-postgres}"
 REDIS_CONTAINER="${REDIS_CONTAINER:-live-auction-redis}"
 DB_USER="${DB_USER:-live_auction}"
@@ -39,7 +39,7 @@ generate_csv_with_hash() {
       -U "$DB_USER" -d "$DB_NAME" \
       -v user_prefix="$prefix" \
       -v session_count="$count" \
-      -f - < "$ROOT_DIR/docs/perf/pts/generate-l2-pts-sessions-with-hash.sql"
+      -f - < "$ROOT_DIR/tests/pts/sql/generate-l2-pts-sessions-with-hash.sql"
   } > "$GEN_DIR/$file"
 }
 
@@ -165,5 +165,5 @@ write_mixed_csv "s3-mixed-smoke-30-sessions.csv" \
   reader "s3-smoke-reader-5-sessions.csv" 5 \
   bidder "s3-smoke-bidder-5-sessions.csv" 5
 
-echo "- docs/perf/pts/inputs/s1-s5/s3-mixed-final-burst-4500-sessions.csv"
-echo "- docs/perf/pts/inputs/s1-s5/s3-mixed-smoke-30-sessions.csv"
+echo "- tests/pts/inputs/s1-s5/s3-mixed-final-burst-4500-sessions.csv"
+echo "- tests/pts/inputs/s1-s5/s3-mixed-smoke-30-sessions.csv"

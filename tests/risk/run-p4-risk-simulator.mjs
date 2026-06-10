@@ -9,7 +9,7 @@ const backendDir = join(root, 'backend');
 const serverBinDir = join(backendDir, 'tmp');
 const serverBin = process.platform === 'win32' ? join(serverBinDir, 'p4-risk-server.exe') : join(serverBinDir, 'p4-risk-server');
 const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 12);
-const rawRoot = join(root, process.env.RAW_ROOT || `docs/perf/raw/p4-risk-simulator-${stamp}`);
+const rawRoot = join(root, process.env.RAW_ROOT || `artifacts/perf/raw/p4-risk-simulator-${stamp}`);
 const baseURL = process.env.BASE_URL || 'http://127.0.0.1:18080';
 const manageServer = process.env.MANAGE_SERVER === '1';
 const scenarioFilter = (process.env.SCENARIOS || '')

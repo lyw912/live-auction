@@ -1,0 +1,505 @@
+# S2 — 正常竞价 / Steady Auction & Soak
+
+> Maps to: brief 挑战二 "毫秒级实时同步" + 规则(加价/自动延时); rubric 性能 + 稳定性.
+> Headline: **steady decision p99 ≤ 100 ms** at a sustained offered rate + **M4 no leak**.
+> Tool: **independent-ECS k6 soak/read/capacity runs** for open-arrival evidence.
+> Source assets: `tests/load/s2-steady-soak.js` and `tests/load/s2-read-interference.js`.
+> Expanded split: `S2-long-soak`, `S2-convergence-drain`,
+> `S2-capacity-stair`, and `S2-read-interference` are governed by
+> [s2-s3-expanded-test-design.md](07-s2-s3-expanded-design.md).
+
+## 1. The business moment
+
+Not the final-second crush — the *normal* minutes of a live auction. A few
+hundred to a few thousand people watch; a **minority actively bid**; the price
+climbs the increment ladder step by step; auto-extension fires when someone bids
+near the end. This must stay smooth for 10+ minutes with no latency drift and no
+resource leak. It is what proves the system is *stable*, not just *fast once*.
+
+## 2. The realistic bid model (and what to reject)
+
+> **Reject "80% of VUs bid every 2 s on the one auction."** On a single ascending
+> auction that is ~hundreds–thousands of writes/sec onto one key, ~all rejected —
+> a self-inflicted hot-key write storm, not realistic bidding. (Research: this is
+> an adversarial hotspot; it also self-throttles under stress = coordinated
+> omission.) That belongs in S1's burst, clearly labeled, not here.
+
+Defensible steady model:
+
+```
+viewers connected        : 2000–5000 (held; mostly read-only, drive fanout context)
+active bidder sessions   : 5–15% of viewers
+offered bid arrivals     : OPEN model, ramp 20/s → 60/s → 100/s   (intended raises, not re-bids)
+bid amounts              : escalate over time so a HEALTHY fraction accept and climb the ladder
+noise                    : include rejects (stale client_seen_seq), self-leading attempts
+accepted update rate     : measure it (≈ how fast the price legitimately climbs, e.g. 1–10/s)
+duration                 : 10 min (PTS chart) / 30–60 min (local soak)
+```
+
+The fanout pressure is driven by **accepted updates × subscribers**, not by
+rejected attempts. Report offered bids *and* accepted updates separately.
+
+## 3. Current S2 Runs
+
+### 3a. Independent k6 soak (30–60 min, the leak gate)
+k6 `ramping-arrival-rate` is the cleanest current open-model asset and costs
+nothing. Run it against the server; scrape server metrics via Prometheus →
+Grafana. This is the required S2 run.
+
+```javascript
+import http from 'k6/http'; import { check } from 'k6';
+export const options = {
+  scenarios: {
+    steady_bids: {
+      executor: 'ramping-arrival-rate',          // OPEN model
+      startRate: 20, timeUnit: '1s',
+      preAllocatedVUs: 50, maxVUs: 200,
+      stages: [
+        { target: 20,  duration: '10m' },
+        { target: 60,  duration: '10m' },
+        { target: 100, duration: '10m' },
+      ],
+    },
+  },
+  thresholds: { 'http_req_duration{sampler:bid-decision}': ['p(99)<100'], dropped_iterations: ['count<200'] },
+};
+export default function () {
+  const amt = ladderBase + Math.floor((Date.now()-t0)/climbMs)*increment;
+  const res = http.post(`${BASE}/api/auctions/auc_live/bids`,
+    JSON.stringify({ client_bid_id:`s2-${__VU}-${__ITER}`, idempotency_key:`s2-${__VU}-${__ITER}`,
+                     amount_cents: amt }), { headers: authHdr(__VU), tags:{ sampler:'bid-decision' } });
+  check(res, { 'final decision': r => { const j=r.json(); return j.durability_status==='ENGINE_DURABLE'
+                 && /ENGINE_(ACCEPTED|REJECTED|SOLD)/.test(j.result); } });
+}
+```
+> **Report `dropped_iterations`** alongside p99 — it is the explicit overload
+> signal that closed-loop tests hide. Zero (or near-zero) dropped iterations means
+> the offered rate was actually delivered.
+
+Current independent-ECS result:
+
+- `s2-ecs-30m-20260604T095720`: 85,499 bid attempts and 85,499 final
+  `ENGINE_*` decisions over the 20/s -> 60/s -> 100/s 30-minute shape;
+  k6 exit 0, dropped iterations 0, HTTP failures 0, auth/ACL failures 0,
+  admission contamination 0, non-decision failures 0; HTTP p99 3.30ms and
+  custom S2 decision p99 4ms.
+- Server convergence and correctness passed after service-side evidence
+  collection: 61 `ENGINE_ACCEPTED`, 85,438 `ENGINE_REJECTED`, all 85,499
+  settlements terminal, Kafka consumer lag 0, Redis pending decisions 0, DLQ
+  empty, outbox drained, engine seq complete, and all verifier P0/P1 gates PASS.
+- Evidence path:
+  `external run artifact`.
+
+Interpretation boundary: this is a bid-decision endurance and convergence pass.
+It is not accepted-heavy fanout evidence and it is not read-interference
+evidence. The rejected decisions still exercise Redis decision logging, Kafka
+ledger relay, PostgreSQL settlement, and verifier gates, but only 61 accepted
+updates drove outbox/WebSocket fanout. Use `S2-read-interference` for HTTP read
+pressure and S3 for WebSocket fanout.
+
+Count semantics for S2:
+
+| Count | Meaning |
+|---|---|
+| k6 iterations / final decisions | offered bid pressure delivered by the independent same-VPC generator |
+| `dropped_iterations=0` | the generator did not silently undersupply the open-arrival rate |
+| Redis pending / Kafka lag / settlement rows / outbox pending | the async durability and finality chain drained after the bid pressure |
+| accepted count | real price-changing updates; this drives fanout, but it is not the decision-capacity headline |
+
+For example, `s2-convergence-drain-decision-ecs-20260604T1937` had 49,049 final
+decisions but only 6 accepted updates. That is a valid decision/reject-heavy
+convergence proof because the target was Kafka/Redis/PG/outbox drain for normal
+decision traffic. It must not be reworded as "600/s accepted-update capacity";
+accepted-heavy S2 capacity is tracked separately as bottleneck evidence.
+
+### 3a-bis. S2 read interference (HTTP polling under bid load)
+
+The live-room polling question is separate from long bid-decision soak. Use
+`tests/load/s2-read-interference.js` from an independent k6 ECS:
+
+```
+bid attempts: 100/s
+HTTP reads  : 2000/s -> 5000/s -> 10000/s
+mix         : 80% GET auction snapshot, 15% leaderboard, 5% my bid history
+duration    : 15 min default (5 min per stage)
+```
+
+Evidence required: bid p99 under read load, read p99 by route, dropped
+iterations, k6 host health, DB pool wait/connection counts, Redis/Kafka/PG/outbox
+convergence, and the same correctness verifier gates.
+
+Current measured status on 2026-06-04:
+
+```text
+label       : s2-read-ecs-15m-20260604T113330
+verdict     : CURRENT_FAILING / bottleneck evidence, not a clean 10k-read pass
+bid result  : ~98.4 decisions/s, p99 5.68ms, HTTP failures 0
+read result : ~2142 successes/s actual, snapshot p99 1.60s,
+              leaderboard p99 4.07s, my-bids p99 884.8ms
+k6 signal   : 2,057,742 dropped iterations; READ_MAX_VUS=4000 filled
+service     : DB pool max/total 90; empty-pool acquires 3,257,372;
+              empty-pool wait total 2,281,594s
+correctness : immediate convergence gate failed; late verifier passed after
+              Kafka/settlement drain
+```
+
+Reduced clean-ceiling attempt:
+
+```text
+label       : s2-read-clean-ecs-15m-20260604T120823
+shape       : 100 bid/s + 2000/s -> 3000/s -> 4000/s reads
+verdict     : CURRENT_FAILING / lower-ceiling bottleneck evidence
+bid result  : ~98.4 decisions/s, p99 5.70ms, HTTP failures 0
+read result : ~2081 successes/s actual, snapshot p99 1.02s,
+              leaderboard p99 2.72s, my-bids p99 596ms
+k6 signal   : 524,423 dropped iterations; READ_MAX_VUS=2500 filled around
+              a ~2.3k/s target point
+service     : DB pool max/total 90; empty-pool acquires 2,996,066;
+              empty-pool wait total 1,315,846s
+correctness : immediate convergence gate failed; late verifier passed after
+              Kafka/settlement drain
+```
+
+Use these as read-path ceiling evidence. Do not claim 3000/s, 4000/s, 5000/s, or
+10000/s read capacity until a later clean-ceiling run or read-path optimization
+proves it. The next display candidate should be 1500/s -> 1800/s -> 2000/s
+reads, or 2000/s flat for 15 minutes.
+
+## 4. Auto-extension correctness (a rule the steady run must exercise)
+
+The brief requires 自动延时 (bid near close → extend 10–30 s). The steady run
+should drive bids into the extension window and assert: the auction end time
+advances, late accepts remain valid, and the *final* winner reflects the extended
+window. Add to the M3 verifier a check that `ends_at` moved and no bid accepted
+after the true (extended) end. This is correctness, reported as PASS/FAIL.
+
+## 5. Settlement Convergence And Payment Safety
+
+`ENGINE_DURABLE` is the user-visible decision boundary, not the accounting
+boundary. During the auction, settlement lag does not invalidate bid decisions:
+Redis hot state, `engine_seq`, and fanout carry the live experience. At落槌 and
+payment time, however, PostgreSQL settlement must be complete before order/payment
+is treated as final truth.
+
+Report S2 convergence as:
+
+```
+kafka_settlement_lag_peak
+converged_seconds = k6_end -> Kafka lag 0 + Redis pending 0 + PG settlements complete + outbox drained
+```
+
+Business interpretation for jewellery auctions:
+
+- During live bidding: bounded lag is acceptable if M1/M2 are healthy and
+  verifier later proves no loss.
+- At close/payment: do not issue payment links from incomplete PG truth. The
+  auction enters a short **SETTLING / confirming final result** state until
+  Kafka lag, Redis pending decisions, PG settlements, and outbox backlog reach
+  zero.
+- If convergence exceeds the business window (for example 60s local / 3-5min
+  operational payment buffer), alert and keep payment disabled; recovery may
+  replay Redis/Kafka state into PG, but must not guess the winner from stale PG.
+
+Do **not** make "stop accepting bids 30s before close" the default mitigation:
+it conflicts with soft-close and final-second bidding. The defensible fallback is
+post-close payment gating, not pre-close product degradation.
+
+Current S2 bottleneck evidence (local diagnostic, not a final PTS chart):
+
+- baseline `s2-stair-1000-20260602T184500`: 80,999 `ENGINE_DURABLE` decisions,
+  M1 p99 5.24ms, p99.9 20.03ms, dropped 0; 180s convergence failed with about
+  30k settlement lag.
+- batch-drain `s2-stair-1000-batchdrain-20260602T193000`: same 80,999 decisions,
+  M1 p99 5.79ms, p99.9 30.51ms, dropped 0; convergence PASS in 158s.
+- set-based rejected settlement + settlement log suppression
+  `s2-stair-1000-setbased-logsuppressed-100s-20260602T211311`: 70,999
+  decisions, HTTP p99 5.44ms, p99.9 32.21ms, dropped 0; 100s convergence gate
+  failed at 102s with Kafka lag 1371 and settlement_total 69774/70999; verifier
+  later passed after full drain.
+- direct-SETTLED rejected fast-path trial
+  `s2-stair-1000-directsettled-100s-20260602T212330`: rejected and reverted; it
+  worsened convergence (lag 32033 at 101s) and failed the 100s verifier because
+  settlement had not completed.
+- 110s terminal rerun after adding runtime sampling and fixing
+  `REDIS_ENGINE_SETTLEMENT_WORKERS` env propagation:
+  `s2-stair-1000-workers4-110s-20260603T1928`: 70,999 decisions, HTTP p99
+  5.56ms, p99.9 34.25ms, dropped 0, HTTP failures 0, verifier later PASS after
+  full drain; **110s convergence FAIL** at 112s with Kafka lag 1275 and
+  settlement_total 69925/70999.
+- 120s product-buffer rerun:
+  `s2-stair-1000-120s-20260603T1942`: 70,999 decisions, HTTP p99 5.34ms,
+  p99.9 27.68ms, dropped 0, HTTP failures 0, all verifier gates PASS after
+  drain. Convergence samples show 286 records still outstanding at 119s and full
+  drain at the 122s poll (`kafka_group_lag=0`, `settlement_total=70999`,
+  `redis_pending_count=0`, `outbox_unpublished=0`).
+
+Interpretation: the foreground decision path is healthy under the S2 local stair,
+but settlement convergence remains the limiting safety signal. The 110s target
+for this 2-minute local stair was executed and failed. A 120s product payment
+buffer is defensible only with polling tolerance: this run confirmed drain at
+122s, not at a strict 120.000s hard boundary. Mark the current state as
+foreground M1 PASS, final correctness-after-drain PASS, and
+payment/finality convergence **acceptable for a 120s business buffer with
+explicit poll-boundary disclosure**, not as full S2 `CURRENT_PASS` because the
+short stair still does not prove M4 long-soak no-leak.
+
+The 4-worker rerun is also evidence that simply adding settlement workers is not
+a complete fix for one hot auction: the Kafka consumer group showed all
+`auc_live` messages on one partition, so only one consumer can process the
+auction's ordered settlement chain.
+
+Independent-ECS accepted-heavy capacity stair, 2026-06-04:
+
+- `s2-capacity-accepted-ecs-20260604T150519` used the accepted profile
+  `50/s -> 100/s -> 200/s -> 400/s -> 600/s`, `CAPACITY_PROFILE=accepted`,
+  `NOISE_PCT=0`, fast amount ladder, independent k6 ECS.
+- k6 was clean at the synchronous Redis decision boundary: exit 0,
+  `dropped_iterations=0`, `http_req_failed=0`, 131,574 final decisions,
+  125,376 accepted, 6,198 rejected, decision p99 3.89ms, p99.9 7.47ms,
+  max VUs used 4 with k6 CPU/RSS below saturation.
+- Server convergence was **not** clean at collection time: Redis engine log had
+  131,574 entries matching k6, but PostgreSQL settlement was only about 61k and
+  `settlement-workers` still had about 77,888 Kafka lag on the hot partition.
+  Verifier reported `redis_kafka_pg_accepted_match=FAIL` and non-terminal
+  settlement before a later PostgreSQL shared-memory error in a heavy verifier
+  query.
+- Classification: `CURRENT_FAILING` for full S2-capacity correctness,
+  `CURRENT_PASS` only for the foreground Redis decision layer under this
+  accepted-heavy profile. Do not cite it as "600/s accepted capacity pass".
+
+Post-accepted-batch rerun, 2026-06-04:
+
+- `s2-capacity-accepted-postfix-ecs-20260604T161315` repeated the same
+  `50/s -> 100/s -> 200/s -> 400/s -> 600/s` accepted-heavy profile after
+  accepted contiguous-prefix batching.
+- k6 was again clean at the foreground decision boundary: exit 0,
+  `dropped_iterations=0`, `http_req_failed=0`, 131,574 final decisions,
+  107,624 accepted, 23,950 rejected, bid decision p99 13ms, HTTP p99 12.49ms.
+  The independent k6 host was not saturated: CPU roughly 9-30%, RSS about
+  235MB, and active VUs stayed far below the configured ceiling.
+- The end-to-end async chain still was **not** clean at the immediate evidence
+  point. Redis engine log reached 131,574, but a service-side sample at
+  16:29 showed only 69,748 accepted settlements and 2,764 rejected settlements
+  persisted; Kafka `settlement-workers` still had 64,476 lag on hot partition
+  15. Later samples continued to drain slowly: 16:31 lag 61,258, 16:32 lag
+  58,376, 16:34 lag 55,376, 16:39 lag 43,876.
+- The verifier classified the same split: most P0 invariants passed, including
+  no duplicate client bid IDs, no duplicate engine seq, Kafka offset order, and
+  accepted public-event coverage; but the first verifier sample still had
+  non-terminal settlement/outbox rows, so it failed `no_non_terminal_settlements`
+  and `outbox_drained`. A later heavy verifier query also exposed a PostgreSQL
+  container `/dev/shm` limit (`64MB`) via "could not resize shared memory
+  segment"; that is a collector/environment limitation to record, not a reason
+  to call the run clean.
+- Classification: still `CURRENT_FAILING` for full S2-capacity correctness.
+  The accepted-prefix batch improved the implementation shape but did not make
+  `600/s` a defensible end-to-end pass.
+
+Root cause and fix direction:
+
+- The single hot auction is keyed to one Kafka partition. Official Kafka
+  consumer-group semantics allow only one consumer in a group to read a partition
+  at a time, so adding settlement workers cannot parallelize this one auction's
+  ordered stream by itself.
+- The old accepted settlement path paid one transaction per accepted message:
+  settlement attempt, `SELECT auctions FOR UPDATE`, auction update, bid insert,
+  auction event, outbox event/delivery, idempotency completion, checkpoint, and
+  commit. That is correct, but it made accepted-heavy S2 hit the async
+  settlement/outbox knee before the Redis decision knee.
+- The retained optimization is accepted contiguous-prefix batching. It batches
+  only same-auction, same-epoch, consecutive `engine_seq`, same Kafka
+  topic/partition, consecutive Kafka offset, non-terminal `ENGINE_ACCEPTED`
+  rows. `ENGINE_SOLD`, reject, gap, replay, stale epoch, or identity conflict
+  falls back to the pre-existing per-message path. The batch transaction still
+  writes `bids`, `auction_events`, `outbox_events`, `outbox_delivery`,
+  `idempotency_records`, `redis_engine_settlements`, auction seq/price/winner,
+  and the engine checkpoint.
+- New proof tests: `TestKafkaSettlementBatchesAcceptedPrefix` verifies gap-free
+  public seq, accepted bid rows, auction events, outbox delivery rows,
+  settlement rows, idempotency completion, and auction engine/public seq after
+  a pure accepted prefix. `TestKafkaSettlementBatchesAcceptedPrefixBeforeReject`
+  verifies mixed accepted+rejected Kafka batches still settle correctly.
+- After the 600/s postfix rerun, the worker also learned to keep consuming
+  multiple safe contiguous prefixes within the same fetched Kafka batch instead
+  of returning after the first fast prefix. This preserves the same safety rule:
+  only same-auction, same-epoch, consecutive `engine_seq` and consecutive Kafka
+  offsets are batched; reject/gap/replay/stale cases still create boundaries or
+  fall back. The benefit is expected to be incremental, mainly reducing loop and
+  commit overhead when a batch contains `accepted...reject...accepted...`; it
+  does not remove the core PostgreSQL write surfaces.
+
+Post-fix rerun policy:
+
+The lower 400/s ceiling rerun was executed first:
+
+- `s2-capacity-accepted-clean400-p1-ecs-20260604T181824` used the
+  `50/s -> 100/s -> 200/s -> 300/s -> 400/s` accepted-heavy profile after the
+  P0/P1 settlement changes.
+- k6 was clean at the foreground decision boundary: exit 0,
+  `dropped_iterations=0`, `http_req_failed=0`, 101,374 final decisions,
+  87,374 accepted, 14,000 rejected, bid p99 37ms, p99.9 221.6ms, max 318ms.
+  The independent k6 host was not the bottleneck: max active VU 18/400, k6 CPU
+  about 3-21%, RSS about 197MB, and TCP established about 405.
+- The async chain was not instant-clean at the first service sample. Kafka lag
+  was about 19,521 shortly after the run, then drained through later samples
+  (16,959 -> 10,937 -> 2,075 -> 0). PostgreSQL settlement reached the final
+  101,374/101,374 rows only after late drain.
+- Final service-side verification passed: `settled=101374`,
+  `non_terminal=0`, `max_seq=101374`; `ACCEPTED|SETTLED|87374`,
+  `REJECTED|SETTLED|14000`; outbox `PUBLISHED=87374`; Kafka partition 15
+  lag 0; Redis stream length and PG settlement count both 101,374.
+- `l4b-invariant-gates.tsv` reports all P0/P1 gates PASS, including
+  `no_non_terminal_settlements`, `engine_seq_complete`,
+  `every_bid_has_settled_ledger`, `redis_kafka_pg_accepted_match`,
+  `outbox_drained`, `kafka_consumer_group_lag_zero`, and
+  `redis_pending_decisions_empty`.
+- Classification: `CURRENT_PASS` for the foreground 400/s accepted-heavy
+  decision profile and **final late convergence**. It is not evidence of
+  immediate async zero-backlog at 400/s, and it does not make 600/s an
+  end-to-end pass. The p99.9/max tail must be disclosed; do not say "no tail
+  latency."
+- Practical note: the 400/s run's 101,374 decisions also exposed verifier cost at
+  this data volume. It remains useful capacity evidence, but the smaller
+  display run below is the clean judge-facing artifact because it has a complete
+  service verifier output with all heavy gates.
+
+The display-sized clean rerun has now been executed:
+
+- `s2-capacity-accepted-display200-p1-ecs-20260604T192002` used the
+  `50/s -> 100/s -> 150/s -> 200/s` accepted-heavy profile, 30s hold per stage,
+  after the P0/P1 settlement changes.
+- k6 was clean: exit 0, `dropped_iterations=0`, `http_req_failed=0`,
+  auth/ACL/admission/non-decision failures all 0, 15,525 final decisions,
+  15,522 accepted, 3 rejected.
+- Latency stayed comfortably below the S2 decision gate: bid p99 4ms, p99.9 6ms,
+  max 20ms; HTTP p99 3.58ms, p99.9 5.70ms, max 19.63ms.
+- The independent k6 host was not the bottleneck: max VU 1/120, CPU about 5-9%,
+  RSS about 83MB, TCP established about 125.
+- Final service-side verification passed: `settlements=15525`, non-terminal 0,
+  `max_seq=15525`; `ACCEPTED|SETTLED|15522`, `REJECTED|SETTLED|3`; auction
+  `accepted_bid_count=15522`, `seq=15522`, `engine_seq=15525`,
+  `engine_paused=false`; outbox `PUBLISHED=15522`; Kafka partition 15 lag 0.
+- `l4b-invariant-gates.tsv` reports all P0/P1 gates PASS, including
+  `engine_seq_complete`, `every_bid_has_settled_ledger`,
+  `idempotency_response_matches_bid`, `accepted_public_event_exact_mapping`,
+  `bid_too_low_rejects_justified`, `outbox_drained`,
+  `kafka_consumer_group_lag_zero`, `v3_relay_stream_complete`, and
+  `redis_pending_decisions_empty`.
+- Evidence path:
+  `external run artifact`.
+- Classification: `CURRENT_PASS` and the preferred judge-facing
+  accepted-heavy S2-capacity display artifact. It proves the P1 path can sustain
+  a 200/s accepted-heavy open-arrival stair over more than 10k decisions with
+  complete end-to-end settlement and verifier coverage.
+
+Independent-ECS decision/reject convergence-drain, 2026-06-04:
+
+- `s2-convergence-drain-decision-ecs-20260604T1937` used same-VPC independent
+  k6 against `http://172.16.179.112:18080`. The public IP path was deliberately
+  not used; `47.113.223.90:18080` timed out from the service host, while the
+  service itself was healthy on `127.0.0.1:18080` and listening on `*:18080`.
+- Workload profile: `100/s -> 200/s -> 400/s -> 600/s`, 1s ramp plus 30s hold
+  per stage, 30s ramp-down, `AMOUNT_MODE=time_ladder`, `NOISE_PCT=20`,
+  `USER_COUNT=1500`, `MAX_VUS=1500`. This is the decision/reject-heavy S2
+  convergence profile, not the accepted-heavy capacity profile.
+- k6 was clean: exit 0, `dropped_iterations=0`, `http_req_failed=0`,
+  auth/ACL/admission/non-decision failures all 0, 49,049 final decisions,
+  6 accepted, 49,043 rejected. Decision p99 was 4ms, p99.9 18ms, max 45ms;
+  HTTP p99 was 3.63ms, p99.9 17.97ms, max 44.53ms.
+- The independent k6 host was not the bottleneck: max active VU 3/400, CPU
+  roughly 8-20%, RSS about 181-183MB, and TCP established about 405.
+- Service-side verifier passed after post-run collection:
+  `settlements=49049`, `ACCEPTED|SETTLED=6`, `REJECTED|SETTLED=49043`,
+  non-terminal settlements 0, open/failed settlements 0, Kafka consumer lag 0,
+  Redis pending 0, Redis decision stream length 49,049, outbox `PUBLISHED=98`,
+  outbox unpublished 0, DLQ gate PASS, and all `l4b-invariant-gates.tsv` P0/P1
+  gates PASS.
+- Drain timing: a dedicated `s2-convergence.tsv` poll was not started exactly at
+  k6 end, so do not claim an exact second-by-second convergence sample. However,
+  DB timestamps show the final outbox `published_at` at
+  `2026-06-04 19:53:41.981 CST` and the final settlement `updated_at` at
+  `2026-06-04 19:53:45.828 CST`. The profile duration is about 154s
+  (`4 * (1s ramp + 30s hold) + 30s ramp-down`), and the first settlement was at
+  `19:51:12.036 CST`, so the backlog was effectively caught up by the k6
+  ramp-down end. The conservative report line is: "post-run collect/verifier at
+  `19:55:57 CST` confirmed Kafka/Redis/PG/outbox zero backlog; DB timestamps
+  show the final settlement completed at approximately test end."
+- Evidence path:
+  `external run artifact`.
+- Classification: `CURRENT_PASS` for S2 decision/reject-heavy
+  convergence-drain at the 100/200/400/600 display profile. It proves payment
+  finality convergence for normal decision-heavy traffic over more than 10k
+  decisions. It must not be used to claim accepted-heavy 600/s immediate drain;
+  accepted-heavy remains governed by the accepted-capacity evidence above.
+
+Why this drained much faster than earlier 100-122s local stair runs:
+
+- Workload shape changed. This run is decision/reject-heavy: only 6 of 49,049
+  decisions were accepted. Rejected settlement still writes audit/idempotency
+  state, but it does not update winner/price, create accepted public events, or
+  create accepted-update outbox pressure on every decision.
+- Scale and pressure window are smaller and smoother than the earlier 70k-100k
+  local diagnostic stairs. The highest offered rate here was 600/s with 30s
+  holds, so the settlement worker could keep up while the test was still
+  running instead of inheriting a large post-run backlog.
+- The earlier 120s evidence intentionally measured a high-backlog drain after a
+  more aggressive local stair. It remains valid as bottleneck history, not a
+  contradiction of this run.
+- The code path is also later than the old 100-122s evidence: set-based rejected
+  settlement, success-log suppression, accepted-prefix batching, and relay loop
+  improvements had already been retained or rejected based on measured runs.
+  The key engineering lesson is still unchanged: do not skip rejected audit rows
+  or payment-finality gates for speed; keep the foreground decision fast and
+  make payment wait for verified Kafka/Redis/PG/outbox convergence.
+
+Current rerun policy:
+
+1. Use the 200/s display run as the clean judge-facing S2-capacity pass.
+2. Keep `400/s` as higher-ceiling evidence with explicit late-drain and verifier
+   cost caveats.
+3. Use `s2-convergence-drain-decision-ecs-20260604T1937` as the clean
+   decision/reject-heavy convergence-drain pass.
+4. Keep accepted-heavy `600/s` as attack/upstream ceiling evidence until it has
+   both k6 clean and post-run convergence within the chosen product buffer.
+5. Do not increase to 800/1000 until the async drain gate passes at 600.
+
+Detailed diagnosis and judge-facing answers:
+[s2-settlement-diagnosis-and-judge-defense.md](03-s2-steady-auction-and-soak.md).
+
+## 6. Metric → chart / panel mapping
+
+| Claim | Source |
+|---|---|
+| steady decision p99 ≤ 100 ms | PTS `出价决策 bid-decision` p99 (RPS run) / k6 `p(99)` (soak) |
+| offered vs accepted rate | PTS TPS + server accepted count; k6 rate vs server `ENGINE_ACCEPTED/s` |
+| settlement convergence safe for payment | `s2-convergence-summary.env`; exact `s2-convergence.tsv` samples; Kafka consumer lag; verifier gates `kafka_consumer_group_lag_zero`, `redis_pending_decisions_empty`, `outbox_drained` |
+| **M4 no leak** | Grafana: `process_resident_memory_bytes`, `go_memstats_heap_inuse_bytes` (post-GC floor), `go_goroutines`, `process_open_fds` — flat slope over the soak |
+| auto-extension correct | M3 verifier extension check |
+
+For current local S2 artifacts, the project also writes self-contained runtime
+samples to `s2-runtime-samples.tsv`: `runtime_rss_bytes`,
+`runtime_heap_inuse_bytes`, `runtime_heap_alloc_bytes`, `runtime_goroutines`,
+`runtime_open_fds`, and DB pool counts. A 2m30s stair can diagnose pressure, but
+it is not a substitute for a 30-60 minute M4 no-leak soak.
+
+## 7. Pitfalls
+
+- **Using closed VU loop for the sustained claim.** Use RPS mode (PTS) /
+  arrival-rate (k6); otherwise overload hides and p99 is optimistic.
+- **Calling a short stair a soak.** A 2-5 minute 1000/s stair can diagnose
+  capacity and convergence, but it cannot prove 30-60 minute M4 no-leak.
+- **Running k6 on the service node for formal soak evidence.** Acceptable for
+  development, but judge-facing S2 should use an independent same-VPC ECS or PTS
+  RPS to avoid load-generator resource contention.
+- **Mixing read interference into fanout.** High-frequency read traffic belongs
+  to `S2-read-interference`; it must not pollute S3 live-fanout samplers.
+- **Re-bid storm.** Active bidders should bid to *raise*, not re-fire below the
+  current price every 2 s; otherwise you recreate S1's hotspot and call it steady.
+- **Soak too short.** < 30 min rarely exposes a slow leak; watch the post-GC
+  floor, not the sawtooth peaks.
+- **Reading peaks instead of the floor for M4.** A rising *floor* is the leak; a
+  sawtooth that resets to a stable floor is healthy.
+- **No `pprof` baseline.** Snapshot heap at warm-up and diff at the end
+  (`go tool pprof -base`) to localize any growth.
+- **Calling M1 success "payment safe".** M1 proves the user saw a final engine
+  decision. Payment safety additionally requires settlement convergence.

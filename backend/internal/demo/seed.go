@@ -15,18 +15,23 @@ func SeedP0Smoke(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client) error
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	_, err = tx.Exec(ctx, `
+		CREATE TEMP TABLE p0_demo_rooms ON COMMIT DROP AS
+		SELECT id
+		FROM rooms
+		WHERE host_id = 'host_1'
+		   OR id IN ('room_main', 'room_side');
+
 		CREATE TEMP TABLE p0_demo_auctions ON COMMIT DROP AS
 		SELECT id
 		FROM auctions
-		WHERE room_id IN ('room_main', 'room_side')
-		   OR room_id IN (SELECT id FROM rooms WHERE host_id = 'host_1')
+		WHERE room_id IN (SELECT id FROM p0_demo_rooms)
 		   OR id IN ('auc_live', 'auc_side');
 
 		CREATE TEMP TABLE p0_demo_items ON COMMIT DROP AS
 		SELECT DISTINCT item_id AS id
 		FROM auctions
 		WHERE id IN (SELECT id FROM p0_demo_auctions)
-		   OR room_id IN ('room_main', 'room_side');
+		   OR room_id IN (SELECT id FROM p0_demo_rooms);
 
 		CREATE TEMP TABLE p0_demo_orders ON COMMIT DROP AS
 		SELECT id
@@ -37,7 +42,7 @@ func SeedP0Smoke(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client) error
 		SELECT id
 		FROM ai_generation_jobs
 		WHERE auction_id IN (SELECT id FROM p0_demo_auctions)
-		   OR room_id IN ('room_main', 'room_side');
+		   OR room_id IN (SELECT id FROM p0_demo_rooms);
 
 		DELETE FROM scheduler_jobs
 		WHERE target_id IN (SELECT id FROM p0_demo_auctions)
@@ -57,26 +62,28 @@ func SeedP0Smoke(ctx context.Context, db *pgxpool.Pool, rdb *redis.Client) error
 		DELETE FROM auction_highlight_assets WHERE auction_id IN (SELECT id FROM p0_demo_auctions);
 		DELETE FROM ai_generation_jobs WHERE id IN (SELECT id FROM p0_demo_jobs);
 		DELETE FROM auction_risk_alerts WHERE auction_id IN (SELECT id FROM p0_demo_auctions);
-		DELETE FROM auction_system_messages WHERE auction_id IN (SELECT id FROM p0_demo_auctions) OR room_id IN ('room_main', 'room_side');
+		DELETE FROM auction_system_messages WHERE auction_id IN (SELECT id FROM p0_demo_auctions) OR room_id IN (SELECT id FROM p0_demo_rooms);
 		DELETE FROM system_control_signals
 		WHERE target_id IN (SELECT id FROM p0_demo_auctions)
-		   OR target_id IN ('room_main', 'room_side');
+		   OR target_id IN (SELECT id FROM p0_demo_rooms);
 		DELETE FROM user_activity_events
 		WHERE auction_id IN (SELECT id FROM p0_demo_auctions)
-		   OR room_id IN ('room_main', 'room_side');
+		   OR room_id IN (SELECT id FROM p0_demo_rooms);
 		DELETE FROM system_anomaly_events
 		WHERE auction_id IN (SELECT id FROM p0_demo_auctions);
-		DELETE FROM liveops_lucky_draw_entries WHERE room_id IN ('room_main', 'room_side');
-		DELETE FROM liveops_team_choices WHERE room_id IN ('room_main', 'room_side');
-		DELETE FROM liveops_task_progress WHERE room_id IN ('room_main', 'room_side');
-		DELETE FROM liveops_campaigns WHERE room_id IN ('room_main', 'room_side');
+		DELETE FROM liveops_lucky_draw_entries WHERE room_id IN (SELECT id FROM p0_demo_rooms);
+		DELETE FROM liveops_team_choices WHERE room_id IN (SELECT id FROM p0_demo_rooms);
+		DELETE FROM liveops_task_progress WHERE room_id IN (SELECT id FROM p0_demo_rooms);
+		DELETE FROM liveops_campaigns WHERE room_id IN (SELECT id FROM p0_demo_rooms);
 		DELETE FROM payment_events
 		WHERE order_id IN (SELECT id FROM p0_demo_orders);
 		DELETE FROM orders WHERE id IN (SELECT id FROM p0_demo_orders);
 		DELETE FROM auction_rules WHERE auction_id IN (SELECT id FROM p0_demo_auctions);
 		DELETE FROM auctions WHERE id IN (SELECT id FROM p0_demo_auctions);
 		DELETE FROM items WHERE id IN (SELECT id FROM p0_demo_items) AND id NOT IN ('item_live', 'item_side');
-		DELETE FROM chat_messages WHERE room_id IN ('room_main', 'room_side');
+		DELETE FROM chat_messages WHERE room_id IN (SELECT id FROM p0_demo_rooms);
+		DELETE FROM room_memberships WHERE room_id IN (SELECT id FROM p0_demo_rooms);
+		DELETE FROM rooms WHERE id IN (SELECT id FROM p0_demo_rooms) AND id NOT IN ('room_main', 'room_side');
 
 		INSERT INTO users (id, role, display_name, city)
 		VALUES

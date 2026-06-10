@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -362,8 +363,10 @@ else
       if absolute_end_ms > 0 and candidate > absolute_end_ms then
         candidate = absolute_end_ms
       end
-      new_end_at_ms = candidate
-      new_extend_count = extend_count + 1
+      if candidate > end_at_ms then
+        new_end_at_ms = candidate
+        new_extend_count = extend_count + 1
+      end
     end
   end
   end
@@ -582,8 +585,10 @@ else
       if absolute_end_ms > 0 and candidate > absolute_end_ms then
         candidate = absolute_end_ms
       end
-      new_end_at_ms = candidate
-      new_extend_count = extend_count + 1
+      if candidate > end_at_ms then
+        new_end_at_ms = candidate
+        new_extend_count = extend_count + 1
+      end
     end
   end
 end
@@ -823,6 +828,7 @@ type confirmEngineResult struct {
 }
 
 type hotProxyIntent struct {
+	AuctionID      string
 	ID             string
 	UserID         string
 	MaxAmountCents int64
@@ -929,6 +935,19 @@ func (e *Engine) PlaceBid(ctx context.Context, auctionID string, userID string, 
 // engine and ledger path as a manual bid, but records the bid source as
 // AUTO_MAX_BID so ranking, history, audit, and demo evidence remain honest.
 func (e *Engine) PlaceAutoMaxBid(ctx context.Context, auctionID string, userID string, idempotencyKey string, input auction.BidInput, traceID string, aclKey ...string) (auction.BidResponse, error) {
+	return e.placeBidWithSource(ctx, auctionID, userID, idempotencyKey, input, traceID, auction.BidSourceAutoMaxBid, aclKey...)
+}
+
+func (e *Engine) PlaceActiveMaxBidIntent(ctx context.Context, auctionID string, userID string, intentID string, idempotencyKey string, input auction.BidInput, traceID string, aclKey ...string) (auction.BidResponse, error) {
+	if intentID == "" {
+		return auction.BidResponse{}, apierrors.New(apierrors.CodeInvalidArgument, "active max bid intent is required", http.StatusBadRequest)
+	}
+	intent := hotProxyIntent{AuctionID: auctionID, UserID: userID, ID: intentID}
+	unlock, ok := e.lockActiveHotProxyIntent(ctx, intent)
+	if !ok {
+		return auction.BidResponse{}, apierrors.New(apierrors.CodeMaxBidTooLow, "max bid intent is no longer active", http.StatusConflict)
+	}
+	defer unlock()
 	return e.placeBidWithSource(ctx, auctionID, userID, idempotencyKey, input, traceID, auction.BidSourceAutoMaxBid, aclKey...)
 }
 
@@ -1170,12 +1189,17 @@ func (e *Engine) resolveHotMaxBids(ctx context.Context, auctionID string, trigge
 		if step == nil || amount <= 0 {
 			return last, applied
 		}
+		unlock, ok := e.lockActiveHotProxyIntent(ctx, *step)
+		if !ok {
+			continue
+		}
 		clientBidID := fmt.Sprintf("auto:%s:%d:%d", step.ID, trigger.EngineSeq, engineSeq)
 		resp, err := e.placeBidWithSource(ctx, auctionID, step.UserID, clientBidID, auction.BidInput{
 			ClientBidID:   clientBidID,
 			AmountCents:   amount,
 			ClientSeenSeq: engineSeq,
 		}, traceID, auction.BidSourceAutoMaxBid)
+		unlock()
 		if err != nil || (resp.Result != auction.BidResultEngineAccepted && resp.Result != auction.BidResultEngineSold) {
 			return last, applied
 		}
@@ -1193,7 +1217,7 @@ func (e *Engine) resolveHotMaxBids(ctx context.Context, auctionID string, trigge
 
 func (e *Engine) loadHotProxyIntents(ctx context.Context, auctionID string) ([]hotProxyIntent, error) {
 	rows, err := e.db.Query(ctx, `
-		SELECT id, user_id, max_amount_cents, created_at
+		SELECT id, auction_id, user_id, max_amount_cents, created_at
 		FROM max_bid_intents
 		WHERE auction_id = $1 AND status = 'ACTIVE'
 		ORDER BY max_amount_cents DESC, created_at ASC, id ASC
@@ -1206,12 +1230,47 @@ func (e *Engine) loadHotProxyIntents(ctx context.Context, auctionID string) ([]h
 	var out []hotProxyIntent
 	for rows.Next() {
 		var intent hotProxyIntent
-		if err := rows.Scan(&intent.ID, &intent.UserID, &intent.MaxAmountCents, &intent.CreatedAt); err != nil {
+		if err := rows.Scan(&intent.ID, &intent.AuctionID, &intent.UserID, &intent.MaxAmountCents, &intent.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, intent)
 	}
 	return out, rows.Err()
+}
+
+func (e *Engine) lockActiveHotProxyIntent(ctx context.Context, intent hotProxyIntent) (func(), bool) {
+	conn, err := e.db.Acquire(ctx)
+	if err != nil {
+		return nil, false
+	}
+	release := func() {
+		conn.Release()
+	}
+	key := hotProxyIntentAdvisoryKey(intent.AuctionID, intent.UserID)
+	var locked bool
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, key).Scan(&locked); err != nil || !locked {
+		release()
+		return nil, false
+	}
+	release = func() {
+		_, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, key)
+		conn.Release()
+	}
+	var active bool
+	if err := conn.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM max_bid_intents
+			WHERE id = $1
+			  AND auction_id = $2
+			  AND user_id = $3
+			  AND status = 'ACTIVE'
+		)
+	`, intent.ID, intent.AuctionID, intent.UserID).Scan(&active); err != nil || !active {
+		release()
+		return nil, false
+	}
+	return release, true
 }
 
 func (e *Engine) markHotProxyIntentApplied(ctx context.Context, intentID string, engineSeq int64) error {
@@ -1246,6 +1305,15 @@ func (e *Engine) markHotProxyIntentExhausted(ctx context.Context, intentID strin
 		WHERE id = $1 AND status = 'ACTIVE'
 	`, intentID)
 	return err
+}
+
+func hotProxyIntentAdvisoryKey(auctionID string, userID string) int64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte("max_bid_intent:"))
+	_, _ = h.Write([]byte(auctionID))
+	_, _ = h.Write([]byte(":"))
+	_, _ = h.Write([]byte(userID))
+	return int64(h.Sum64())
 }
 
 func hotProxyDefenderBeatsOrTies(defender hotProxyIntent, challenger hotProxyIntent) bool {
@@ -1477,12 +1545,17 @@ func (e *Engine) preemptHotProxyChallenger(ctx context.Context, auctionID string
 	if amount < minimum {
 		return auction.BidResponse{}, false
 	}
+	unlock, ok := e.lockActiveHotProxyIntent(ctx, *defender)
+	if !ok {
+		return auction.BidResponse{}, false
+	}
 	clientBidID := fmt.Sprintf("auto-preempt:%s:%d:%d", defender.ID, engineSeq, time.Now().UTC().UnixNano())
 	resp, err := e.placeBidWithSource(ctx, auctionID, defender.UserID, clientBidID, auction.BidInput{
 		ClientBidID:   clientBidID,
 		AmountCents:   amount,
 		ClientSeenSeq: engineSeq,
 	}, traceID, auction.BidSourceAutoMaxBid)
+	unlock()
 	if err != nil || (resp.Result != auction.BidResultEngineAccepted && resp.Result != auction.BidResultEngineSold) {
 		return auction.BidResponse{}, false
 	}
@@ -1902,52 +1975,52 @@ func (e *Engine) FenceAuction(ctx context.Context, auctionID string, reason stri
 // natural terminal transition. A mismatch means settlement is still catching up
 // or Redis has extended end_at; caller must reschedule instead of deciding a
 // potentially stale winner.
-func (e *Engine) FenceAuctionForScheduler(ctx context.Context, auctionID string, reason string, pgEndAt time.Time, pgPrice int64, pgWinnerID *string) (time.Time, error) {
+func (e *Engine) FenceAuctionForScheduler(ctx context.Context, auctionID string, reason string, pgEndAt time.Time, pgPrice int64, pgWinnerID *string) (time.Time, bool, error) {
 	if e == nil || e.redis == nil {
-		return time.Time{}, nil
+		return time.Time{}, false, nil
 	}
 	key := redisx.BidEngineStateKey(auctionID)
 	values, err := e.redis.HGetAll(ctx, key).Result()
 	if err != nil {
-		return time.Now().UTC().Add(500 * time.Millisecond), err
+		return time.Now().UTC().Add(500 * time.Millisecond), false, err
 	}
 	if len(values) == 0 {
-		return time.Time{}, nil
+		return time.Time{}, false, nil
 	}
 	pipe := e.redis.Pipeline()
 	pipe.HSet(ctx, key, "paused", "1", "pause_reason", reason)
 	pipe.PExpire(ctx, key, engineStateTTL)
 	if _, err := pipe.Exec(ctx); err != nil {
-		return time.Now().UTC().Add(500 * time.Millisecond), err
+		return time.Now().UTC().Add(500 * time.Millisecond), false, err
 	}
 	pending, err := e.redis.XLen(ctx, redisx.BidEngineLogStreamKey(auctionID)).Result()
 	if err != nil {
-		return time.Now().UTC().Add(500 * time.Millisecond), err
+		return time.Now().UTC().Add(500 * time.Millisecond), false, err
 	}
 	cursor, err := e.redis.Get(ctx, redisx.BidEngineRelayCursorKey(auctionID)).Result()
 	if errors.Is(err, redis.Nil) {
 		cursor = "0-0"
 	} else if err != nil {
-		return time.Now().UTC().Add(500 * time.Millisecond), err
+		return time.Now().UTC().Add(500 * time.Millisecond), false, err
 	}
 	if pending > 0 {
 		msgs, err := e.redis.XRangeN(ctx, redisx.BidEngineLogStreamKey(auctionID), "("+cursor, "+", 1).Result()
 		if err != nil {
-			return time.Now().UTC().Add(500 * time.Millisecond), err
+			return time.Now().UTC().Add(500 * time.Millisecond), false, err
 		}
 		if len(msgs) > 0 {
-			return time.Now().UTC().Add(500 * time.Millisecond), fmt.Errorf("redis engine has unrelayed terminal decisions")
+			return time.Now().UTC().Add(500 * time.Millisecond), false, fmt.Errorf("redis engine has unrelayed terminal decisions")
 		}
 	}
 	redisEndAtMS := parseInt64(values["end_at_ms"])
 	if redisEndAtMS > pgEndAt.UnixMilli() {
 		_ = e.redis.HSet(ctx, key, "paused", "0", "pause_reason", "").Err()
-		return time.Now().UTC().Add(500 * time.Millisecond), fmt.Errorf("redis end_at is newer than PostgreSQL")
+		return time.UnixMilli(redisEndAtMS).UTC(), true, fmt.Errorf("redis end_at is newer than PostgreSQL")
 	}
 	redisPrice := parseInt64(values["current_price_cents"])
 	if redisPrice != pgPrice {
 		_ = e.redis.HSet(ctx, key, "paused", "0", "pause_reason", "").Err()
-		return time.Now().UTC().Add(500 * time.Millisecond), fmt.Errorf("redis price %d != postgres price %d", redisPrice, pgPrice)
+		return time.Now().UTC().Add(500 * time.Millisecond), false, fmt.Errorf("redis price %d != postgres price %d", redisPrice, pgPrice)
 	}
 	redisWinner := values["current_winner_id"]
 	pgWinner := ""
@@ -1956,13 +2029,13 @@ func (e *Engine) FenceAuctionForScheduler(ctx context.Context, auctionID string,
 	}
 	if redisWinner != pgWinner {
 		_ = e.redis.HSet(ctx, key, "paused", "0", "pause_reason", "").Err()
-		return time.Now().UTC().Add(500 * time.Millisecond), fmt.Errorf("redis winner %q != postgres winner %q", redisWinner, pgWinner)
+		return time.Now().UTC().Add(500 * time.Millisecond), false, fmt.Errorf("redis winner %q != postgres winner %q", redisWinner, pgWinner)
 	}
 	if redisEndAtMS > 0 && time.Now().UTC().UnixMilli() < redisEndAtMS {
 		_ = e.redis.HSet(ctx, key, "paused", "0", "pause_reason", "").Err()
-		return time.UnixMilli(redisEndAtMS).UTC(), fmt.Errorf("redis auction has not reached end_at")
+		return time.UnixMilli(redisEndAtMS).UTC(), false, fmt.Errorf("redis auction has not reached end_at")
 	}
-	return time.Time{}, nil
+	return time.Time{}, false, nil
 }
 
 func (r engineResult) response(durabilityStatus string, decisionStatus string) auction.BidResponse {
@@ -3141,12 +3214,13 @@ func (w *Worker) settleAcceptedBatch(ctx context.Context, auctionID string, batc
 	var dbEpoch int64
 	var dbEngineSeq int64
 	var publicSeq int64
+	var dbEndAt time.Time
 	if err := tx.QueryRow(ctx, `
-		SELECT engine_epoch, engine_seq, seq
+		SELECT engine_epoch, engine_seq, seq, end_at
 		FROM auctions
 		WHERE id = $1
 		FOR UPDATE
-	`, auctionID).Scan(&dbEpoch, &dbEngineSeq, &publicSeq); err != nil {
+	`, auctionID).Scan(&dbEpoch, &dbEngineSeq, &publicSeq, &dbEndAt); err != nil {
 		return 0, err
 	}
 	observability.Observe("auction_settlement_step_seconds", time.Since(step).Seconds(), map[string]string{"step": "auctions_lock", "result": resultAccepted}, observability.DefaultLatencyBuckets)
@@ -3174,7 +3248,7 @@ func (w *Worker) settleAcceptedBatch(ctx context.Context, auctionID string, batc
 		return 0, transientSettlementError{err: fmt.Errorf("accepted batch seq waiting auction=%s redis_first=%d db_next=%d", auctionID, first.EngineSeq, dbEngineSeq+1)}
 	}
 
-	rows, err := acceptedSettlementBatchRows(batch, publicSeq)
+	rows, err := acceptedSettlementBatchRows(batch, publicSeq, dbEndAt)
 	if err != nil {
 		return 0, err
 	}
@@ -3283,8 +3357,9 @@ type acceptedSettlementBatchRow struct {
 	ServerTimeMS    int64           `json:"server_time_ms"`
 }
 
-func acceptedSettlementBatchRows(batch []decodedLedgerMessage, publicSeq int64) ([]acceptedSettlementBatchRow, error) {
+func acceptedSettlementBatchRows(batch []decodedLedgerMessage, publicSeq int64, initialEndAt time.Time) ([]acceptedSettlementBatchRow, error) {
 	rows := make([]acceptedSettlementBatchRow, 0, len(batch))
+	previousEndAtMS := initialEndAt.UTC().UnixMilli()
 	for i, item := range batch {
 		result := item.result
 		seq := publicSeq + int64(i) + 1
@@ -3296,6 +3371,7 @@ func acceptedSettlementBatchRows(batch []decodedLedgerMessage, publicSeq int64) 
 		if err != nil {
 			return nil, err
 		}
+		eventType := "bid_accepted"
 		payload := map[string]any{
 			"bid_id":              result.BidID,
 			"user_id":             result.UserID,
@@ -3309,6 +3385,14 @@ func acceptedSettlementBatchRows(batch []decodedLedgerMessage, publicSeq int64) 
 			"durability_status":   auction.DurabilityStatusKafkaAcked,
 			"decision_basis":      result.DecisionBasis,
 			"state_version":       seq,
+		}
+		if result.EndAtMS > previousEndAtMS && previousEndAtMS > 0 {
+			eventType = "auction_extended"
+			payload["old_end_at"] = time.UnixMilli(previousEndAtMS).UTC()
+			payload["new_end_at"] = time.UnixMilli(result.EndAtMS).UTC()
+			payload["end_at"] = time.UnixMilli(result.EndAtMS).UTC()
+			payload["extend_ms"] = result.EndAtMS - previousEndAtMS
+			payload["extend_count"] = result.ExtendCount
 		}
 		payloadJSON, err := json.Marshal(payload)
 		if err != nil {
@@ -3342,10 +3426,13 @@ func acceptedSettlementBatchRows(batch []decodedLedgerMessage, publicSeq int64) 
 			TraceID:         result.TraceID,
 			Source:          source,
 			PublicSeq:       seq,
-			EventType:       "bid_accepted",
+			EventType:       eventType,
 			EventPayload:    json.RawMessage(payloadJSON),
 			ServerTimeMS:    serverTimeMS,
 		})
+		if result.EndAtMS > previousEndAtMS {
+			previousEndAtMS = result.EndAtMS
+		}
 	}
 	return rows, nil
 }
@@ -4271,7 +4358,15 @@ func settleAccepted(ctx context.Context, tx pgx.Tx, result engineResult) (int64,
 		endAt = &t
 	}
 	var publicSeq int64
+	var previousEndAt time.Time
 	err := tx.QueryRow(ctx, `
+		WITH locked AS (
+			SELECT end_at
+			FROM auctions
+			WHERE id = $1 AND engine_epoch = $7 AND engine_seq = $6 - 1
+			FOR UPDATE
+		),
+		updated AS (
 		UPDATE auctions
 		SET status = $2,
 		    current_price_cents = $3,
@@ -4284,9 +4379,12 @@ func settleAccepted(ctx context.Context, tx pgx.Tx, result engineResult) (int64,
 		    engine_epoch = $7,
 		    version = version + 1,
 		    updated_at = now()
-		WHERE id = $1 AND engine_epoch = $7 AND engine_seq = $6 - 1
+		WHERE id = $1 AND id IN (SELECT $1 FROM locked)
 		RETURNING seq
-	`, result.AuctionID, newStatus, result.AmountCents, result.UserID, endAt, result.EngineSeq, result.EngineEpoch, result.ExtendCount).Scan(&publicSeq)
+		)
+		SELECT updated.seq, locked.end_at
+		FROM updated, locked
+	`, result.AuctionID, newStatus, result.AmountCents, result.UserID, endAt, result.EngineSeq, result.EngineEpoch, result.ExtendCount).Scan(&publicSeq, &previousEndAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, fmt.Errorf("accepted settlement fenced out auction=%s epoch=%d seq=%d", result.AuctionID, result.EngineEpoch, result.EngineSeq)
 	}
@@ -4320,6 +4418,14 @@ func settleAccepted(ctx context.Context, tx pgx.Tx, result engineResult) (int64,
 		"decision_status":     auction.DecisionStatusDecided,
 		"durability_status":   auction.DurabilityStatusKafkaAcked,
 		"decision_basis":      result.DecisionBasis,
+	}
+	if endAt != nil && endAt.After(previousEndAt) && eventType == "bid_accepted" {
+		eventType = "auction_extended"
+		payload["old_end_at"] = previousEndAt.UTC()
+		payload["new_end_at"] = endAt.UTC()
+		payload["end_at"] = endAt.UTC()
+		payload["extend_ms"] = endAt.UTC().UnixMilli() - previousEndAt.UTC().UnixMilli()
+		payload["extend_count"] = result.ExtendCount
 	}
 	if result.Source == auction.BidSourceAutoMaxBid {
 		payload["bid_source"] = auction.BidSourceAutoMaxBid

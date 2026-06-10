@@ -11,7 +11,7 @@ fi
 shift || true
 
 LABEL="${LABEL:-${SCENARIO}-$(date +%Y%m%dT%H%M%S)}"
-EVIDENCE_DIR="${EVIDENCE_DIR:-docs/perf/pts/evidence/incoming/${LABEL}}"
+EVIDENCE_DIR="${EVIDENCE_DIR:-artifacts/pts/evidence/incoming/${LABEL}}"
 BASE_URL="${BASE_URL:-http://127.0.0.1:18080}"
 if [ -z "${WS_URL:-}" ]; then
   case "$BASE_URL" in
@@ -195,7 +195,7 @@ case "$SCENARIO" in
     MISSED_EVENTS="${MISSED_EVENTS:-3}"
     BID_RATE_PER_S="${BID_RATE_PER_S:-10}"
     BID_SOURCE_VUS="${BID_SOURCE_VUS:-5}"
-    SESSION_CSV="${SESSION_CSV:-../../docs/perf/pts/pts-1ab-1000vu-sessions.csv}"
+    SESSION_CSV="${SESSION_CSV:-../../tests/pts/inputs/s1-s5/s1-s5-1000-user-sessions.csv}"
     k6 run \
       --env "BASE_URL=${BASE_URL}" \
       --env "WS_URL=${WS_URL}" \

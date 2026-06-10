@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -136,6 +137,33 @@ func TestAIListingDraftIsHostOnlyStructuredAndApplyIsAuditOnly(t *testing.T) {
 	}
 
 	assertAPIStatus(t, router, http.MethodPost, "/api/host/ai/listing-drafts/"+payload.ID+"/apply", nil, userHeaders("host_1", "host"), http.StatusOK)
+}
+
+func TestAIListingDraftFallsBackToSucceededDraftWhenProviderFails(t *testing.T) {
+	db := openMonitorDB(t)
+	repo := aicap.NewRepository(db)
+	job, err := repo.CreateListingDraft(context.Background(), "host_1", &fakeStructuredGenerator{
+		errs: map[string]error{"listing_draft": errors.New("Post \"https://cc.580ai.net/v1/chat/completions\": context deadline exceeded")},
+	}, aicap.ListingDraftRequest{
+		RoomID:         "room_main",
+		SellerNotes:    "天然翡翠A货平安扣吊坠，附证书，顺丰包邮",
+		TargetCategory: "collectibles",
+	})
+	if err != nil {
+		t.Fatalf("CreateListingDraft fallback: %v", err)
+	}
+	if job.Status != "SUCCEEDED" {
+		t.Fatalf("fallback listing draft status = %s, want SUCCEEDED; error=%s", job.Status, job.ErrorMessage)
+	}
+	if job.ErrorMessage != "" {
+		t.Fatalf("fallback listing draft should not expose error_message, got %q", job.ErrorMessage)
+	}
+	if job.Safety["fallback"] != true || job.Safety["fallback_reason"] == "" {
+		t.Fatalf("fallback safety missing reason: %#v", job.Safety)
+	}
+	if len(stringSliceFromAny(job.Output["title_candidates"])) == 0 {
+		t.Fatalf("fallback draft missing title candidates: %#v", job.Output)
+	}
 }
 
 func TestAICommentarySystemMessagesSentinelRecapAndProductQA(t *testing.T) {

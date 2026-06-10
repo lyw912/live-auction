@@ -17,27 +17,27 @@ Read compact evidence first. Do not bulk-read raw artifact directories.
 
 Default context order:
 
-1. `docs/current/README.md`
-2. `docs/current/performance-correctness-contract.md`
-3. `docs/current/architecture.md`
-4. `docs/current/evidence-policy.md`
-5. `docs/current/runtime-profiles.md`
-6. `docs/current/pts-run-review-template.md` when writing or reviewing PTS reports.
-7. `docs/current/fault-injection-runbook.md` for fault claims.
-8. `docs/current/pts1b-readiness-checklist.md` before paid/current PTS runs.
+1. `docs/README.md`
+2. `docs/design/02-performance-correctness-contract.md`
+3. `docs/design/01-architecture.md`
+4. `docs/design/04-evidence-policy.md`
+5. `docs/design/03-runtime-profiles.md`
+6. `docs/s1-s5/00-overview.md` when writing or reviewing S1-S5 reports.
+7. `docs/s1-s5/10-fault-injection-runbook.md` for fault claims.
+8. `docs/s1-s5/12-readiness-checklist.md` before paid/current PTS runs.
 9. `tests/pts/MANIFEST.md` for PTS workloads.
-10. `docs/perf/pts/evidence/README.md` for raw PTS evidence.
+10. `docs/design/04-evidence-policy.md` for raw artifact classification.
 11. `tests/load/analyze-p3-artifacts.mjs` output or existing `analysis-compact.json` / `analysis-compact.md` for older local-stress workloads.
 12. the single relevant workload script under `tests/pts/` or `tests/load/`
 13. only the subsystem code or raw artifact identified by the compact report
 
 Read broader docs only when needed:
 
-- `docs/perf/windows-local-strategy.md`
-- `docs/design-v2-industrial/09-performance-and-benchmark.md` for historical baseline discipline only
-- `docs/archive/progress/p3-progress.md`
+- `docs/s1-s5/01-metrics-and-slo.md`
+- `docs/s1-s5/08-scale-out-and-ceilings.md`
+- `tests/load/README.md`
 
-Never open every file in `docs/perf/raw/**`. Use compact reports to pick the one workload and one artifact type to inspect.
+Never open every file in `artifacts/perf/raw/**`. Use compact reports to pick the one workload and one artifact type to inspect.
 
 If current methods, tool behavior, or profiling techniques matter, browse the web and prefer official docs:
 
@@ -55,7 +55,7 @@ If current methods, tool behavior, or profiling techniques matter, browse the we
 - Treat local smoke as harness validation only.
 - Do not stop after one run if the result is inconclusive. Change load model, scale, duration, data shape, or instrumentation and run again.
 - Prefer open-model HTTP pressure (`constant-arrival-rate` or ramping arrival rate) when testing sustained request arrival. Prefer VU/session models when connection count is the load.
-- Record raw outputs and commands. If raw output is too large, save it under `docs/perf/raw/` and summarize path + key numbers.
+- Record raw outputs and commands. If raw output is too large, save it under `artifacts/perf/raw/` and summarize path + key numbers.
 - Separate SUT bottlenecks from load-generator, laptop, Docker, network, or script limits.
 - Do not publish or imply final capacity from Windows. Local results can prove bottleneck direction, regressions, and relative improvements.
 - Failed tests are valuable if they expose a real limit and preserve enough evidence to reproduce.
@@ -65,14 +65,14 @@ If current methods, tool behavior, or profiling techniques matter, browse the we
 - Do not read unrelated historical raw runs. For before/after comparison, compare matching workload names and scale settings from compact reports first, then open only the two raw artifacts needed to verify the suspected delta.
 - Always distinguish PTS-1B current-contract tests from historical admission/downstream-pressure tests:
   - PTS-1B must record the runtime profile/env source.
-  - New PTS report reviews must use `docs/current/pts-run-review-template.md`.
+  - New PTS report reviews must use `docs/s1-s5/00-overview.md` and `docs/design/04-evidence-policy.md`.
   - `.env.example` is a local demo profile and invalid for PTS-1B pressure claims.
   - PTS-1B must use `.env.pts1b.example` or the manifest reset/preflight flow with `BID_ENGINE_MODE=redis_ledger`, `ADMISSION_ENABLED=false`, Redis hot state, and Kafka durable append settings.
   - Current PTS-1B tests must report user-visible `ENGINE_*` decision latency, business-result distribution, durability status, settlement status, and correctness verifier output.
   - HTTP `200` count alone is not accepted-bid count.
   - Dominant `PROCESSING_RETRY_LATER`, vague `409`, or seconds-long pending states fail the current UX/performance target even if eventual settlement is correct.
   - Redis/Kafka/PostgreSQL fault claims require failure-injection evidence, not prose.
-  - New PTS raw evidence writes to `docs/perf/pts/evidence/incoming/<label>/`; after review, move useful runs to `archive/*` or `current/` only if they are `CURRENT_PASS`.
+  - New PTS raw evidence writes to `artifacts/pts/evidence/incoming/<label>/`; promote only compact summaries into `docs/s1-s5/` or `docs/judge/` after review.
   - Historical PG-lane, Redis-guard, or early L4B runs are bottleneck history unless revalidated under the current contract.
   - Admission-on tests keep product rate/admission limits enabled and are only allowed to prove ACL/auth correctness, stable business `429`, abuse protection, and that protected downstream systems are not overloaded.
   - Downstream-pressure tests must explicitly raise or otherwise document admission ceilings before claiming PG hot-row, outbox, fanout, reconnect, Redis, or runtime bottlenecks.
@@ -123,7 +123,7 @@ If current methods, tool behavior, or profiling techniques matter, browse the we
 You may write or modify test scripts when the existing harness cannot hit the target.
 
 - Prefer committed scripts only when they add durable project value.
-- Use temporary scripts under `docs/perf/tmp/` or `tests/load/tmp-*` only if they are useful for the current investigation; clean or document them before finalizing.
+- Use temporary scripts under `artifacts/tmp/` or `tests/load/tmp-*` only if they are useful for the current investigation; clean or document them before finalizing.
 - Keep generated scripts honest: no hidden sleeps that reduce offered load, no route mocks, no bypass of auth/ACL unless explicitly labeled as load-generation setup.
 - Add custom k6 metrics for accepted/rejected/limited/retry-later, fanout messages, reconnect result, and business outcome whenever HTTP status alone hides the real result.
 - Name users by business role, not by the subsystem being observed. For example, an outbox pressure workload should use seeded bidders if bids are the legitimate way to create outbox events. A synthetic `k6_outbox_*` user is only valid if it is seeded with the required auth and room membership. Otherwise the run is measuring ACL failure, not outbox pressure.

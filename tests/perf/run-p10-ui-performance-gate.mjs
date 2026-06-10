@@ -366,8 +366,8 @@ async function main() {
       target: h5URL
     },
     thresholds,
-    trace_path: 'docs/perf/raw/p10-ui-performance-gate.zip',
-    summary_path: 'docs/perf/raw/p10-ui-performance-gate.json',
+    trace_path: 'artifacts/perf/raw/p10-ui-performance-gate.zip',
+    summary_path: 'artifacts/perf/raw/p10-ui-performance-gate.json',
     route_mock_classification: 'UI_CONTRACT_COVERAGE_ONLY',
     workload: {
       rapid_bid_events: 24,

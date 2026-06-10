@@ -11,7 +11,7 @@ set -euo pipefail
 BASE_URL="${BASE_URL:-http://127.0.0.1:18080}"
 SOAK_MINUTES="${SOAK_MINUTES:-30}"
 LABEL="${LABEL:-s2-$(date +%Y%m%dT%H%M%S)}"
-EVIDENCE_DIR="docs/perf/pts/evidence/incoming/${LABEL}"
+EVIDENCE_DIR="artifacts/pts/evidence/incoming/${LABEL}"
 ALLOW_MOCK_AUTH="${ALLOW_MOCK_AUTH:-true}"
 STAGE1_RATE="${STAGE1_RATE:-20}"
 STAGE2_RATE="${STAGE2_RATE:-60}"

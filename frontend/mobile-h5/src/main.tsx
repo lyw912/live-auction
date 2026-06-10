@@ -6,7 +6,7 @@ import type { AtmosphereCue, AtmosphereInput } from './atmosphere';
 import { AuctionStatePanel, BottomSheet, ChatComposer, ChatPanel, LeaderboardPanel, LiveStage, StateMatrixTabs, type WaterfallChip } from './components';
 import { ResultSheet } from './result';
 import type { AuctionItem, AuctionOverlayMode, AuctionRealtimeEvent, AuctionState, AuctionSummary, AuctionSoundPack, AuthUser, BidderRequirement, BidPhase, BidResponse, BottomSheetKey, ChatMessage, ConnectionPhase, HeatSnapshot, HistoryRow, LeaderboardPayload, LiveOpsCampaign, MaxBidIntent, MaxBidPhase, OrderRow, PaymentPhase, PendingBidRequest, ProductQAAnswer, ProductQATurn, RecoveryPhase, ResultSheetKind, Scenario, SnapshotResponse, SoundCapability, SystemMessage, WSTicketResponse } from './domain';
-import { createAudioContext, createClientBidID, demoProductImageURL, demoUserID, deriveCountdown, deriveCountdownPhase, ensureDemoSession, extendSecondsFromEvent, extensionCopyFromEvent, formatCents, heatSnapshot, isBidConfirmationPending, isCountdownExpired, isDangerousActionDisabled, isEngineRejected, isTestMatrixEnabled, loadAuctionSoundPack, maxBidErrorCopy, maxBidStatusCopy, playAuctionSound, playCountdownTone, playCueTone, playLayeredCue, readJSON, rejectCopy, responseServerTimeMS, retryAfterMS, retryAfterMSFromHeaders, roomIDFromPath, scenarios, selectEntryAuction, speakSystemMessage, vibrateCountdownPhase, vibratePattern, visibleRoomAuctions } from './domain';
+import { createAudioContext, createClientBidID, demoProductImageURL, demoUserID, deriveCountdown, deriveCountdownPhase, ensureDemoSession, extendSecondsFromEvent, extensionCopyFromEvent, formatCents, heatSnapshot, isBidCloseGuardActive, isBidConfirmationPending, isCountdownExpired, isDangerousActionDisabled, isEngineRejected, isTestMatrixEnabled, loadAuctionSoundPack, maxBidErrorCopy, maxBidStatusCopy, playAuctionSound, playCountdownTone, playCueTone, playLayeredCue, readJSON, rejectCopy, responseServerTimeMS, retryAfterMS, retryAfterMSFromHeaders, roomIDFromPath, scenarios, selectEntryAuction, speakSystemMessage, vibrateCountdownPhase, vibratePattern, visibleRoomAuctions } from './domain';
 import { calculateAtmosphereIntensity, normalizeAtmosphere, shouldGateAtmosphere } from './atmosphere';
 import { reconnectDelayMS } from './realtime';
 import { h5Copy } from './copy';
@@ -320,6 +320,12 @@ function App() {
     connectionPhase === 'connected' &&
     recoveryPhase === 'idle' &&
     isCountdownExpired(auctionEndAt, serverTimeMS, nowMS, serverTimeSyncedAtRef.current)
+  ), [auctionEndAt, connectionPhase, nowMS, recoveryPhase, selected, serverTimeMS]);
+  const bidCloseGuardActive = useMemo(() => (
+    selected === 'active_bids' &&
+    connectionPhase === 'connected' &&
+    recoveryPhase === 'idle' &&
+    isBidCloseGuardActive(auctionEndAt, serverTimeMS, nowMS, serverTimeSyncedAtRef.current)
   ), [auctionEndAt, connectionPhase, nowMS, recoveryPhase, selected, serverTimeMS]);
 
   const showAtmosphere = (input: AtmosphereInput) => {
@@ -820,6 +826,19 @@ function App() {
         rejected: true
       };
     }
+    if (bidCloseGuardActive && bidPhase !== 'pending' && bidPhase !== 'engine_pending' && bidPhase !== 'engine_sold_pending') {
+      return {
+        key: 'recovering',
+        title: '到点结算中',
+        status: 'RECOVERING',
+        price: formatCents(currentPriceCents),
+        leader: `${leaderMasked} 领先`,
+        feedback: '已进入服务端落槌保护，正在确认最终结果',
+        countdown: countdownCopy,
+        cta: h5Copy.loading,
+        ctaDisabled: true
+      };
+    }
     if (bidPhase === 'pending') {
       return {
         key: 'pending' as AuctionState,
@@ -922,10 +941,10 @@ function App() {
         status: 'ACTIVE',
         price: formatCents(currentPriceCents),
         leader: `${leaderMasked} 领先`,
-        feedback: countdownExpired ? '到点确认服务端结果' : bidFeedback,
+        feedback: countdownExpired || bidCloseGuardActive ? '到点确认服务端结果' : bidFeedback,
         countdown: countdownCopy,
-        cta: countdownExpired ? h5Copy.loading : `出一手 ${formatCents(nextBidCents)}`,
-        ctaDisabled: countdownExpired,
+        cta: countdownExpired || bidCloseGuardActive ? h5Copy.loading : `出一手 ${formatCents(nextBidCents)}`,
+        ctaDisabled: countdownExpired || bidCloseGuardActive,
         rejected: true
       };
     }
@@ -949,12 +968,12 @@ function App() {
       status: 'ACTIVE',
       price: formatCents(currentPriceCents),
       leader: `${leaderMasked} 领先`,
-      feedback: countdownExpired ? '到点确认服务端结果' : bidFeedback,
+      feedback: countdownExpired || bidCloseGuardActive ? '到点确认服务端结果' : bidFeedback,
       countdown: countdownCopy,
-      cta: countdownExpired ? h5Copy.loading : `出一手 ${formatCents(nextBidCents)}`,
-      ctaDisabled: countdownExpired
+      cta: countdownExpired || bidCloseGuardActive ? h5Copy.loading : `出一手 ${formatCents(nextBidCents)}`,
+      ctaDisabled: countdownExpired || bidCloseGuardActive
     };
-  }, [activeAuctionID, bidCooldownRemainingMS, bidFeedback, bidderRequirement, bidPhase, confirmAmountCents, connectionPhase, countdownCopy, countdownExpired, currentPriceCents, isCurrentUserLeading, lastSeq, leaderMasked, leaderboard?.state, minimumNextBidCents, nextBidCents, payableOrderAmountCents, payableOrderID, paymentPhase, recoveryPhase, selected, terminalPriceCents, terminalWinnerID]);
+  }, [activeAuctionID, bidCloseGuardActive, bidCooldownRemainingMS, bidFeedback, bidderRequirement, bidPhase, confirmAmountCents, connectionPhase, countdownCopy, countdownExpired, currentPriceCents, isCurrentUserLeading, lastSeq, leaderMasked, leaderboard?.state, minimumNextBidCents, nextBidCents, payableOrderAmountCents, payableOrderID, paymentPhase, recoveryPhase, selected, terminalPriceCents, terminalWinnerID]);
   const atmosphereGate = useMemo(() => shouldGateAtmosphere({
     recovering: recoveryPhase !== 'idle' || connectionPhase === 'recovering',
     stale: scenario.stale || countdownPhase.phase === 'stale' || selected === 'recovering',
@@ -1670,17 +1689,23 @@ function App() {
 
   useEffect(() => {
     if (!sessionReady || !activeAuctionID || selected !== 'active_bids') return undefined;
-    if (connectionPhase === 'connected' && recoveryPhase === 'idle' && !countdownExpired) return undefined;
+    if (connectionPhase === 'connected' && recoveryPhase === 'idle' && !countdownExpired && !bidCloseGuardActive) return undefined;
     const timer = window.setInterval(() => {
       void recoverFromSnapshot();
     }, 2_500);
     return () => window.clearInterval(timer);
-  }, [activeAuctionID, connectionPhase, countdownExpired, recoveryPhase, sessionReady, selected]);
+  }, [activeAuctionID, bidCloseGuardActive, connectionPhase, countdownExpired, recoveryPhase, sessionReady, selected]);
 
   const submitBid = async () => {
     const auctionID = activeAuctionIDRef.current;
     const canRetryPendingBid = Boolean(pendingBidRef.current && pendingBidRef.current.auctionID === auctionID && (bidPhase === 'uncertain' || bidPhase === 'engine_pending' || riskCode === 'PROCESSING_RETRY_LATER' || riskCode === 'BID_CONFIRMATION_PENDING'));
     if (selected !== 'active_bids' || (!canRetryPendingBid && scenario.ctaDisabled) || !auctionID) return;
+    if (!canRetryPendingBid && isBidCloseGuardActive(auctionEndAtRef.current, serverTimeMSRef.current, Date.now(), serverTimeSyncedAtRef.current)) {
+      setBidFeedback('已进入服务端落槌保护，正在确认最终结果');
+      setBidPhase('rejected');
+      void recoverFromSnapshot();
+      return;
+    }
     if (bidInFlightRef.current || bidCooldownUntilMS > Date.now()) return;
     bidInFlightRef.current = true;
     const pending = pendingBidRef.current;
@@ -1911,6 +1936,7 @@ function App() {
     setMaxBidPhase('canceling');
     setMaxBidFeedback('正在取消自动加价');
     try {
+      await ensureBuyerSession();
       const key = createClientBidID();
       const response = await fetch(`/api/auctions/${auctionID}/max-bid-intent`, {
         method: 'DELETE',
@@ -1929,8 +1955,23 @@ function App() {
         setMaxBidFeedback(maxBidErrorCopy(payload?.code ?? payload?.message));
         return;
       }
-      setMaxBidIntent(payload.intent);
-      setMaxBidFeedback(maxBidStatusCopy(payload.intent));
+      const cancelledIntent = payload.intent;
+      const verify = await fetch(`/api/auctions/${auctionID}/max-bid-intent`);
+      if (verify.status === 404) {
+        setMaxBidIntent(null);
+        setMaxBidFeedback('自动加价已取消');
+        setMaxBidPhase('idle');
+        return;
+      }
+      const verifiedIntent = await readJSON<MaxBidIntent>(verify);
+      if (!verify.ok || !verifiedIntent || verifiedIntent.status === 'ACTIVE') {
+        setMaxBidPhase('error');
+        setMaxBidFeedback('取消状态未确认，请重试');
+        void loadMaxBidIntent(auctionID);
+        return;
+      }
+      setMaxBidIntent(verifiedIntent.auction_id === auctionID ? verifiedIntent : cancelledIntent);
+      setMaxBidFeedback(maxBidStatusCopy(verifiedIntent.auction_id === auctionID ? verifiedIntent : cancelledIntent));
       setMaxBidPhase('idle');
     } catch {
       setMaxBidPhase('error');

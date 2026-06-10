@@ -620,7 +620,7 @@ func (c *Checker) checkRedisEngineEventCoverage(ctx context.Context, scopeSQL st
 			  ON e.auction_id = s.auction_id
 			 AND e.engine_epoch = s.engine_epoch
 			 AND e.engine_seq = s.engine_seq
-			 AND e.event_type IN ('bid_accepted','auction_sold')
+			 AND e.event_type IN ('bid_accepted','auction_extended','auction_sold')
 			WHERE b.id IS NULL OR e.id IS NULL
 		)
 		SELECT *, count(*) OVER() AS total

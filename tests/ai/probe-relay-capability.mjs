@@ -19,7 +19,7 @@ const textModel = env.AI_TEXT_MODEL || defaultTextModel;
 const textBaseURL = normalizeBaseURL(env.AI_TEXT_BASE_URL || defaultTextBaseURL);
 const timeoutMS = Number(env.AI_RELAY_TIMEOUT_MS || 30_000);
 const imageURL = env.AI_RELAY_IMAGE_URL || defaultImageURL;
-const outputPath = resolve(env.AI_RELAY_PROBE_OUT || 'docs/atmosphere-ai-implementation-2026-06-06/evidence/ai-relay-probe-gptgod-latest.json');
+const outputPath = resolve(env.AI_RELAY_PROBE_OUT || 'artifacts/ai/ai-relay-probe-gptgod-latest.json');
 
 if (!textAPIKey || /^replace-/i.test(textAPIKey)) {
   console.error('AI_TEXT_API_KEY or DEEPSEEK_API_KEY must be set to a real text AI provider key. Do not commit real keys.');

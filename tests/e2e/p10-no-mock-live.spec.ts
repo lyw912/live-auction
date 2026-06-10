@@ -58,8 +58,8 @@ test('P10 no-mock demo creates auction and proves H5 plus flight recorder path',
   const suffix = Date.now();
   const roomID = `room_p10_${suffix}`;
   const title = `P10 No-Mock Tea Cup ${suffix}`;
-  const imageURL = 'docs/demo/assets/ceramic-tea-cup.jpg';
-  const videoAssetPath = 'docs/demo/assets/pottery-live-loop.webm';
+  const imageURL = '/demo/ceramic-tea-cup.jpg';
+  const videoAssetPath = 'frontend/pc-console/public/demo/jade-live-loop.mp4';
 
   try {
     const hostLogin = await hostAPI.post('/api/auth/login', { data: { account: 'host' } });

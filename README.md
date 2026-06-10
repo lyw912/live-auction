@@ -1,84 +1,175 @@
-# Live Auction
+# Live Auction — 直播竞拍全栈系统
 
-直播竞拍全栈系统，目标是实现一条可演示、可测试、可追问的工程链路：
+> 抖音电商 AI 全栈挑战赛参赛作品
 
-```text
-商品上架 -> 规则配置 -> 开拍 -> 实时出价 -> 动态排名
--> 自动延时/封顶成交 -> 订单生成 -> mock 支付/历史记录
--> 监控诊断与故障恢复
+一套落地了 **Redis Lua 原子决策 → Kafka 有序决策 WAL → PostgreSQL 结算真相 → Reconciler 校验闭环** 的失败关闭(fail-closed)实时竞拍内核，配合 AI 智能运营助手与极致竞价氛围体验。
+
+```
+商品上架 → 规则配置 → 排期开拍 → 实时出价(原子Lua决策) → 动态排名
+→ 反狙击延时/封顶成交 → Kafka WAL → PG 结算建单 → mock 支付
+→ 监控诊断 / AI 解说 / 复盘高光
 ```
 
-## Design Source
+## 技术栈
 
-当前开发、压测、评审先读 [docs/current/README.md](docs/current/README.md)。官方题目原文 `抖音电商AI全栈课题-直播竞拍全栈系统（宣讲版）.md` 永远不改；[docs/design-v2-industrial](docs/design-v2-industrial) 是历史设计基线和产品/UX/工程约束库，不再是热竞价架构的唯一来源。
+| 层 | 技术 | 说明 |
+|----|------|------|
+| 后端 | Go 1.26 · Chi · pgx · go-redis · kafka-go | 模块化单体，嵌入式 5 Worker |
+| 热决策 | Redis 7 (Lua) | 单写者原子决策引擎，AOF appendfsync=always |
+| 持久化 | Kafka 3.9 (KRaft) | 有序决策 WAL/Fence，group-commit |
+| 真相 | PostgreSQL 16 | 结算/审计/订单，exactly-once 边界 |
+| 前端 H5 | React 18 · TypeScript · Vite | 服务器权威 · 断线重连 · 氛围动效 |
+| 前端 PC | React 18 · Arco Design · Vite | 商家后台 · AI 工具 · 监控 |
+| AI | DeepSeek V4 Flash · Qwen-VL-Max | 选品/解说/哨兵/Q&A/复盘 |
+| 可观测 | Prometheus · Grafana · Tempo · OTel | 指标/追踪/告警 |
+| 存储 | MinIO (S3) | 商品图片 |
+| 测试 | Go tests · Playwright · K6 · Toxiproxy · PTS | 90+ 集成 · 35 正确性门禁 |
 
-当前优先级：
+## 快速启动
 
-1. `docs/current/performance-correctness-contract.md`
-2. `docs/current/architecture.md`
-3. `docs/current/evidence-policy.md`
-4. `docs/current/runtime-profiles.md`
-5. `docs/current/document-map.md`
-6. 官方题目原文
-7. `docs/design-v2-industrial/*` 中仍适用的产品、UI、恢复、诊断和工程规则
+```bash
+# 1. 基础设施
+cd infra && docker compose up -d
 
-## Tech Route
+# 2. 数据库迁移
+cd backend && make migrate-up
 
-- Backend: Go modular monolith, `net/http` + `chi`.
-- Hot bidding target: Redis live decision state + Kafka durable decision WAL/fence + PostgreSQL settlement/audit/order truth.
-- Realtime: transactional outbox, Redis history/snapshot, browser WebSocket hub.
-- Frontend: React + TypeScript + Vite.
-- PC console: Arco Design.
-- Mobile H5: custom auction UI.
-- Local infra: Docker Compose with PostgreSQL, Redis, Kafka, MinIO, Prometheus and Grafana.
-- Testing: Go tests, Playwright E2E, local smoke, PTS/JMeter cloud pressure, correctness verifier and fault-injection evidence.
+# 3. 后端（配置 .env 后启动）
+cp .env.example .env   # 填入 AI API Key
+make run               # :18080
 
-## Repository Layout
+# 4. 前端
+npm run dev:h5         # H5 竞拍端 :5276
+npm run dev:pc         # PC 商家端 :5277
+```
 
-```text
-backend/               Go backend service
-  cmd/server/          server entrypoint
-  internal/            bounded modules
-  migrations/          goose SQL migrations
+详细步骤见 [docs/setup_guide.md](docs/setup_guide.md)。
+
+## 目录结构
+
+```
+backend/                    Go 后端 (25,928 行)
+  cmd/server/               入口：嵌入 Outbox Relay / Settlement Worker / AI Worker / Scheduler
+  internal/
+    redisengine/            热竞价引擎 — Lua 决策 + Relay + 结算 + 重建 (5,495 行)
+    auction/                领域模型 / 规则校验 / 出价逻辑 / 状态机
+    ai/                     AI Generator / 安全护栏 / Provider 路由
+    gateway/                Chi 路由 / 鉴权 / Admission / Handler
+    realtime/               WebSocket Hub / 排行榜投影 / 背压
+    reconcile/              Redis↔Kafka↔PG 漂移检测
+    scheduler/              终态转换(SOLD/ENDED) + Fencer
+    outbox/                 变更日志投递
+    config/                 91 项可配参数
+  migrations/               31 个 goose SQL 迁移
 frontend/
-  pc-console/          merchant/host PC console
-  mobile-h5/           bidder mobile H5
+  mobile-h5/                H5 竞拍端 — 服务器权威 / 氛围引擎 / 断线重连
+  pc-console/               PC 商家端 — Arco Design / AI 工具 / 飞行记录器
+  shared-design/            设计令牌 (CSS Variables)
 tests/
-  integration/         cross-module/backend tests
-  e2e/                 Playwright flows
-  load/                k6 scripts
-  chaos/               Toxiproxy scenarios
-infra/                 local Docker Compose and infra config
+  pts/                      PTS 正确性校验器 (35 门禁) + JMeter 场景
+  load/                     K6 压测脚本 (18 个)
+  chaos/                    Toxiproxy 混沌测试 (8 场景)
+  e2e/                      Playwright E2E (7 spec)
+infra/                      Docker Compose — 11 容器
 docs/
-  current/            current architecture, PTS-1B contract and evidence policy
-  archive/            historical era/progress maps
-  design-v2-industrial/ historical design baseline and UI/product constraints
-  evidence/           historical gate evidence
-  perf/               measured performance baselines
-  demo/               demo scripts and notes
-  adr/                architecture decisions
+  README.md                 评委阅读入口
+  design/                   最新架构合同 / SLO / 证据策略
+  s1-s5/                    S1-S5 评测设计与门禁
+  judge/                    终审报告 / 答辩材料 / 演示脚本
 ```
 
-## First Setup
+## 架构概览
 
-Follow [docs/setup_guide.md](docs/setup_guide.md). Do not start bid, settlement or realtime implementation until the local database, migrations, env file and test commands are in place.
+### 热出价路径
 
-Current runtime profile:
+```
+HTTP POST /bids
+  → Gateway (鉴权 / ACL / Admission 限流 / 幂等门)
+  → Redis Lua 原子决策 (一次 RTT)
+      幂等 → 状态校验 → 5条规则+误触 → engine_seq++ → 决策流
+  → Group-Commit Relay → Kafka AppendBatch(acks=all)
+  → HTTP 返回 ENGINE_ACCEPTED/REJECTED/SOLD + durability_status
+  → Settlement Worker 消费 Kafka → 幂等写 PG → 建单 → Outbox → WS 广播
+```
 
-- `.env.example`: local/demo profile on the same Redis hot ledger + Kafka ACK engine; admission enabled.
-- PTS-1B scripts: same engine, admission disabled, Kafka required.
+### 四层持久性
 
-Formal PTS-1B runs should follow [tests/pts/MANIFEST.md](tests/pts/MANIFEST.md), not hand-edited env guesses.
+| 层 | 响应字段 | 含义 | 恢复路径 |
+|----|---------|------|---------|
+| Redis AOF | `ENGINE_DURABLE` | 本地持久化 | AOF 重放 / 从 Kafka+PG 重建 |
+| Kafka ACK | `KAFKA_ACKED` | 分布式 WAL 持久化 | RF=3 (生产) |
+| PG 结算 | `SETTLED` | exactly-once 边界 | 幂等重放 |
+| 订单 | order exists | 业务闭合 | 幂等建单 |
 
-## Engineering Rules
+### 失败关闭
 
-- For the current PTS-1B hot manual-bid path, Redis is the live atomic decision state only under the Kafka WAL/fence and reconciliation contract.
-- Kafka is the durable ordered decision log/fence for current hot-engine decisions.
-- PostgreSQL remains settlement, audit, order and durable query truth. It is not the synchronous hot-row decision point for the PTS-1B target.
-- WebSocket is delivery/recovery, never client-side truth.
-- Client time never decides close time or winner.
-- Every executable bid attempt is idempotent.
-- Every auction state mutation writes an immutable event and outbox record.
-- Every diagnostic panel must have a real producer.
-- No performance number is documented without raw baseline evidence.
-- HTTP status is not the auction outcome. Inspect `ENGINE_*`, durability status and settlement status.
+- Redis 丢失 → 暂停(RECONCILING) → 从 Kafka 高水位+PG 重建 → 校验 → 恢复
+- Kafka 故障 → 熔断器 → 零额外延迟降级到 ENGINE_DURABLE
+- 状态不完整 → RECONCILING，绝不凭空 ACCEPT
+
+## 核心特性
+
+**竞拍规则（零漏洞）** — 0 元起拍 / 加价网格校验 / 封顶自动成交(可达性+网格对齐验证) / 反狙击延时(+绝对硬顶防 bot) / 误触二次确认(重跑全部守卫) / 主播随时取消
+
+**分布式正确性** — 幂等出价(请求哈希冲突检测) / engine_seq 全序无空洞 / at-least-once WAL + 幂等消费者 = effectively exactly-once / Reconciler 漂移检测 / 35 条正确性门禁
+
+**实时体验** — 服务器权威(无乐观成功) / 时钟漂移免疫倒计时 / 断线重连+序号空洞快照恢复 / 房间级 WS 隔离+背压
+
+**竞价氛围** — 领先/被超越/延时/落槌分阶段动效+音效+触觉 / 心跳音床 / 竞速榜瀑布 / 热度计
+
+**AI 智能运营** — 选品 Copilot / 自动解说 / 哨兵告警 / 商品 Q&A / 复盘高光；AI 永不碰钱/胜者/终态
+
+## 测试与验证
+
+| 层 | 覆盖 |
+|----|------|
+| Go 集成测试 | 90+ 测试，testcontainers (PG/Redis)，CI 每 push 运行 |
+| PTS 正确性校验 | 28 条 P0 不变式 + 7 条基础设施门禁，P0 零容忍 |
+| K6 压测 | 18 脚本：最后一秒竞争 / 稳态浸泡 / WS 扇出 / 重连风暴 |
+| 混沌测试 | 8 场景：Redis 不可用 / FLUSHALL / Kafka 宕机 / 结算崩溃 / PG 不可用 |
+| Playwright E2E | 7 spec：H5 / PC / 氛围引擎 / 视觉回归 |
+
+## 配置
+
+通过 `.env` 管理，关键参数：
+
+```bash
+# 出价引擎
+BID_AUCTION_LIMIT_PER_SECOND=80    # 单拍品决策频率上限
+BID_USER_LIMIT_PER_SECOND=3        # 单用户限频
+BID_ENGINE_KAFKA_APPEND_TIMEOUT=750ms
+
+# WebSocket
+WS_QUEUE_MESSAGES=256              # 单连接背压队列
+WS_RECOVERY_MAX_EVENTS=300
+
+# AI
+AI_PROVIDER_MODE=provider
+AI_TEXT_MODEL=deepseek-v4-flash
+AI_COMMENTARY_BATCH_SIZE=4
+```
+
+完整参数见 `.env.example` (91 项)。
+
+## 工程规则
+
+- Redis 是热态原子决策，仅在 Kafka WAL/Fence 和 Reconciliation 合同下运行
+- PostgreSQL 是结算/审计/订单真相，不做热路径行锁
+- 客户端时间永不决定关闭时间或胜者
+- HTTP 状态不是拍品结果，检查 `ENGINE_*` / `durability_status` / `settlement_status`
+- 每个出价尝试幂等
+- 无性能数字未经原始基线证据
+
+## 代码规模
+
+| 分类 | 行数 |
+|------|------|
+| Go 后端源码 | 25,928 |
+| Go 测试代码 | 15,578 |
+| 前端源码 | 17,710 |
+| 测试脚本 | 17,152 |
+| **合计** | **~76,000** |
+
+## License
+
+MIT

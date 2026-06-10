@@ -64,6 +64,15 @@ async function fetchJSONWithTimeout<T>(url: string, options?: RequestInit, timeo
   }
 }
 
+async function fetchJSONWithHostRetry<T>(url: string, options?: RequestInit, timeoutMs = 12000) {
+  let result = await fetchJSONWithTimeout<T>(url, options, timeoutMs);
+  if (result.response.status === 401 || result.response.status === 403) {
+    await withTimeout(ensureDemoSession('host'), 10000, 'auth timeout');
+    result = await fetchJSONWithTimeout<T>(url, options, timeoutMs);
+  }
+  return result;
+}
+
 function asArray<T>(value: T[] | null | undefined): T[] {
   return Array.isArray(value) ? value : [];
 }
@@ -146,8 +155,11 @@ function App() {
     setFlightRecorderLoading(true);
     setFlightRecorder(undefined);
     try {
-      const response = await fetch(`/api/monitor/auctions/${encodeURIComponent(nextAuctionID)}/flight-recorder?limit=80&timeline_limit=120`);
-      const payload = await readJSON<FlightRecorderPayload>(response);
+      const { response, payload } = await fetchJSONWithHostRetry<FlightRecorderPayload>(
+        `/api/monitor/auctions/${encodeURIComponent(nextAuctionID)}/flight-recorder?limit=80&timeline_limit=120`,
+        undefined,
+        8000
+      );
       if (!response.ok) throw new Error('flight recorder query failed');
       setFlightRecorder(payload);
     } catch {
@@ -160,12 +172,11 @@ function App() {
 
   const createMonitorSignal = async (request: SignalRequest) => {
     try {
-      const response = await fetch('/api/monitor/signals', {
+      const { response, payload } = await fetchJSONWithHostRetry<{ id?: number; message?: string }>('/api/monitor/signals', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(request)
       });
-      const payload = await readJSON<{ id?: number; message?: string }>(response);
       if (!response.ok) {
         Message.error(payload.message ?? `${signalCopy(request.signal_type)} 失败`);
         return false;
@@ -192,16 +203,16 @@ function App() {
       rejects,
       recovery
     ] = await Promise.all([
-      fetchJSONWithTimeout<MonitorPayload>('/api/monitor/auctions', undefined, 6000).then(({ payload }) => payload).catch(() => monitor.auctions),
-      fetchJSONWithTimeout<RedisEngineMonitorPayload>('/api/monitor/redis-engine', undefined, 6000).then(({ payload }) => payload).catch(() => monitor.redisEngine),
-      fetchJSONWithTimeout<MonitorPayload>(`/api/monitor/anomalies?${monitorQuery(nextRoomID, monitorFilter)}`, undefined, 6000).then(({ payload }) => payload).catch(() => monitor.anomalies),
-      fetchJSONWithTimeout<MonitorPayload>('/api/monitor/outbox', undefined, 6000).then(({ payload }) => payload).catch(() => monitor.outbox),
-      fetchJSONWithTimeout<MonitorPayload>('/api/monitor/outbox/watermarks', undefined, 6000).then(({ payload }) => payload).catch(() => monitor.outboxWatermarks),
-      fetchJSONWithTimeout<MonitorPayload>('/api/monitor/snapshots', undefined, 6000).then(({ payload }) => payload).catch(() => monitor.snapshots),
-      fetchJSONWithTimeout<MonitorPayload>('/api/monitor/signals', undefined, 6000).then(({ payload }) => payload).catch(() => monitor.signals),
-      fetchJSONWithTimeout<MonitorPayload>('/api/monitor/scheduler', undefined, 6000).then(({ payload }) => payload).catch(() => monitor.scheduler),
-      fetchJSONWithTimeout<MonitorPayload>('/api/monitor/rejects', undefined, 6000).then(({ payload }) => payload).catch(() => monitor.rejects),
-      fetchJSONWithTimeout<MonitorPayload>('/api/monitor/recovery', undefined, 6000).then(({ payload }) => payload).catch(() => monitor.recovery)
+      fetchJSONWithHostRetry<MonitorPayload>('/api/monitor/auctions', undefined, 6000).then(({ payload }) => payload).catch(() => monitor.auctions),
+      fetchJSONWithHostRetry<RedisEngineMonitorPayload>('/api/monitor/redis-engine', undefined, 6000).then(({ payload }) => payload).catch(() => monitor.redisEngine),
+      fetchJSONWithHostRetry<MonitorPayload>(`/api/monitor/anomalies?${monitorQuery(nextRoomID, monitorFilter)}`, undefined, 6000).then(({ payload }) => payload).catch(() => monitor.anomalies),
+      fetchJSONWithHostRetry<MonitorPayload>('/api/monitor/outbox', undefined, 6000).then(({ payload }) => payload).catch(() => monitor.outbox),
+      fetchJSONWithHostRetry<MonitorPayload>('/api/monitor/outbox/watermarks', undefined, 6000).then(({ payload }) => payload).catch(() => monitor.outboxWatermarks),
+      fetchJSONWithHostRetry<MonitorPayload>('/api/monitor/snapshots', undefined, 6000).then(({ payload }) => payload).catch(() => monitor.snapshots),
+      fetchJSONWithHostRetry<MonitorPayload>('/api/monitor/signals', undefined, 6000).then(({ payload }) => payload).catch(() => monitor.signals),
+      fetchJSONWithHostRetry<MonitorPayload>('/api/monitor/scheduler', undefined, 6000).then(({ payload }) => payload).catch(() => monitor.scheduler),
+      fetchJSONWithHostRetry<MonitorPayload>('/api/monitor/rejects', undefined, 6000).then(({ payload }) => payload).catch(() => monitor.rejects),
+      fetchJSONWithHostRetry<MonitorPayload>('/api/monitor/recovery', undefined, 6000).then(({ payload }) => payload).catch(() => monitor.recovery)
     ]);
     setMonitor({ auctions: auctionsDiag, redisEngine, anomalies, outbox, outboxWatermarks, snapshots, signals, scheduler, rejects, recovery });
     setWorkbenchTask((current) => current.tone === 'error'
@@ -212,7 +223,7 @@ function App() {
   const refreshAuctionRows = async (targetRoomID = roomID, preferredAuctionID = selectedAuctionID) => {
     if (!sessionReady || !targetRoomID) return;
     try {
-      const { response, payload } = await fetchJSONWithTimeout<Auction[]>(
+      const { response, payload } = await fetchJSONWithHostRetry<Auction[]>(
         `/api/auctions?room_id=${targetRoomID}`,
         undefined,
         6000
@@ -226,7 +237,7 @@ function App() {
         : auctionRows.find((auction) => auction.status === 'ACTIVE')?.id ?? auctionRows[0]?.id ?? '';
       if (visibleAuctionID) {
         setSelectedAuctionID(visibleAuctionID);
-        const ordersResult = await fetchJSONWithTimeout<Order[]>(
+        const ordersResult = await fetchJSONWithHostRetry<Order[]>(
           `/api/orders?auction_id=${encodeURIComponent(visibleAuctionID)}&limit=20`,
           undefined,
           6000
@@ -253,7 +264,7 @@ function App() {
     setWorkbenchTask({ active: true, title: '正在刷新商家工作台', detail: '正在读取直播间和商家身份状态。', tone: 'loading' });
     try {
       await withTimeout(ensureDemoSession('host'), 10000, 'auth timeout');
-      const { response: roomResponse, payload: roomPayload } = await fetchJSONWithTimeout<{ items?: Room[] }>('/api/rooms', undefined, 10000);
+      const { response: roomResponse, payload: roomPayload } = await fetchJSONWithHostRetry<{ items?: Room[] }>('/api/rooms', undefined, 10000);
       if (!roomResponse.ok) throw new Error('rooms failed');
       const roomRows = asArray(roomPayload.items);
       const nextRoomID = roomRows.find((room) => room.id === preferredRoomID)?.id
@@ -262,11 +273,11 @@ function App() {
         ?? preferredRoomID;
       setWorkbenchTask({ active: true, title: '正在刷新商家工作台', detail: '正在读取拍品、竞拍和订单。', tone: 'loading' });
       const [auctionPayload, liveOps] = await Promise.all([
-        fetchJSONWithTimeout<Auction[]>(`/api/auctions?room_id=${nextRoomID}`).then(({ response, payload }) => {
+        fetchJSONWithHostRetry<Auction[]>(`/api/auctions?room_id=${nextRoomID}`).then(({ response, payload }) => {
           if (!response.ok) throw new Error('auctions failed');
           return payload;
         }),
-        fetchJSONWithTimeout<LiveOpsHostSummary>(`/api/host/rooms/${nextRoomID}/liveops`).then(({ response, payload }) => {
+        fetchJSONWithHostRetry<LiveOpsHostSummary>(`/api/host/rooms/${nextRoomID}/liveops`).then(({ response, payload }) => {
           if (!response.ok) throw new Error('liveops failed');
           return payload;
         }).catch(() => undefined)
@@ -278,7 +289,7 @@ function App() {
         ?? sortedAuctions(auctionRows)[0]?.id
         ?? '';
       const orderRows = nextSelected
-        ? await fetchJSONWithTimeout<Order[]>(`/api/orders?auction_id=${encodeURIComponent(nextSelected)}&limit=20`).then(({ response, payload }) => {
+        ? await fetchJSONWithHostRetry<Order[]>(`/api/orders?auction_id=${encodeURIComponent(nextSelected)}&limit=20`).then(({ response, payload }) => {
           if (!response.ok) throw new Error('orders failed');
           return asArray(payload);
         })
@@ -332,12 +343,11 @@ function App() {
     setLiveOpsSaving(true);
     try {
       await ensureHostSession();
-      const response = await fetch(`/api/host/rooms/${roomID}/liveops`, {
+      const { response, payload } = await fetchJSONWithHostRetry<LiveOpsHostSummary & { message?: string }>(`/api/host/rooms/${roomID}/liveops`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(liveOpsDraft)
       });
-      const payload = await readJSON<LiveOpsHostSummary & { message?: string }>(response);
       if (!response.ok) {
         Message.error(payload.message ?? '互动权益保存失败');
         return;
@@ -423,8 +433,11 @@ function App() {
         return;
       }
       try {
-        const response = await fetch(`/api/monitor/auctions/${selectedAuction.id}/flight-recorder?limit=20&timeline_limit=20`);
-        const payload = await readJSON<FlightRecorderPayload>(response);
+        const { response, payload } = await fetchJSONWithHostRetry<FlightRecorderPayload>(
+          `/api/monitor/auctions/${selectedAuction.id}/flight-recorder?limit=20&timeline_limit=20`,
+          undefined,
+          6000
+        );
         if (!cancelled) {
           setRecentEvents(response.ok ? (payload.timeline ?? []).slice(0, 6) : []);
         }
@@ -447,8 +460,11 @@ function App() {
       }
       setPromptsLoading(true);
       try {
-        const response = await fetch(`/api/host/auctions/${selectedAuction.id}/prompts`);
-        const payload = await readJSON<HostPromptsPayload>(response);
+        const { response, payload } = await fetchJSONWithHostRetry<HostPromptsPayload>(
+          `/api/host/auctions/${selectedAuction.id}/prompts`,
+          undefined,
+          6000
+        );
         if (!cancelled) {
           setHostPrompts(response.ok ? (payload.prompts ?? []) : []);
         }
@@ -473,8 +489,11 @@ function App() {
       }
       setHeatLoading(true);
       try {
-        const response = await fetch(`/api/host/auctions/${selectedAuction.id}/heat-summary`);
-        const payload = await readJSON<HeatSummary>(response);
+        const { response, payload } = await fetchJSONWithHostRetry<HeatSummary>(
+          `/api/host/auctions/${selectedAuction.id}/heat-summary`,
+          undefined,
+          6000
+        );
         if (!cancelled) {
           setHeatSummary(response.ok ? payload : undefined);
         }
@@ -498,8 +517,11 @@ function App() {
         return;
       }
       try {
-        const response = await fetch(`/api/rooms/${encodeURIComponent(roomID)}/system-messages?limit=10`);
-        const payload = await readJSON<{ items?: SystemMessage[] }>(response);
+        const { response, payload } = await fetchJSONWithHostRetry<{ items?: SystemMessage[] }>(
+          `/api/rooms/${encodeURIComponent(roomID)}/system-messages?limit=10`,
+          undefined,
+          6000
+        );
         if (!cancelled) setSystemMessages(response.ok ? (payload.items ?? []) : []);
       } catch {
         if (!cancelled) setSystemMessages([]);
@@ -519,8 +541,11 @@ function App() {
         return;
       }
       try {
-        const response = await fetch(`/api/host/auctions/${selectedAuction.id}/ai-settings`);
-        const payload = await readJSON<AuctionAISettings>(response);
+        const { response, payload } = await fetchJSONWithHostRetry<AuctionAISettings>(
+          `/api/host/auctions/${selectedAuction.id}/ai-settings`,
+          undefined,
+          6000
+        );
         if (!cancelled && response.ok) setAuctionAISettings(payload);
       } catch {
         if (!cancelled) setAuctionAISettings(undefined);
@@ -691,7 +716,7 @@ function App() {
     setAuctionActionPending(action);
     try {
       await ensureHostSession();
-      const response = await fetch(`/api/auctions/${selectedAuction.id}/${action}`, {
+      const { response, payload } = await fetchJSONWithTimeout<Auction | RuleAPIError>(`/api/auctions/${actionAuctionID}/${action}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: action === 'cancel'
@@ -699,13 +724,13 @@ function App() {
           : action === 'schedule'
             ? JSON.stringify({ start_at: scheduleStartAt ? new Date(scheduleStartAt).toISOString() : null })
             : undefined
-      });
+      }, 12000);
       if (!response.ok) {
-        const err = await response.json() as RuleAPIError;
+        const err = payload as RuleAPIError;
         Message.error(businessErrorMessage(err.code, err.message ?? `${action} failed`));
         return;
       }
-      const updated = await readJSON<Auction>(response);
+      const updated = payload as Auction;
       setAuctions((current) => current.map((row) => row.id === updated.id ? { ...row, ...updated, item: updated.item ?? row.item } : row));
       setSelectedAuctionID(updated.id);
       setRule(createRuleDraft({ ...selectedAuction, ...updated, item: updated.item ?? selectedAuction.item }));
@@ -717,8 +742,9 @@ function App() {
         Message.success('操作已提交');
       }
       void loadAll(roomID, false, false, actionAuctionID, { includeDiagnostics: false, suppressFailure: true });
-    } catch {
-      Message.error('操作失败');
+    } catch (error) {
+      const timeout = error instanceof Error && (error.name === 'AbortError' || error.message.includes('timeout'));
+      Message.error(timeout ? '操作请求超时，请刷新后重试' : '操作失败');
     } finally {
       setAuctionActionPending('');
     }
@@ -780,7 +806,7 @@ function App() {
       return;
     }
     const runOne = async (stepMode: Exclude<typeof mode, 'duel'>, index = 0) => {
-      const response = await fetch(`/api/demo/auctions/${selectedAuction.id}/competing-bid`, {
+      const { response, payload } = await fetchJSONWithHostRetry<{ result?: string; reject_reason?: string; code?: string; message?: string; current_price_cents?: number; current_winner_id?: string }>(`/api/demo/auctions/${selectedAuction.id}/competing-bid`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -788,8 +814,7 @@ function App() {
           amount_cents: options.amountCents,
           client_bid_id: `host-demo-${stepMode}-${Date.now()}-${index}`
         })
-      });
-      const payload = await readJSON<{ result?: string; reject_reason?: string; code?: string; message?: string; current_price_cents?: number; current_winner_id?: string }>(response);
+      }, 12000);
       const proxyDefenseAccepted = payload.reject_reason === 'BID_TOO_LOW' &&
         stepMode !== 'reject' &&
         stepMode !== 'stale_low' &&
@@ -827,7 +852,8 @@ function App() {
       }
       void loadAll(roomID, false, false, selectedAuction.id, { includeDiagnostics: false, suppressFailure: true });
     } catch (error) {
-      Message.error(error instanceof Error ? error.message : '演示出价失败');
+      const timeout = error instanceof Error && (error.name === 'AbortError' || error.message.includes('timeout'));
+      Message.error(timeout ? '演示出价请求超时，请刷新后重试' : error instanceof Error ? error.message : '演示出价失败');
     }
   };
 
@@ -838,12 +864,11 @@ function App() {
     }
     try {
       await ensureHostSession();
-      const response = await fetch(`/api/demo/auctions/${selectedAuction.id}/shorten-end`, {
+      const { response, payload } = await fetchJSONWithHostRetry<RuleAPIError & Auction>(`/api/demo/auctions/${selectedAuction.id}/shorten-end`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ remaining_seconds: 15 })
-      });
-      const payload = await readJSON<RuleAPIError & Auction>(response);
+      }, 12000);
       if (!response.ok) {
         Message.error(payload.message ?? '倒计时缩短失败');
         return;
@@ -876,18 +901,22 @@ function App() {
       }
       const providerImageURLs = imageURL.startsWith('https://') ? [imageURL] : [];
       const providerImageDataURLs = imageDataURL ? [imageDataURL] : [];
-      const response = await fetch('/api/host/ai/listing-drafts', {
+      const fallbackNotes = [
+        itemDraft.title.trim(),
+        itemDraft.description.trim()
+      ].filter(Boolean).join('。');
+      const sellerNotes = listingNotes.trim() || fallbackNotes;
+      const { response, payload } = await fetchJSONWithHostRetry<ListingDraftJob & { message?: string }>('/api/host/ai/listing-drafts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           room_id: roomID,
           image_urls: providerImageURLs,
           image_data_urls: providerImageDataURLs,
-          seller_notes: listingNotes.trim(),
+          seller_notes: sellerNotes,
           target_category: listingCategory.trim()
         })
-      });
-      const payload = await readJSON<ListingDraftJob & { message?: string }>(response);
+      }, 30000);
       if (!response.ok) {
         Message.error(payload.message ?? '智能草稿生成失败');
         return;

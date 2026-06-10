@@ -69,7 +69,7 @@
 #   REDIS_CONTAINER         default live-auction-redis
 #   KAFKA_CONTAINER         default live-auction-kafka
 #   SERVER_START_CMD        optional custom command to (re)start the backend
-#   EVIDENCE_ROOT           default docs/perf/pts/evidence/incoming
+#   EVIDENCE_ROOT           default artifacts/pts/evidence/incoming
 
 set -euo pipefail
 
@@ -122,7 +122,7 @@ BACKEND_REDIS_ADDR="${REDIS_ADDR:-localhost:6380}"
 if [ "$FAULT_TYPE" = "partial" ]; then
   BACKEND_REDIS_ADDR="${REDIS_ADDR:-localhost:16379}"
 fi
-EVIDENCE_ROOT="${EVIDENCE_ROOT:-$ROOT_DIR/docs/perf/pts/evidence/incoming}"
+EVIDENCE_ROOT="${EVIDENCE_ROOT:-$ROOT_DIR/artifacts/pts/evidence/incoming}"
 SERVER_PID_FILE="${SERVER_PID_FILE:-$RUNTIME_DIR/server.pid}"
 K6_DOCKER_IMAGE="${K6_DOCKER_IMAGE:-grafana/k6:latest}"
 K6_RUNNER="local"

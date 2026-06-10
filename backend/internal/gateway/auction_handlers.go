@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/minio/minio-go/v7"
+	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/sync/singleflight"
 
@@ -1158,7 +1159,43 @@ func (h AuctionHandler) DemoShortenEnd(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	result, err := h.Repo.ShortenActiveAuction(r.Context(), auctionID, req.RemainingSeconds, traceID(r.Context()))
+	if err == nil {
+		err = h.syncDemoShortenedAuctionToRedis(r.Context(), result)
+	}
 	writeResult(w, r, http.StatusOK, result, err)
+}
+
+func (h AuctionHandler) syncDemoShortenedAuctionToRedis(ctx context.Context, result auction.Auction) error {
+	if h.Deps == nil || h.Deps.Redis == nil || result.EndAt == nil {
+		return nil
+	}
+	endAtMS := result.EndAt.UTC().UnixMilli()
+	remainingExtendCount := result.Rule.MaxExtendCount - result.ExtendCount
+	if remainingExtendCount < 0 {
+		remainingExtendCount = 0
+	}
+	absoluteEndMS := endAtMS + int64(remainingExtendCount)*int64(result.Rule.ExtendBySeconds)*int64(time.Second/time.Millisecond)
+	nowMS := time.Now().UTC().UnixMilli()
+	stateKey := redisx.BidEngineStateKey(result.ID)
+	guardKey := redisx.BidGuardProjectionKey(result.ID)
+
+	pipe := h.Deps.Redis.TxPipeline()
+	pipe.HSet(ctx, stateKey, "end_at_ms", endAtMS, "absolute_end_ms", absoluteEndMS, "paused", "0", "pause_reason", "")
+	pipe.PExpire(ctx, stateKey, 24*time.Hour)
+	pipe.HSet(ctx, guardKey, "status", string(result.Status), "current_price_cents", result.CurrentPriceCents, "end_at_ms", endAtMS, "seq", result.Seq, "accepted_bid_count", result.AcceptedBidCount, "projected_at_ms", nowMS)
+	if result.CurrentWinnerID != nil {
+		pipe.HSet(ctx, guardKey, "current_winner_id", *result.CurrentWinnerID)
+	}
+	pipe.Expire(ctx, guardKey, redisGuardProjectionTTL)
+	cmds, err := pipe.Exec(ctx)
+	if err != nil {
+		for _, cmd := range cmds {
+			if cmdErr := cmd.Err(); cmdErr != nil && !errors.Is(cmdErr, redis.Nil) {
+				return cmdErr
+			}
+		}
+	}
+	return err
 }
 
 func (h AuctionHandler) ConfirmBid(w http.ResponseWriter, r *http.Request) {
@@ -1251,17 +1288,19 @@ func (h AuctionHandler) PutMaxBidIntent(w http.ResponseWriter, r *http.Request) 
 	result, err := h.Repo.PutMaxBidIntent(r.Context(), auctionID, user.ID, r.Header.Get("Idempotency-Key"), req)
 	if err == nil {
 		h.invalidateMaxBidIntentSnapshotCache(r.Context(), auctionID, user.ID)
-		if trigger, ok := h.triggerMaxBidIntentNow(r.Context(), auctionID, user.ID, req, traceID(r.Context())); ok {
+		if trigger, ok := h.triggerMaxBidIntentNow(r.Context(), result.Intent, req, traceID(r.Context())); ok {
 			result.TriggerBid = &trigger
 		}
 	}
 	writeResult(w, r, http.StatusOK, result, err)
 }
 
-func (h AuctionHandler) triggerMaxBidIntentNow(ctx context.Context, auctionID string, userID string, req auction.MaxBidIntentInput, traceID string) (auction.BidResponse, bool) {
+func (h AuctionHandler) triggerMaxBidIntentNow(ctx context.Context, intent auction.MaxBidIntent, req auction.MaxBidIntentInput, traceID string) (auction.BidResponse, bool) {
 	if h.Engine == nil || h.Repo == nil {
 		return auction.BidResponse{}, false
 	}
+	auctionID := intent.AuctionID
+	userID := intent.UserID
 	state, err := h.Repo.GetAuction(ctx, auctionID)
 	if err != nil || state.Status != auction.StatusActive || (state.CurrentWinnerID != nil && *state.CurrentWinnerID == userID) {
 		return auction.BidResponse{}, false
@@ -1277,7 +1316,7 @@ func (h AuctionHandler) triggerMaxBidIntentNow(ctx context.Context, auctionID st
 		next = *state.CapPriceCents
 	}
 	clientBidID := fmt.Sprintf("auto-intent:%s:%s:%d", userID, auctionID, time.Now().UTC().UnixNano())
-	resp, err := h.Engine.PlaceAutoMaxBid(ctx, auctionID, userID, clientBidID, auction.BidInput{
+	resp, err := h.Engine.PlaceActiveMaxBidIntent(ctx, auctionID, userID, intent.ID, clientBidID, auction.BidInput{
 		ClientBidID:   clientBidID,
 		AmountCents:   next,
 		ClientSeenSeq: state.Seq,

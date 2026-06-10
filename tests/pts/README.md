@@ -1,9 +1,9 @@
 # PTS Performance Test Suite
 
-> Entry point: read `docs/current/test-strategy/README.md` first for the only
+> Entry point: read `docs/s1-s5/00-overview.md` first for the only
 > current S1-S5 test plan. Then read `tests/pts/MANIFEST.md` for script/data
 > asset locations.
-> Read `docs/current/performance-correctness-contract.md` before interpreting any result.
+> Read `docs/design/02-performance-correctness-contract.md` before interpreting any result.
 
 ## Asset Directory Structure
 
@@ -195,6 +195,6 @@ If `RATE_LIMITED`, `BID_AUCTION_TOO_HOT`, HTTP `429`, or WS admission rejection 
 
 ## Formal Cloud Run Discipline
 
-When the system is deployed on ECS, use the ECS public domain/IP for smoke. For formal performance evidence, run the system on Linux/ECS, collect server metrics, record three repeat runs per workload, and follow `docs/current/performance-correctness-contract.md`. The old `docs/design-v2-industrial/templates/perf-baseline.md` template can still be used as a formatting aid, but it is not sufficient for current PTS-1B claims unless it includes `ENGINE_*`, durability, settlement, verifier, and fault-injection evidence.
+When the system is deployed on ECS, use the ECS public domain/IP for smoke. For formal performance evidence, run the system on Linux/ECS, collect server metrics, record repeat runs per workload, and follow `docs/design/02-performance-correctness-contract.md`. Do not cite local raw artifacts as judge-facing proof unless they include `ENGINE_*`, durability, settlement, verifier, and fault-injection evidence.
 
 Do not use the Cloudflare quick tunnel for capacity conclusions. It is only a temporary reachability and script-debugging bridge.

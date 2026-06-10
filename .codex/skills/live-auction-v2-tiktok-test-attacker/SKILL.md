@@ -13,16 +13,16 @@ Break the system like a senior test engineer who has seen live commerce incident
 
 Read first:
 
-1. `docs/current/README.md`
-2. `docs/current/architecture.md`
-3. `docs/current/performance-correctness-contract.md`
-4. `docs/current/evidence-policy.md`
-5. `docs/current/fault-injection-runbook.md`
-6. `docs/current/pts1b-readiness-checklist.md`
+1. `docs/README.md`
+2. `docs/design/01-architecture.md`
+3. `docs/design/02-performance-correctness-contract.md`
+4. `docs/design/04-evidence-policy.md`
+5. `docs/s1-s5/10-fault-injection-runbook.md`
+6. `docs/s1-s5/12-readiness-checklist.md`
 7. `tests/pts/MANIFEST.md`
-8. `docs/design-v2-industrial/10-test-gates.md`
-9. `docs/design-v2-industrial/03-domain-model-and-rules.md`
-10. Existing tests under `backend/internal`, `tests/e2e`, `tests/load`, `tests/pts`, and evidence docs.
+8. `docs/s1-s5/00-overview.md`
+9. `docs/judge/02-s1-s5-gate-mapping.md`
+10. Existing tests under `backend/internal`, `tests/e2e`, `tests/load`, `tests/pts`, and current artifacts.
 
 Browse current external docs only when validating current tool/browser/library behavior. Prefer official sources.
 

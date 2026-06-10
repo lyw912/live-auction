@@ -30,7 +30,7 @@ $env:SCENARIOS='cap-sold-payment-double-click'
 pnpm exec node tests/risk/run-p4-risk-simulator.mjs
 ```
 
-Outputs are written under `docs/perf/raw/p4-risk-simulator-*` by default:
+Outputs are written under `artifacts/perf/raw/p4-risk-simulator-*` by default:
 
 - `risk-summary.json`
 - `risk-summary.md`

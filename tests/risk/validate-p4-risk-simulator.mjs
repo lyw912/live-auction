@@ -21,7 +21,7 @@ for (const scenario of [
 assert(text.includes("go', ['run', './cmd/p1loadseed']"), 'risk simulator must reset real seed data');
 assert(text.includes("go', ['run', './cmd/invariantcheck'"), 'risk simulator must run invariant verifier');
 assert(text.includes("go', ['build', '-o', serverBin, './cmd/server']"), 'managed mode must build a concrete server binary');
-assert(text.includes("join(backendDir, 'tmp')"), 'managed mode must keep generated server binary outside docs/perf/raw');
+assert(text.includes("join(backendDir, 'tmp')"), 'managed mode must keep generated server binary outside artifacts/perf/raw');
 assert(text.includes('/api/auctions/auc_live/bids'), 'risk simulator must exercise real bid API');
 assert(text.includes('/api/monitor/auctions/auc_live/flight-recorder'), 'risk simulator must exercise flight recorder ACL');
 assert(text.includes('/api/users/me/orders'), 'risk simulator must verify user-visible order state');

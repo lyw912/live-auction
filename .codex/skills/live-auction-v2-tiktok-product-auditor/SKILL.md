@@ -13,14 +13,14 @@ Audit product completeness with zero tolerance for hand-wavy "done". Identify si
 
 Read first:
 
-1. `docs/current/README.md`
-2. `docs/current/performance-correctness-contract.md`
-3. `docs/current/fault-injection-runbook.md` for user-visible recovery semantics.
-4. `抖音电商AI全栈课题-直播竞拍全栈系统（宣讲版）.md`
-5. `docs/design-v2-industrial/00-project-brief.md`
-6. `docs/design-v2-industrial/07-frontend-ux.md`
-7. `docs/design-v2-industrial/05-api-contracts.md`
-8. `README.md`, `docs/setup_guide.md`, `docs/demo/demo-flow.md`, `docs/demo/known-limits.md`, and `docs/demo/p10-no-mock-auction-demo.md`.
+1. `docs/README.md`
+2. `docs/design/01-architecture.md`
+3. `docs/design/02-performance-correctness-contract.md`
+4. `docs/s1-s5/00-overview.md`
+5. `docs/s1-s5/10-fault-injection-runbook.md` for user-visible recovery semantics.
+6. `docs/s1-s5/12-readiness-checklist.md`
+7. `docs/judge/01-final-review.md`
+8. `README.md`, `docs/setup_guide.md`, and `docs/judge/03-demo-script.md`.
 
 Browse current market/product references only if the audit needs present-day TikTok Shop/live-commerce behavior or terminology. Cite sources if browsing.
 

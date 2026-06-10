@@ -423,6 +423,11 @@ export function formatRemaining(ms: number) {
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
+export const FINAL_COUNTDOWN_WINDOW_MS = 10_000;
+export const HAMMER_SEQUENCE_WINDOW_MS = 6_000;
+export const HAMMER_BEAT_MS = 2_000;
+export const BID_CLOSE_GUARD_MS = 1_200;
+
 export function deriveCountdown(endAt: string, serverTimeMS: number, nowMS: number, serverTimeSyncedAt: number, terminal: boolean, stale: boolean, extended: boolean) {
   if (terminal) return '已结束';
   if (!endAt || serverTimeMS <= 0) return stale ? '剩余时间确认中' : '等待服务端时间';
@@ -460,12 +465,12 @@ export function deriveCountdownPhase(input: {
   const remainingMS = remainingCountdownMS(input.endAt, input.serverTimeMS, input.nowMS, input.serverTimeSyncedAt);
   if (remainingMS == null) return { phase: 'stale', remainingMS: null, beat: '' };
   if (remainingMS <= 0) return { phase: 'syncing', remainingMS, beat: '' };
-  if (remainingMS <= 3_000) {
-    const second = Math.max(1, Math.ceil(remainingMS / 1000));
-    return { phase: 'hammer', remainingMS, beat: second === 3 ? '第一次' : second === 2 ? '第二次' : '最后一次' };
+  if (remainingMS <= HAMMER_SEQUENCE_WINDOW_MS) {
+    const beatIndex = Math.ceil(remainingMS / HAMMER_BEAT_MS);
+    return { phase: 'hammer', remainingMS, beat: beatIndex >= 3 ? '第一次' : beatIndex === 2 ? '第二次' : '最后一次' };
   }
-  if (remainingMS <= 5_000) return { phase: 'critical', remainingMS, beat: '' };
-  if (remainingMS <= 10_000) return { phase: 'hot', remainingMS, beat: '' };
+  if (remainingMS <= FINAL_COUNTDOWN_WINDOW_MS) return { phase: 'critical', remainingMS, beat: '' };
+  if (remainingMS <= 15_000) return { phase: 'hot', remainingMS, beat: '' };
   return { phase: 'normal', remainingMS, beat: '' };
 }
 
@@ -494,11 +499,13 @@ export function extendSecondsFromEvent(detail: AuctionRealtimeEvent, oldEndAt: s
 }
 
 export function isCountdownExpired(endAt: string, serverTimeMS: number, nowMS: number, serverTimeSyncedAt: number) {
-  if (!endAt || serverTimeMS <= 0) return false;
-  const endAtMS = Date.parse(endAt);
-  if (!Number.isFinite(endAtMS)) return false;
-  const syncedAt = serverTimeSyncedAt > 0 ? serverTimeSyncedAt : serverTimeMS;
-  return endAtMS - serverTimeMS - Math.max(0, nowMS - syncedAt) <= 0;
+  const remainingMS = remainingCountdownMS(endAt, serverTimeMS, nowMS, serverTimeSyncedAt);
+  return remainingMS != null && remainingMS <= 0;
+}
+
+export function isBidCloseGuardActive(endAt: string, serverTimeMS: number, nowMS: number, serverTimeSyncedAt: number) {
+  const remainingMS = remainingCountdownMS(endAt, serverTimeMS, nowMS, serverTimeSyncedAt);
+  return remainingMS != null && remainingMS <= BID_CLOSE_GUARD_MS;
 }
 
 export function createClientBidID() {

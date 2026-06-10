@@ -8,9 +8,9 @@ prevents accidental use as current PTS-1B evidence.
 Current PTS execution starts from:
 
 - `tests/pts/MANIFEST.md`
-- `docs/current/runtime-profiles.md`
-- `docs/current/performance-correctness-contract.md`
-- `docs/current/evidence-policy.md`
+- `docs/design/03-runtime-profiles.md`
+- `docs/design/02-performance-correctness-contract.md`
+- `docs/design/04-evidence-policy.md`
 
 ## Cleanup Decision
 

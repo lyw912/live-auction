@@ -1,6 +1,6 @@
 # P1 k6 Baseline Suite
 
-These scripts implement the P1-03 workload plan from `docs/design-v2-industrial/09-performance-and-benchmark.md`.
+These scripts implement the P1-03 workload plan from `docs/s1-s5/00-overview.md`.
 
 Prerequisites:
 
@@ -51,7 +51,7 @@ node tests\load\run-p3-local-stress.mjs
 
 `P3_PROFILE=downstream-pressure` is the default. The runner starts managed workloads with `ADMISSION_ENABLED=false`, records the effective admission environment, verifies `auction_admission_enabled 0` before and after each workload, and fails downstream-pressure evidence if admission rejection counters increase.
 
-Artifact retention is intentionally minimal by default. `P3_ARTIFACT_MODE=minimal` keeps compact analysis files, k6 summary JSON, before/after metrics, and environment metadata. Full logs, during-sample metrics, DB snapshots, and readyz dumps are kept for failed workloads, or for all workloads only when `P3_ARTIFACT_MODE=full`. Generated backend binaries are built under `backend/tmp`, not under `docs/perf/raw`.
+Artifact retention is intentionally minimal by default. `P3_ARTIFACT_MODE=minimal` keeps compact analysis files, k6 summary JSON, before/after metrics, and environment metadata. Full logs, during-sample metrics, DB snapshots, and readyz dumps are kept for failed workloads, or for all workloads only when `P3_ARTIFACT_MODE=full`. Generated backend binaries are built under `backend/tmp`, not under `artifacts/perf/raw`.
 
 For attribution or comparison, read the compact index first:
 
@@ -59,7 +59,7 @@ For attribution or comparison, read the compact index first:
 pnpm exec node tests/load/analyze-p3-artifacts.mjs
 ```
 
-This writes `docs/perf/raw/p3-artifact-index.json` and prints the latest workload verdict hints. Open raw JSON, Prometheus snapshots, DB snapshots, or logs only after the compact report points to a specific workload and candidate bottleneck.
+This writes `artifacts/perf/raw/p3-artifact-index.json` and prints the latest workload verdict hints. Open raw JSON, Prometheus snapshots, DB snapshots, or logs only after the compact report points to a specific workload and candidate bottleneck.
 
 Default `P3_ARTIFACT_MODE=minimal` is enough for normal P3 development: smoke, regression checks, admission pollution checks, environment-limit detection, and first-pass bottleneck attribution. Use `P3_ARTIFACT_MODE=full` only for a single focused drilldown when the compact report says the run reached the backend, admission stayed off, environment signals are clean, and the remaining question needs full logs, during metrics, DB snapshots, or runtime profiles.
 
@@ -99,11 +99,11 @@ P2 bid abuse smoke:
 
 Formal baseline rules:
 
-- Windows local smoke and relative comparisons are required during development; see `docs/perf/windows-local-strategy.md`.
-- P3 local stress cadence and bottleneck drilldown rules are defined in `docs/design-v2-industrial/17-local-stress-and-p3-execution-plan.md`; use `live-auction-v2-stress-attacker` for adversarial pressure rounds.
+- Windows local smoke and relative comparisons are required during development; see `docs/s1-s5/01-metrics-and-slo.md`.
+- P3 local stress cadence and bottleneck drilldown rules are defined in `docs/s1-s5/08-scale-out-and-ceilings.md`; use `live-auction-v2-stress-attacker` for adversarial pressure rounds.
 - Run final capacity baseline on Linux native or a clearly documented equivalent.
 - Record 3 raw Linux runs per workload before publishing any QPS/P99/fanout/online-user claim.
-- Use `docs/design-v2-industrial/templates/perf-baseline.md`.
+- Use `docs/design/04-evidence-policy.md`.
 - Do not use local Windows smoke outputs as final capacity evidence.
 
 P2-07 harness:
@@ -112,7 +112,7 @@ P2-07 harness:
 node tests/load/run-p2-linux-baseline.mjs --final
 ```
 
-The final runner refuses non-Linux hosts and low `ulimit -n`. It writes `docs/perf/raw/p2-07/environment.json`, one raw k6 summary per workload/run, one log per workload/run, and `docs/perf/p2-07-linux-baseline-round-1.md`.
+The final runner refuses non-Linux hosts and low `ulimit -n`. It writes `artifacts/perf/raw/p2-07/environment.json`, one raw k6 summary per workload/run, one log per workload/run, and `artifacts/perf/p2-07-linux-baseline-round-1.md`.
 
 For local script validation only:
 

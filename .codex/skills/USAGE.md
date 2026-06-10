@@ -25,7 +25,7 @@ docs/design-v2-industrial/README.md
 docs/current/README.md
 ```
 
-这些 skills 当前默认先读取 `docs/current/`，再按任务读取 `docs/design-v2-industrial/` 的历史/产品/UX/工程约束材料。如果文档放在其他路径，使用前先告诉 Codex 当前权威设计目录。
+这些 skills 当前默认先读取 `docs/README.md`，再按任务读取 `docs/design/`、`docs/s1-s5/` 和 `docs/judge/`。旧的 `docs/current/`、`docs/perf/`、`docs/reviews/`、`docs/design-v2-industrial/` 已不再作为当前权威文档保留。
 
 触发建议：
 
@@ -40,7 +40,7 @@ docs/current/README.md
 - 测试攻击：`使用 live-auction-v2-tiktok-test-attacker 设计并运行恶意/边界/事故场景`
 - 产品验收：`使用 live-auction-v2-tiktok-product-auditor 对照范围和代码逐项查验是否降级实现`
 
-压测、性能审查、发布闸门、评委拷打类任务必须先确认 `docs/current/runtime-profiles.md`：
+压测、性能审查、发布闸门、评委拷打类任务必须先确认 `docs/design/03-runtime-profiles.md`：
 
 - `.env.example` 只代表本地 demo profile。
 - PTS-1B 必须使用 `.env.pts1b.example` 或 `tests/pts/MANIFEST.md` 的 reset/preflight/verify 流程。

@@ -10,7 +10,7 @@ if [ -f "$INPUT" ]; then
   EVIDENCE_DIR="$(dirname "$(dirname "$JSONL")")"
 else
   REPORT_ID="$INPUT"
-  EVIDENCE_DIR="$ROOT_DIR/docs/perf/pts/evidence/incoming/$REPORT_ID"
+  EVIDENCE_DIR="$ROOT_DIR/artifacts/pts/evidence/incoming/$REPORT_ID"
   JSONL="$EVIDENCE_DIR/pts-sampling-logs/sampling-logs.jsonl"
 fi
 

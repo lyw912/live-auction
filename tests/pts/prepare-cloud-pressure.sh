@@ -4,7 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BACKEND_DIR="$ROOT_DIR/backend"
 MIGRATIONS_DIR="$BACKEND_DIR/migrations"
-OUT_DIR="$ROOT_DIR/docs/perf/pts"
+OUT_DIR="$ROOT_DIR/artifacts/pts"
+SQL_DIR="$ROOT_DIR/tests/pts/sql"
 RUNTIME_DIR="${PTS_RUNTIME_DIR:-/tmp/live-auction-pts}"
 SESSION_CSV="${SESSION_CSV:-archive/data/pts_sessions.csv}"
 JMX_PATH_WAS_SET="${JMX_PATH+x}"
@@ -100,7 +101,7 @@ echo "[3/7] Seeding P1 pressure data"
 echo "[4/7] Generating real session CSV for PTS"
 {
   echo "user_id,token,role"
-  docker exec -i "$DB_CONTAINER" psql -q -A -F ',' -t -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$DB_NAME" -v session_count="$SESSION_COUNT" -f - < "$OUT_DIR/generate-pts-sessions.sql"
+  docker exec -i "$DB_CONTAINER" psql -q -A -F ',' -t -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$DB_NAME" -v session_count="$SESSION_COUNT" -f - < "$SQL_DIR/generate-pts-sessions.sql"
 } > "$OUT_DIR/$SESSION_CSV"
 
 echo "[5/7] Building backend"

@@ -3711,10 +3711,10 @@ button {
 
 .qa-safety-note {
   padding: 8px 10px;
-  border: 1px solid rgba(77, 231, 255, .18);
+  border: 1px solid rgba(77, 231, 255, .45);
   border-radius: 8px;
-  background: rgba(77, 231, 255, .08);
-  color: rgba(255, 255, 255, .72);
+  background: rgba(6, 26, 34, .92);
+  color: #dff8ff;
   font-size: 12px;
   line-height: 1.45;
 }
@@ -3738,8 +3738,9 @@ button {
   margin: 0;
   padding: 8px 10px;
   border-radius: 8px 8px 2px 8px;
-  background: rgba(255, 210, 75, 0.18);
-  color: #fff6d6;
+  border: 1px solid rgba(255, 210, 75, 0.38);
+  background: rgba(64, 43, 6, 0.95);
+  color: #fff7d8;
   font-size: 13px;
   line-height: 1.45;
 }
@@ -3748,22 +3749,23 @@ button {
   display: grid;
   gap: 6px;
   padding: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.26);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(12, 18, 32, 0.94);
 }
 
 .qa-answer strong {
-  color: #fff;
+  color: #ffffff;
   font-size: 14px;
   line-height: 1.5;
 }
 
 .qa-answer span,
 .qa-answer em {
-  color: rgba(255, 255, 255, 0.72);
+  color: #d9e4f2;
   font-size: 12px;
   font-style: normal;
+  line-height: 1.45;
 }
 
 .qa-prompts {
@@ -3775,16 +3777,16 @@ button {
 
 .qa-prompts button {
   flex: 0 0 auto;
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.32);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.86);
+  background: rgba(18, 26, 42, 0.94);
+  color: #f7fbff;
   font-size: 12px;
   padding: 7px 10px;
 }
 
 .qa-prompts button:disabled {
-  opacity: 0.55;
+  opacity: 0.68;
 }
 
 .buyer-order-detail {

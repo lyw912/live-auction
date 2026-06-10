@@ -461,14 +461,14 @@ function RaceBoard({
   onOpenBid: () => void;
 }) {
   const entries = leaderboard?.entries ?? [];
-  const top = entries.slice(0, 3);
+  const visibleEntries = entries.slice(0, 5);
   const mine = entries.find((entry) => entry.is_current);
-  const leader = top[0];
+  const leader = visibleEntries[0];
   const myRank = mine?.rank ?? leaderboard?.my_rank;
   const gap = leaderboard?.gap_to_leader_cents ?? (mine && leader ? Math.max(0, leader.amount_cents - mine.amount_cents) : undefined);
   const recovering = leaderboard?.state === 'RECOVERING';
   const hasBids = entries.length > 0 || (leaderboard?.accepted_bidder_count ?? 0) > 0;
-  const expanded = Boolean(forceExpanded || leaderboard?.burst_mode || (leaderboard?.accepted_bids_30s ?? 0) >= 4 || leaderboard?.state === 'OUTBID');
+  const expanded = Boolean(forceExpanded || hasBids || leaderboard?.burst_mode || (leaderboard?.accepted_bids_30s ?? 0) >= 4 || leaderboard?.state === 'OUTBID');
   const lastCueKind = atmosphereCue?.user_scope === 'self' ? atmosphereCue.kind : 'none';
   const bidderLabel = (entry: NonNullable<LeaderboardPayload['entries']>[number]) => entry.is_current ? `我（${entry.user_masked}）` : entry.user_masked;
   const headline = recovering
@@ -494,12 +494,14 @@ function RaceBoard({
       aria-label="常驻竞速榜"
       aria-live="polite"
     >
-      <button className="race-board-rest" type="button" onClick={onOpenBid}>
-        <Trophy size={15} />
-        <strong>{headline}</strong>
-        <span>{mineCopy}</span>
-        <em>{(leaderboard?.accepted_bids_30s ?? 0) > 0 ? `近30秒 ${leaderboard?.accepted_bids_30s} 次` : '真实有效出价'}</em>
-      </button>
+      {hasBids && !recovering ? null : (
+        <button className="race-board-rest" type="button" onClick={onOpenBid}>
+          <Trophy size={15} />
+          <strong>{headline}</strong>
+          <span>{mineCopy}</span>
+          <em>{(leaderboard?.accepted_bids_30s ?? 0) > 0 ? `近30秒 ${leaderboard?.accepted_bids_30s} 次` : '真实有效出价'}</em>
+        </button>
+      )}
       <div className="race-board-expanded">
         <div className="race-board-title">
           <strong>竞速榜</strong>
@@ -508,11 +510,11 @@ function RaceBoard({
         {recovering ? (
           <p>竞拍状态校对中，以服务端修复后的榜单为准</p>
         ) : hasBids ? (
-          <LeaderboardRows entries={top.length > 0 ? top : entries} burstMode={Boolean(leaderboard?.burst_mode)} highlightKind={lastCueKind} />
+          <LeaderboardRows entries={visibleEntries.length > 0 ? visibleEntries : entries} burstMode={Boolean(leaderboard?.burst_mode)} highlightKind={lastCueKind} />
         ) : (
           <p>等你第一手登顶</p>
         )}
-        {mine && !top.some((entry) => entry.user_id === mine.user_id) ? (
+        {mine && !visibleEntries.some((entry) => entry.user_id === mine.user_id) ? (
           <div className="leaderboard-row is-current race-board-mine">
             <span>#{mine.rank}</span>
             <strong>我</strong>

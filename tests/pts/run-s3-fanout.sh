@@ -16,7 +16,7 @@
 #
 # PTS Part A config:
 #   JMX: tests/pts/scenarios/s3-room-fanout/s3-mixed-final-burst-4500vu.jmx
-#   CSV: docs/perf/pts/inputs/s1-s5/s3-mixed-final-burst-4500-sessions.csv
+#   CSV: tests/pts/inputs/s1-s5/s3-mixed-final-burst-4500-sessions.csv
 #   压力模式=虚拟用户模式, 最大VU=4500, 指定IP数=9
 #   指定循环=是, 循环次数=1, 时长=3min, 采样率=1% (100% only for smoke/debug)
 #   Screenshots: S3 live fanout receive p99, S3 POST accepted-update bid p99,
@@ -48,11 +48,11 @@ if [ "$SOAK_ONLY" != "--soak-only" ]; then
   echo ""
   echo "=== Part A: PTS JMeter S3-mixed-final-burst ==="
   echo "   JMX: tests/pts/scenarios/s3-room-fanout/s3-mixed-final-burst-4500vu.jmx"
-  echo "   CSV: docs/perf/pts/inputs/s1-s5/s3-mixed-final-burst-4500-sessions.csv"
+  echo "   CSV: tests/pts/inputs/s1-s5/s3-mixed-final-burst-4500-sessions.csv"
   echo "   PTS: 最大VU=4500, 指定IP数=9, 指定循环=是, 循环次数=1, 时长=3min, 采样率=1%"
   echo "   Smoke first if needed:"
   echo "     JMX: tests/pts/scenarios/s3-room-fanout/s3-mixed-smoke-30vu.jmx"
-  echo "     CSV: docs/perf/pts/inputs/s1-s5/s3-mixed-smoke-30-sessions.csv"
+  echo "     CSV: tests/pts/inputs/s1-s5/s3-mixed-smoke-30-sessions.csv"
   echo "     最大VU=30, 指定IP数=1, 指定循环=是, 循环次数=1, 时长=1min, 采样率=100%"
   echo ""
   read -r -p "Press ENTER when PTS run is complete: "
@@ -67,7 +67,7 @@ echo "     go_goroutines                 (should not climb monotonically)"
 echo "     process_open_fds              (bounded by ulimit; should plateau)"
 echo "     auction_fanout_latency_seconds (server-side fanout histogram)"
 
-mkdir -p "docs/perf/pts/evidence/incoming/${LABEL}"
+mkdir -p "artifacts/pts/evidence/incoming/${LABEL}"
 
 k6 run \
   --env BASE_URL="$BASE_URL" \
@@ -75,7 +75,7 @@ k6 run \
   --env HOLD_SECONDS="$HOLD_SECONDS" \
   --env BID_RATE_PER_S=5 \
   tests/load/s3-fanout-soak.js \
-  --out "json=docs/perf/pts/evidence/incoming/${LABEL}/s3-k6-fanout.json" \
+  --out "json=artifacts/pts/evidence/incoming/${LABEL}/s3-k6-fanout.json" \
   || true
 
 echo ""
@@ -83,7 +83,7 @@ echo "=== S3 post-run: collect server evidence ==="
 BASE_URL="$BASE_URL" bash tests/pts/collect-server-evidence.sh "${LABEL}"
 
 echo ""
-echo "=== S3 done. Evidence: docs/perf/pts/evidence/incoming/${LABEL}/ ==="
+echo "=== S3 done. Evidence: artifacts/pts/evidence/incoming/${LABEL}/ ==="
 [ -n "${PTS_REPORT_ID_A:-}" ] && echo "   PTS report A (headline): ${PTS_REPORT_ID_A}"
 echo "   M4 evidence: Grafana screenshot showing stable heap/goroutines/fd over soak."
 echo "   M2 evidence: k6 summary s3_fanout_latency_ms p99."

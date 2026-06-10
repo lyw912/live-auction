@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 12);
-const rawRoot = join(root, process.env.RAW_ROOT || `docs/perf/raw/p3-local-stress-${stamp}`);
+const rawRoot = join(root, process.env.RAW_ROOT || `artifacts/perf/raw/p3-local-stress-${stamp}`);
 const backendDir = join(root, 'backend');
 const serverBinDir = join(backendDir, 'tmp');
 const serverBin = process.platform === 'win32' ? join(serverBinDir, 'p3-local-server.exe') : join(serverBinDir, 'p3-local-server');

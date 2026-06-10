@@ -3,7 +3,7 @@ import { pathToFileURL } from 'node:url';
 import { mkdir, rm } from 'node:fs/promises';
 import { build } from 'vite';
 
-const outDir = 'docs/perf/tmp/frontend-domain-tests';
+const outDir = 'artifacts/tmp/frontend-domain-tests';
 
 async function bundle(entry, name) {
   const fileName = `${name}.mjs`;
@@ -38,12 +38,14 @@ assert.equal(h5.deriveCountdown('', 0, Date.now(), 0, false, true, false), '剩�
 {
   const endAt = '2099-05-22T14:00:00Z';
   const base = Date.parse('2099-05-22T13:59:50Z');
-  assert.equal(h5.deriveCountdownPhase({ endAt, serverTimeMS: base, nowMS: base, serverTimeSyncedAt: base, terminal: false, stale: false, active: true }).phase, 'hot');
-  assert.equal(h5.deriveCountdownPhase({ endAt, serverTimeMS: base + 5_100, nowMS: base + 5_100, serverTimeSyncedAt: base + 5_100, terminal: false, stale: false, active: true }).phase, 'critical');
-  assert.equal(h5.deriveCountdownPhase({ endAt, serverTimeMS: base + 7_500, nowMS: base + 7_500, serverTimeSyncedAt: base + 7_500, terminal: false, stale: false, active: true }).phase, 'hammer');
-  assert.equal(h5.deriveCountdownPhase({ endAt, serverTimeMS: base + 7_500, nowMS: base + 7_500, serverTimeSyncedAt: base + 7_500, terminal: false, stale: false, active: true }).beat, '第一次');
-  assert.equal(h5.deriveCountdownPhase({ endAt, serverTimeMS: base + 8_500, nowMS: base + 8_500, serverTimeSyncedAt: base + 8_500, terminal: false, stale: false, active: true }).beat, '第二次');
-  assert.equal(h5.deriveCountdownPhase({ endAt, serverTimeMS: base + 9_500, nowMS: base + 9_500, serverTimeSyncedAt: base + 9_500, terminal: false, stale: false, active: true }).beat, '最后一次');
+  assert.equal(h5.deriveCountdownPhase({ endAt, serverTimeMS: base - 4_000, nowMS: base - 4_000, serverTimeSyncedAt: base - 4_000, terminal: false, stale: false, active: true }).phase, 'hot');
+  assert.equal(h5.deriveCountdownPhase({ endAt, serverTimeMS: base, nowMS: base, serverTimeSyncedAt: base, terminal: false, stale: false, active: true }).phase, 'critical');
+  assert.equal(h5.deriveCountdownPhase({ endAt, serverTimeMS: base + 4_100, nowMS: base + 4_100, serverTimeSyncedAt: base + 4_100, terminal: false, stale: false, active: true }).phase, 'hammer');
+  assert.equal(h5.deriveCountdownPhase({ endAt, serverTimeMS: base + 4_100, nowMS: base + 4_100, serverTimeSyncedAt: base + 4_100, terminal: false, stale: false, active: true }).beat, '第一次');
+  assert.equal(h5.deriveCountdownPhase({ endAt, serverTimeMS: base + 6_100, nowMS: base + 6_100, serverTimeSyncedAt: base + 6_100, terminal: false, stale: false, active: true }).beat, '第二次');
+  assert.equal(h5.deriveCountdownPhase({ endAt, serverTimeMS: base + 8_100, nowMS: base + 8_100, serverTimeSyncedAt: base + 8_100, terminal: false, stale: false, active: true }).beat, '最后一次');
+  assert.equal(h5.isBidCloseGuardActive(endAt, base + 8_900, base + 8_900, base + 8_900), true);
+  assert.equal(h5.isBidCloseGuardActive(endAt, base + 8_700, base + 8_700, base + 8_700), false);
   assert.equal(h5.deriveCountdownPhase({ endAt, serverTimeMS: base + 7_500, nowMS: base + 7_500, serverTimeSyncedAt: base + 7_500, terminal: false, stale: true, active: true }).phase, 'stale');
   assert.equal(h5.deriveCountdownPhase({ endAt, serverTimeMS: base + 10_100, nowMS: base + 10_100, serverTimeSyncedAt: base + 10_100, terminal: false, stale: false, active: true }).phase, 'syncing');
 }

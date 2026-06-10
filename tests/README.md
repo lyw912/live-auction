@@ -1,6 +1,6 @@
 # Tests
 
-Test assets are grouped by gate type from `docs/design-v2-industrial/10-test-gates.md`.
+Test assets are grouped by gate type from `docs/s1-s5/00-overview.md`.
 
 - `integration/`: backend cross-module and database behavior.
 - `e2e/`: Playwright browser flows.

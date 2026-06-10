@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 12);
-const rawRoot = join(root, `docs/perf/raw/p3-relay-owner-kill-${stamp}`);
+const rawRoot = join(root, `artifacts/perf/raw/p3-relay-owner-kill-${stamp}`);
 const backendDir = join(root, 'backend');
 const binDir = join(backendDir, 'tmp');
 const serverBin = process.platform === 'win32' ? join(binDir, 'p3-server.exe') : join(binDir, 'p3-server');

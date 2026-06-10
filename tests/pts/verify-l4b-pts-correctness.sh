@@ -4,7 +4,7 @@ set -euo pipefail
 AUCTION_ID="${AUCTION_ID:-auc_live}"
 LABEL="${1:-after-l4b-pts}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-EVIDENCE_ROOT="${EVIDENCE_ROOT:-$ROOT_DIR/docs/perf/pts/evidence/incoming}"
+EVIDENCE_ROOT="${EVIDENCE_ROOT:-$ROOT_DIR/artifacts/pts/evidence/incoming}"
 OUT_DIR="$EVIDENCE_ROOT/$LABEL"
 DB_CONTAINER="${DB_CONTAINER:-live-auction-postgres}"
 KAFKA_CONTAINER="${KAFKA_CONTAINER:-live-auction-kafka}"

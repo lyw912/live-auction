@@ -65,7 +65,7 @@ func (s *Server) enqueueLeaderboardDeltaBestEffort(auctionID string, eventPayloa
 		return
 	}
 	switch envelope.EventType {
-	case "bid_accepted", "auction_sold", "auction_ended":
+	case "bid_accepted", "auction_extended", "auction_sold", "auction_ended":
 	default:
 		return
 	}

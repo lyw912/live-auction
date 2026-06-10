@@ -6,7 +6,7 @@ RUNTIME_DIR="${PTS_RUNTIME_DIR:-/tmp/live-auction-pts}"
 
 export SESSION_COUNT="${SESSION_COUNT:-1000}"
 export SESSION_CSV="${SESSION_CSV:-s1-s5-1000-user-sessions.csv}"
-SESSION_CSV_PATH="${SESSION_CSV_PATH:-$ROOT_DIR/docs/perf/pts/inputs/s1-s5/$SESSION_CSV}"
+SESSION_CSV_PATH="${SESSION_CSV_PATH:-$ROOT_DIR/tests/pts/inputs/s1-s5/$SESSION_CSV}"
 export L4B_PROFILE="${L4B_PROFILE:-accepted}"
 case "$L4B_PROFILE" in
   accepted|pts-1a|pts1a)

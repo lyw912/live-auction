@@ -10,7 +10,7 @@ groups:
         annotations:
           summary: "Live auction anomaly recorded"
           description: "Backend diagnostics recorded {{ $labels.severity }} anomaly {{ $labels.type }}."
-          runbook: "docs/runbooks/alerts.md#liveauctioncriticalanomaly"
+          runbook: "docs/design/05-alert-runbooks.md#liveauctioncriticalanomaly"
 
       - alert: LiveAuctionOutboxDeadLetter
         expr: increase(auction_outbox_dead_total[5m]) > 0
@@ -21,7 +21,7 @@ groups:
         annotations:
           summary: "Outbox delivery reached dead-letter state"
           description: "At least one outbox delivery exhausted retries in the last 5 minutes."
-          runbook: "docs/runbooks/alerts.md#liveauctionoutboxdeadletter"
+          runbook: "docs/design/05-alert-runbooks.md#liveauctionoutboxdeadletter"
 
       - alert: LiveAuctionOutboxLagHigh
         expr: histogram_quantile(0.95, sum by (le) (rate(auction_outbox_lag_seconds_bucket[5m]))) > 2
@@ -32,7 +32,7 @@ groups:
         annotations:
           summary: "Outbox delivery lag is elevated"
           description: "P95 outbox delivery lag is above the local P1 guard threshold for 2 minutes."
-          runbook: "docs/runbooks/alerts.md#liveauctionoutboxlaghigh"
+          runbook: "docs/design/05-alert-runbooks.md#liveauctionoutboxlaghigh"
 
       - alert: LiveAuctionSchedulerDriftHigh
         expr: histogram_quantile(0.95, sum by (le, job_type) (rate(auction_scheduler_drift_seconds_bucket[5m]))) > 2
@@ -43,7 +43,7 @@ groups:
         annotations:
           summary: "Scheduler drift is elevated"
           description: "P95 scheduler drift for {{ $labels.job_type }} is above the local P1 guard threshold."
-          runbook: "docs/runbooks/alerts.md#liveauctionschedulerdrifthigh"
+          runbook: "docs/design/05-alert-runbooks.md#liveauctionschedulerdrifthigh"
 
       - alert: LiveAuctionReconnectSpike
         expr: sum(increase(auction_ws_recover_total[5m])) > 50
@@ -54,7 +54,7 @@ groups:
         annotations:
           summary: "Reconnect activity spiked"
           description: "WebSocket recovery attempts increased sharply in the last 5 minutes."
-          runbook: "docs/runbooks/alerts.md#liveauctionreconnectspike"
+          runbook: "docs/design/05-alert-runbooks.md#liveauctionreconnectspike"
 
       - alert: LiveAuctionSnapshotRebuildPressure
         expr: sum(increase(auction_snapshot_source_total{source=~"db|snapshot_unavailable|stale_redis"}[5m])) > 20
@@ -65,7 +65,7 @@ groups:
         annotations:
           summary: "Snapshot recovery pressure is elevated"
           description: "Clients are relying on DB/stale/unavailable snapshot recovery paths."
-          runbook: "docs/runbooks/alerts.md#liveauctionsnapshotrebuildpressure"
+          runbook: "docs/design/05-alert-runbooks.md#liveauctionsnapshotrebuildpressure"
 
       - alert: LiveAuctionSlowConsumerDisconnects
         expr: increase(auction_ws_slow_consumer_disconnect_total[5m]) > 0
@@ -76,7 +76,7 @@ groups:
         annotations:
           summary: "Slow WebSocket consumers are being disconnected"
           description: "At least one slow consumer was closed in the last 5 minutes."
-          runbook: "docs/runbooks/alerts.md#liveauctionslowconsumerdisconnects"
+          runbook: "docs/design/05-alert-runbooks.md#liveauctionslowconsumerdisconnects"
 
       - alert: LiveAuctionPTS1BBidGatewayP99High
         expr: histogram_quantile(0.99, sum by (le) (rate(auction_bid_gateway_stage_seconds_bucket{stage="total",mode="redis_ledger"}[2m]))) > 0.75
@@ -88,7 +88,7 @@ groups:
         annotations:
           summary: "PTS-1B bid gateway p99 exceeded the hot-path budget"
           description: "Redis-ledger bid handler p99 is above 750ms. Compare stage p99 with PTS sampled RTT before claiming a backend bottleneck."
-          runbook: "docs/perf/pts/l4b-kafka/pts1b-observability-runbook-2026-05-30.md#triage-matrix"
+          runbook: "docs/design/05-alert-runbooks.md#liveauctionpts1bbidgatewayp99high"
 
       - alert: LiveAuctionPTS1BRedisLuaP99High
         expr: histogram_quantile(0.99, sum by (le) (rate(auction_bid_http_stage_seconds_bucket{stage="redis_lua"}[2m]))) > 0.1
@@ -100,7 +100,7 @@ groups:
         annotations:
           summary: "PTS-1B Redis Lua p99 is elevated"
           description: "Redis decision Lua p99 is above 100ms, indicating Redis CPU/contention or oversized script work."
-          runbook: "docs/perf/pts/l4b-kafka/pts1b-observability-runbook-2026-05-30.md#triage-matrix"
+          runbook: "docs/design/05-alert-runbooks.md#liveauctionpts1bredisluap99high"
 
       - alert: LiveAuctionPTS1BKafkaAppendP99High
         expr: histogram_quantile(0.99, sum by (le) (rate(auction_bid_kafka_append_seconds_bucket{status="ok"}[2m]))) > 0.75
@@ -112,7 +112,7 @@ groups:
         annotations:
           summary: "PTS-1B Kafka append p99 exceeded the sync-ack budget"
           description: "Kafka sync append p99 is above 750ms. Check broker health, ISR/min.insync settings, append timeouts, and pending-order wait."
-          runbook: "docs/perf/pts/l4b-kafka/pts1b-observability-runbook-2026-05-30.md#triage-matrix"
+          runbook: "docs/design/05-alert-runbooks.md#liveauctionpts1bkafkaappendp99high"
 
       - alert: LiveAuctionPTS1BEnginePaused
         expr: increase(auction_bid_engine_pause_total[2m]) > 0
@@ -124,7 +124,7 @@ groups:
         annotations:
           summary: "Redis ledger engine paused during PTS-1B"
           description: "Any engine pause invalidates a performance-only conclusion. Inspect pause_reason, pending decisions, Kafka append markers, and DLQ."
-          runbook: "docs/perf/pts/l4b-kafka/pts1b-observability-runbook-2026-05-30.md#triage-matrix"
+          runbook: "docs/design/05-alert-runbooks.md#liveauctionpts1benginepaused"
 
       - alert: LiveAuctionPTS1BPendingDecisionsStuck
         expr: max(auction_bid_redis_pending_decisions) > 0
@@ -136,7 +136,7 @@ groups:
         annotations:
           summary: "Redis ledger pending decisions did not drain"
           description: "Pending decisions remaining after the burst means Kafka append or settlement recovery is incomplete."
-          runbook: "docs/perf/pts/l4b-kafka/pts1b-observability-runbook-2026-05-30.md#triage-matrix"
+          runbook: "docs/design/05-alert-runbooks.md#liveauctionpts1bpendingdecisionsstuck"
 
       - alert: LiveAuctionSettlementLagHigh
         expr: auction_settlement_lag_p99_ms > 5000
@@ -147,7 +147,7 @@ groups:
         annotations:
           summary: "Settlement P99 lag is high"
           description: "P99 settlement lag exceeded 5 s for 2 minutes. Check worker count, Kafka consumer lag, and PG write load."
-          runbook: "docs/current/test-strategy/s2-settlement-diagnosis-and-judge-defense.md"
+          runbook: "docs/design/05-alert-runbooks.md#liveauctionsettlementlaghigh"
 
       - alert: LiveAuctionSettlementPendingStuck
         expr: auction_settlement_pending_total > 100
@@ -158,7 +158,7 @@ groups:
         annotations:
           summary: "Large number of PROCESSING settlements not draining"
           description: "More than 100 settlements have been in PROCESSING state for over 3 minutes. Settlement worker may be stalled."
-          runbook: "docs/current/test-strategy/s2-settlement-diagnosis-and-judge-defense.md"
+          runbook: "docs/design/05-alert-runbooks.md#liveauctionsettlementpendingstuck"
 
       - alert: LiveAuctionTerminalNotFenced
         expr: increase(auction_reconcile_terminal_unfenced_total[5m]) > 0
@@ -169,7 +169,7 @@ groups:
         annotations:
           summary: "Cancelled/ended auction not fenced in Redis hot engine"
           description: "Reconciler found an auction in a terminal PG state whose Redis hot-state was not marked paused. Bids may have been accepted after cancellation. Check /api/monitor/redis-engine."
-          runbook: "docs/current/fault-injection-runbook.md"
+          runbook: "docs/design/05-alert-runbooks.md#liveauctionterminalnotfenced"
 
       - alert: LiveAuctionKafkaAckWaitDegradation
         expr: increase(auction_kafka_ack_wait_timeout_total[2m]) > 10
@@ -181,7 +181,7 @@ groups:
         annotations:
           summary: "kafka_ack mode: relay latch degrading to ENGINE_DURABLE"
           description: "More than 10 waitKafkaAck degradations in 2 minutes. reason=fail_fast means Kafka fault detected mid-batch; reason=circuit_open means circuit breaker is open (Kafka down, all handlers skip wait); reason=timeout means relay too slow. Check auction_kafka_ack_wait_ms{outcome} for breakdown."
-          runbook: "docs/current/runtime-profiles.md#kafka-ack-response-durability-boundary"
+          runbook: "docs/design/05-alert-runbooks.md#liveauctionkafkaackwaitdegradation"
 
       - alert: LiveAuctionKafkaAckCircuitOpen
         expr: increase(auction_kafka_ack_wait_timeout_total{reason="circuit_open"}[1m]) > 5
@@ -193,7 +193,7 @@ groups:
         annotations:
           summary: "kafka_ack circuit breaker open — Kafka broker unreachable"
           description: "Circuit breaker opened: relay AppendBatch failed with a hard Kafka error and all subsequent kafka_ack handlers are skipping the wait. Check Kafka broker health, auction_bid_relay_kafka_batch_fail_total, and relay goroutine logs."
-          runbook: "docs/current/runtime-profiles.md#kafka-ack-response-durability-boundary"
+          runbook: "docs/design/05-alert-runbooks.md#liveauctionkafkaackcircuitopen"
 
       - alert: LiveAuctionKafkaAckWaitP99High
         expr: histogram_quantile(0.99, sum by (le, outcome) (rate(auction_kafka_ack_wait_ms_bucket{outcome="acked"}[2m]))) > 30
@@ -205,4 +205,4 @@ groups:
         annotations:
           summary: "kafka_ack wait P99 exceeds event-driven relay budget"
           description: "P99 kafka_ack latch wait is above 30ms. At this level, total bid P99 risks breaching the default kafka_ack 60ms envelope. Check relay trigger goroutine is running (runRelayOnTrigger), Kafka broker produce latency, and Redis pipeline latency."
-          runbook: "docs/current/runtime-profiles.md#kafka-ack-response-durability-boundary"
+          runbook: "docs/design/05-alert-runbooks.md#liveauctionkafkaackwaitp99high"

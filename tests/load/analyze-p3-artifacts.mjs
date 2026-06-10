@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
-const rawRoot = resolve(root, process.argv[2] || 'docs/perf/raw');
+const rawRoot = resolve(root, process.argv[2] || 'artifacts/perf/raw');
 
 function readJSON(path) {
   return JSON.parse(readFileSync(path, 'utf8'));

@@ -546,6 +546,22 @@ func TestRedisLedgerConcurrentSoftCloseExtendsOnlyOnce(t *testing.T) {
 	if acceptedBidCount != settledAccepted {
 		t.Fatalf("accepted_bid_count = %d, want settled accepted decisions %d", acceptedBidCount, settledAccepted)
 	}
+	var extensionEvents int
+	var extendedMS int64
+	if err := db.QueryRow(ctx, `
+		SELECT count(*), COALESCE(max((payload_json->>'extend_ms')::bigint), 0)
+		FROM auction_events
+		WHERE auction_id = $1
+		  AND event_type = 'auction_extended'
+	`, auctionID).Scan(&extensionEvents, &extendedMS); err != nil {
+		t.Fatalf("count extension events: %v", err)
+	}
+	if extensionEvents != 1 {
+		t.Fatalf("auction_extended events = %d, want 1", extensionEvents)
+	}
+	if extendedMS != int64((10 * time.Second).Milliseconds()) {
+		t.Fatalf("auction_extended extend_ms = %d, want 10000", extendedMS)
+	}
 }
 
 func TestRedisLedgerConcurrentCapOnlyOneSoldAndLoserSeesTerminal(t *testing.T) {
@@ -1281,6 +1297,61 @@ func TestRedisLedgerHotProxyAutoOutbidsThroughSameCAS(t *testing.T) {
 	}
 	if lastApplied == nil || *lastApplied != 2 {
 		t.Fatalf("last_applied_seq = %v, want 2", lastApplied)
+	}
+}
+
+func TestRedisLedgerHotProxyCancelledIntentDoesNotDefend(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	rdb := openStreamsRedis(t)
+	ledger := NewMemoryLedger()
+	engine := New(db, rdb, ledger)
+	worker := NewWorker(db, rdb, ledger, "test-"+uuid.NewString())
+	auctionID := createEngineAuction(t, db, 0)
+	repo := auction.NewRepository(db)
+
+	if _, err := repo.PutMaxBidIntent(ctx, auctionID, "user_2", "cancelled-proxy-create", auction.MaxBidIntentInput{
+		MaxAmountCents: 30_000,
+		Source:         auction.MaxBidIntentSourceMaxBid,
+	}); err != nil {
+		t.Fatalf("PutMaxBidIntent: %v", err)
+	}
+	cancelled, err := repo.DeleteMaxBidIntent(ctx, auctionID, "user_2", "cancelled-proxy-delete")
+	if err != nil {
+		t.Fatalf("DeleteMaxBidIntent: %v", err)
+	}
+	if cancelled.Intent.Status != auction.MaxBidIntentStatusCancelled {
+		t.Fatalf("cancelled status = %s, want CANCELLED", cancelled.Intent.Status)
+	}
+
+	resp, err := engine.PlaceBid(ctx, auctionID, "user_1", "cancelled-proxy-trigger", auction.BidInput{
+		ClientBidID:   "cancelled-proxy-trigger",
+		AmountCents:   15_000,
+		ClientSeenSeq: 0,
+	}, "tr_cancelled_proxy")
+	if err != nil {
+		t.Fatalf("PlaceBid: %v", err)
+	}
+	if resp.Result != auction.BidResultEngineAccepted {
+		t.Fatalf("manual response = %#v, want accepted", resp)
+	}
+	if resp.CurrentWinnerID == nil || *resp.CurrentWinnerID != "user_1" || resp.CurrentPriceCents != 15_000 || resp.EngineSeq != 1 {
+		t.Fatalf("manual response after cancelled proxy = %#v, want user_1 at 15000 seq 1", resp)
+	}
+	ensureLedgerMessages(t, ctx, worker, 1)
+	if _, err := worker.ProcessKafka(ctx, 10); err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+	var autoBids int
+	if err := db.QueryRow(ctx, `
+		SELECT count(*)
+		FROM bids
+		WHERE auction_id = $1 AND source = $2
+	`, auctionID, auction.BidSourceAutoMaxBid).Scan(&autoBids); err != nil {
+		t.Fatalf("count auto bids: %v", err)
+	}
+	if autoBids != 0 {
+		t.Fatalf("auto bids after cancellation = %d, want 0", autoBids)
 	}
 }
 
@@ -2234,7 +2305,7 @@ func TestKafkaSettlementBatchesAcceptedPrefix(t *testing.T) {
 	if err := db.QueryRow(ctx, `SELECT count(*) FROM bids WHERE auction_id = $1 AND status = 'ACCEPTED' AND settlement_status = 'SETTLED'`, auctionID).Scan(&bidRows); err != nil {
 		t.Fatalf("count accepted bids: %v", err)
 	}
-	if err := db.QueryRow(ctx, `SELECT count(*) FROM auction_events WHERE auction_id = $1 AND event_type = 'bid_accepted'`, auctionID).Scan(&events); err != nil {
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM auction_events WHERE auction_id = $1 AND event_type IN ('bid_accepted', 'auction_extended')`, auctionID).Scan(&events); err != nil {
 		t.Fatalf("count auction events: %v", err)
 	}
 	if err := db.QueryRow(ctx, `

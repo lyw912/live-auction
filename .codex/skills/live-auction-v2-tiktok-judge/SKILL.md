@@ -13,19 +13,18 @@ Act as a hostile evaluator, not a collaborator. Assume the candidate may have ov
 
 Read first:
 
-1. `docs/current/README.md`
-2. `docs/current/architecture.md`
-3. `docs/current/performance-correctness-contract.md`
-4. `docs/current/evidence-policy.md`
-5. `docs/current/document-map.md`
-6. `docs/current/fault-injection-runbook.md`
-7. `docs/current/pts1b-readiness-checklist.md`
+1. `docs/README.md`
+2. `docs/design/01-architecture.md`
+3. `docs/design/02-performance-correctness-contract.md`
+4. `docs/design/04-evidence-policy.md`
+5. `docs/s1-s5/00-overview.md`
+6. `docs/s1-s5/10-fault-injection-runbook.md`
+7. `docs/s1-s5/12-readiness-checklist.md`
 8. `tests/pts/MANIFEST.md`
-9. `docs/perf/pts/evidence/README.md`
-10. `docs/archive/progress-history-map.md`
-11. `抖音电商AI全栈课题-直播竞拍全栈系统（宣讲版）.md`
-12. `单热点调研.md`
-13. Relevant design/evidence/perf docs and implementation files.
+9. `docs/judge/01-final-review.md`
+10. `docs/judge/02-s1-s5-gate-mapping.md`
+11. `docs/judge/03-demo-script.md`
+12. Relevant design/evidence/perf docs and implementation files.
 
 Browse official/current references only when judging a claim that depends on current TikTok/TikTok Shop, browser, k6, DB, Redis, or framework behavior. Cite sources if browsing.
 
@@ -33,10 +32,9 @@ Browse official/current references only when judging a claim that depends on cur
 
 - Findings first. No encouragement.
 - Treat every claim as false until proven by code, test, runtime output, or committed evidence.
-- Treat old PTS reports and old `AUTHORITATIVE` labels as historical unless classified through `docs/current/evidence-policy.md`.
-- Treat `docs/archive/progress/p*-progress.md` and `docs/archive/progress/p3-decision-log.md` as historical unless revalidated through current docs.
-- Treat raw PTS folders in `incoming/` as unreviewed and `archive/*` as failing/partial/historical unless a current run review classifies them otherwise.
-- Treat README/demo/setup architecture claims as attack surface; they must match `docs/current/`.
+- Treat old PTS reports and old `AUTHORITATIVE` labels as historical unless classified through `docs/design/04-evidence-policy.md`.
+- Treat raw PTS folders in `artifacts/pts/evidence/incoming/` as unreviewed unless a current run review classifies them otherwise.
+- Treat README/demo/setup architecture claims as attack surface; they must match `docs/design/` and `docs/s1-s5/`.
 - Do not accept "implemented" from docs alone.
 - Follow data flow from user action/API call to DB writes, outbox, Redis/WS, frontend state, diagnostics, and evidence.
 - Prefer concrete file/line references.
@@ -70,7 +68,7 @@ Inspect as applicable:
 - Diagnostics: gateway monitor handlers and PC diagnostics.
 - H5: `frontend/mobile-h5/src/main.tsx`, Playwright tests.
 - PC: `frontend/pc-console/src`, Playwright tests.
-- Evidence: `docs/evidence`, `docs/perf`, `docs/demo`.
+- Evidence: committed summaries in `docs/s1-s5`, `docs/judge`, and raw local artifacts under `artifacts/`.
 
 For each important claim, record:
 

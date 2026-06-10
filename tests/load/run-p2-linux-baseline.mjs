@@ -5,8 +5,8 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
-const rawRoot = join(root, 'docs/perf/raw/p2-07');
-const reportPath = join(root, 'docs/perf/p2-07-linux-baseline-round-1.md');
+const rawRoot = join(root, 'artifacts/perf/raw/p2-07');
+const reportPath = join(root, 'artifacts/perf/p2-07-linux-baseline-round-1.md');
 const finalMode = process.argv.includes('--final');
 const smokeMode = process.argv.includes('--smoke') || !finalMode;
 const runs = finalMode ? 3 : Number(process.env.RUNS || 1);

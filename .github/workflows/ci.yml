@@ -45,7 +45,10 @@ jobs:
           test -f README.md
           test -f CLAUDE.md
           test -f docs/setup_guide.md
-          test -f docs/design-v2-industrial/12-engineering-rules.md
+          test -f docs/README.md
+          test -f docs/design/01-architecture.md
+          test -f docs/s1-s5/00-overview.md
+          test -f docs/judge/01-final-review.md
       - name: Install goose
         run: go install github.com/pressly/goose/v3/cmd/goose@v3.27.1
       - name: Run migrations

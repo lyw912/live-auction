@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"net/http"
 	"time"
 
@@ -122,6 +123,9 @@ func (r *Repository) upsertMaxBidIntentTx(ctx context.Context, tx pgx.Tx, auctio
 	if err != nil {
 		return MaxBidIntent{}, err
 	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, maxBidIntentAdvisoryKey(auctionID, userID)); err != nil {
+		return MaxBidIntent{}, err
+	}
 
 	rule, err := lockAuctionForMaxBidIntent(ctx, tx, auctionID)
 	if err != nil {
@@ -193,6 +197,9 @@ func (r *Repository) CancelMaxBidIntent(ctx context.Context, auctionID string, u
 }
 
 func (r *Repository) cancelMaxBidIntentTx(ctx context.Context, tx pgx.Tx, auctionID string, userID string) (MaxBidIntent, error) {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, maxBidIntentAdvisoryKey(auctionID, userID)); err != nil {
+		return MaxBidIntent{}, err
+	}
 	if err := lockAuctionForMaxBidIntentCancel(ctx, tx, auctionID); err != nil {
 		return MaxBidIntent{}, err
 	}
@@ -230,6 +237,15 @@ func (r *Repository) cancelMaxBidIntentTx(ctx context.Context, tx pgx.Tx, auctio
 		return MaxBidIntent{}, err
 	}
 	return intent, nil
+}
+
+func maxBidIntentAdvisoryKey(auctionID string, userID string) int64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte("max_bid_intent:"))
+	_, _ = h.Write([]byte(auctionID))
+	_, _ = h.Write([]byte(":"))
+	_, _ = h.Write([]byte(userID))
+	return int64(h.Sum64())
 }
 
 func lockAuctionForMaxBidIntentCancel(ctx context.Context, tx pgx.Tx, auctionID string) error {

@@ -87,7 +87,7 @@ else
   fi
 fi
 
-echo "=== S4 complete. Evidence under: docs/perf/pts/evidence/incoming/ ==="
+echo "=== S4 complete. Evidence under: artifacts/pts/evidence/incoming/ ==="
 echo ""
 echo "=== Judge report fragments to extract from each fault dir: ==="
 echo "   recovery-breakdown.json  → RTO timeline (timestamps, component-ready)"
@@ -102,4 +102,4 @@ echo "   Expected: 0 (every accepted decision settled)"
 echo ""
 echo "=== S4 headline for judge report: ==="
 echo "   Six fault modes; P0: RTO 4s/26s/3s, RPO=0, zero phantom accepts."
-echo "   Evidence: docs/current/chaos-l1f-progress-20260601.md"
+echo "   Evidence: docs/s1-s5/10-fault-injection-runbook.md"

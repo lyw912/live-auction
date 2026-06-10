@@ -6,7 +6,7 @@ const root = join(fileURLToPath(new URL('../..', import.meta.url)));
 const alertPath = join(root, 'infra/prometheus/rules/live-auction-alerts.yml');
 const prometheusPath = join(root, 'infra/prometheus/prometheus.yml');
 const composePath = join(root, 'infra/docker-compose.yml');
-const runbookPath = join(root, 'docs/runbooks/alerts.md');
+const runbookPath = join(root, 'docs/design/05-alert-runbooks.md');
 
 const implementedMetrics = [
   'auction_anomaly_total',
@@ -75,7 +75,7 @@ for (const block of blocks) {
   assert(text.includes('severity:'), `${block.name} missing severity label`);
   assert(text.includes('component:'), `${block.name} missing component label`);
   assert(text.includes('runbook:'), `${block.name} missing runbook annotation`);
-  assert(text.includes(`docs/runbooks/alerts.md#${runbookAnchor(block.name)}`), `${block.name} runbook link mismatch`);
+  assert(text.includes(`docs/design/05-alert-runbooks.md#${runbookAnchor(block.name)}`), `${block.name} runbook link mismatch`);
   assert(runbook.includes(`## ${block.name}`.toLowerCase()), `${block.name} missing runbook section`);
 
   const metricRefs = expr.match(/[a-zA-Z_:][a-zA-Z0-9_:]*/g) ?? [];

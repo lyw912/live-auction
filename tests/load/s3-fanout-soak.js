@@ -29,8 +29,8 @@
  *   HOLD_SECONDS      how long each viewer holds its connection, default 300
  *   FANOUT_P99_SLA_MS M2 SLO in ms, default 1000
  *   RUN_ID            idempotency key namespace, default Date.now() at init
- *   VIEWER_CSV        viewer session CSV, default docs/perf/pts/pts-l2-viewer-10000-sessions.csv
- *   BIDDER_CSV        bidder session CSV, default docs/perf/pts/pts-l2-bidder-1000-sessions.csv
+ *   VIEWER_CSV        viewer session CSV, default tests/pts/inputs/s1-s5/s3-live-only-fanout-3100-sessions.csv
+ *   BIDDER_CSV        bidder session CSV, default tests/pts/inputs/s1-s5/s1-s5-1000-user-sessions.csv
  *
  * Local soak (10k connections — ensure ulimit -n and fs.nr_open are raised):
  *   k6 run --env VIEWER_VUS=10000 --env HOLD_SECONDS=600 tests/load/s3-fanout-soak.js
@@ -56,8 +56,8 @@ const BID_BASE_AMOUNT = Number(__ENV.BID_BASE_AMOUNT || 1000000000);
 const HOLD_SECONDS = Number(__ENV.HOLD_SECONDS  || 300);
 const FANOUT_SLA   = Number(__ENV.FANOUT_P99_SLA_MS || 1000);
 const RUN_ID       = __ENV.RUN_ID || String(Date.now());
-const VIEWER_CSV   = __ENV.VIEWER_CSV || '../../docs/perf/pts/pts-l2-viewer-10000-sessions.csv';
-const BIDDER_CSV   = __ENV.BIDDER_CSV || '../../docs/perf/pts/pts-l2-bidder-1000-sessions.csv';
+const VIEWER_CSV   = __ENV.VIEWER_CSV || '../../tests/pts/inputs/s1-s5/s3-live-only-fanout-3100-sessions.csv';
+const BIDDER_CSV   = __ENV.BIDDER_CSV || '../../tests/pts/inputs/s1-s5/s1-s5-1000-user-sessions.csv';
 
 function parseSessionCSV(path) {
   const text = open(path);

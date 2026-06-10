@@ -8,7 +8,7 @@ const config = JSON.parse(readFileSync(join(root, 'tests/chaos/toxiproxy-scenari
 const scenarioName = process.argv[2];
 const runMode = process.argv.includes('--run');
 const baseURL = process.env.BASE_URL || 'http://127.0.0.1:18080';
-const evidenceRoot = process.env.EVIDENCE_ROOT || join(root, 'docs/perf/pts/evidence/incoming');
+const evidenceRoot = process.env.EVIDENCE_ROOT || join(root, 'artifacts/pts/evidence/incoming');
 
 if (!scenarioName) {
   console.error(`Usage: node tests/chaos/run-toxiproxy-scenario.mjs <${config.scenarios.map((s) => s.name).join('|')}|--clear|--status> [--run]`);

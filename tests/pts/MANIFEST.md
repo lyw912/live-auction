@@ -3,18 +3,18 @@
 > Last updated: 2026-06-05.
 > This file is an implementation asset index only. The single test plan,
 > scenario names, run order, scale choices, and judge-facing narrative are in
-> `docs/current/test-strategy/README.md`.
+> `docs/s1-s5/00-overview.md`.
 
 Do not use old `L*` names as plan stages. Current executable assets live under
 `tests/pts/scenarios/` and should be referenced by S1-S5 names.
 
 Read before running or interpreting any workload:
 
-- `docs/current/performance-correctness-contract.md`
-- `docs/current/test-strategy/README.md`
-- `docs/current/test-strategy/metrics-and-slo.md`
-- `docs/current/test-strategy/pts-playbook.md`
-- `docs/current/evidence-policy.md`
+- `docs/design/02-performance-correctness-contract.md`
+- `docs/s1-s5/00-overview.md`
+- `docs/s1-s5/01-metrics-and-slo.md`
+- `docs/s1-s5/13-pts-playbook.md`
+- `docs/design/04-evidence-policy.md`
 
 ## Scenario Assets
 
@@ -45,10 +45,10 @@ Read before running or interpreting any workload:
 
 | File | Purpose |
 |---|---|
-| `docs/perf/pts/inputs/s1-s5/s1-s5-1000-user-sessions.csv` | S1/S5 1000-user session pool |
-| `docs/perf/pts/inputs/s1-s5/s3-mixed-final-burst-4500-sessions.csv` | S3 mixed final burst upload CSV: 3000 viewer + 1000 bidder + 500 reader |
-| `docs/perf/pts/inputs/s1-s5/s3-mixed-smoke-30-sessions.csv` | S3 smoke upload CSV: 20 viewer + 5 bidder + 5 reader |
-| `docs/perf/pts/inputs/s1-s5/s3-live-only-fanout-3100-sessions.csv` | S3 live-only fanout upload CSV: 3000 viewer + 100 bidder |
+| `tests/pts/inputs/s1-s5/s1-s5-1000-user-sessions.csv` | S1/S5 1000-user session pool |
+| `tests/pts/inputs/s1-s5/s3-mixed-final-burst-4500-sessions.csv` | S3 mixed final burst upload CSV: 3000 viewer + 1000 bidder + 500 reader |
+| `tests/pts/inputs/s1-s5/s3-mixed-smoke-30-sessions.csv` | S3 smoke upload CSV: 20 viewer + 5 bidder + 5 reader |
+| `tests/pts/inputs/s1-s5/s3-live-only-fanout-3100-sessions.csv` | S3 live-only fanout upload CSV: 3000 viewer + 100 bidder |
 | `tests/pts/pts_sessions.csv.example` | Example CSV shape only |
 
 ## Utility Scripts
@@ -89,7 +89,7 @@ Read before running or interpreting any workload:
 - HTTP `202` / `PROCESSING_RETRY_LATER` RTT is not M1 decision latency.
 - Dominant `PROCESSING_RETRY_LATER`, vague `409`, pending Redis decisions, Kafka lag, DLQ, engine pause, settlement gap, or outbox backlog fails current pass evidence.
 - A latency number without verifier output is not success evidence.
-- A file existing here does not make it current evidence. Current evidence must be named in `docs/perf/pts/evidence/current/s1-s5/INDEX.md`.
+- A file existing here does not make it current evidence. Current evidence must be classified through `docs/design/04-evidence-policy.md`.
 - The old S3 7000/5000 multi-ThreadGroup JMX variants are not the current default
   because PTS can redistribute separate main Thread Groups and console duration
   can keep reader groups looping. Use the single-branch mixed CSV/JMX unless a

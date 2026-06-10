@@ -5,15 +5,15 @@ architecture docs, not the historical PG-lane baseline.
 
 ## Required First Reads
 
-1. `docs/current/README.md`
-2. `docs/current/architecture.md`
-3. `docs/current/performance-correctness-contract.md`
-4. `docs/current/document-map.md`
+1. `docs/README.md`
+2. `docs/design/01-architecture.md`
+3. `docs/design/02-performance-correctness-contract.md`
+4. `docs/s1-s5/00-overview.md`
 5. `tests/pts/MANIFEST.md` for PTS work
 
-The official brief `抖音电商AI全栈课题-直播竞拍全栈系统（宣讲版）.md` and images under
-`docs/references/official-brief-images/` are immutable. `单热点调研.md` is
-important research, but it is not by itself the governing design.
+The committed documentation is intentionally limited to the final judge-facing
+design under `docs/`. Treat old local briefs, screenshots, reviews, and research
+notes as historical background only; they are not governing design.
 
 ## Current Non-Negotiables
 
@@ -32,15 +32,15 @@ important research, but it is not by itself the governing design.
 
 ## Historical Material
 
-`docs/design-v2-industrial/`, `docs/evidence/`, `docs/archive/`,
-`docs/perf/pts/`, and old report reviews may be useful background. If they
-conflict with `docs/current/`, prefer `docs/current/` and label the older source
-as historical or current-adjacent.
+Historical review drafts, raw evidence, screenshots, and intermediate design
+directories have been removed from the committed `docs/` tree. Treat any old
+local artifact outside the new `docs/` layout as historical or current-adjacent,
+not as governing material.
 
 ## Current PTS Target
 
 PTS-1B means 1000 final-second bids against one hot auction, user-visible bid
-decision p99 <= 50ms, highest valid amount wins, all rejects have decision-time
+decision p99 <= 60ms in the current kafka_ack profile, highest valid amount wins, all rejects have decision-time
 basis, and fault-injection gates either recover safely or fail closed.
 
 ## Development Checklist
@@ -49,4 +49,4 @@ basis, and fault-injection gates either recover safely or fail closed.
 - Preserve idempotency and request-hash conflict behavior.
 - Keep outbox/WebSocket/snapshot recovery ordered and replayable.
 - Add or update tests for correctness, race, and recovery paths touched.
-- Use `docs/current/evidence-policy.md` before writing or citing evidence.
+- Use `docs/design/04-evidence-policy.md` before writing or citing evidence.

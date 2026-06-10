@@ -59,16 +59,16 @@ for (const [name, script] of Object.entries(coverage)) {
 const runnerText = readFileSync(join(loadDir, 'run-p2-linux-baseline.mjs'), 'utf8');
 assert(runnerText.includes("process.platform !== 'linux'"), 'P2-07 final runner must refuse non-Linux final baselines');
 assert(runnerText.includes('ulimit -n >= 65535'), 'P2-07 final runner must enforce high file descriptor limit');
-assert(runnerText.includes('docs/perf/raw/p2-07'), 'P2-07 runner must store raw outputs under docs/perf/raw/p2-07');
+assert(runnerText.includes('artifacts/perf/raw/p2-07'), 'P2-07 runner must store raw outputs under artifacts/perf/raw/p2-07');
 assert(runnerText.includes('multi-room-isolation'), 'P2-07 runner must include multi-room isolation workload');
 assert(runnerText.includes('bid-abuse'), 'P2-07 runner must include bid abuse workload');
 
 const p3RunnerText = readFileSync(join(loadDir, 'run-p3-local-stress.mjs'), 'utf8');
-assert(p3RunnerText.includes('docs/perf/raw/p3-local-stress'), 'P3 runner must store raw outputs under docs/perf/raw/p3-local-stress');
+assert(p3RunnerText.includes('artifacts/perf/raw/p3-local-stress'), 'P3 runner must store raw outputs under artifacts/perf/raw/p3-local-stress');
 assert(p3RunnerText.includes('RAW_ROOT'), 'P3 runner must allow explicit raw output roots');
 assert(p3RunnerText.includes('P3_ARTIFACT_MODE'), 'P3 runner must support minimal/full artifact retention modes');
 assert(p3RunnerText.includes('analysis-compact.json'), 'P3 runner must write a compact analysis report');
-assert(p3RunnerText.includes("join(backendDir, 'tmp')"), 'P3 runner must keep generated backend binaries outside docs/perf/raw');
+assert(p3RunnerText.includes("join(backendDir, 'tmp')"), 'P3 runner must keep generated backend binaries outside artifacts/perf/raw');
 assert(p3RunnerText.includes('MANAGE_SERVER'), 'P3 runner must be able to manage a local backend binary');
 assert(p3RunnerText.includes('WORKLOADS'), 'P3 runner must support focused workload subsets');
 assert(p3RunnerText.includes("const profile = process.env.P3_PROFILE || 'downstream-pressure'"), 'P3 runner must default to downstream-pressure');
@@ -96,7 +96,7 @@ assert(p3OwnerKillText.includes('OUTBOX_WORKER_ID'), 'P3 owner-kill runner must 
 assert(p3OwnerKillText.includes('p3-bid-pressure.js'), 'P3 owner-kill runner must drive real bid pressure');
 assert(p3OwnerKillText.includes('ownerA.kill()'), 'P3 owner-kill runner must kill the first owner');
 assert(p3OwnerKillText.includes("ADMISSION_ENABLED: 'false'"), 'P3 owner-kill runner must disable admission during performance exploration');
-assert(p3OwnerKillText.includes("join(backendDir, 'tmp')"), 'P3 owner-kill runner must keep generated binaries outside docs/perf/raw');
+assert(p3OwnerKillText.includes("join(backendDir, 'tmp')"), 'P3 owner-kill runner must keep generated binaries outside artifacts/perf/raw');
 
 const p3FanoutText = readFileSync(join(loadDir, 'p3-ws-fanout-pressure.js'), 'utf8');
 assert(p3FanoutText.includes('constant-arrival-rate'), 'P3 fanout pressure must use arrival-rate triggers');
@@ -124,7 +124,7 @@ assert(p3AnalyzeText.includes('needs_full_drilldown'), 'P3 artifact analyzer mus
 
 const stressSkillText = readFileSync(join(skillDir, 'SKILL.md'), 'utf8');
 assert(stressSkillText.includes('Read compact evidence first'), 'stress attacker skill must require compact-first context loading');
-assert(stressSkillText.includes('Never open every file in `docs/perf/raw/**`'), 'stress attacker skill must forbid bulk raw artifact reading');
+assert(stressSkillText.includes('Never open every file in `artifacts/perf/raw/**`'), 'stress attacker skill must forbid bulk raw artifact reading');
 assert(stressSkillText.includes('Default to `P3_ARTIFACT_MODE=minimal`'), 'stress attacker skill must default to minimal artifact mode');
 
 console.log('k6 suite config ok');

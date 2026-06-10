@@ -90,14 +90,17 @@ func (r *Repository) CreateListingDraft(ctx context.Context, hostID string, gen 
 			status = "DISABLED"
 			errorMessage = "AI provider disabled"
 		} else {
-			status = "FAILED"
 			errorMessage = cleanText(err.Error(), 240)
 		}
 		result = StructuredResult{Provider: "none", Model: "none", Output: structToMap(BuildFallbackListingDraft(req)), Safety: map[string]any{
 			"fallback":              true,
+			"fallback_reason":       errorMessage,
 			"human_review_required": true,
 			"no_auto_publish":       true,
 		}}
+		if status == "SUCCEEDED" {
+			errorMessage = ""
+		}
 	}
 	draft := NormalizeListingDraft(result.Output, req)
 	result.Output = structToMap(draft)

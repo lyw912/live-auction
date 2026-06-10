@@ -2,7 +2,7 @@
 set -euo pipefail
 
 INPUT="${1:?usage: bash tests/pts/review-s1-pts-run.sh <report-id|label> [evidence-dir]}"
-EVIDENCE_DIR="${2:-docs/perf/pts/evidence/incoming/$INPUT}"
+EVIDENCE_DIR="${2:-artifacts/pts/evidence/incoming/$INPUT}"
 SAMPLER_LABEL="${SAMPLER_LABEL:-出价决策 bid-decision}"
 EXPECTED_COUNT="${EXPECTED_COUNT:-1000}"
 

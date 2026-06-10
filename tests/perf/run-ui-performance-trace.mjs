@@ -240,8 +240,8 @@ async function main() {
       target: h5URL
     },
     thresholds,
-    trace_path: 'docs/perf/raw/p1-06-ui-performance-trace.zip',
-    summary_path: 'docs/perf/raw/p1-06-ui-performance-trace.json',
+    trace_path: 'artifacts/perf/raw/p1-06-ui-performance-trace.zip',
+    summary_path: 'artifacts/perf/raw/p1-06-ui-performance-trace.json',
     longtask_count: metrics.longTasks.length,
     max_longtask_ms: max(longTaskDurations),
     max_frame_gap_ms: max(metrics.frameGaps),

@@ -433,6 +433,7 @@ func cleanupInvariantFixtures(t *testing.T, db *pgxpool.Pool) {
 	t.Helper()
 	ctx := context.Background()
 	statements := []string{
+		`UPDATE auctions SET accepted_bid_count = 0, current_winner_id = NULL WHERE id LIKE 'auc_inv_%'`,
 		`DELETE FROM outbox_delivery WHERE outbox_id IN (SELECT id FROM outbox_events WHERE auction_id LIKE 'auc_inv_%')`,
 		`DELETE FROM outbox_events WHERE auction_id LIKE 'auc_inv_%'`,
 		`DELETE FROM auction_events WHERE auction_id LIKE 'auc_inv_%'`,

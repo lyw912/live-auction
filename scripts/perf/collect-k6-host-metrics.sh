@@ -2,7 +2,7 @@
 # Sample the independent k6 host while a workload is running.
 set -euo pipefail
 
-OUT_DIR="${1:-${K6_HOST_METRICS_DIR:-docs/perf/pts/evidence/incoming/k6-host-$(date +%Y%m%dT%H%M%S)}}"
+OUT_DIR="${1:-${K6_HOST_METRICS_DIR:-artifacts/pts/evidence/incoming/k6-host-$(date +%Y%m%dT%H%M%S)}}"
 INTERVAL_SECONDS="${INTERVAL_SECONDS:-5}"
 K6_PATTERN="${K6_PATTERN:-k6}"
 

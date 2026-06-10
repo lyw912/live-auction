@@ -422,7 +422,7 @@ func (r *Relay) refreshGuardProjectionBestEffort(ctx context.Context, auctionID 
 
 func (r *Relay) guardProjectionFromEvent(ctx context.Context, event Event) (guardProjection, bool, error) {
 	switch event.EventType {
-	case "bid_accepted", "auction_sold", "auction_started", "auction_cancelled", "auction_ended", "rules_updated", "snapshot":
+	case "bid_accepted", "auction_extended", "auction_sold", "auction_started", "auction_cancelled", "auction_ended", "rules_updated", "snapshot":
 	default:
 		return guardProjection{}, false, nil
 	}
