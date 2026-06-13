@@ -68,8 +68,37 @@ test.beforeEach(async ({ page }) => {
     await route.fulfill({ json: { items: [{ id: 'room_main', host_id: 'host_1', status: 'OPEN', role: 'host' }] } });
   });
   await page.route('/api/auctions?room_id=room_main', async (route) => route.fulfill({ json: [auctionDraft, auctionScheduled, auctionLive] }));
-  await page.route('/api/orders', async (route) => route.fulfill({
+  await page.route(/\/api\/orders(\?.*)?$/, async (route) => route.fulfill({
     json: [{ id: 'ord_pending', auction_id: 'auc_live', winner_id: 'user_1', amount_cents: 60000, status: 'ORDER_PENDING', deposit_status: 'HELD' }]
+  }));
+  await page.route(/\/api\/rooms\/room_main\/system-messages(\?.*)?$/, async (route) => route.fulfill({ json: { items: [] } }));
+  await page.route('/api/host/rooms/room_main/liveops', async (route) => route.fulfill({
+    json: {
+      campaign: {
+        id: 'ops_1',
+        room_id: 'room_main',
+        status: 'ACTIVE',
+        title: '直播互动',
+        description: '完成互动任务',
+        progress: 0,
+        disclaimer: '演示数据',
+        updated_at: '2026-05-22T13:59:50Z'
+      },
+      reward_config: {
+        enabled: true,
+        title: '开拍福袋',
+        description: '完成任务参与',
+        reward_name: '直播间权益',
+        reward_quota: 20,
+        required_task_count: 3
+      },
+      participant_count: 0,
+      qualified_count: 0,
+      opened_count: 0
+    }
+  }));
+  await page.route('/api/host/auctions/auc_live/ai-settings', async (route) => route.fulfill({
+    json: { auction_id: 'auc_live', auto_commentary_enabled: true }
   }));
   await page.route('/api/monitor/auctions', async (route) => route.fulfill({
     json: { items: [{ auction_id: 'auc_live', room_id: 'room_main', status: 'ACTIVE', current_price_cents: 45000, seq: 42 }] }
@@ -475,6 +504,39 @@ test('PC host live assist renders API prompts and dismisses locally without muta
   await expect(page.getByTestId('prompter-cards').getByText('最后窗口')).not.toBeVisible();
   await expect(page.getByTestId('prompter-cards').getByText('暂无主播提示')).toBeVisible();
   expect(mutationRequests).toEqual([]);
+});
+
+test('PC demo bid preview updates immediately and ignores stale auction pollback', async ({ page }) => {
+  let demoBidCalled = false;
+  await page.route('/api/demo/auctions/auc_live/competing-bid', async (route) => {
+    demoBidCalled = true;
+    await route.fulfill({
+      json: {
+        result: 'ENGINE_ACCEPTED',
+        auction_id: 'auc_live',
+        seq: 42,
+        engine_seq: 43,
+        settlement_status: 'PENDING',
+        current_price_cents: 50000,
+        current_winner_id: 'user_3',
+        end_at: '2026-05-22T14:00:00Z',
+        reject_reason: null
+      }
+    });
+  });
+
+  await page.goto('/');
+  const summary = page.getByTestId('auction-control-summary');
+  await expect(summary.locator('.command-price strong')).toHaveText('¥450.00');
+  await page.getByRole('button', { name: '打开场景演示' }).click();
+  await page.getByRole('button', { name: '对手压过买家' }).click();
+
+  await expect(summary.locator('.command-price strong')).toHaveText('¥500.00');
+  await expect(summary.getByText('领先者 匿名买家')).toBeVisible();
+  await expect(page.getByText(/18 次有效出价 · seq 43/)).toBeVisible();
+  await page.waitForTimeout(1800);
+  await expect(summary.locator('.command-price strong')).toHaveText('¥500.00');
+  expect(demoBidCalled).toBe(true);
 });
 
 test('PC host recap shows next item start price suggestion as review-only', async ({ page }) => {

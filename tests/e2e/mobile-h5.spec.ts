@@ -875,7 +875,7 @@ test('H5 network retry reuses original bid idempotency key', async ({ page }) =>
   await expect(bidCTA).toHaveText(/用原请求重试/);
 
   await bidCTA.click();
-  await expect(page.getByText('出价已提交，正在确认')).toBeVisible();
+  await expect(page.getByText('你已领先，后台同步中')).toBeVisible();
   expect(requests).toHaveLength(2);
   expect(requests[1].idempotencyKey).toBe(requests[0].idempotencyKey);
   expect(requests[1].body.client_bid_id).toBe(requests[0].body.client_bid_id);

@@ -162,15 +162,18 @@ body {
 }
 
 .health-ribbon {
-  min-height: 58px;
+  min-height: 82px;
   display: grid;
-  grid-template-columns: minmax(180px, .7fr) minmax(0, 1.4fr) minmax(260px, auto);
+  grid-template-columns: minmax(190px, .62fr) minmax(280px, 1.05fr) minmax(220px, .9fr) minmax(260px, auto);
   align-items: center;
   gap: 14px;
-  padding: 10px 14px;
-  background: #fff;
-  border: 1px solid var(--color-line);
+  padding: 12px 14px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, .98), rgba(246, 251, 248, .96)),
+    #fff;
+  border: 1px solid rgba(15, 23, 42, .08);
   border-radius: var(--radius-md);
+  box-shadow: 0 14px 38px rgba(15, 23, 42, .06);
 }
 
 .workbench-status {
@@ -260,6 +263,14 @@ body {
   gap: 2px;
 }
 
+.ribbon-kicker {
+  color: #b90035 !important;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
 .ribbon-room strong {
   color: var(--color-ink-950);
   font-size: 17px;
@@ -281,6 +292,63 @@ body {
   align-items: center;
   gap: 6px;
   font-size: 12px;
+}
+
+.ribbon-live-card {
+  min-width: 0;
+  min-height: 58px;
+  border: 1px solid rgba(185, 0, 53, .14);
+  border-radius: var(--radius-md);
+  background:
+    linear-gradient(135deg, rgba(255, 15, 85, .08), rgba(255, 255, 255, .9) 58%),
+    #fff;
+  padding: 9px 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 12px;
+  align-items: center;
+}
+
+.ribbon-live-card > span {
+  width: fit-content;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: #fff0f4;
+  color: #b90035;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.ribbon-live-card strong {
+  min-width: 0;
+  color: var(--color-ink-950);
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ribbon-live-card div {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+}
+
+.ribbon-live-card em {
+  color: #111827;
+  font-family: var(--font-auction-tabular);
+  font-size: 19px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.ribbon-live-card small {
+  color: var(--color-muted);
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
 }
 
 .engine-health.ok {
@@ -1615,6 +1683,112 @@ body {
 
 .control-stats strong svg {
   flex: 0 0 auto;
+}
+
+.ops-kpi-grid {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.ops-kpi-card {
+  min-height: 104px;
+  border: 1px solid rgba(15, 23, 42, .08);
+  border-radius: var(--radius-md);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, .96), rgba(248, 250, 252, .96)),
+    #fff;
+  padding: 12px;
+  display: grid;
+  align-content: space-between;
+  gap: 8px;
+  position: relative;
+  overflow: hidden;
+}
+
+.ops-kpi-card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: #2f7cf6;
+}
+
+.ops-kpi-card.primary::before {
+  background: linear-gradient(180deg, #ff0f55, #ff7a1a);
+}
+
+.ops-kpi-card.warn::before {
+  background: var(--warning);
+}
+
+.ops-kpi-card.danger::before {
+  background: var(--danger);
+}
+
+.ops-kpi-card span {
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.ops-kpi-card strong {
+  min-width: 0;
+  color: var(--color-ink-950);
+  font-family: var(--font-auction-tabular);
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.ops-kpi-card small {
+  color: var(--color-muted-strong);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.38;
+}
+
+.order-kpi-strip {
+  margin-bottom: 12px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.order-kpi-strip div {
+  min-height: 82px;
+  border: 1px solid rgba(15, 23, 42, .08);
+  border-radius: var(--radius-md);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, .96), rgba(246, 251, 248, .9)),
+    #fff;
+  padding: 10px 12px;
+  display: grid;
+  gap: 4px;
+}
+
+.order-kpi-strip span {
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.order-kpi-strip strong {
+  color: var(--color-ink-950);
+  font-family: var(--font-auction-tabular);
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.order-kpi-strip small {
+  color: var(--color-muted-strong);
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .recent-events {

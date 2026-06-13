@@ -175,6 +175,7 @@ function App() {
   const pendingLeaderboardDeltaRef = useRef<LeaderboardPayload | null>(null);
   const leaderboardFrameRef = useRef<number | null>(null);
   const leaderboardBurstUntilRef = useRef(0);
+  const hotAcceptedPreviewRef = useRef<{ auctionID: string; amountCents: number; expiresAt: number } | null>(null);
   const atmosphereSeenRef = useRef<Set<string>>(new Set());
   const recoveringRef = useRef(false);
   const activeCueRef = useRef<AtmosphereCue | null>(null);
@@ -430,6 +431,7 @@ function App() {
   const syncBidPhaseFromLeaderboard = (payload: LeaderboardPayload) => {
     if (!payload || payload.auction_id !== activeAuctionIDRef.current) return;
     if (payload.state === 'LEADING' || payload.my_rank === 1 || payload.current_winner_id === currentUserIDRef.current) {
+      hotAcceptedPreviewRef.current = null;
       if (payload.current_winner_id === currentUserIDRef.current || payload.state === 'LEADING') {
         setBidPhase((phase) => phase === 'pending' || phase === 'confirming' || phase === 'confirm_required' ? phase : 'accepted');
         setRiskCode('');
@@ -438,6 +440,17 @@ function App() {
       return;
     }
     if (payload.state === 'OUTBID' || (payload.my_rank != null && payload.my_rank > 1) || (payload.current_winner_id && payload.current_winner_id !== currentUserIDRef.current)) {
+      const hotPreview = hotAcceptedPreviewRef.current;
+      const leaderAmount = payload.leader_amount_cents ?? payload.current_price_cents;
+      if (
+        hotPreview
+        && hotPreview.auctionID === payload.auction_id
+        && Date.now() < hotPreview.expiresAt
+        && leaderAmount < hotPreview.amountCents
+      ) {
+        return;
+      }
+      hotAcceptedPreviewRef.current = null;
       pendingBidRef.current = null;
       setBidPhase((phase) => phase === 'pending' || phase === 'confirming' || phase === 'confirm_required' ? phase : 'idle');
       setConfirmToken('');
@@ -1049,14 +1062,29 @@ function App() {
     if (payload.end_at) setAuctionEndAt(payload.end_at);
     if (payload.server_time_ms) syncServerTimeMS(payload.server_time_ms);
     if (isEnginePending || isEngineSoldPending) {
-      setBidFeedback(isEngineSoldPending
-        ? '已到成交确认，等待订单生成'
-        : '出价已提交，正在确认');
-      setBidPhase(isEngineSoldPending ? 'engine_sold_pending' : 'engine_pending');
+      if (acceptedWinnerID === currentUserID && !isEngineSoldPending) {
+        setConfirmToken('');
+        setConfirmIdempotencyKey('');
+        setConfirmAmountCents(0);
+        setRiskCode('');
+        setBidFeedback('你已领先，后台同步中');
+        setBidPhase('accepted');
+        pendingBidRef.current = null;
+        hotAcceptedPreviewRef.current = {
+          auctionID: payload.auction_id ?? activeAuctionIDRef.current,
+          amountCents: acceptedPrice,
+          expiresAt: Date.now() + 3000
+        };
+      } else {
+        setBidFeedback(isEngineSoldPending
+          ? '已到成交确认，等待订单生成'
+          : '出价已提交，正在确认');
+        setBidPhase(isEngineSoldPending ? 'engine_sold_pending' : 'engine_pending');
+      }
       showAtmosphere({
         kind: 'leading',
-        title: isEngineSoldPending ? '成交确认中' : '出价已接收',
-        detail: isEngineSoldPending ? '等待订单生成' : '等待最终确认',
+        title: isEngineSoldPending ? '成交确认中' : acceptedWinnerID === currentUserID ? '领先！' : '出价已接收',
+        detail: isEngineSoldPending ? '等待订单生成' : acceptedWinnerID === currentUserID ? `${formatCents(acceptedPrice)} 已由热引擎确认` : '等待最终确认',
         auction_id: payload.auction_id ?? activeAuctionIDRef.current,
         cause_seq: payload.engine_seq ?? payload.seq ?? lastSeqRef.current,
         event_type: payload.result ?? 'ENGINE_ACCEPTED',
@@ -1156,6 +1184,7 @@ function App() {
     setAtmosphereCue(null);
     setWaterfallChips([]);
     setLeaderboard(null);
+    hotAcceptedPreviewRef.current = null;
     setMaxBidIntent(null);
     setMaxBidPhase('idle');
     setMaxBidFeedback('仅自己可见，服务端按加价阶梯代出价');
@@ -2484,6 +2513,8 @@ function App() {
         <ChatComposer
         chatDraft={chatDraft}
         chatSending={chatSending}
+        onOpenDetails={() => setActiveSheet('details')}
+        onOpenProducts={() => openWarmupSheet('products', 'watch')}
         onDraftChange={setChatDraft}
         onSend={sendChat}
         />

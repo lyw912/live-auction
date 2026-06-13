@@ -106,6 +106,37 @@ function formatLag(ms: number) {
   return `${Math.round(ms)} 毫秒`;
 }
 
+function compactNumber(value: number) {
+  if (!Number.isFinite(value)) return '0';
+  if (value >= 10000) return `${(value / 10000).toFixed(1)}万`;
+  return Math.round(value).toLocaleString();
+}
+
+function orderRevenueCents(orders: Order[], status?: string) {
+  return orders
+    .filter((order) => !status || order.status === status)
+    .reduce((sum, order) => sum + (order.amount_cents || 0), 0);
+}
+
+function auctionOpsSummary(auction: Auction, orders: Order[], heatSummary?: HeatSummary) {
+  const auctionOrders = orders.filter((order) => order.auction_id === auction.id);
+  const paidOrders = auctionOrders.filter((order) => order.status === 'PAID');
+  const pendingOrders = auctionOrders.filter((order) => order.status !== 'PAID' && order.status !== 'ORDER_EXPIRED');
+  const priceLiftCents = Math.max(0, auction.current_price_cents - auction.start_price_cents);
+  const capDistanceCents = Math.max(0, (auction.cap_price_cents ?? auction.current_price_cents) - auction.current_price_cents);
+  return {
+    activeBidders: heatSummary?.auction_id === auction.id ? heatSummary.active_bidders_30s : 0,
+    acceptedBids30s: heatSummary?.auction_id === auction.id ? heatSummary.accepted_bids_30s : 0,
+    chatMessages30s: heatSummary?.auction_id === auction.id ? heatSummary.chat_messages_30s : 0,
+    paidOrders: paidOrders.length,
+    pendingOrders: pendingOrders.length,
+    paidRevenueCents: orderRevenueCents(paidOrders),
+    priceLiftCents,
+    capDistanceCents,
+    liftRate: auction.start_price_cents > 0 ? Math.round((priceLiftCents / auction.start_price_cents) * 100) : 0
+  };
+}
+
 function formatFileSize(bytes: number) {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 KB';
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
@@ -461,11 +492,21 @@ export function HealthRibbon({
   const recoveryLabel = active ? connectionLabel(monitor, active.room_id) : connectionLabel(monitor, roomID);
   const health = engineHealth(monitor);
   const visibleRooms = rooms.filter(isOperationalRoom);
+  const activeTitle = active?.item?.title ?? active?.item_id ?? '暂无开拍中拍品';
   return (
     <section className="health-ribbon" data-testid="health-ribbon">
       <div className="ribbon-room">
+        <span className="ribbon-kicker">Live Auction Command</span>
         <strong>{roomDisplayName(roomID)}</strong>
         <span>当前时间 {new Date(now).toLocaleTimeString()}</span>
+      </div>
+      <div className="ribbon-live-card" aria-label="当前直播战情">
+        <span>{active ? '正在开拍' : '等待开拍'}</span>
+        <strong>{activeTitle}</strong>
+        <div>
+          <em>{active ? formatCents(active.current_price_cents) : '-'}</em>
+          <small>{active ? `${compactNumber(active.accepted_bid_count)} 次有效出价 · seq ${active.seq}` : '开拍后展示服务端序列'}</small>
+        </div>
       </div>
       <div className="ribbon-metrics" data-testid="health-ribbon-status" role="status" aria-live="polite">
         <span><Wifi size={15} /> {recoveryLabel}</span>
@@ -796,15 +837,19 @@ export function QueueCard({
 }
 
 export function AuctionControlSummary({
+  heatSummary,
   monitor,
   now,
+  orders,
   recentEvents,
   selectedAuction,
   liveAuction,
   children
 }: {
+  heatSummary?: HeatSummary;
   monitor: Record<string, MonitorPayload>;
   now: number;
+  orders: Order[];
   recentEvents: Array<Record<string, unknown>>;
   selectedAuction: Auction;
   liveAuction?: Auction;
@@ -812,6 +857,9 @@ export function AuctionControlSummary({
 }) {
   const selectedIsLive = liveAuction?.id === selectedAuction.id || selectedAuction.status === 'ACTIVE';
   const mediaURL = displayMediaURL(selectedAuction.item?.image_url);
+  const ops = auctionOpsSummary(selectedAuction, orders, heatSummary);
+  const engine = redisEngineSummary(monitor.redisEngine, selectedAuction);
+  const recentScopedEvents = recentEvents.filter((event) => String(event.auction_id ?? event.aggregate_id ?? '') === selectedAuction.id).length;
   return (
     <section className={`command-panel status-${selectedAuction.status.toLowerCase()}`} data-testid="auction-control-summary">
       <div className="command-hero">
@@ -861,6 +909,28 @@ export function AuctionControlSummary({
         <div>
           <span>竞拍状态</span>
           <strong>{auctionStatusLabel(selectedAuction.status)}</strong>
+        </div>
+      </div>
+      <div className="ops-kpi-grid" data-testid="pc-ops-kpi-grid" aria-label="运营指标">
+        <div className="ops-kpi-card primary">
+          <span>当前拍品热度</span>
+          <strong>{ops.activeBidders || ops.acceptedBids30s ? `${ops.activeBidders} 人` : '等待真实热度'}</strong>
+          <small>近 30 秒有效出价 {ops.acceptedBids30s} · 弹幕 {ops.chatMessages30s}</small>
+        </div>
+        <div className="ops-kpi-card">
+          <span>价格推进</span>
+          <strong>{formatCents(ops.priceLiftCents)}</strong>
+          <small>较起拍 +{ops.liftRate}% · 距封顶 {formatCents(ops.capDistanceCents)}</small>
+        </div>
+        <div className="ops-kpi-card">
+          <span>订单承接</span>
+          <strong>{ops.paidOrders} 已支付 / {ops.pendingOrders} 待处理</strong>
+          <small>已支付金额 {formatCents(ops.paidRevenueCents)}</small>
+        </div>
+        <div className={`ops-kpi-card ${engine.failed_settlements > 0 || engine.paused_auctions > 0 ? 'danger' : engine.pending_settlements > 0 ? 'warn' : ''}`}>
+          <span>诊断信号</span>
+          <strong>{engine.failed_settlements > 0 ? '落账失败' : engine.paused_auctions > 0 ? '确认暂停' : engine.pending_settlements > 0 ? '待落账' : '链路正常'}</strong>
+          <small>事件 {recentScopedEvents} · 待确认 {engine.pending_redis_decisions} · 待落账 {engine.pending_settlements}</small>
         </div>
       </div>
       {!selectedIsLive ? (
@@ -1616,6 +1686,13 @@ export function OrdersPanel({ orders, onOpenFlightRecorder, onOpenOrder }: { ord
   const [expanded, setExpanded] = useState(false);
   const visibleOrders = expanded ? orders : orders.slice(0, 8);
   const hiddenCount = Math.max(0, orders.length - visibleOrders.length);
+  const paidCount = orders.filter((order) => order.status === 'PAID').length;
+  const pendingCount = orders.filter((order) => order.status === 'ORDER_PENDING' || order.status === 'PAYMENT_INITIATED').length;
+  const expiredCount = orders.filter((order) => order.status === 'ORDER_EXPIRED').length;
+  const paidAmountCents = orderRevenueCents(orders, 'PAID');
+  const depositAtRiskCents = orders
+    .filter((order) => order.deposit_status === 'HELD' || order.status === 'ORDER_EXPIRED')
+    .reduce((sum, order) => sum + (order.deposit_cents ?? 0), 0);
   return (
     <div className="rule-panel order-table-panel">
       <div className="panel-heading order-heading">
@@ -1628,6 +1705,11 @@ export function OrdersPanel({ orders, onOpenFlightRecorder, onOpenOrder }: { ord
             {expanded ? '收起历史订单' : `展开全部 ${orders.length} 条`}
           </Button>
         ) : null}
+      </div>
+      <div className="order-kpi-strip" data-testid="pc-order-kpi-strip">
+        <div><span>订单数</span><strong>{orders.length}</strong><small>{pendingCount} 待处理</small></div>
+        <div><span>已支付金额</span><strong>{formatCents(paidAmountCents)}</strong><small>{paidCount} 单已支付</small></div>
+        <div><span>保证金关注</span><strong>{formatCents(depositAtRiskCents)}</strong><small>{expiredCount} 单超时/待释放</small></div>
       </div>
       {orders.length === 0 ? <div className="empty-state">暂无订单</div> : (
         <div className="order-table" role="table" aria-label="订单记录">

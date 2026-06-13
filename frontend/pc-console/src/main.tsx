@@ -37,6 +37,18 @@ type WorkbenchTask = {
   tone: 'loading' | 'ok' | 'error';
 };
 
+type BidDecisionPreview = {
+  result?: string;
+  reject_reason?: string;
+  code?: string;
+  message?: string;
+  current_price_cents?: number;
+  current_winner_id?: string;
+  seq?: number;
+  engine_seq?: number;
+  end_at?: string;
+};
+
 const idleWorkbenchTask: WorkbenchTask = {
   active: false,
   title: '工作台已就绪',
@@ -75,6 +87,33 @@ async function fetchJSONWithHostRetry<T>(url: string, options?: RequestInit, tim
 
 function asArray<T>(value: T[] | null | undefined): T[] {
   return Array.isArray(value) ? value : [];
+}
+
+function shouldKeepHotPreview(local: Auction | undefined, incoming: Auction) {
+  if (!local) return false;
+  const localSeq = Number(local.seq ?? 0);
+  const incomingSeq = Number(incoming.seq ?? 0);
+  if (!Number.isFinite(localSeq) || !Number.isFinite(incomingSeq)) return false;
+  if (localSeq <= incomingSeq) return false;
+  return incoming.status !== 'SOLD' && incoming.status !== 'ENDED' && incoming.status !== 'CANCELLED';
+}
+
+function mergeAuctionRowsPreservingHotPreview(current: Auction[], incoming: Auction[]) {
+  const currentByID = new Map(current.map((row) => [row.id, row]));
+  return incoming.map((row) => {
+    const local = currentByID.get(row.id);
+    if (!shouldKeepHotPreview(local, row) || !local) return row;
+    return {
+      ...row,
+      current_price_cents: local.current_price_cents,
+      current_winner_id: local.current_winner_id,
+      end_at: local.end_at,
+      seq: local.seq,
+      accepted_bid_count: Math.max(row.accepted_bid_count ?? 0, local.accepted_bid_count ?? 0),
+      extend_count: Math.max(row.extend_count ?? 0, local.extend_count ?? 0),
+      item: row.item ?? local.item
+    };
+  });
 }
 
 function App() {
@@ -147,6 +186,23 @@ function App() {
   const visibleTask = resettingSeed || resetTask.tone === 'error' || (resetTask.title === '演示环境已重置' && !loading)
     ? resetTask
     : workbenchTask;
+
+  const applyAuctionDecisionPreview = (auctionID: string, payload: BidDecisionPreview) => {
+    if (!auctionID || payload.current_price_cents == null) return;
+    setAuctions((current) => current.map((row) => {
+      if (row.id !== auctionID) return row;
+      const responseSeq = Number(payload.engine_seq ?? payload.seq ?? row.seq ?? 0);
+      const currentSeq = Number(row.seq ?? 0);
+      return {
+        ...row,
+        current_price_cents: payload.current_price_cents ?? row.current_price_cents,
+        current_winner_id: payload.current_winner_id ?? row.current_winner_id,
+        end_at: payload.end_at ?? row.end_at,
+        seq: Number.isFinite(responseSeq) && responseSeq > currentSeq ? responseSeq : row.seq
+      };
+    }));
+    setSelectedAuctionID(auctionID);
+  };
 
   const openFlightRecorder = async (auctionID: string) => {
     const nextAuctionID = auctionID.trim();
@@ -230,7 +286,7 @@ function App() {
       );
       if (!response.ok) return;
       const auctionRows = asArray(payload);
-      setAuctions(auctionRows);
+      setAuctions((current) => mergeAuctionRowsPreservingHotPreview(current, auctionRows));
       setItems(auctionRows.map((auction) => auction.item).filter(Boolean));
       const visibleAuctionID = preferredAuctionID && auctionRows.some((auction) => auction.id === preferredAuctionID)
         ? preferredAuctionID
@@ -297,7 +353,7 @@ function App() {
       setWorkbenchTask({ active: true, title: '正在刷新商家工作台', detail: '正在更新页面。', tone: 'loading' });
       setRooms(roomRows);
       if (nextRoomID !== roomID) setRoomID(nextRoomID);
-      setAuctions(auctionRows);
+      setAuctions((current) => mergeAuctionRowsPreservingHotPreview(current, auctionRows));
       setOrders(orderRows);
       if (liveOps) {
         setLiveOpsSummary(liveOps);
@@ -806,7 +862,7 @@ function App() {
       return;
     }
     const runOne = async (stepMode: Exclude<typeof mode, 'duel'>, index = 0) => {
-      const { response, payload } = await fetchJSONWithHostRetry<{ result?: string; reject_reason?: string; code?: string; message?: string; current_price_cents?: number; current_winner_id?: string }>(`/api/demo/auctions/${selectedAuction.id}/competing-bid`, {
+      const { response, payload } = await fetchJSONWithHostRetry<BidDecisionPreview>(`/api/demo/auctions/${selectedAuction.id}/competing-bid`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -828,10 +884,12 @@ function App() {
     try {
       await ensureHostSession();
       if (mode === 'rival_max_bid') {
-        await runOne(mode);
+        const payload = await runOne(mode);
+        applyAuctionDecisionPreview(selectedAuction.id, payload);
         Message.success(`已为演示对手设置自动加价${options.amountCents ? `：¥${(options.amountCents / 100).toFixed(2)}` : ''}`);
       } else {
         const payload = await runOne(mode);
+        applyAuctionDecisionPreview(selectedAuction.id, payload);
         const proxyDefenseAccepted = payload.reject_reason === 'BID_TOO_LOW' &&
           payload.current_winner_id === 'user_1' &&
           Number(payload.current_price_cents ?? 0) > Number(selectedAuction.current_price_cents ?? 0);
@@ -850,7 +908,7 @@ function App() {
                   : '无效出价已写入';
         Message.success(proxyDefenseAccepted ? `${copy}：代理防守成功` : `${copy}：${payload.result ?? mode}`);
       }
-      void loadAll(roomID, false, false, selectedAuction.id, { includeDiagnostics: false, suppressFailure: true });
+      void refreshAuctionRows(roomID, selectedAuction.id);
     } catch (error) {
       const timeout = error instanceof Error && (error.name === 'AbortError' || error.message.includes('timeout'));
       Message.error(timeout ? '演示出价请求超时，请刷新后重试' : error instanceof Error ? error.message : '演示出价失败');
@@ -1186,9 +1244,11 @@ function App() {
               />
               {selectedAuction ? (
                 <AuctionControlSummary
+                  heatSummary={heatSummary}
                   liveAuction={pinnedActiveAuction}
                   monitor={monitor}
                   now={now}
+                  orders={orders}
                   recentEvents={recentEvents}
                   selectedAuction={selectedAuction}
                 >

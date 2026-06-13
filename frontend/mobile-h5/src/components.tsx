@@ -1,4 +1,5 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { motion, useReducedMotion } from 'motion/react';
 import { AlertTriangle, BadgeCheck, Bell, BellOff, CheckCircle2, ChevronUp, Clock3, CreditCard, Flame, History, Info, MessageCircle, MoreHorizontal, PackageCheck, RefreshCw, Send, ShieldCheck, ShoppingCart, Sparkles, Truck, Trophy, Users, Wifi, WifiOff, X } from 'lucide-react';
 import CertificateIcon from '@icon-park/react/es/icons/Certificate';
 import CommentIcon from '@icon-park/react/es/icons/CommentOne';
@@ -27,6 +28,28 @@ function displayChatUser(userID: string, currentUserID: string) {
   if (userID === currentUserID) return '我';
   if (/^[\u4e00-\u9fa5].*\*\*$/.test(userID)) return userID;
   return '匿名买家';
+}
+
+function auctionMediaURL(auction?: AuctionSummary) {
+  return displayMediaURL(
+    auction?.item?.video_poster_url ??
+    auction?.item?.videoPosterURL ??
+    auction?.item?.image_url ??
+    auction?.item?.imageURL
+  );
+}
+
+function auctionProductTitle(auction: AuctionSummary, fallback = '当前拍品') {
+  return auction.item?.title ?? auction.item_id ?? auction.id ?? fallback;
+}
+
+function auctionLiveStatusCopy(auction: AuctionSummary, activeAuctionID: string) {
+  if (auction.id === activeAuctionID) return '正在讲解';
+  if (auction.status === 'SCHEDULED' || auction.status === 'DRAFT') return '排队候场';
+  if (auction.status === 'SOLD') return '已成交';
+  if (auction.status === 'ENDED') return '已结束';
+  if (auction.status === 'CANCELLED') return '已取消';
+  return auctionStatusLabel(auction.status);
 }
 
 const iconParkProofFill = ['#D4AF37', '#2c2c2c', '#EFBF04', '#F7E6CA'];
@@ -101,6 +124,7 @@ export function LiveStage({
   onLike: () => void;
   onToggleSound: () => void;
 }) {
+  const shouldReduceMotion = useReducedMotion();
   const mediaURL = displayMediaURL(item.video_poster_url ?? item.videoPosterURL ?? item.image_url ?? item.imageURL);
   const videoURL = demoLiveVideoURL;
   const activeAuction = auctions.find((auction) => auction.id === activeAuctionID);
@@ -146,7 +170,6 @@ export function LiveStage({
     : scenario.status === 'ACTIVE' && !scenario.ctaDisabled
       ? `出一手 ${formatCents(nextBidCents)}`
       : '看拍品信息';
-
   return (
     <section
       className={`video-stage ${mediaURL ? 'has-media' : 'no-media'}`}
@@ -194,23 +217,29 @@ export function LiveStage({
       <BarrageLayer messages={barrageMessages} />
       <div className="video-topbar">
         <div className="host-profile">
-          <span className="host-avatar">{roomID.slice(0, 1).toUpperCase()}</span>
-          <span><strong>{roomCopy}</strong><em>正在直播</em></span>
-          <button type="button" className={followed ? 'is-followed' : ''} onClick={onToggleFollow}>{followed ? '已关注' : '关注'}</button>
+          <span className={`host-avatar ${mediaURL ? 'has-media' : ''}`} style={mediaURL ? { '--host-avatar-url': `url("${mediaURL}")` } as React.CSSProperties : undefined}>
+            <span className="host-live-dot" aria-hidden="true" />
+          </span>
+          <span><strong>{roomCopy}</strong><em><span aria-hidden="true" /> 正在直播</em></span>
+          <button type="button" className={followed ? 'is-followed' : ''} onClick={onToggleFollow}>
+            {followed ? <BadgeCheck size={13} /> : <Sparkles size={13} />}
+            {followed ? '已关注' : '关注'}
+          </button>
         </div>
-        <span className="viewer-count avatar-stack" title="当前直播间在线买家数"><Users size={13} /> {onlineBuyerCopy}</span>
-        {followed ? <span className="viewer-count" title="已关注本直播间"><BadgeCheck size={13} /> 已关注</span> : null}
-        <span className="viewer-count" title="直播间实时连接状态"><Wifi size={13} /> {connectionCopy}</span>
-        <button
-          className="sound-toggle"
-          type="button"
-          aria-label={soundEnabled ? '关闭提示音' : soundCapability === 'ready' ? '开启提示音' : '提示音不可用'}
-          title={soundCapability === 'blocked' ? '浏览器阻止音频，请再次点击授权' : soundCapability === 'unavailable' ? '当前浏览器不支持提示音' : undefined}
-          disabled={soundCapability === 'unavailable'}
-          onClick={onToggleSound}
-        >
-          {soundEnabled ? <SoundIcon size={14} theme="filled" fill="#fff" /> : <BellOff size={14} />}
-        </button>
+        <div className="live-status-strip" aria-label="直播状态">
+          <span className="viewer-count avatar-stack" title="当前直播间在线买家数"><Users size={13} /> {onlineBuyerCopy}</span>
+          <span className={`viewer-count connection-${connectionPhase}`} title="直播间实时连接状态"><Wifi size={13} /> {connectionCopy}</span>
+          <button
+            className="sound-toggle"
+            type="button"
+            aria-label={soundEnabled ? '关闭提示音' : soundCapability === 'ready' ? '开启提示音' : '提示音不可用'}
+            title={soundCapability === 'blocked' ? '浏览器阻止音频，请再次点击授权' : soundCapability === 'unavailable' ? '当前浏览器不支持提示音' : undefined}
+            disabled={soundCapability === 'unavailable'}
+            onClick={onToggleSound}
+          >
+            {soundEnabled ? <SoundIcon size={14} theme="filled" fill="#fff" /> : <BellOff size={14} />}
+          </button>
+        </div>
       </div>
       <RaceBoard
         leaderboard={leaderboard}
@@ -240,9 +269,7 @@ export function LiveStage({
           ))}
         </div>}
         <div className="stage-chat-overlay" data-testid="stage-chat-overlay" aria-label="live-chat-overlay">
-          {visibleChat.length === 0 ? (
-            <span className="stage-chat-empty">等待实时弹幕</span>
-          ) : visibleChat.map((message) => (
+          {visibleChat.length === 0 ? null : visibleChat.map((message) => (
             <span className="stage-chat-line" key={message.id}>
               <strong>{message.user}</strong>
               {message.body}
@@ -255,7 +282,18 @@ export function LiveStage({
         </div>
       </div>
       <HeatMeter heat={heat} countdownPhase={countdownPhase.phase} />
-      <button className="floating-product-card" type="button" onClick={onOpenBid} data-testid="floating-product-card" aria-label="进入竞拍面板">
+      <motion.button
+        className="floating-product-card"
+        type="button"
+        onClick={onOpenBid}
+        data-testid="floating-product-card"
+        aria-label="进入竞拍面板"
+        initial={shouldReduceMotion ? false : { opacity: 0, y: 18, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        whileTap={shouldReduceMotion ? undefined : { scale: 0.985 }}
+        transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+      >
+        <span className="floating-live-badge"><Sparkles size={12} /> 讲解中</span>
         <span className={`floating-thumb ${mediaURL ? 'has-media' : ''}`} style={mediaURL ? { '--floating-media-url': `url("${mediaURL}")` } as React.CSSProperties : undefined}>
           {!mediaURL && <ShoppingBagIcon size={18} theme="multi-color" fill={['#FE2C55', '#2c2c2c', '#F7E6CA', '#D4AF37']} />}
         </span>
@@ -268,19 +306,28 @@ export function LiveStage({
           </span>
         </span>
         <span className="floating-bid-strip" data-testid="h5-sticky-bid-strip">
-          <span>
-            <small>{scenario.status === 'ACTIVE' ? '当前' : auctionStatusLabel(scenario.status)}</small>
-            <strong>{scenario.status === 'ACTIVE' ? formatCents(currentPriceCents) : scenario.price}</strong>
-          </span>
-          <em aria-hidden="true">→</em>
           <span className="floating-product-action">{floatingActionCopy}</span>
         </span>
-      </button>
+      </motion.button>
       <div className="live-action-rail" aria-label="live-actions">
-        <button type="button" onClick={onOpenProducts} aria-label="商品列表"><ShoppingBagIcon className="action-rail-icon" size={26} theme="outline" fill={iconParkActionFill} strokeWidth={4} /><span className="live-action-badge">{queuedCount + 1}</span></button>
-        <button type="button" onClick={onOpenLiveOps} aria-label="直播互动"><CommentIcon className="action-rail-icon" size={26} theme="outline" fill={iconParkActionFill} strokeWidth={4} /></button>
-        <button type="button" onClick={onLike} aria-label="点赞"><LikeIcon className="action-rail-icon" size={26} theme="outline" fill={iconParkActionFill} strokeWidth={4} /><span className="live-action-badge">{likeCount}</span></button>
-        <button type="button" onClick={onOpenMore} aria-label="我的"><MoreIcon className="action-rail-icon" size={26} theme="outline" fill={iconParkActionFill} strokeWidth={4} /></button>
+        <button type="button" className="rail-product" onClick={onOpenProducts} aria-label="商品列表">
+          <ShoppingBagIcon className="action-rail-icon" size={24} theme="outline" fill={iconParkActionFill} strokeWidth={4} />
+          <span className="rail-label">商品</span>
+          <span className="live-action-badge">{queuedCount + 1}</span>
+        </button>
+        <button type="button" onClick={onOpenLiveOps} aria-label="直播互动">
+          <CommentIcon className="action-rail-icon" size={24} theme="outline" fill={iconParkActionFill} strokeWidth={4} />
+          <span className="rail-label">互动</span>
+        </button>
+        <button type="button" onClick={onLike} aria-label="点赞">
+          <LikeIcon className="action-rail-icon" size={24} theme="outline" fill={iconParkActionFill} strokeWidth={4} />
+          <span className="rail-label">喜欢</span>
+          <span className="live-action-badge">{likeCount}</span>
+        </button>
+        <button type="button" onClick={onOpenMore} aria-label="我的">
+          <MoreIcon className="action-rail-icon" size={24} theme="outline" fill={iconParkActionFill} strokeWidth={4} />
+          <span className="rail-label">更多</span>
+        </button>
       </div>
     </section>
   );
@@ -765,12 +812,22 @@ function PaymentConfirmDialog({
   return (
     <div className="payment-confirm-backdrop" data-testid="payment-confirm-dialog" role="dialog" aria-modal="true" aria-label="确认支付">
       <section className="payment-confirm-card">
+        <div className="payment-orbit" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+        </div>
         <div className="payment-confirm-head">
-          <CreditCard size={20} />
+          <span className="payment-confirm-icon" aria-hidden="true"><CreditCard size={20} /></span>
           <div>
             <span>确认支付</span>
             <strong>{formatCents(amountCents)}</strong>
           </div>
+        </div>
+        <div className="payment-flow" aria-label="支付结果流程">
+          <span className="is-done"><CheckCircle2 size={13} /> 成交锁单</span>
+          <span className="is-current"><CreditCard size={13} /> 支付确认</span>
+          <span><PackageCheck size={13} /> 订单完成</span>
         </div>
         <div className="payment-confirm-grid">
           <div><span>订单号</span><strong>{displayOrderNo(orderID)}</strong></div>
@@ -790,18 +847,42 @@ function PaymentConfirmDialog({
 export function ChatComposer({
   chatDraft,
   chatSending,
+  onOpenDetails,
+  onOpenProducts,
   onDraftChange,
   onSend
 }: {
   chatDraft: string;
   chatSending: boolean;
+  onOpenDetails: () => void;
+  onOpenProducts: () => void;
   onDraftChange: (value: string) => void;
   onSend: () => void;
 }) {
   return (
     <section className="chat-composer" data-testid="chat-panel">
+      <div className="chat-tool-strip" aria-label="chat-shortcuts">
+        <button type="button" aria-label="查看商品袋" onClick={onOpenProducts}>
+          <ShoppingBagIcon size={16} theme="outline" fill={iconParkProofFill} strokeWidth={4} />
+          商品
+        </button>
+        <button type="button" aria-label="查看规则凭证" onClick={onOpenDetails}>
+          <ShieldCheck size={15} />
+          规则
+        </button>
+      </div>
       <div className="chat-input-row">
-        <input aria-label="chat-input" value={chatDraft} onChange={(event) => onDraftChange(event.currentTarget.value)} placeholder="说点什么..." />
+        <input
+          aria-label="chat-input"
+          name="live-chat-message"
+          type="text"
+          autoComplete="off"
+          inputMode="text"
+          maxLength={120}
+          value={chatDraft}
+          onChange={(event) => onDraftChange(event.currentTarget.value)}
+          placeholder="说点什么..."
+        />
         <button type="button" aria-label="send-chat" disabled={chatSending || !chatDraft.trim()} onClick={onSend}>
           <Send size={16} />
         </button>
@@ -1509,20 +1590,54 @@ export function ProductListSheet({
   scenario: Scenario;
 }) {
   const rows = auctions.length > 0 ? auctions : [{ id: activeAuctionID || 'current', status: scenario.status, item: { title: scenario.title } }];
+  const activeIndex = Math.max(0, rows.findIndex((auction) => auction.id === activeAuctionID));
+  const soldCount = rows.filter((auction) => auction.status === 'SOLD').length;
+  const activeRow = rows[activeIndex] ?? rows[0];
   return (
-    <div className="product-card-list">
+    <div className="product-sheet">
+      <div className="product-sheet-hero">
+        <div>
+          <span>本场货盘</span>
+          <strong>{rows.length} 件拍品</strong>
+        </div>
+        <div>
+          <span>当前讲解</span>
+          <strong>{activeRow ? `#${activeIndex + 1}` : '-'}</strong>
+        </div>
+        <div>
+          <span>已成交</span>
+          <strong>{soldCount}</strong>
+        </div>
+      </div>
+      <div className="product-card-list">
       {rows.map((auction) => {
-        const status = auction.id === activeAuctionID ? '竞拍中' : auction.status === 'SCHEDULED' || auction.status === 'DRAFT' ? '即将开拍' : auction.status === 'SOLD' ? '已成交' : auction.status === 'ENDED' ? '已结束' : auction.status === 'CANCELLED' ? '已取消' : String(auction.status ?? '排队中');
+        const status = auctionLiveStatusCopy(auction, activeAuctionID);
+        const mediaURL = auctionMediaURL(auction);
+        const proof = [
+          auction.item?.certificate ? '证书' : '',
+          auction.item?.condition ? '品相' : '',
+          auction.item?.shipping ? '履约' : ''
+        ].filter(Boolean);
         return (
           <article className={`product-card ${auction.id === activeAuctionID ? 'is-active' : ''}`} key={auction.id}>
-            <div>
-              <strong>{auction.item?.title ?? auction.item_id ?? auction.id}</strong>
-              <span>{status} · {formatCents(auction.current_price_cents ?? 0)} · {auction.accepted_bid_count ?? 0} 次出价</span>
+            <span className={`product-card-thumb ${mediaURL ? 'has-media' : ''}`} style={mediaURL ? { '--product-card-media-url': `url("${mediaURL}")` } as React.CSSProperties : undefined}>
+              {!mediaURL ? <ShoppingBagIcon size={18} theme="multi-color" fill={iconParkProofFill} /> : null}
+            </span>
+            <div className="product-card-main">
+              <span className="product-card-status">{status}</span>
+              <strong>{auctionProductTitle(auction)}</strong>
+              <span>{formatCents(auction.current_price_cents ?? 0)} · {auction.accepted_bid_count ?? 0} 次有效出价</span>
+              {proof.length ? (
+                <div className="product-card-proof" aria-label="商品证据">
+                  {proof.map((item) => <small key={item}>{item}</small>)}
+                </div>
+              ) : null}
             </div>
-            <em>{auction.id === activeAuctionID ? '当前拍品' : status}</em>
+            <em>{auction.id === activeAuctionID ? '进入竞拍' : status}</em>
           </article>
         );
       })}
+      </div>
     </div>
   );
 }
