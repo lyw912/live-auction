@@ -543,7 +543,7 @@ export function riskQueue(monitor: Record<string, MonitorPayload>, selectedAucti
   if (recoveryTotal > 0) {
     risks.push({
       level: recoveryRows.some((row) => Number(row.snapshot_stale ?? 0) > 0 || Number(row.slow_consumer_disconnects ?? 0) > 0) ? 'high' : 'low',
-      title: '买家端同步有压力',
+      title: '恢复记录',
       body: `${recoveryTotal} 条买家端重连或卡顿信号；确认直播间状态稳定后再催促出价。`,
       source: '连接记录'
     });

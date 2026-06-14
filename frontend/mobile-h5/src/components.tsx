@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import { AlertTriangle, BadgeCheck, Bell, BellOff, CheckCircle2, ChevronUp, Clock3, CreditCard, Flame, History, Info, MessageCircle, MoreHorizontal, PackageCheck, RefreshCw, Send, ShieldCheck, ShoppingCart, Sparkles, Truck, Trophy, Users, Wifi, WifiOff, X } from 'lucide-react';
+import { Badge, Button as ShadButton } from '@live-auction/shared-design';
 import CertificateIcon from '@icon-park/react/es/icons/Certificate';
 import CommentIcon from '@icon-park/react/es/icons/CommentOne';
 import JewelryIcon from '@icon-park/react/es/icons/Jewelry';
@@ -11,7 +12,10 @@ import SoundIcon from '@icon-park/react/es/icons/SoundOne';
 import TruckIcon from '@icon-park/react/es/icons/Truck';
 import type { AtmosphereCue, AtmosphereIntensity } from './atmosphere';
 import type { AuctionItem, AuctionState, AuctionSummary, BottomSheetKey, ChatMessage, ConnectionPhase, CountdownPhase, CountdownPhaseState, HeatSnapshot, HistoryRow, LeaderboardPayload, LiveOpsCampaign, MaxBidIntent, MaxBidPhase, PaymentPhase, ProductQAAnswer, ResultSheetKind, Scenario, SoundCapability, SystemMessage } from './domain';
-import { auctionStatusLabel, connectionSyncCopy, demoLiveVideoURL, demoProductImageURL, displayMediaURL, formatCents, formatClockTime, isDangerousActionDisabled, leaderboardActionCopy, rankBadgeLabel, riskActionCopy, scenarios } from './domain';
+import { auctionStatusLabel, connectionSyncCopy, demoProductImageURL, displayMediaURL, formatCents, formatClockTime, isDangerousActionDisabled, leaderboardActionCopy, rankBadgeLabel, riskActionCopy, scenarios } from './domain';
+import { useLiveMediaSource } from './features/live-media/useLiveMediaSource';
+import { PriceOdometer } from './features/atmosphere/PriceOdometer';
+import { LiveBackdrop } from './widgets/live-stage/LiveBackdrop';
 import { h5Copy } from './copy';
 import { ResultSheet } from './result';
 
@@ -54,6 +58,33 @@ function auctionLiveStatusCopy(auction: AuctionSummary, activeAuctionID: string)
 
 const iconParkProofFill = ['#D4AF37', '#2c2c2c', '#EFBF04', '#F7E6CA'];
 const iconParkActionFill = ['#fff', '#fff', '#fff', '#fff'];
+
+function AtmosphereCueNotice({ cue }: { cue: AtmosphereCue | null }) {
+  if (!cue) return null;
+  return (
+    <>
+      <div className="atmosphere-effect-layer" aria-hidden="true">
+        <span className="effect-leading-ring" />
+        <span className="effect-outbid-edge" />
+        <span className="effect-hammer-mark" />
+      </div>
+      <div
+        className={`atmosphere-cue ${cue.kind}`}
+        role="status"
+        aria-live="polite"
+        key={cue.id}
+        data-testid="atmosphere-cue"
+        data-auction-id={cue.auction_id}
+        data-cause-seq={cue.cause_seq}
+        data-event-type={cue.event_type}
+        data-user-scope={cue.user_scope}
+      >
+        <strong>{cue.title}</strong>
+        <span>{cue.detail}</span>
+      </div>
+    </>
+  );
+}
 
 export function LiveStage({
   activeAuctionID,
@@ -125,8 +156,9 @@ export function LiveStage({
   onToggleSound: () => void;
 }) {
   const shouldReduceMotion = useReducedMotion();
-  const mediaURL = displayMediaURL(item.video_poster_url ?? item.videoPosterURL ?? item.image_url ?? item.imageURL);
-  const videoURL = demoLiveVideoURL;
+  const posterCandidate = item.video_poster_url ?? item.videoPosterURL ?? item.image_url ?? item.imageURL;
+  const media = useLiveMediaSource(activeAuctionID, posterCandidate);
+  const mediaURL = media.posterURL || displayMediaURL(posterCandidate);
   const activeAuction = auctions.find((auction) => auction.id === activeAuctionID);
   const queuedCount = auctions.filter((auction) => auction.id !== activeAuctionID).length;
   const proofChips: Array<{ icon: React.ReactNode; label: string }> = [];
@@ -156,7 +188,9 @@ export function LiveStage({
         : '直播已断开';
   const onlineBuyerCopy = heat.watcherCountAvailable && heat.watcherCount != null
     ? `在线买家 ${heat.watcherCount}`
-    : '在线买家';
+    : heat.activeBidders30s > 0
+      ? `近30秒 ${heat.activeBidders30s} 人`
+      : '在线买家';
   const roomCopy = roomID === 'room_main'
     ? '竞拍专场'
     : roomID.replace(/^room[_-]?/i, '专场 ');
@@ -182,30 +216,8 @@ export function LiveStage({
       data-atmosphere-gated={atmosphereGated ? 'true' : 'false'}
       style={mediaURL ? { '--stage-media-url': `url("${mediaURL}")` } as React.CSSProperties : undefined}
     >
-      <video className="live-video-bg" src={videoURL} poster={mediaURL || demoProductImageURL} autoPlay muted loop playsInline aria-hidden="true" />
-      {atmosphereCue && (
-        <div className="atmosphere-effect-layer" aria-hidden="true">
-          <span className="effect-leading-ring" />
-          <span className="effect-outbid-edge" />
-          <span className="effect-hammer-mark" />
-        </div>
-      )}
-      {atmosphereCue && (
-        <div
-          className={`atmosphere-cue ${atmosphereCue.kind}`}
-          role="status"
-          aria-live="polite"
-          key={atmosphereCue.id}
-          data-testid="atmosphere-cue"
-          data-auction-id={atmosphereCue.auction_id}
-          data-cause-seq={atmosphereCue.cause_seq}
-          data-event-type={atmosphereCue.event_type}
-          data-user-scope={atmosphereCue.user_scope}
-        >
-          <strong>{atmosphereCue.title}</strong>
-          <span>{atmosphereCue.detail}</span>
-        </div>
-      )}
+      <LiveBackdrop source={media} poster={mediaURL} />
+      <AtmosphereCueNotice cue={atmosphereCue} />
       <BidWaterfall chips={atmosphereGated ? [] : waterfallChips} intensity={atmosphereIntensity} />
       <ClimaxLayer
         atmosphereCue={atmosphereCue}
@@ -300,7 +312,11 @@ export function LiveStage({
         <span className="floating-product-copy">
           <strong>{activeAuction?.item?.title ?? lotTitle}</strong>
           <span className="floating-auction-meta">
-            <em data-testid="floating-auction-price">{scenario.status === 'ACTIVE' ? `当前最高价 ${formatCents(currentPriceCents)}` : `${auctionStatusLabel(scenario.status)} · ${scenario.price}`}</em>
+            <em data-testid="floating-auction-price">
+              {scenario.status === 'ACTIVE' ? (
+                <>当前最高价 <PriceOdometer valueCents={currentPriceCents} reducedMotion={Boolean(shouldReduceMotion || atmosphereGated)} /></>
+              ) : `${auctionStatusLabel(scenario.status)} · ${scenario.price}`}
+            </em>
             <small data-testid="floating-auction-countdown"><Clock3 size={12} />{scenario.countdown ?? countdownCopy}</small>
             <small data-testid="floating-auction-status">{auctionStatusLabel(scenario.status)} · {connectionCopy}</small>
           </span>
@@ -324,7 +340,7 @@ export function LiveStage({
           <span className="rail-label">喜欢</span>
           <span className="live-action-badge">{likeCount}</span>
         </button>
-        <button type="button" onClick={onOpenMore} aria-label="我的">
+        <button type="button" onClick={onOpenMore} aria-label="更多">
           <MoreIcon className="action-rail-icon" size={24} theme="outline" fill={iconParkActionFill} strokeWidth={4} />
           <span className="rail-label">更多</span>
         </button>
@@ -442,7 +458,7 @@ function ClimaxLayer({
       ) : null}
       <div className="climax-spotlight" aria-hidden="true" />
       <div className="climax-card" data-testid="climax-stage-card">
-        <span>{isWinner ? '成交凭证' : '本场落槌'}</span>
+        <span>{isWinner ? '落槌高光' : '本场落槌 · 落槌高光'}</span>
         <strong>{isWinner ? '中拍！' : '已成交'}</strong>
         <em>{formatCents(terminalPriceCents)}</em>
         <p>{bidderCopy} · {totalBidCopy}</p>
@@ -471,14 +487,17 @@ function FinalSecondsLayer({
   const extendedCopy = atmosphereCue?.detail.match(/延时\s*\+\d+s/)?.[0] ?? '延时';
   const title = isExtended
     ? extendedCopy
-    : countdownPhase.phase === 'hammer'
-      ? countdownPhase.beat || '落槌窗口'
-      : '最后 5 秒';
+    : `最后 ${seconds ?? 5} 秒`;
   const detail = isExtended
     ? '最后窗口有真实出价，竞拍继续'
     : countdownPhase.phase === 'hammer'
       ? countdownPhase.beat === '最后一次' ? '落槌前最后确认' : '有效出价仍会延时'
       : 'going once · 盯紧下一口';
+  const emphasis = countdownPhase.phase === 'hammer' && countdownPhase.beat
+    ? countdownPhase.beat
+    : seconds != null && !isExtended
+      ? `${seconds}s`
+      : detail;
   return (
     <div
       className={`final-seconds-layer ${isExtended ? 'is-extended' : countdownPhase.phase}`}
@@ -486,7 +505,7 @@ function FinalSecondsLayer({
       aria-live="assertive"
     >
       <span>{title}</span>
-      <strong>{seconds != null && !isExtended ? `${seconds}s` : detail}</strong>
+      <strong>{isExtended ? detail : emphasis}</strong>
       {!isExtended && <em>{detail}</em>}
     </div>
   );
@@ -517,7 +536,8 @@ function RaceBoard({
   const hasBids = entries.length > 0 || (leaderboard?.accepted_bidder_count ?? 0) > 0;
   const expanded = Boolean(forceExpanded || hasBids || leaderboard?.burst_mode || (leaderboard?.accepted_bids_30s ?? 0) >= 4 || leaderboard?.state === 'OUTBID');
   const lastCueKind = atmosphereCue?.user_scope === 'self' ? atmosphereCue.kind : 'none';
-  const bidderLabel = (entry: NonNullable<LeaderboardPayload['entries']>[number]) => entry.is_current ? `我（${entry.user_masked}）` : entry.user_masked;
+  const currentBidderLabel = (masked?: string) => !masked || masked === '我' || masked.startsWith('我') ? '我' : `我 ${masked}`;
+  const bidderLabel = (entry: NonNullable<LeaderboardPayload['entries']>[number]) => entry.is_current ? currentBidderLabel(entry.user_masked) : entry.user_masked;
   const headline = recovering
     ? '竞拍状态校对中'
     : hasBids && leader
@@ -563,12 +583,13 @@ function RaceBoard({
         )}
         {mine && !visibleEntries.some((entry) => entry.user_id === mine.user_id) ? (
           <div className="leaderboard-row is-current race-board-mine">
-            <span>#{mine.rank}</span>
-            <strong>我</strong>
+            <span>#{mine.rank} </span>
+            <strong>我 </strong>
             <em>{formatCents(mine.amount_cents)}</em>
             <small>{gap != null && gap > 0 ? `差 ${formatCents(gap)}` : '正在领先'}</small>
           </div>
         ) : null}
+        {mine ? <p className="race-board-status">{mineCopy}</p> : null}
       </div>
     </section>
   );
@@ -756,8 +777,8 @@ function buyerHistorySecondary(row: HistoryRow) {
 
 function buyerOrderSecondary(row: HistoryRow) {
   const time = historyTime(row);
-  const status = buyerOrderStatus(String(row.order_status ?? row.status ?? ''));
-  return time ? `${status} · ${time}` : status;
+  const orderID = orderIDFromRow(row);
+  return time ? `${displayOrderNo(orderID)} · ${time}` : displayOrderNo(orderID);
 }
 
 function displayOrderNo(orderID: string) {
@@ -826,18 +847,18 @@ function PaymentConfirmDialog({
         </div>
         <div className="payment-flow" aria-label="支付结果流程">
           <span className="is-done"><CheckCircle2 size={13} /> 成交锁单</span>
-          <span className="is-current"><CreditCard size={13} /> 支付确认</span>
-          <span><PackageCheck size={13} /> 订单完成</span>
+          <span className="is-current"><CreditCard size={13} /> 服务端确认</span>
+          <span><PackageCheck size={13} /> 重查订单</span>
         </div>
         <div className="payment-confirm-grid">
           <div><span>订单号</span><strong>{displayOrderNo(orderID)}</strong></div>
-          <div><span>支付方式</span><strong>演示支付</strong></div>
-          <div><span>支付结果</span><strong>确认后写入服务端订单状态</strong></div>
+          <div><span>支付方式</span><strong>演示支付 pay-mock</strong></div>
+          <div><span>成功真相</span><strong>仅以 order_status=PAID 为准</strong></div>
         </div>
-        <p>这里不接真实资金通道，但会调用订单支付接口，更新订单为已支付并回到订单详情。</p>
+        <p>本期不接真实资金通道。确认后只调用 mock 支付边界，界面等待服务端订单状态返回，不用本地回跳或 HTTP 200 断言成功。</p>
         <div className="payment-confirm-actions">
-          <button type="button" onClick={onCancel}>稍后支付</button>
-          <button type="button" onClick={onConfirm}>确认支付 {formatCents(amountCents)}</button>
+          <ShadButton type="button" variant="outline" onClick={onCancel}>稍后支付</ShadButton>
+          <ShadButton type="button" variant="bid" onClick={onConfirm}>确认支付 {formatCents(amountCents)}</ShadButton>
         </div>
       </section>
     </div>
@@ -970,7 +991,7 @@ export function LiveOpsPanel({
   const drawStatus = luckyDraw?.my_entry_status === 'OPENED'
     ? `已领取：${luckyDraw.my_reward_label ?? '直播间权益'}`
     : luckyDraw?.my_entry_status === 'ENTERED'
-      ? `${luckyDraw.participants} 人已领取资格 · 可查看奖励`
+      ? `${luckyDraw.participants} 人已领取资格 · 可开奖`
       : luckyDraw?.can_enter
         ? `${luckyDraw.participants} 人已领取资格 · 现在可参与`
         : `完成 ${luckyDraw?.completed_task_count ?? finishedTasks}/${luckyDraw?.eligible_task_count ?? 4} 后解锁`;
@@ -1002,25 +1023,25 @@ export function LiveOpsPanel({
         ) : null}
         <div className="lucky-draw-actions">
           {luckyDraw?.my_entry_status === 'ENTERED' ? (
-            <button type="button" onClick={onOpenLuckyDraw}>查看奖励</button>
+            <button type="button" onClick={onOpenLuckyDraw}>开奖</button>
           ) : luckyDraw?.my_entry_status === 'OPENED' ? (
             <button type="button" onClick={onOpenLeaderboard}>查看榜单</button>
           ) : (
-            <button type="button" disabled={!luckyDraw?.can_enter} onClick={onEnterLuckyDraw}>领取资格</button>
+            <button type="button" disabled={!luckyDraw?.can_enter} onClick={onEnterLuckyDraw}>参与福袋</button>
           )}
         </div>
       </div>
       <div className="buyer-pk-card" data-testid="buyer-pk-card">
         <div className="pk-title">
-          <span><Flame size={13} /> 讲解偏好</span>
+          <span><Flame size={13} /> 买家阵营</span>
           <strong>{auctionStatusLabel(scenario.status)}</strong>
         </div>
         <div className="pk-bars" style={{ '--craft-score': `${craftScore}%`, '--story-score': `${storyScore}%` } as React.CSSProperties}>
           <button type="button" className={activeTeam === 'craft' ? 'active' : ''} onClick={() => onSelectTeam('craft')}>
-            <span>看工艺</span><strong>{craftScore}%</strong>
+            <span>工艺派</span><strong>{craftScore}%</strong>
           </button>
           <button type="button" className={activeTeam === 'story' ? 'active' : ''} onClick={() => onSelectTeam('story')}>
-            <span>听故事</span><strong>{storyScore}%</strong>
+            <span>故事派</span><strong>{storyScore}%</strong>
           </button>
         </div>
         <small>投票会汇总给商家，帮助主播下一段讲证书、瑕疵或工艺；不影响价格、排名或成交。</small>
@@ -1433,8 +1454,8 @@ export function BottomSheet({
   onToggleSound: () => void;
 }) {
   const titleMap: Record<BottomSheetKey, string> = {
-    products: '商品袋',
-    details: '规则凭证',
+    products: '商品与规则',
+    details: '商品与规则',
     maxBid: '自动加价',
     leaderboard: '出价榜',
     history: '我的记录',
@@ -1444,15 +1465,15 @@ export function BottomSheet({
     more: '我的'
   };
   const sheetGroups: Record<BottomSheetKey, Array<[BottomSheetKey, string]>> = {
-    products: [['products', '本场拍品'], ['details', '规则凭证'], ['leaderboard', '出价榜']],
-    details: [['products', '本场拍品'], ['details', '规则凭证'], ['leaderboard', '出价榜']],
-    leaderboard: [['products', '本场拍品'], ['details', '规则凭证'], ['leaderboard', '出价榜']],
+    products: [['products', '本场'], ['details', '详情'], ['maxBid', '自动加价'], ['leaderboard', '出价榜']],
+    details: [['products', '本场'], ['details', '详情'], ['maxBid', '自动加价'], ['leaderboard', '出价榜']],
+    maxBid: [['products', '本场'], ['details', '详情'], ['maxBid', '自动加价'], ['leaderboard', '出价榜']],
+    leaderboard: [['products', '本场'], ['details', '详情'], ['maxBid', '自动加价'], ['leaderboard', '出价榜']],
     liveops: [['liveops', '互动任务'], ['qa', '拍品问答']],
     qa: [['liveops', '互动任务'], ['qa', '拍品问答']],
-    more: [['more', '设置与保障'], ['orders', '我的记录']],
-    orders: [['more', '设置与保障'], ['orders', '我的记录']],
-    history: [['more', '设置与保障'], ['orders', '我的记录']],
-    maxBid: [['maxBid', '自动加价']]
+    more: [['more', '更多'], ['orders', '我的订单']],
+    orders: [['more', '更多'], ['orders', '我的订单']],
+    history: [['more', '更多'], ['orders', '我的订单']]
   };
   useEffect(() => {
     if (!activeSheet) return undefined;
@@ -1633,7 +1654,7 @@ export function ProductListSheet({
                 </div>
               ) : null}
             </div>
-            <em>{auction.id === activeAuctionID ? '进入竞拍' : status}</em>
+            <em>{auction.id === activeAuctionID ? '当前拍品' : status}</em>
           </article>
         );
       })}
@@ -1648,15 +1669,17 @@ export function ProductRuleSheet({ auction, item, scenario }: { auction?: Auctio
   const depositCap = auction?.rule?.deposit_cap_cents ?? 0;
   const depositBps = auction?.rule?.deposit_bps ?? 0;
   const depositPercent = depositBps > 0 ? `${(depositBps / 100).toFixed(depositBps % 100 === 0 ? 0 : 2)}%` : '';
-  const depositCopy = depositFloor > 0 || depositBps > 0
-    ? `本场保证金按成交价${depositPercent ? ` ${depositPercent}` : ''} 预估，最低 ${formatCents(depositFloor)}${depositCap > 0 ? `，最高 ${formatCents(depositCap)}` : ''}。未中拍或订单完成后按支付链路处理。`
+  const depositCopy = depositFloor > 0
+    ? `本场要求保证金，最低 ${formatCents(depositFloor)}${depositCap > 0 ? `，最高 ${formatCents(depositCap)}` : ''}${depositPercent ? `；成交后按成交价 ${depositPercent} 预估` : ''}。未中拍或订单完成后按支付链路处理。`
+    : depositBps > 0
+      ? `本场保证金按成交价 ${depositPercent} 预估；未中拍或订单完成后按支付链路处理。`
     : '本场未展示固定保证金门槛；以服务端出价校验和订单状态为准。';
   const extensionCopy = `最后 ${auction?.rule?.extend_window_seconds ?? 10} 秒内有有效出价，会自动延长 ${auction?.rule?.extend_by_seconds ?? 10} 秒${auction?.rule?.max_extend_count ? `，最多 ${auction.rule.max_extend_count} 次` : ''}，避免最后一秒抢拍。`;
   const capCopy = auction?.cap_price_cents
     ? `价格到达 ${formatCents(auction.cap_price_cents)} 后不再继续抬价。`
     : '本场未设置展示封顶价，仍由服务端规则校验每次出价。';
   const confirmationCopy = auction?.rule?.fat_finger_threshold_cents
-    ? `单次出价达到 ${formatCents(auction.rule.fat_finger_threshold_cents)} 会先弹出确认，防止误触。`
+    ? `单次高额跳价达到 ${formatCents(auction.rule.fat_finger_threshold_cents)} 会触发确认，防止误触。`
     : '异常大额出价会先弹出确认，防止误触。';
   const certificateCopy = item.certificate ?? `GID 20260607 · 可核验`;
   const proofItems = [
@@ -1703,7 +1726,7 @@ export function ProductRuleSheet({ auction, item, scenario }: { auction?: Auctio
           <p>{extensionCopy}</p>
         </article>
         <article>
-          <strong>大额出价确认</strong>
+          <strong>误触保护</strong>
           <p>{confirmationCopy}</p>
         </article>
         <article>
@@ -1794,7 +1817,7 @@ export function MaxBidSheet({
       </div>
       <div className="max-bid-actions">
         <button type="button" onClick={onSubmit} disabled={settingDisabled || invalid}>
-          {phase === 'pending' ? '提交中' : active ? `更新为 ${formatCents(submittedAmount)}` : `设置 ${formatCents(submittedAmount)}`}
+          {phase === 'pending' ? '提交中' : active ? '更新自动加价' : '设置自动加价'}
         </button>
         <button type="button" onClick={onCancel} disabled={cancelDisabled}>
           {phase === 'canceling' ? '取消中' : '取消'}
@@ -1943,8 +1966,8 @@ function LeaderboardRows({ entries, burstMode = false, highlightKind = 'none' }:
               else rowRefs.current.delete(key);
             }}
           >
-            <span>{rankBadgeLabel(entry.rank)}</span>
-            <strong>{entry.is_current ? `我（${entry.user_masked}）` : entry.user_masked}</strong>
+            <span>{rankBadgeLabel(entry.rank)} </span>
+            <strong>{entry.is_current ? '我 ' : `${entry.user_masked} `}</strong>
             <em>{formatCents(entry.amount_cents)}</em>
             <small>{entry.bid_count} 次</small>
           </div>
@@ -1987,7 +2010,11 @@ export function MoreSheet({
       </button>
       <button type="button" onClick={onOpenRecords}>
         <History size={16} />
-        我的出价与订单
+        我的出价
+      </button>
+      <button type="button" onClick={onOpenRecords}>
+        <History size={16} />
+        我的订单
       </button>
       <p>保护说明只披露买家可验证事实；不会承诺库存预留、相似拍品优先权或虚构人气。</p>
     </div>
@@ -2100,6 +2127,7 @@ function BuyerOrderDetail({
   const ruleDeposit = depositCap > 0 ? Math.min(estimateDeposit, depositCap) : estimateDeposit;
   const deposit = Number(order.deposit_cents ?? 0) || ruleDeposit;
   const providerPaymentID = String(order.provider_payment_id ?? '');
+  const paid = String(order.order_status ?? order.status ?? '') === 'PAID';
   return (
     <div className="buyer-order-detail" data-testid="buyer-order-detail">
       <div className="buyer-order-detail-head">
@@ -2107,7 +2135,10 @@ function BuyerOrderDetail({
           <span>订单详情</span>
           <strong>{displayOrderNo(orderIDFromRow(order))}</strong>
         </div>
-        <button type="button" onClick={onClose}>收起</button>
+        <div className="buyer-order-detail-actions">
+          <Badge variant={paid ? 'won' : 'stale'}>{paid ? 'PAID' : 'SERVER PENDING'}</Badge>
+          <ShadButton type="button" size="sm" variant="outline" onClick={onClose}>收起</ShadButton>
+        </div>
       </div>
       <div className="buyer-order-product">
         <span className={`buyer-order-thumb ${mediaURL ? 'has-media' : ''}`} style={mediaURL ? { '--buyer-order-media-url': `url("${mediaURL}")` } as React.CSSProperties : undefined}>
@@ -2127,6 +2158,10 @@ function BuyerOrderDetail({
         <div><span>封顶价</span><strong>{formatCents(Number(order.cap_price_cents ?? auction?.cap_price_cents ?? amount))}</strong></div>
         <div><span>支付状态</span><strong>{String(order.deposit_status ?? '以服务端为准')}</strong></div>
         <div><span>支付流水</span><strong>{providerPaymentID ? providerPaymentID : '待支付后生成'}</strong></div>
+      </div>
+      <div className="buyer-order-section">
+        <span>订单状态口径</span>
+        <p>买家端只展示服务端订单字段。支付完成必须来自订单重查或支付接口返回的 <code>order_status=PAID</code>，不会根据按钮点击、页面回跳或 HTTP 状态自行判成功。</p>
       </div>
       <div className="buyer-order-section">
         <span>商品详情</span>
@@ -2178,9 +2213,10 @@ function OrderCardList({
                 <span className="order-card-body">
                   <strong>{orderTitle(row, fallbackItem)}</strong>
                   <em>{displayOrderNo(orderID)}</em>
+                  <small>{orderStatus(row)}</small>
                 </span>
                 <span className="order-card-side">
-                  <strong>{formatCents(orderAmount(row))}</strong>
+                  <strong>订单 {formatCents(orderAmount(row))}</strong>
                   <em>{buyerOrderSecondary(row)}</em>
                 </span>
               </button>

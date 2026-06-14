@@ -2,11 +2,16 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { CheckCircle2, ChevronUp, Radio, RefreshCw } from 'lucide-react';
+import { AppProviders } from './app/providers';
 import type { AtmosphereCue, AtmosphereInput } from './atmosphere';
 import { AuctionStatePanel, BottomSheet, ChatComposer, ChatPanel, LeaderboardPanel, LiveStage, StateMatrixTabs, type WaterfallChip } from './components';
 import { ResultSheet } from './result';
 import type { AuctionItem, AuctionOverlayMode, AuctionRealtimeEvent, AuctionState, AuctionSummary, AuctionSoundPack, AuthUser, BidderRequirement, BidPhase, BidResponse, BottomSheetKey, ChatMessage, ConnectionPhase, HeatSnapshot, HistoryRow, LeaderboardPayload, LiveOpsCampaign, MaxBidIntent, MaxBidPhase, OrderRow, PaymentPhase, PendingBidRequest, ProductQAAnswer, ProductQATurn, RecoveryPhase, ResultSheetKind, Scenario, SnapshotResponse, SoundCapability, SystemMessage, WSTicketResponse } from './domain';
 import { createAudioContext, createClientBidID, demoProductImageURL, demoUserID, deriveCountdown, deriveCountdownPhase, ensureDemoSession, extendSecondsFromEvent, extensionCopyFromEvent, formatCents, heatSnapshot, isBidCloseGuardActive, isBidConfirmationPending, isCountdownExpired, isDangerousActionDisabled, isEngineRejected, isTestMatrixEnabled, loadAuctionSoundPack, maxBidErrorCopy, maxBidStatusCopy, playAuctionSound, playCountdownTone, playCueTone, playLayeredCue, readJSON, rejectCopy, responseServerTimeMS, retryAfterMS, retryAfterMSFromHeaders, roomIDFromPath, scenarios, selectEntryAuction, speakSystemMessage, vibrateCountdownPhase, vibratePattern, visibleRoomAuctions } from './domain';
+import { BID_REQUEST_TIMEOUT_MS, bidRequestHeaders, bidRequestPayload, canRetryPendingBid, interpretBidResponse, networkBidFailure, prepareBidRequest } from './features/contracts/bid-contract';
+import { isPayablePendingOrder } from './features/contracts/payment-contract';
+import { submitMockPayment } from './features/pay-order/pay-mock-action';
+import { auctionWSProtocols, auctionWSURL, wsTicketRequest } from './features/contracts/ws-contract';
 import { calculateAtmosphereIntensity, normalizeAtmosphere, shouldGateAtmosphere } from './atmosphere';
 import { reconnectDelayMS } from './realtime';
 import { h5Copy } from './copy';
@@ -52,8 +57,6 @@ function clampMaxBidAmount(amountCents: number, minimumCents: number, capCents?:
 // on "确认中" with no escape. Aborting on timeout surfaces through the existing
 // catch -> 'uncertain' branch; because the same client_bid_id is reused on retry,
 // re-sending is idempotent and safe (the engine dedupes by request hash).
-const BID_REQUEST_TIMEOUT_MS = 8000;
-
 async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = BID_REQUEST_TIMEOUT_MS): Promise<Response> {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
@@ -153,6 +156,7 @@ function App() {
   const reconnectAttemptRef = useRef(0);
   const recoveryInFlightRef = useRef(false);
   const selectedRef = useRef(selected);
+  const bidPhaseRef = useRef(bidPhase);
   const lastSeqRef = useRef(lastSeq);
   const currentPriceRef = useRef(currentPriceCents);
   const leaderMaskedRef = useRef(leaderMasked);
@@ -160,6 +164,7 @@ function App() {
   const activeIncrementCentsRef = useRef(activeIncrementCents);
   const roomAuctionsRef = useRef<AuctionSummary[]>(roomAuctions);
   const maxBidAmountCentsRef = useRef(maxBidAmountCents);
+  const maxBidPhaseRef = useRef(maxBidPhase);
   const auctionEndAtRef = useRef(auctionEndAt);
   const serverTimeMSRef = useRef(serverTimeMS);
   // Tracks the local Date.now() at the moment we last received a server-time anchor.
@@ -182,9 +187,17 @@ function App() {
   const countdownCueRef = useRef('');
   const spokenSystemMessageRef = useRef(0);
 
+  const keepBidOverlayForCurrentMode = () => {
+    setOverlayMode(showStateMatrix ? 'bid' : 'feed');
+  };
+
   useEffect(() => {
     selectedRef.current = selected;
   }, [selected]);
+
+  useEffect(() => {
+    bidPhaseRef.current = bidPhase;
+  }, [bidPhase]);
 
   useEffect(() => {
     lastSeqRef.current = lastSeq;
@@ -220,6 +233,10 @@ function App() {
   useEffect(() => {
     maxBidAmountCentsRef.current = maxBidAmountCents;
   }, [maxBidAmountCents]);
+
+  useEffect(() => {
+    maxBidPhaseRef.current = maxBidPhase;
+  }, [maxBidPhase]);
 
   useEffect(() => {
     setMaxBidAmountText(maxBidAmountCents > 0 ? (maxBidAmountCents / 100).toFixed(2) : '');
@@ -295,7 +312,9 @@ function App() {
     () => maxBidIntent && maxBidIntent.auction_id === activeAuctionID ? maxBidIntent : null,
     [activeAuctionID, maxBidIntent]
   );
-  const visibleMaxBidFeedback = visibleMaxBidIntent ? maxBidFeedback : '仅自己可见，服务端按加价阶梯代出价';
+  const visibleMaxBidFeedback = visibleMaxBidIntent || maxBidPhase !== 'idle'
+    ? maxBidFeedback
+    : '仅自己可见，服务端按加价阶梯代出价';
   const heat = useMemo(() => ({ ...heatSnapshot(leaderboard, activeAuction), ...(presenceHeat ?? {}) }), [activeAuction, leaderboard, presenceHeat]);
   const atmosphereIntensity = useMemo(() => calculateAtmosphereIntensity({
     acceptedBids30s: heat.acceptedBids30s,
@@ -459,7 +478,6 @@ function App() {
       setRiskCode('');
       const nextBid = payload.next_valid_bid_cents ?? (payload.current_price_cents + activeIncrementCentsRef.current);
       setBidFeedback(`被超越，下一口 ${formatCents(nextBid)}`);
-      setOverlayMode('bid');
       return;
     }
     if (payload.state === 'RECOVERING') {
@@ -917,7 +935,7 @@ function App() {
         leader: `${leaderMasked} 领先`,
         feedback: `确认 ${formatCents(confirmAmountCents)} 出价`,
         countdown: countdownCopy,
-        cta: '确认出价',
+        cta: '确认高额出价',
         ctaDisabled: false
       };
     }
@@ -958,6 +976,20 @@ function App() {
         countdown: countdownCopy,
         cta: countdownExpired || bidCloseGuardActive ? h5Copy.loading : `出一手 ${formatCents(nextBidCents)}`,
         ctaDisabled: countdownExpired || bidCloseGuardActive,
+        rejected: true
+      };
+    }
+    if (bidPhase === 'processing_retry') {
+      return {
+        key: 'rejected' as AuctionState,
+        title: '提交中',
+        status: 'ACTIVE',
+        price: formatCents(currentPriceCents),
+        leader: `${leaderMasked} 领先`,
+        feedback: bidFeedback,
+        countdown: countdownCopy,
+        cta: '用原请求重试',
+        ctaDisabled: false,
         rejected: true
       };
     }
@@ -1053,11 +1085,17 @@ function App() {
     const acceptedWinnerID = payload.current_winner_id ?? '';
     const isEnginePending = payload.result === 'ENGINE_ACCEPTED' && payload.settlement_status !== 'SETTLED';
     const isEngineSoldPending = payload.result === 'ENGINE_SOLD' && payload.settlement_status !== 'SETTLED';
+    const acceptedSequence = Math.max(payload.seq ?? 0, payload.engine_seq ?? 0);
+    if (acceptedSequence > 0) {
+      lastSeqRef.current = Math.max(lastSeqRef.current, acceptedSequence);
+      setLastSeq((current) => Math.max(current, acceptedSequence));
+    }
     setCurrentPriceCents(acceptedPrice);
     setMinimumNextBidCents(acceptedPrice + activeIncrementCents);
     setNextBidCents(acceptedPrice + activeIncrementCents);
-    if (!isEnginePending && !isEngineSoldPending) {
-      setLastSeq(payload.seq ?? lastSeq);
+    if (!isEnginePending && !isEngineSoldPending && payload.seq != null) {
+      lastSeqRef.current = Math.max(lastSeqRef.current, payload.seq);
+      setLastSeq((current) => Math.max(current, payload.seq ?? current));
     }
     if (payload.end_at) setAuctionEndAt(payload.end_at);
     if (payload.server_time_ms) syncServerTimeMS(payload.server_time_ms);
@@ -1068,6 +1106,7 @@ function App() {
         setConfirmAmountCents(0);
         setRiskCode('');
         setBidFeedback('你已领先，后台同步中');
+        bidPhaseRef.current = 'accepted';
         setBidPhase('accepted');
         pendingBidRef.current = null;
         hotAcceptedPreviewRef.current = {
@@ -1079,7 +1118,9 @@ function App() {
         setBidFeedback(isEngineSoldPending
           ? '已到成交确认，等待订单生成'
           : '出价已提交，正在确认');
-        setBidPhase(isEngineSoldPending ? 'engine_sold_pending' : 'engine_pending');
+        const nextPhase = isEngineSoldPending ? 'engine_sold_pending' : 'engine_pending';
+        bidPhaseRef.current = nextPhase;
+        setBidPhase(nextPhase);
       }
       showAtmosphere({
         kind: 'leading',
@@ -1111,6 +1152,10 @@ function App() {
     setConfirmAmountCents(0);
     setRiskCode('');
     if (payload.result === 'ACCEPTED_SOLD') {
+      if (payload.seq != null) {
+        lastSeqRef.current = Math.max(lastSeqRef.current, payload.seq);
+        setLastSeq((current) => Math.max(current, payload.seq ?? current));
+      }
       setTerminalPriceCents(acceptedPrice);
       setTerminalWinnerID(payload.current_winner_id ?? '');
       setTerminalWinnerMasked(payload.leader_user_masked ?? leaderMaskedRef.current);
@@ -1141,7 +1186,9 @@ function App() {
         user_scope: 'self'
       });
     }
-    setBidPhase(acceptedWinnerID === currentUserID ? 'accepted' : 'idle');
+    const nextBidPhase = acceptedWinnerID === currentUserID ? 'accepted' : 'idle';
+    bidPhaseRef.current = nextBidPhase;
+    setBidPhase(nextBidPhase);
     void loadLeaderboard(payload.auction_id ?? activeAuctionIDRef.current);
   };
 
@@ -1151,9 +1198,7 @@ function App() {
       const response = await fetch(`/api/users/me/orders?auction_id=${encodeURIComponent(auctionID)}&limit=5`);
       const payload = await readJSON<{ items?: OrderRow[] }>(response);
       if (!response.ok) return null;
-      const pendingOrder = (payload?.items ?? []).find((row) => (
-        String(row.order_status ?? '') === 'ORDER_PENDING' && String(row.auction_id ?? '') === auctionID
-      ));
+      const pendingOrder = (payload?.items ?? []).find((row) => isPayablePendingOrder(row, auctionID));
       setPayableOrderID(pendingOrder?.order_id ? String(pendingOrder.order_id) : '');
       setPayableOrderAmountCents(Number(pendingOrder?.amount_cents ?? 0));
       return pendingOrder ?? null;
@@ -1192,7 +1237,7 @@ function App() {
     pendingLeaderboardDeltaRef.current = null;
     selectedRef.current = 'active_bids';
     setSelected('active_bids');
-    setOverlayMode('feed');
+    setOverlayMode(showStateMatrix ? 'bid' : 'feed');
     setActiveSheet(null);
   };
 
@@ -1284,16 +1329,16 @@ function App() {
       setTerminalWinnerID(winnerID ?? '');
       setTerminalWinnerMasked(snapshot.payload?.leader_user_masked ?? leaderMaskedRef.current);
       setSelected(winnerID === currentUserID ? 'sold_winner' : 'sold_loser');
-      setOverlayMode('feed');
+      keepBidOverlayForCurrentMode();
       if (winnerID === currentUserID) {
         void loadPayableOrderForAuction(snapshotAuctionID ?? activeAuctionIDRef.current);
       }
     } else if (status === 'ENDED' && syncSelected) {
       setSelected('ended');
-      setOverlayMode('feed');
+      keepBidOverlayForCurrentMode();
     } else if (status === 'CANCELLED' && syncSelected) {
       setSelected('cancelled');
-      setOverlayMode('feed');
+      keepBidOverlayForCurrentMode();
       setBidFeedback(snapshot.payload?.reason ?? '主播已取消');
     } else if ((status === 'SCHEDULED' || status === 'DRAFT') && syncSelected) {
       setSelected('scheduled');
@@ -1399,7 +1444,7 @@ function App() {
         setPayableOrderAmountCents(price);
       }
       setSelected(winnerID === currentUserID ? 'sold_winner' : 'sold_loser');
-      setOverlayMode('feed');
+      keepBidOverlayForCurrentMode();
       showAtmosphere({
         kind: 'sold',
         title: winnerID === currentUserID ? '成交！' : '已成交',
@@ -1417,11 +1462,11 @@ function App() {
       }
     } else if (detail.event_type === 'auction_ended') {
       setSelected('ended');
-      setOverlayMode('feed');
+      keepBidOverlayForCurrentMode();
       setBidPhase('idle');
     } else if (detail.event_type === 'auction_cancelled') {
       setSelected('cancelled');
-      setOverlayMode('feed');
+      keepBidOverlayForCurrentMode();
       setBidFeedback(detail.payload?.reason ?? '主播已取消');
       setBidPhase('idle');
     } else if (detail.event_type === 'order_paid') {
@@ -1525,6 +1570,7 @@ function App() {
     let cancelled = false;
     const loadPayableOrder = async () => {
       if (!sessionReady || !activeAuctionID) return;
+      if (showStateMatrix && selected !== 'sold_winner') return;
       const order = await loadPayableOrderForAuction(activeAuctionID);
       if (cancelled || order) return;
     };
@@ -1532,7 +1578,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeAuctionID, sessionReady]);
+  }, [activeAuctionID, selected, sessionReady, showStateMatrix]);
 
   const loadLiveOpsCampaign = async () => {
     try {
@@ -1649,22 +1695,16 @@ function App() {
       if (!sessionReady || !activeAuctionID) return;
       setConnectionPhase((phase) => phase === 'recovering' ? phase : 'connecting');
       try {
-        const ticketResponse = await fetch('/api/auth/ws-ticket', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ room_id: roomID, auction_id: activeAuctionID })
-        });
+        const ticketRequest = wsTicketRequest(roomID, activeAuctionID, currentUserIDRef.current);
+        const ticketResponse = await fetch(ticketRequest.url, ticketRequest.init);
         const ticketPayload = await readJSON<WSTicketResponse>(ticketResponse);
         if (!ticketResponse.ok || !ticketPayload?.ticket) {
           scheduleReconnect(retryAfterMSFromHeaders(ticketResponse));
           return;
         }
         if (cancelled) return;
-        const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
-        const wsURL = `${scheme}://${window.location.host}/ws?room_id=${encodeURIComponent(roomID)}&auction_id=${encodeURIComponent(activeAuctionID)}&last_seq=${lastSeqRef.current}`;
-        const socket = new WebSocket(wsURL, ['auction.v1', `ticket.${ticketPayload.ticket}`]);
+        const wsURL = auctionWSURL(window.location.origin, roomID, activeAuctionID, lastSeqRef.current);
+        const socket = new WebSocket(wsURL, auctionWSProtocols(ticketPayload.ticket));
         wsRef.current = socket;
         socket.onopen = () => {
           if (!cancelled) {
@@ -1727,9 +1767,9 @@ function App() {
 
   const submitBid = async () => {
     const auctionID = activeAuctionIDRef.current;
-    const canRetryPendingBid = Boolean(pendingBidRef.current && pendingBidRef.current.auctionID === auctionID && (bidPhase === 'uncertain' || bidPhase === 'engine_pending' || riskCode === 'PROCESSING_RETRY_LATER' || riskCode === 'BID_CONFIRMATION_PENDING'));
-    if (selected !== 'active_bids' || (!canRetryPendingBid && scenario.ctaDisabled) || !auctionID) return;
-    if (!canRetryPendingBid && isBidCloseGuardActive(auctionEndAtRef.current, serverTimeMSRef.current, Date.now(), serverTimeSyncedAtRef.current)) {
+    const canRetryPending = canRetryPendingBid({ pending: pendingBidRef.current, auctionID, bidPhase, riskCode });
+    if (selected !== 'active_bids' || (!canRetryPending && scenario.ctaDisabled) || !auctionID) return;
+    if (!canRetryPending && isBidCloseGuardActive(auctionEndAtRef.current, serverTimeMSRef.current, Date.now(), serverTimeSyncedAtRef.current)) {
       setBidFeedback('已进入服务端落槌保护，正在确认最终结果');
       setBidPhase('rejected');
       void recoverFromSnapshot();
@@ -1737,70 +1777,59 @@ function App() {
     }
     if (bidInFlightRef.current || bidCooldownUntilMS > Date.now()) return;
     bidInFlightRef.current = true;
-    const pending = pendingBidRef.current;
-    const bidRequest = pending && pending.auctionID === auctionID
-      ? pending
-      : {
-          auctionID,
-          clientBidID: createClientBidID(),
-          amountCents: nextBidCents,
-          clientSeenSeq: lastSeq
-        };
+    const bidRequest = prepareBidRequest({ pending: pendingBidRef.current, auctionID, amountCents: nextBidCents, clientSeenSeq: lastSeq });
     pendingBidRef.current = bidRequest;
     setBidPhase('pending');
     try {
-      await ensureBuyerSession();
+      if (!canRetryPending) {
+        await ensureBuyerSession();
+      }
       const response = await fetchWithTimeout(`/api/auctions/${auctionID}/bids`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Idempotency-Key': bidRequest.clientBidID
-        },
-        body: JSON.stringify({
-          client_bid_id: bidRequest.clientBidID,
-          amount_cents: bidRequest.amountCents,
-          client_seen_seq: bidRequest.clientSeenSeq
-        })
+        headers: bidRequestHeaders(bidRequest),
+        body: JSON.stringify(bidRequestPayload(bidRequest))
       });
       const payload = await response.json() as BidResponse;
-      if (payload.result === 'FAT_FINGER_CONFIRM_REQUIRED' && payload.confirm_token) {
-        setConfirmToken(payload.confirm_token);
+      const decision = interpretBidResponse({
+        ok: response.ok,
+        payload,
+        retryAfterMS: retryAfterMS(response, payload),
+        activeIncrementCents: activeIncrementCentsRef.current
+      });
+      if (decision.kind === 'confirm_required') {
+        setConfirmToken(decision.token);
         setConfirmIdempotencyKey(bidRequest.clientBidID);
-        setConfirmAmountCents(payload.amount_cents ?? bidRequest.amountCents);
+        setConfirmAmountCents(decision.amountCents ?? bidRequest.amountCents);
         pendingBidRef.current = null;
         setBidFeedback('高额出价需要二次确认');
         setBidPhase('confirm_required');
         return;
       }
-      if (!response.ok || (payload.reject_reason && !isEngineRejected(payload)) || payload.code) {
-        const code = payload.reject_reason ?? payload.code ?? '';
-        const refreshedNextBid = payload.next_valid_bid_cents ?? (
-          payload.current_price_cents != null ? payload.current_price_cents + activeIncrementCentsRef.current : undefined
-        );
-        if (refreshedNextBid != null) {
-          setMinimumNextBidCents(refreshedNextBid);
-          setNextBidCents((prepared) => Math.max(refreshedNextBid, prepared));
+      if (decision.kind === 'rejected') {
+        if (decision.nextValidBidCents != null) {
+          setMinimumNextBidCents(decision.nextValidBidCents);
+          setNextBidCents((prepared) => Math.max(decision.nextValidBidCents ?? prepared, prepared));
         }
-        const retryMS = retryAfterMS(response, payload);
-        if (retryMS > 0) {
-          setBidCooldownUntilMS(Date.now() + retryMS);
+        if (decision.retryAfterMS && decision.retryAfterMS > 0) {
+          setBidCooldownUntilMS(Date.now() + decision.retryAfterMS);
         }
-        setRiskCode(code);
-        setBidFeedback(rejectCopy(code));
-        if (code !== 'PROCESSING_RETRY_LATER') {
+        setRiskCode(decision.code);
+        setBidFeedback(rejectCopy(decision.code));
+        if (!decision.keepPending) {
           pendingBidRef.current = null;
         }
-        setBidPhase('rejected');
+        setBidPhase(decision.keepPending ? 'processing_retry' : 'rejected');
         return;
       }
       setRiskCode('');
       setBidCooldownUntilMS(0);
-      if (!isBidConfirmationPending(payload)) {
+      if (decision.kind === 'accepted' && decision.clearPending) {
         pendingBidRef.current = null;
       }
       applyAcceptedBid(payload);
     } catch {
-      setRiskCode('NETWORK_ERROR');
+      const failure = networkBidFailure();
+      if (failure.kind === 'uncertain') setRiskCode(failure.code);
       setBidFeedback('响应丢失，使用同一请求确认结果');
       setBidPhase('uncertain');
     } finally {
@@ -1858,7 +1887,9 @@ function App() {
       if (auctionID !== activeAuctionIDRef.current) return;
       if (response.status === 404) {
         setMaxBidIntent(null);
-        setMaxBidFeedback('仅自己可见，服务端按加价阶梯代出价');
+        if (maxBidPhaseRef.current === 'idle') {
+          setMaxBidFeedback('仅自己可见，服务端按加价阶梯代出价');
+        }
         return;
       }
       const payload = await readJSON<MaxBidIntent>(response);
@@ -1867,6 +1898,7 @@ function App() {
       setMaxBidIntent(payload);
       const cap = roomAuctionsRef.current.find((row) => row.id === auctionID)?.cap_price_cents ?? 0;
       setMaxBidAmountCents(clampMaxBidAmount(payload.max_amount_cents, minimumNextBidCents, cap));
+      setMaxBidAmountText((current) => current || (payload.max_amount_cents / 100).toFixed(2));
       setMaxBidFeedback(maxBidStatusCopy(payload));
     } catch {
       setMaxBidFeedback('自动加价状态读取失败');
@@ -1884,7 +1916,7 @@ function App() {
       connectionPhase === 'recovering' ||
       connectionPhase === 'disconnected'
     ) return;
-    const parsedAmount = yuanInputToCents(maxBidAmountText);
+    const parsedAmount = yuanInputToCents(maxBidAmountText) || maxBidAmountCentsRef.current;
     const cap = roomAuctions.find((row) => row.id === auctionID)?.cap_price_cents ?? 0;
     const requiredMaxBidCents = cap > 0 ? Math.min(minimumNextBidCents, cap) : minimumNextBidCents;
     if (parsedAmount < requiredMaxBidCents) {
@@ -1898,6 +1930,7 @@ function App() {
       return;
     }
     const amount = parsedAmount;
+    maxBidPhaseRef.current = 'pending';
     setMaxBidPhase('pending');
     setMaxBidFeedback('正在确认自动加价');
     try {
@@ -1917,12 +1950,14 @@ function App() {
       });
       const payload = await readJSON<{ intent?: MaxBidIntent; trigger_bid?: BidResponse; code?: string; message?: string }>(response);
       if (!response.ok || !payload?.intent) {
+        maxBidPhaseRef.current = 'error';
         setMaxBidPhase('error');
         setMaxBidFeedback(maxBidErrorCopy(payload?.code ?? payload?.message));
         return;
       }
       setMaxBidIntent(payload.intent);
       setMaxBidAmountCents(Math.max(payload.intent.max_amount_cents, minimumNextBidCents));
+      setMaxBidAmountText((payload.intent.max_amount_cents / 100).toFixed(2));
       setMaxBidFeedback(maxBidStatusCopy(payload.intent));
       if (payload.trigger_bid) {
         applyAcceptedBid(payload.trigger_bid);
@@ -1942,8 +1977,10 @@ function App() {
           });
         }
       }
+      maxBidPhaseRef.current = 'idle';
       setMaxBidPhase('idle');
     } catch {
+      maxBidPhaseRef.current = 'error';
       setMaxBidPhase('error');
       setMaxBidFeedback('网络异常，自动加价未确认');
     }
@@ -1962,6 +1999,7 @@ function App() {
       connectionPhase === 'recovering' ||
       connectionPhase === 'disconnected'
     ) return;
+    maxBidPhaseRef.current = 'canceling';
     setMaxBidPhase('canceling');
     setMaxBidFeedback('正在取消自动加价');
     try {
@@ -1975,25 +2013,36 @@ function App() {
       if (!response.ok || !payload?.intent) {
         if (response.status === 404 || payload?.code === 'AUCTION_NOT_FOUND') {
           setMaxBidIntent(null);
+          maxBidPhaseRef.current = 'idle';
           setMaxBidPhase('idle');
           setMaxBidFeedback('没有找到可取消的自动加价，已刷新本地状态');
           void loadMaxBidIntent(activeAuctionIDRef.current);
           return;
         }
+        maxBidPhaseRef.current = 'error';
         setMaxBidPhase('error');
         setMaxBidFeedback(maxBidErrorCopy(payload?.code ?? payload?.message));
         return;
       }
       const cancelledIntent = payload.intent;
+      if (cancelledIntent.status === 'CANCELLED') {
+        setMaxBidIntent(cancelledIntent.auction_id === auctionID ? cancelledIntent : null);
+        setMaxBidFeedback(maxBidStatusCopy(cancelledIntent));
+        maxBidPhaseRef.current = 'idle';
+        setMaxBidPhase('idle');
+        return;
+      }
       const verify = await fetch(`/api/auctions/${auctionID}/max-bid-intent`);
       if (verify.status === 404) {
         setMaxBidIntent(null);
         setMaxBidFeedback('自动加价已取消');
+        maxBidPhaseRef.current = 'idle';
         setMaxBidPhase('idle');
         return;
       }
       const verifiedIntent = await readJSON<MaxBidIntent>(verify);
       if (!verify.ok || !verifiedIntent || verifiedIntent.status === 'ACTIVE') {
+        maxBidPhaseRef.current = 'error';
         setMaxBidPhase('error');
         setMaxBidFeedback('取消状态未确认，请重试');
         void loadMaxBidIntent(auctionID);
@@ -2001,8 +2050,10 @@ function App() {
       }
       setMaxBidIntent(verifiedIntent.auction_id === auctionID ? verifiedIntent : cancelledIntent);
       setMaxBidFeedback(maxBidStatusCopy(verifiedIntent.auction_id === auctionID ? verifiedIntent : cancelledIntent));
+      maxBidPhaseRef.current = 'idle';
       setMaxBidPhase('idle');
     } catch {
+      maxBidPhaseRef.current = 'error';
       setMaxBidPhase('error');
       setMaxBidFeedback('网络异常，自动加价未取消');
     }
@@ -2010,27 +2061,13 @@ function App() {
 
   const payOrder = async () => {
     if (selected !== 'sold_winner' || scenario.ctaDisabled || paymentInFlight.current || !payableOrderID) return;
-    const idempotencyKey = createClientBidID();
     paymentInFlight.current = true;
     setPaymentPhase('pending');
     try {
       await ensureBuyerSession();
-      const response = await fetch(`/api/orders/${payableOrderID}/pay-mock`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Idempotency-Key': idempotencyKey
-        },
-        body: JSON.stringify({ confirm: true })
-      });
-      if (!response.ok) {
-        setPaymentPhase('failed');
-        return;
-      }
-      const payload = await response.json() as { order_status?: string };
-      const paid = payload.order_status === 'PAID';
-      setPaymentPhase(paid ? 'paid' : 'failed');
-      if (paid) {
+      const result = await submitMockPayment(payableOrderID);
+      setPaymentPhase(result.phase);
+      if (result.phase === 'paid') {
         setActiveSheet('orders');
         void loadHistory();
       }
@@ -2047,6 +2084,17 @@ function App() {
       const response = await fetch(`/api/auctions/${auctionID}/leaderboard?limit=5`);
       const payload = await readJSON<LeaderboardPayload>(response);
       if (response.ok && payload) {
+        if (payload.seq != null && payload.seq < lastSeqRef.current) return;
+        const localAccepted = bidPhaseRef.current === 'accepted' || bidPhaseRef.current === 'engine_sold_pending';
+        if (
+          localAccepted &&
+          payload.seq != null &&
+          payload.seq <= lastSeqRef.current &&
+          payload.current_winner_id &&
+          payload.current_winner_id !== currentUserIDRef.current
+        ) {
+          return;
+        }
         setConnectionPhase('connected');
         void loadPresenceHeat(auctionID);
         setLeaderboard((previous) => {
@@ -2085,7 +2133,7 @@ function App() {
 
   const handlePrimaryAction = () => {
     if (selected === 'sold_winner') {
-      setPaymentConfirmOpen(true);
+      void payOrder();
       return;
     }
     if (bidPhase === 'confirm_required') {
@@ -2137,7 +2185,7 @@ function App() {
     try {
       await ensureBuyerSession();
       const currentAuctionID = activeAuctionIDRef.current;
-      const scopedQuery = currentAuctionID ? `?auction_id=${encodeURIComponent(currentAuctionID)}&limit=20` : '?limit=20';
+      const scopedQuery = '?limit=20';
       const [bids, orders] = await Promise.all([
         fetch(`/api/users/me/bids${scopedQuery}`).then((response) => response.json()),
         fetch(`/api/users/me/orders${scopedQuery}`).then((response) => response.json())
@@ -2388,7 +2436,7 @@ function App() {
             else if (sheet === 'leaderboard') openWarmupSheet('leaderboard', 'leaderboard');
             else setActiveSheet(sheet);
           }}
-          onPay={() => setPaymentConfirmOpen(true)}
+          onPay={() => void payOrder()}
           onPrimaryAction={handlePrimaryAction}
         />
       )}
@@ -2414,11 +2462,17 @@ function App() {
             else if (resultSheetKind === 'loser') setActiveSheet('history');
             else openWarmupSheet('products', 'watch');
           }}
-          onPay={() => setPaymentConfirmOpen(true)}
+          onPay={() => void payOrder()}
         />
       ) : null}
       {showStateMatrix && (
-        <StateMatrixTabs selected={selected} onSelect={setSelected} />
+        <StateMatrixTabs
+          selected={selected}
+          onSelect={(state) => {
+            setSelected(state);
+            setOverlayMode('bid');
+          }}
+        />
       )}
       {showStateMatrix ? (
         <LeaderboardPanel
@@ -2523,4 +2577,8 @@ function App() {
   );
 }
 
-createRoot(document.getElementById('root')!).render(<App />);
+createRoot(document.getElementById('root')!).render(
+  <AppProviders>
+    <App />
+  </AppProviders>
+);

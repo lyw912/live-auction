@@ -1,63 +1,107 @@
+@theme inline {
+  --font-sans: var(--font-auction-sans);
+  --font-serif: var(--font-auction-display);
+  --font-mono: var(--font-auction-tabular);
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-bid-cta: hsl(var(--bid-cta));
+  --color-bid-cta-foreground: hsl(var(--bid-cta-foreground));
+  --color-state-leading: hsl(var(--state-leading));
+  --color-state-outbid: hsl(var(--state-outbid));
+  --color-state-won: hsl(var(--state-won));
+  --color-state-lost: hsl(var(--state-lost));
+  --color-live: hsl(var(--live));
+  --color-stale: hsl(var(--stale));
+  --color-paused: hsl(var(--paused));
+}
+
 :root {
-  --font-auction-sans: "Alibaba PuHuiTi 3.0", -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
-  --font-auction-tabular: "Roboto Mono", "SFMono-Regular", ui-monospace, "Segoe UI", monospace;
+  color-scheme: dark;
 
-  --color-ink-950: #111315;
-  --color-ink-900: #181a22;
-  --color-ink-800: #1f2933;
-  --color-surface-0: #fbfcfe;
-  --color-surface-1: #f5f6fa;
-  --color-surface-2: #eceff5;
-  --color-line: #d9dee7;
-  --color-line-soft: #edf2f0;
-  --color-muted: #667085;
-  --color-muted-strong: #313746;
-  --color-bid-red: #ff2d55;
-  --color-cta: #FE2C55;
-  --color-primary: #165DFF;
-  --color-danger: #FF4D4F;
-  --color-success: #00A870;
-  --color-gold: #D4AF37;
-  --color-gold-bright: #EFBF04;
-  --color-champagne: #F7E6CA;
-  --color-bid-red-soft: #fff0f4;
-  --color-auction-gold: #ffb000;
-  --color-auction-gold-soft: #fff7df;
-  --color-trust-green: #14b8a6;
-  --color-trust-green-deep: #0f766e;
-  --color-trust-green-soft: #e7f8f6;
-  --color-live-cyan: #38bdf8;
-  --color-live-cyan-soft: #eaf7ff;
-  --color-risk-orange: #f97316;
-  --color-risk-orange-soft: #fff1e8;
-  --color-danger-text: #9f2d1d;
-  --color-success-text: #17613f;
+  --font-auction-display: "Source Serif 4", "Noto Serif SC", "Songti SC", Georgia, serif;
+  --font-auction-sans: "Aptos", "Inter Tight", "Source Han Sans SC", "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-auction-tabular: "Roboto Mono", "SFMono-Regular", "Cascadia Mono", ui-monospace, monospace;
 
-  --bg-page: #181818;
-  --bg-card: #242424;
-  --bg-component: #393939;
-  --bg-elevated: #2c2c2c;
-  --bg-layout: #f5f5f5;
-  --bg-container: #ffffff;
-  --bg-fill: rgba(0, 0, 0, .02);
-  --mask: rgba(0, 0, 0, .40);
-  --text-1: rgba(255, 255, 255, .90);
-  --text-2: rgba(255, 255, 255, .55);
-  --text-3: rgba(255, 255, 255, .35);
-  --text-disabled: rgba(255, 255, 255, .22);
-  --primary: #165DFF;
-  --cta: #FE2C55;
-  --danger: #FF4D4F;
-  --success: #00A870;
-  --warning: #E37318;
-  --gold: #D4AF37;
-  --gold-bright: #EFBF04;
-  --champagne: #F7E6CA;
-  --border-1: #e8e8e8;
-  --border-2: #dddddd;
-  --radius-sheet: 16px;
+  --background: 222 32% 7%;
+  --foreground: 214 26% 91%;
+  --card: 221 28% 10%;
+  --card-foreground: 214 24% 92%;
+  --popover: 221 30% 9%;
+  --popover-foreground: 214 24% 92%;
+  --primary: 188 95% 46%;
+  --primary-foreground: 219 35% 8%;
+  --secondary: 219 22% 16%;
+  --secondary-foreground: 214 22% 88%;
+  --muted: 219 19% 15%;
+  --muted-foreground: 215 15% 65%;
+  --accent: 212 54% 20%;
+  --accent-foreground: 203 92% 88%;
+  --destructive: 355 78% 59%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 218 20% 22%;
+  --input: 218 20% 22%;
+  --ring: 188 95% 46%;
+
+  --success-hsl: 158 71% 45%;
+  --warning-hsl: 39 94% 56%;
+  --info-hsl: 205 96% 63%;
+
+  --state-leading: 43 93% 58%;
+  --state-outbid: 355 78% 59%;
+  --state-won: 43 89% 64%;
+  --state-lost: 217 13% 58%;
+  --bid-cta: 348 90% 58%;
+  --bid-cta-foreground: 0 0% 100%;
+  --bid-cta-glow: 348 90% 58%;
+  --flash-up: 158 71% 45%;
+  --flash-down: 355 78% 59%;
+  --live: 160 78% 44%;
+  --stale: 39 94% 56%;
+  --paused: 217 13% 58%;
+
+  --chart-1: 188 95% 46%;
+  --chart-2: 43 93% 58%;
+  --chart-3: var(--success-hsl);
+  --chart-4: 355 78% 59%;
+  --chart-5: 268 78% 72%;
+
+  --sidebar-background: 222 35% 5%;
+  --sidebar-foreground: 214 22% 86%;
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: 218 25% 12%;
+  --sidebar-accent-foreground: 214 24% 91%;
+  --sidebar-border: 218 24% 16%;
+  --sidebar-ring: var(--ring);
+
+  --radius: 8px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-sheet: 14px;
   --radius-card: 8px;
   --radius-chip: 999px;
+
+  --density-h5-control: 44px;
+  --density-pc-row: 34px;
+  --density-pc-toolbar: 40px;
 
   --space-1: 4px;
   --space-2: 8px;
@@ -67,25 +111,107 @@
   --space-6: 24px;
   --space-8: 32px;
 
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-
   --z-base: 0;
   --z-raised: 1;
   --z-overlay: 20;
   --z-sheet: 40;
   --z-toast: 60;
 
-  --shadow-panel: 0 16px 28px rgba(15, 23, 42, .14);
-  --shadow-stage: 0 24px 36px rgba(0, 0, 0, .28);
+  --shadow-panel: 0 18px 42px hsl(222 45% 3% / 0.42);
+  --shadow-stage: 0 26px 60px hsl(222 45% 3% / 0.58);
+  --shadow-command: 0 0 0 1px hsl(var(--border) / 0.9), 0 18px 38px hsl(222 45% 3% / 0.36);
 
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   --safe-area-top: env(safe-area-inset-top, 0px);
   --touch-target-min: 44px;
+
+  /* Legacy variable compatibility while components migrate to shadcn tokens. */
+  --color-ink-950: hsl(var(--background));
+  --color-ink-900: hsl(var(--card));
+  --color-ink-800: hsl(var(--secondary));
+  --color-surface-0: hsl(var(--foreground));
+  --color-surface-1: hsl(var(--muted));
+  --color-surface-2: hsl(var(--secondary));
+  --color-line: hsl(var(--border));
+  --color-line-soft: hsl(var(--border) / 0.55);
+  --color-muted: hsl(var(--muted-foreground));
+  --color-muted-strong: hsl(var(--foreground));
+  --color-bid-red: hsl(var(--bid-cta));
+  --color-cta: hsl(var(--bid-cta));
+  --color-primary: hsl(var(--primary));
+  --color-danger: hsl(var(--destructive));
+  --color-success: hsl(var(--success-hsl));
+  --color-gold: hsl(var(--state-won));
+  --color-gold-bright: hsl(var(--state-leading));
+  --color-champagne: hsl(42 84% 85%);
+  --color-bid-red-soft: hsl(var(--bid-cta) / 0.14);
+  --color-auction-gold: hsl(var(--state-leading));
+  --color-auction-gold-soft: hsl(var(--state-leading) / 0.14);
+  --color-trust-green: hsl(var(--success-hsl));
+  --color-trust-green-deep: hsl(160 76% 34%);
+  --color-trust-green-soft: hsl(var(--success-hsl) / 0.14);
+  --color-live-cyan: hsl(var(--primary));
+  --color-live-cyan-soft: hsl(var(--primary) / 0.14);
+  --color-risk-orange: hsl(var(--warning-hsl));
+  --color-risk-orange-soft: hsl(var(--warning-hsl) / 0.14);
+  --color-danger-text: hsl(var(--destructive));
+  --color-success-text: hsl(var(--success-hsl));
+  --bg-page: hsl(var(--background));
+  --bg-card: hsl(var(--card));
+  --bg-component: hsl(var(--secondary));
+  --bg-elevated: hsl(var(--popover));
+  --bg-layout: hsl(var(--background));
+  --bg-container: hsl(var(--card));
+  --bg-fill: hsl(var(--muted) / 0.35);
+  --mask: hsl(222 45% 3% / 0.58);
+  --text-1: hsl(var(--foreground));
+  --text-2: hsl(var(--muted-foreground));
+  --text-3: hsl(var(--muted-foreground) / 0.68);
+  --text-disabled: hsl(var(--muted-foreground) / 0.42);
+  --cta: hsl(var(--bid-cta));
+  --danger: hsl(var(--destructive));
+  --success: hsl(var(--success-hsl));
+  --warning: hsl(var(--warning-hsl));
+  --gold: hsl(var(--state-won));
+  --gold-bright: hsl(var(--state-leading));
+  --champagne: hsl(42 84% 85%);
+  --border-1: hsl(var(--border));
+  --border-2: hsl(var(--border) / 0.65);
+}
+
+html {
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: var(--font-auction-sans);
+}
+
+body {
+  letter-spacing: 0;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+.auction-display {
+  font-family: var(--font-auction-display);
+}
+
+.auction-ui {
+  font-family: var(--font-auction-sans);
 }
 
 .tabular-nums {
   font-family: var(--font-auction-tabular);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: lining-nums tabular-nums;
+}
+
+.auction-sr-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }

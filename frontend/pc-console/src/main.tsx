@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Button, Layout, Message, Modal } from '@arco-design/web-react';
-import '@arco-design/web-react/dist/css/arco.css';
 
+import { AppProviders } from './app/providers';
 import { AICopilotDrawer, AuctionCommandPanel, AuctionControlSummary, AuctionQueue, ConsoleNav, CurrentAuctionOrderCard, DiagnosticsPanel, EventTimeline, FlightRecorderDrawer, HealthRibbon, InventoryLotsPanel, ItemCreatePanel, LiveAssistRail, LiveHealthPanel, OrderDetailDrawer, OrdersPanel, RuleEditor } from './components';
-import type { Auction, AuctionAISettings, AuctionRecap, AuthUser, FlightRecorderPayload, HeatSummary, HighlightAsset, HostPrompt, HostPromptsPayload, Item, ListingDraftJob, LiveOpsHostSummary, LiveOpsRewardConfig, MonitorPayload, Order, RedisEngineMonitorPayload, Room, RuleAPIError, RuleDraft, SentinelAlert, SignalRequest, SystemMessage } from './domain';
+import type { Auction, AuctionAISettings, AuctionRecap, AuthUser, FlightRecorderPayload, HeatSummary, HighlightAsset, HostPrompt, HostPromptsPayload, Item, ListingDraftJob, LiveOpsHostSummary, LiveOpsRewardConfig, MaxBidSummary, MonitorPayload, Order, RedisEngineMonitorPayload, Room, RuleAPIError, RuleDraft, SentinelAlert, SignalRequest, SystemMessage } from './domain';
 import { activeAuction, auctionStatusLabel, createRuleDraft, defaultRoomID, depositPreview, ensureDemoSession, liveHealthSummary, monitorQuery, narratingAuction, readJSON, rulePayload, signalCopy, sortedAuctions, validateRule } from './domain';
+import { Button, Layout, Message, Modal } from './shared/ui/console-primitives';
 import './styles.css';
 
 function auctionDisplayName(auction?: Auction) {
@@ -47,6 +47,14 @@ type BidDecisionPreview = {
   seq?: number;
   engine_seq?: number;
   end_at?: string;
+};
+
+type UploadURLResponse = {
+  upload_url?: string;
+  public_url?: string;
+  url?: string;
+  object_name?: string;
+  message?: string;
 };
 
 const idleWorkbenchTask: WorkbenchTask = {
@@ -125,6 +133,7 @@ function App() {
   const [selectedAuctionID, setSelectedAuctionID] = useState('');
   const [monitor, setMonitor] = useState<Record<string, MonitorPayload>>({});
   const [recentEvents, setRecentEvents] = useState<Array<Record<string, unknown>>>([]);
+  const [recentEventsByAuction, setRecentEventsByAuction] = useState<Record<string, Array<Record<string, unknown>>>>({});
   const [flightRecorderAuctionID, setFlightRecorderAuctionID] = useState('');
   const [flightRecorder, setFlightRecorder] = useState<FlightRecorderPayload | undefined>();
   const [flightRecorderLoading, setFlightRecorderLoading] = useState(false);
@@ -135,6 +144,7 @@ function App() {
   const [commentaryLoadingType, setCommentaryLoadingType] = useState('');
   const [heatSummary, setHeatSummary] = useState<HeatSummary | undefined>();
   const [heatLoading, setHeatLoading] = useState(false);
+  const [maxBidSummary, setMaxBidSummary] = useState<MaxBidSummary | undefined>();
   const [liveOpsSummary, setLiveOpsSummary] = useState<LiveOpsHostSummary | undefined>();
   const [liveOpsDraft, setLiveOpsDraft] = useState<LiveOpsRewardConfig | undefined>();
   const [liveOpsSaving, setLiveOpsSaving] = useState(false);
@@ -294,7 +304,7 @@ function App() {
       if (visibleAuctionID) {
         setSelectedAuctionID(visibleAuctionID);
         const ordersResult = await fetchJSONWithHostRetry<Order[]>(
-          `/api/orders?auction_id=${encodeURIComponent(visibleAuctionID)}&limit=20`,
+          '/api/orders?limit=20',
           undefined,
           6000
         );
@@ -344,12 +354,10 @@ function App() {
         ?? auctionRows.find((row) => row.status === 'ACTIVE')?.id
         ?? sortedAuctions(auctionRows)[0]?.id
         ?? '';
-      const orderRows = nextSelected
-        ? await fetchJSONWithHostRetry<Order[]>(`/api/orders?auction_id=${encodeURIComponent(nextSelected)}&limit=20`).then(({ response, payload }) => {
+      const orderRows = await fetchJSONWithHostRetry<Order[]>('/api/orders?limit=20').then(({ response, payload }) => {
           if (!response.ok) throw new Error('orders failed');
           return asArray(payload);
-        })
-        : [];
+        });
       setWorkbenchTask({ active: true, title: '正在刷新商家工作台', detail: '正在更新页面。', tone: 'loading' });
       setRooms(roomRows);
       if (nextRoomID !== roomID) setRoomID(nextRoomID);
@@ -488,17 +496,32 @@ function App() {
         setRecentEvents([]);
         return;
       }
+      const eventAuctionID = selectedAuction.status === 'ACTIVE' ? selectedAuction.id : (pinnedActiveAuction?.id ?? selectedAuction.id);
       try {
-        const { response, payload } = await fetchJSONWithHostRetry<FlightRecorderPayload>(
-          `/api/monitor/auctions/${selectedAuction.id}/flight-recorder?limit=20&timeline_limit=20`,
+        let { response, payload } = await fetchJSONWithHostRetry<FlightRecorderPayload>(
+          `/api/monitor/auctions/${eventAuctionID}/flight-recorder?limit=20&timeline_limit=20`,
           undefined,
           6000
         );
+        if (response.ok && (payload.timeline ?? []).length === 0) {
+          const fallback = await fetchJSONWithHostRetry<FlightRecorderPayload>(
+            `/api/monitor/auctions/${eventAuctionID}/flight-recorder?limit=80&timeline_limit=120`,
+            undefined,
+            6000
+          );
+          response = fallback.response;
+          payload = fallback.payload;
+        }
         if (!cancelled) {
-          setRecentEvents(response.ok ? (payload.timeline ?? []).slice(0, 6) : []);
+          const nextEvents = response.ok ? (payload.timeline ?? []).slice(0, 6) : [];
+          setRecentEvents(nextEvents);
+          setRecentEventsByAuction((current) => ({ ...current, [eventAuctionID]: nextEvents }));
         }
       } catch {
-        if (!cancelled) setRecentEvents([]);
+        if (!cancelled) {
+          const cached = recentEventsByAuction[eventAuctionID] ?? [];
+          setRecentEvents(cached);
+        }
       }
     };
     void loadFlightRecorder();
@@ -560,6 +583,30 @@ function App() {
       }
     };
     void loadHeatSummary();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedAuction?.id, pinnedActiveAuction?.id, sessionReady, loading]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadMaxBidSummary = async () => {
+      if (!sessionReady || !selectedAuction?.id) {
+        setMaxBidSummary(undefined);
+        return;
+      }
+      try {
+        const { response, payload } = await fetchJSONWithHostRetry<MaxBidSummary>(
+          `/api/host/auctions/${selectedAuction.id}/max-bid-summary`,
+          undefined,
+          6000
+        );
+        if (!cancelled) setMaxBidSummary(response.ok ? payload : undefined);
+      } catch {
+        if (!cancelled) setMaxBidSummary(undefined);
+      }
+    };
+    void loadMaxBidSummary();
     return () => {
       cancelled = true;
     };
@@ -626,13 +673,24 @@ function App() {
 
   const uploadItemImage = async (file: File) => {
     await ensureHostSession();
-    const data = new FormData();
-    data.append('file', file);
-    const { response: upload, payload } = await fetchJSONWithTimeout<{ public_url?: string; message?: string; code?: string }>('/api/items/upload', {
+    const { response, payload } = await fetchJSONWithTimeout<UploadURLResponse>('/api/items/upload-url', {
       method: 'POST',
-      body: data
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        object_name: file.name,
+        content_type: file.type || 'application/octet-stream',
+        size: file.size
+      })
     }, 12000);
-    if (!upload.ok) throw new Error(payload.message || 'image upload failed');
+    if (!response.ok) throw new Error(payload.message || 'image upload-url failed');
+    const uploadURL = payload.upload_url ?? payload.url;
+    if (!uploadURL) throw new Error('missing upload url');
+    const upload = await fetch(uploadURL, {
+      method: 'PUT',
+      headers: file.type ? { 'Content-Type': file.type } : undefined,
+      body: file
+    });
+    if (!upload.ok) throw new Error('image upload failed');
     if (!payload.public_url) throw new Error('missing uploaded image url');
     return payload.public_url ?? '';
   };
@@ -749,7 +807,6 @@ function App() {
       setRule(createRuleDraft({ ...selectedAuction, ...updated, item: updated.item ?? selectedAuction.item }));
       setRuleSaveState('saved');
       setWorkbenchTask({ active: false, title: '规则已保存', detail: '后端已接受新规则，当前拍品已更新。', tone: 'ok' });
-      Message.success('规则已保存');
       void loadAll(roomID, false, false, updated.id, { includeDiagnostics: false, suppressFailure: true });
     } catch (error) {
       setRuleSaveState('error');
@@ -1273,6 +1330,7 @@ function App() {
                 liveOpsDraft={liveOpsDraft}
                 liveOpsSaving={liveOpsSaving}
                 liveOpsSummary={liveOpsSummary}
+                maxBidSummary={maxBidSummary}
                 monitor={monitor}
                 onBuildRecap={buildRecap}
                 onCreateCommentary={createAICommentary}
@@ -1391,4 +1449,8 @@ function fileToDataURL(file: File): Promise<string> {
   });
 }
 
-createRoot(document.getElementById('root')!).render(<App />);
+createRoot(document.getElementById('root')!).render(
+  <AppProviders>
+    <App />
+  </AppProviders>
+);

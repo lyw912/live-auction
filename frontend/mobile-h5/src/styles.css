@@ -1055,10 +1055,6 @@ button {
   display: none;
 }
 
-.floating-auction-meta small:nth-child(n + 2) {
-  display: none;
-}
-
 .floating-proof-strip,
 .floating-product-stats {
   display: none;
@@ -4547,5 +4543,391 @@ button {
   to {
     opacity: 1;
     transform: scale(1);
+  }
+}
+
+/* Phase 1 WP-3: Auction Terminal H5 stage rebuild overrides. */
+.video-stage {
+  min-height: 100dvh;
+  padding: max(14px, var(--safe-area-top)) 12px calc(112px + var(--safe-area-bottom));
+  background:
+    linear-gradient(180deg, hsl(222 45% 3% / .08), hsl(222 45% 3% / .24) 34%, hsl(222 45% 3% / .92) 82%),
+    hsl(var(--background));
+}
+
+.video-stage::before {
+  z-index: 1;
+  background:
+    linear-gradient(180deg, hsl(222 45% 3% / .1), hsl(222 45% 3% / .18) 34%, hsl(222 45% 3% / .94) 82%),
+    radial-gradient(circle at 18% 82%, hsl(var(--bid-cta) / .18), transparent 22rem),
+    linear-gradient(90deg, hsl(222 45% 3% / .5), transparent 48%);
+}
+
+.video-stage::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  z-index: 1;
+  height: 42%;
+  pointer-events: none;
+  background: linear-gradient(180deg, transparent, hsl(222 45% 3% / .7) 36%, hsl(222 45% 3% / .98));
+}
+
+.live-video-bg {
+  filter: saturate(.96) contrast(1.04);
+}
+
+.video-topbar {
+  min-height: 44px;
+  align-items: flex-start;
+}
+
+.host-profile,
+.live-pill,
+.viewer-count,
+.status-chip,
+.sound-toggle,
+.race-board-rest,
+.race-board-expanded,
+.pressure-action-card,
+.floating-product-card,
+.heat-meter,
+.stage-chat-line,
+.proof-chip,
+.live-topic-row span {
+  border-color: hsl(var(--border) / .62);
+  background:
+    linear-gradient(135deg, hsl(var(--foreground) / .1), hsl(var(--foreground) / .035)),
+    hsl(222 36% 7% / .64);
+  box-shadow: var(--shadow-command);
+  backdrop-filter: blur(18px) saturate(1.18);
+}
+
+.host-profile {
+  max-width: calc(100% - 118px);
+  border-radius: var(--radius-lg);
+}
+
+.host-avatar,
+.floating-thumb,
+.order-card-thumb,
+.buyer-order-thumb {
+  border-radius: var(--radius-md);
+}
+
+.host-profile button,
+.floating-product-action,
+.pressure-action-card button,
+.payment-confirm-actions button:last-child {
+  background: hsl(var(--bid-cta));
+  color: hsl(var(--bid-cta-foreground));
+  box-shadow: 0 0 0 1px hsl(var(--bid-cta) / .2), 0 16px 32px hsl(var(--bid-cta) / .28);
+}
+
+.host-profile button.is-followed {
+  background: hsl(var(--state-leading) / .16);
+  color: hsl(var(--state-leading));
+  box-shadow: inset 0 0 0 1px hsl(var(--state-leading) / .24);
+}
+
+.live-status-strip {
+  flex: 0 1 150px;
+}
+
+.viewer-count.connection-connected {
+  color: hsl(var(--live));
+}
+
+.viewer-count.connection-recovering,
+.viewer-count.connection-connecting {
+  color: hsl(var(--stale));
+}
+
+.viewer-count.connection-disconnected {
+  color: hsl(var(--state-outbid));
+}
+
+.stage-safe-zone {
+  min-height: 56dvh;
+  padding-bottom: clamp(236px, 36dvh, 286px);
+  gap: 10px;
+}
+
+.focus-copy {
+  max-width: min(100%, 340px);
+}
+
+.focus-copy h1 {
+  font-family: var(--font-auction-display);
+  font-size: clamp(22px, 7vw, 34px);
+  line-height: 1.04;
+  letter-spacing: 0;
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+}
+
+.focus-copy p {
+  max-width: 32ch;
+  color: hsl(var(--muted-foreground));
+}
+
+.race-board {
+  left: 12px;
+  right: 78px;
+  top: calc(66px + var(--safe-area-top));
+}
+
+.race-board-rest {
+  min-height: 44px;
+  border-radius: var(--radius-lg);
+}
+
+.race-board .leaderboard-row,
+.pressure-action-card {
+  min-height: 44px;
+}
+
+.pressure-action-card {
+  left: 12px;
+  right: 78px;
+  top: calc(146px + var(--safe-area-top));
+  border-radius: var(--radius-lg);
+}
+
+.pressure-action-card.is-outbid {
+  border-color: hsl(var(--state-outbid) / .62);
+  background:
+    linear-gradient(135deg, hsl(var(--state-outbid) / .28), hsl(222 36% 7% / .84));
+}
+
+.pressure-action-card.is-leading {
+  border-color: hsl(var(--state-leading) / .48);
+  background:
+    linear-gradient(135deg, hsl(var(--state-leading) / .18), hsl(222 36% 7% / .84));
+}
+
+.pressure-action-card.is-final {
+  border-color: hsl(var(--state-won) / .5);
+  background:
+    linear-gradient(135deg, hsl(var(--state-won) / .2), hsl(222 36% 7% / .84));
+}
+
+.bid-waterfall {
+  right: 0;
+  width: 148px;
+}
+
+.live-topic-row span:first-child,
+.race-board-rest svg,
+.race-board-title strong,
+.race-board .leaderboard-row em,
+.climax-card em,
+.floating-auction-meta em {
+  color: hsl(var(--state-leading));
+}
+
+.proof-chip-row {
+  max-width: min(100%, 350px);
+}
+
+.proof-chip,
+.live-topic-row span,
+.stage-chat-line {
+  min-height: 30px;
+  border-radius: var(--radius-md);
+}
+
+.stage-chat-overlay {
+  max-height: 116px;
+}
+
+.stage-chat-line strong,
+.system-barrage strong {
+  color: hsl(var(--primary));
+}
+
+.heat-meter {
+  right: 78px;
+  bottom: calc(214px + var(--safe-area-bottom));
+  min-height: 48px;
+  border-radius: var(--radius-lg);
+}
+
+.floating-product-card {
+  left: 12px;
+  right: 78px;
+  bottom: calc(104px + var(--safe-area-bottom));
+  min-height: 92px;
+  border-radius: var(--radius-lg);
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.floating-product-card strong,
+.floating-product-card em,
+.floating-product-card small,
+.floating-product-action,
+.rail-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.floating-product-card strong {
+  font-family: var(--font-auction-display);
+  letter-spacing: 0;
+}
+
+.floating-product-action {
+  max-width: 100%;
+  border-radius: var(--radius-md);
+}
+
+.live-action-rail {
+  right: 12px;
+  bottom: calc(104px + var(--safe-area-bottom));
+  width: 56px;
+  gap: 8px;
+}
+
+.live-action-rail button {
+  width: 56px;
+  min-height: 56px;
+  border-radius: var(--radius-lg);
+  border-color: hsl(var(--border) / .55);
+  background:
+    linear-gradient(135deg, hsl(var(--foreground) / .08), hsl(var(--foreground) / .025)),
+    hsl(222 36% 7% / .7);
+}
+
+.live-action-badge {
+  background: hsl(var(--bid-cta));
+  color: hsl(var(--bid-cta-foreground));
+}
+
+.atmosphere-effect-layer {
+  z-index: 5;
+}
+
+.video-stage[data-atmosphere-kind="leading"] .effect-leading-ring {
+  border-color: hsl(var(--state-leading) / .86);
+}
+
+.video-stage[data-atmosphere-kind="outbid"] .effect-outbid-edge {
+  border-color: hsl(var(--state-outbid) / .72);
+}
+
+.video-stage[data-atmosphere-kind="sold"] .effect-hammer-mark {
+  border-color: hsl(var(--state-won) / .82);
+}
+
+[data-odometer-direction] {
+  display: inline-block;
+  font-family: var(--font-auction-tabular);
+  font-variant-numeric: lining-nums tabular-nums;
+}
+
+[data-odometer-direction="up"] {
+  color: hsl(var(--flash-up));
+  animation: price-flash-up 320ms ease-out both;
+}
+
+[data-odometer-direction="down"] {
+  color: hsl(var(--flash-down));
+  animation: price-flash-down 320ms ease-out both;
+}
+
+.video-stage[data-atmosphere-kind="leading"] .floating-product-card,
+.video-stage[data-atmosphere-kind="leading"] .race-board-rest {
+  box-shadow:
+    var(--shadow-command),
+    0 0 0 1px hsl(var(--state-leading) / .22),
+    0 0 28px hsl(var(--state-leading) / .16);
+}
+
+.video-stage[data-atmosphere-kind="outbid"] .floating-product-card {
+  box-shadow:
+    var(--shadow-command),
+    0 0 0 1px hsl(var(--state-outbid) / .28),
+    0 0 28px hsl(var(--state-outbid) / .18);
+}
+
+.video-stage[data-atmosphere-kind="sold"] .floating-product-card,
+.video-stage[data-atmosphere-kind="sold"] .climax-card {
+  box-shadow:
+    var(--shadow-command),
+    0 0 0 1px hsl(var(--state-won) / .28),
+    0 0 36px hsl(var(--state-won) / .22);
+}
+
+@keyframes price-flash-up {
+  0% {
+    opacity: .78;
+    transform: translate3d(0, 4px, 0);
+    text-shadow: 0 0 0 hsl(var(--flash-up) / 0);
+  }
+  38% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+    text-shadow: 0 0 18px hsl(var(--flash-up) / .44);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+    text-shadow: 0 0 0 hsl(var(--flash-up) / 0);
+  }
+}
+
+@keyframes price-flash-down {
+  0% {
+    opacity: .78;
+    transform: translate3d(0, -4px, 0);
+    text-shadow: 0 0 0 hsl(var(--flash-down) / 0);
+  }
+  38% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+    text-shadow: 0 0 18px hsl(var(--flash-down) / .44);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+    text-shadow: 0 0 0 hsl(var(--flash-down) / 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-odometer-direction],
+  .video-stage[data-atmosphere-kind="leading"] .floating-product-card,
+  .video-stage[data-atmosphere-kind="outbid"] .floating-product-card,
+  .video-stage[data-atmosphere-kind="sold"] .floating-product-card {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+@media (max-width: 390px) {
+  .race-board,
+  .pressure-action-card,
+  .floating-product-card {
+    right: 72px;
+  }
+
+  .live-action-rail {
+    width: 52px;
+  }
+
+  .live-action-rail button {
+    width: 52px;
+    min-height: 52px;
+  }
+
+  .viewer-count.avatar-stack {
+    display: none;
+  }
+
+  .stage-safe-zone {
+    padding-bottom: clamp(248px, 39dvh, 304px);
   }
 }

@@ -1,8 +1,13 @@
 import React, { useState } from 'react';
-import { Button, DatePicker, Drawer, Form, Input, InputNumber, Layout, Message, Modal, Space, Table, Tabs, Tag, Upload } from '@arco-design/web-react';
+import { Badge, Button as ShadButton } from '@live-auction/shared-design';
+import type { ColumnDef } from '@tanstack/react-table';
 import { Activity, AlertTriangle, Bell, BellOff, Bot, CheckCircle2, ClipboardList, Clock3, Database, ExternalLink, Gavel, ImageIcon, PanelLeftClose, PanelLeftOpen, Play, RadioTower, RefreshCw, ShieldCheck, Sparkles, Square, Upload as UploadIcon, Wifi } from 'lucide-react';
-import type { Auction, AuctionRecap, FlightRecorderPayload, FlightRecorderTimelineRow, HeatSummary, HostPrompt, Item, ListingDraftJob, LiveOpsHostSummary, LiveOpsRewardConfig, MonitorPayload, Order, RedisEngineSummary, Room, RuleDraft, SentinelAlert, SignalRequest, SystemMessage } from './domain';
+import type { Auction, AuctionRecap, FlightRecorderPayload, FlightRecorderTimelineRow, HeatSummary, HostPrompt, Item, ListingDraftJob, LiveOpsHostSummary, LiveOpsRewardConfig, MaxBidSummary, MonitorPayload, Order, RedisEngineSummary, Room, RuleDraft, SentinelAlert, SignalRequest, SystemMessage } from './domain';
 import { anomalyKey, anomalySeverity, auctionScopedRows, auctionStatusLabel, connectionLabel, createRuleDraft, depositPreview, displayMediaURL, formatCents, formatRemaining, formatSeconds, isAckedAlert, liveHealthSummary, maskUser, monitorCount, monitorItems, orderStatusLabel, overallCopy, promptSeverityClass, queueGroups, redisEngineSummary, riskQueue, rowAuctionID, rowSourceURL, severityTagColor, signalCopy, signalTargetID, signalType, sortedAuctions, statusTagColor, terminalStatus, timelineImpact, timelineNextAction, timelineTone, validateRule, visibleAnomalies } from './domain';
+import { Button, DatePicker, Drawer, Form, Input, InputNumber, Message, Modal, Space, Table, Tabs, Tag, Upload } from './shared/ui/console-primitives';
+import { DataTable } from './widgets/DataTable';
+import type { CommandVizFreshnessState, CommandVizPoint } from './widgets/CommandVizStrip';
+import { CommandVizStripShell } from './widgets/CommandVizStripShell';
 
 const demoLiveVideoURL = '/demo/jade-live-loop.mp4';
 
@@ -59,9 +64,9 @@ function isOperationalRoom(room: Room) {
 
 function engineHealth(monitor: Record<string, MonitorPayload>) {
   const summary = redisEngineSummary(monitor.redisEngine);
-  if (summary.failed_settlements > 0 || summary.paused_auctions > 0) return { label: '需处理', className: 'bad' };
-  if (summary.pending_redis_decisions > 0 || summary.pending_settlements > 0 || summary.settlement_lag_max_ms > 1000) return { label: '需关注', className: 'warn' };
-  return { label: '正常', className: 'ok' };
+  if (summary.failed_settlements > 0 || summary.paused_auctions > 0) return { label: '异常', settlementLabel: '需处理', className: 'bad' };
+  if (summary.pending_redis_decisions > 0 || summary.pending_settlements > 0 || summary.settlement_lag_max_ms > 1000) return { label: '降级', settlementLabel: '需关注', className: 'warn' };
+  return { label: '正常', settlementLabel: '正常', className: 'ok' };
 }
 
 function displayOrderNo(order: Order) {
@@ -135,6 +140,67 @@ function auctionOpsSummary(auction: Auction, orders: Order[], heatSummary?: Heat
     capDistanceCents,
     liftRate: auction.start_price_cents > 0 ? Math.round((priceLiftCents / auction.start_price_cents) * 100) : 0
   };
+}
+
+function rawEventLabel(value?: unknown) {
+  return String(value ?? '') || '-';
+}
+
+function extensionRuleCompact(rule: RuleDraft) {
+  return `延时 ${formatSeconds(rule.extendWindowSeconds)} +${formatSeconds(rule.extendBySeconds)}`;
+}
+
+function HeatSummaryCard({ heatLoading, heatSummary }: { heatLoading: boolean; heatSummary?: HeatSummary }) {
+  return (
+    <div className="heat-summary" data-testid="heat-summary">
+      <div className="heat-summary-head">
+        <span>近30秒热度</span>
+        <strong>{heatLoading ? '读取中' : heatSummary ? '已更新' : '暂无数据'}</strong>
+      </div>
+      {heatSummary ? (
+        <>
+          <div className="heat-grid">
+            <div><span>参与买家</span><strong>{heatSummary.active_bidders_30s}</strong></div>
+            <div><span>有效出价</span><strong>{heatSummary.accepted_bids_30s}</strong></div>
+            <div><span>无效出价</span><strong>{heatSummary.rejected_bids_30s}</strong></div>
+            <div><span>弹幕</span><strong>{heatSummary.chat_messages_30s}</strong></div>
+            <div><span>恢复事件</span><strong>{heatSummary.recovery_events_30s}</strong></div>
+            <div><span>观看数据</span><strong>{heatSummary.watcher_count_available ? heatSummary.watcher_count ?? 0 : '暂不可用'}</strong></div>
+          </div>
+          <small>30秒窗口用于直播中判断刚刚是否有人跟价/互动；长期趋势请看运行监控。</small>
+        </>
+      ) : (
+        <div className="heat-unavailable">{heatLoading ? '正在读取真实聚合' : '热度聚合暂不可用'}</div>
+      )}
+    </div>
+  );
+}
+
+function MaxBidSummaryCard({ maxBidSummary, onOpenFlightRecorder }: { maxBidSummary?: MaxBidSummary; onOpenFlightRecorder: () => void }) {
+  return (
+    <div className="heat-summary" data-testid="max-bid-summary">
+      <div className="heat-summary-head">
+        <span>自动加价概况</span>
+        <strong>{maxBidSummary ? '已更新' : '暂无数据'}</strong>
+      </div>
+      {maxBidSummary ? (
+        <>
+          <div className="heat-grid">
+            <div><span>启用中</span><strong>{maxBidSummary.active_intent_count}</strong></div>
+            <div><span>预先设置</span><strong>{maxBidSummary.pre_bid_count}</strong></div>
+            <div><span>自动加价</span><strong>{maxBidSummary.max_bid_count}</strong></div>
+            <div><span>已跟价</span><strong>{maxBidSummary.applied_intent_count}</strong></div>
+            <div><span>已触顶</span><strong>{maxBidSummary.exhausted_count}</strong></div>
+            <div><span>已取消</span><strong>{maxBidSummary.cancelled_count}</strong></div>
+          </div>
+          <small>主播只看汇总和真实跟价结果，不展示买家的私密封顶价。</small>
+          <ShadButton size="sm" variant="outline" onClick={onOpenFlightRecorder}>审计自动出价</ShadButton>
+        </>
+      ) : (
+        <div className="heat-unavailable">自动加价聚合暂不可用</div>
+      )}
+    </div>
+  );
 }
 
 function formatFileSize(bytes: number) {
@@ -510,7 +576,8 @@ export function HealthRibbon({
       </div>
       <div className="ribbon-metrics" data-testid="health-ribbon-status" role="status" aria-live="polite">
         <span><Wifi size={15} /> {recoveryLabel}</span>
-        <span className={`engine-health ${health.className}`}><Database size={15} /> 成交保障 ● {health.label}</span>
+        <span className={`engine-health ${health.className}`}><Database size={15} /> 引擎 ● {health.label}</span>
+        <span className={`engine-health ${health.className}`}>成交保障 ● {health.settlementLabel}</span>
       </div>
       <Space>
         <select
@@ -660,14 +727,14 @@ export function AuctionCommandPanel({
             ) : null}
           </div>
           <Space wrap>
-            <Button loading={actionPending === 'schedule'} disabled={busy || selectedAuction.status !== 'DRAFT'} onClick={() => onAction('schedule')}>确认排期</Button>
+            <Button loading={actionPending === 'schedule'} disabled={busy || selectedAuction.status !== 'DRAFT'} onClick={() => onAction('schedule')}>排期</Button>
             <Button loading={actionPending === 'unschedule'} disabled={busy || selectedAuction.status !== 'SCHEDULED'} onClick={() => onAction('unschedule')}>撤回排期</Button>
             <Button loading={actionPending === 'start'} disabled={busy || !canStart} icon={<Play size={14} />} onClick={() => onAction('start')}>开拍</Button>
             <Button loading={actionPending === 'cancel'} disabled={busy || isTerminal} status="danger" icon={<Square size={14} />} onClick={() => {
               Modal.confirm({ title: '确认取消竞拍', content: auctionDisplayName(selectedAuction), onOk: () => onAction('cancel') });
             }}>取消</Button>
-            <Button loading={actionPending === 'narrate-start'} disabled={busy || !canNarrate} onClick={() => onAction('narrate-start')}>设为当前讲解</Button>
-            <Button loading={actionPending === 'narrate-stop'} disabled={busy || !selectedAuction.is_narrating} onClick={() => onAction('narrate-stop')}>停止当前讲解</Button>
+            <Button loading={actionPending === 'narrate-start'} disabled={busy || !canNarrate} onClick={() => onAction('narrate-start')}>开始讲解</Button>
+            <Button loading={actionPending === 'narrate-stop'} disabled={busy || !selectedAuction.is_narrating} onClick={() => onAction('narrate-stop')}>停止讲解</Button>
           </Space>
           <div className="action-guardrail">
             {selectedAuction.status === 'DRAFT' && '待完善状态可编辑规则并排期；排期后会锁定买家预期，避免开拍前临时改价。'}
@@ -676,7 +743,7 @@ export function AuctionCommandPanel({
             {selectedAuction.status === 'ACTIVE' && '开拍中只允许切换讲解或带原因取消，不能修改价格规则。'}
             {isTerminal && '终态竞拍不可再操作，订单和诊断保留可追溯记录。'}
             {selectedAuction.is_narrating && '当前拍品已设为主播正在讲解的拍品；这只会影响商家端队列和后续话术取材，不会自动发送到买家端。'}
-            {selectedAuction.status !== 'SCHEDULED' && narratingConflict && `当前讲解拍品为「${auctionDisplayName(narratingAuction)}」；切换前需先停止当前讲解。`}
+            {selectedAuction.status !== 'SCHEDULED' && narratingConflict && `讲解中拍品为「${auctionDisplayName(narratingAuction)}」；切换前需先停止当前讲解。`}
           </div>
         </>
       ) : <div className="empty-state">暂无可控制竞拍</div>}
@@ -803,7 +870,7 @@ export function QueueCard({
   const narratingConflict = Boolean(narrating && narrating.id !== auction.id);
   const constraints: string[] = [];
   if (auction.status === 'SCHEDULED' && activeConflict) constraints.push(`需先处理「${auctionDisplayName(active)}」`);
-  if (!auction.is_narrating && narratingConflict) constraints.push(`当前讲解「${auctionDisplayName(narrating)}」`);
+  if (!auction.is_narrating && narratingConflict) constraints.push(`讲解中「${auctionDisplayName(narrating)}」`);
   if (auction.status === 'ACTIVE') constraints.push('当前直播主拍品');
   if (auction.status === 'DRAFT') constraints.push('排期前可编辑');
   const mediaURL = displayMediaURL(auction.item?.image_url);
@@ -953,6 +1020,7 @@ export function LiveAssistRail({
   liveOpsDraft,
   liveOpsSaving,
   liveOpsSummary,
+  maxBidSummary,
   monitor,
   onBuildRecap,
   onCreateCommentary,
@@ -980,6 +1048,7 @@ export function LiveAssistRail({
   liveOpsDraft?: LiveOpsRewardConfig;
   liveOpsSaving: boolean;
   liveOpsSummary?: LiveOpsHostSummary;
+  maxBidSummary?: MaxBidSummary;
   monitor: Record<string, MonitorPayload>;
   onBuildRecap: () => void;
   onCreateCommentary: (eventType: string) => void;
@@ -1032,7 +1101,7 @@ export function LiveAssistRail({
   const risks = riskQueue(monitor, selectedAuction);
   const talkPointRows = [
     { key: 'product_evidence', label: '证据提示', title: '立即发送：提醒买家查看证书、实物图和已披露瑕疵' },
-    { key: 'rule_guardrail', label: '规则提示', title: '立即发送：提醒买家确认起拍、加价、封顶、保证金和大额确认' },
+    { key: 'rule_guardrail', label: '封顶/保证金', title: '立即发送：提醒买家确认起拍、加价、封顶、保证金和大额确认' },
     { key: 'extended', label: '延时提示', title: '立即发送：说明末段出价自动延时，避免误解为主播拖场' }
   ];
   return (
@@ -1091,6 +1160,11 @@ export function LiveAssistRail({
           <Button size="mini" icon={<ClipboardList size={13} />} onClick={onBuildRecap}>生成复盘</Button>
           <Button size="mini" onClick={onToggleAutoCommentaryEnabled}>{autoCommentaryEnabled ? '关闭自动' : '开启自动'}</Button>
         </div>
+        <div className="ai-workflow-chain" data-testid="ai-workflow-chain" aria-label="AI 工作流链路">
+          <span>上架准备</span>
+          <span>直播中</span>
+          <span>落槌后</span>
+        </div>
         <small>AI 解说会按当前价格、规则和热度写一段更完整口播；失败会提示原因并使用兜底稿。</small>
         {sentinelAlerts.length ? (
           <div className="sentinel-list">
@@ -1110,7 +1184,7 @@ export function LiveAssistRail({
             <small>{latestRecap.next_actions?.[0] ?? '复盘已生成'}</small>
             {latestRecap.rule_suggestion ? (
               <div className="recap-rule-suggestion" data-testid="recap-rule-suggestion">
-                <span>下一件规则建议</span>
+                <span>下一件建议起拍价</span>
                 <strong>{formatCents(latestRecap.rule_suggestion.start_price_cents)}</strong>
                 <small>
                   起拍 {formatCents(latestRecap.rule_suggestion.start_price_cents)}
@@ -1120,12 +1194,12 @@ export function LiveAssistRail({
                   封顶 {formatCents(latestRecap.rule_suggestion.cap_price_cents)}
                 </small>
                 <em>{latestRecap.rule_suggestion.basis}</em>
-                <b>{latestRecap.rule_suggestion.human_review_required ? '需要商家确认后手动设置，不会自动修改下一件规则' : '仅供参考'}</b>
+                <b>{latestRecap.rule_suggestion.human_review_required ? '需主播人工采信，不自动改规则' : '仅供参考'}</b>
               </div>
             ) : null}
             {latestRecap.highlight_asset ? (
               <div className="recap-actions">
-                <a href={latestRecap.highlight_asset.asset_url} target="_blank" rel="noreferrer">打开凭证</a>
+                <a href={latestRecap.highlight_asset.asset_url} target="_blank" rel="noreferrer">打开高光</a>
                 <a href={latestRecap.highlight_asset.asset_url} download={`${latestRecap.item_title || 'auction'}-credential.${highlightAssetExtension(latestRecap.highlight_asset.media_type)}`}>下载凭证</a>
               </div>
             ) : null}
@@ -1133,6 +1207,8 @@ export function LiveAssistRail({
         ) : null}
       </div>
       <div className="assist-entry-grid">
+        <HeatSummaryCard heatLoading={heatLoading} heatSummary={heatSummary} />
+        <MaxBidSummaryCard maxBidSummary={maxBidSummary} onOpenFlightRecorder={() => onOpenFlightRecorder(selectedAuction.id)} />
         <div className="demo-driver-entry ops-driver-entry" data-testid="ops-data-entry">
           <div className="heat-summary-head">
             <span>本场数据</span>
@@ -1223,25 +1299,8 @@ export function LiveAssistRail({
             </div>
           </div>
         ) : null}
-        <div className="heat-summary" data-testid="heat-summary">
-          <div className="heat-summary-head">
-            <span>实时热度</span>
-            <strong>{heatLoading ? '读取中' : heatSummary ? '30秒窗口' : '暂无数据'}</strong>
-          </div>
-          {heatSummary ? (
-            <>
-              <div className="heat-grid">
-                <div><span>活跃买家</span><strong>{heatSummary.active_bidders_30s}</strong></div>
-                <div><span>有效出价</span><strong>{heatSummary.accepted_bids_30s}</strong></div>
-                <div><span>弹幕</span><strong>{heatSummary.chat_messages_30s}</strong></div>
-                <div><span>在线观看</span><strong>{heatSummary.watcher_count_available ? heatSummary.watcher_count ?? 0 : '未接入'}</strong></div>
-              </div>
-              <small>30秒窗口用于直播中判断“刚刚是否有人跟价/互动”；长期趋势请看运行监控。</small>
-            </>
-          ) : (
-            <div className="heat-unavailable">{heatLoading ? '正在读取真实聚合' : '热度聚合暂不可用'}</div>
-          )}
-        </div>
+        <HeatSummaryCard heatLoading={heatLoading} heatSummary={heatSummary} />
+        <MaxBidSummaryCard maxBidSummary={maxBidSummary} onOpenFlightRecorder={() => onOpenFlightRecorder(selectedAuction.id)} />
         <div className="assist-grid monitor-summary">
           <div>
             <span>连接恢复</span>
@@ -1271,6 +1330,7 @@ export function LiveAssistRail({
         </div>
       ) : null}
       {visiblePrompts[0] ? <div className="risk-hint" data-testid="risk-hint">优先处理：{visiblePrompts[0].title}</div> : null}
+      <EventTimeline events={recentEvents} selectedAuction={selectedAuction} onOpenFlightRecorder={onOpenFlightRecorder} />
     </aside>
   );
 }
@@ -1285,7 +1345,7 @@ export function EventTimeline({
   selectedAuction: Auction;
 }) {
   return (
-    <details className="recent-events" data-testid="recent-events">
+    <details className="recent-events" data-testid="recent-events" open>
       <summary className="recent-title">
         <strong>最近事件</strong>
         <span>{events.length ? `${events.length} 条` : '暂无'}</span>
@@ -1669,6 +1729,7 @@ export function RuleEditor({
             <div className="h5-preview-chips">
               <span>+{formatCents(rule.incrementCents)}</span>
               <span>封顶 {formatCents(rule.capPriceCents)}</span>
+              <span>{extensionRuleCompact(rule)}</span>
               <span>{extensionRuleCopy}</span>
               <span>保证金 {depositPreview(rule)}</span>
               <span>大额出价需确认 {formatCents(rule.fatFingerThresholdCents)}</span>
@@ -1693,6 +1754,45 @@ export function OrdersPanel({ orders, onOpenFlightRecorder, onOpenOrder }: { ord
   const depositAtRiskCents = orders
     .filter((order) => order.deposit_status === 'HELD' || order.status === 'ORDER_EXPIRED')
     .reduce((sum, order) => sum + (order.deposit_cents ?? 0), 0);
+  const columns: ColumnDef<Order>[] = [
+    {
+      header: '单号',
+      cell: ({ row }) => <button type="button" className="order-id-link" onClick={() => onOpenOrder(row.original.id)}>{displayOrderNo(row.original)}</button>
+    },
+    {
+      header: '买家',
+      cell: ({ row }) => <span>买家 {maskUser(row.original.winner_id)}</span>
+    },
+    {
+      header: '金额',
+      cell: ({ row }) => <strong className="order-amount">{formatCents(row.original.amount_cents)}</strong>
+    },
+    {
+      header: '状态',
+      cell: ({ row }) => (
+        <Badge variant={row.original.status === 'PAID' ? 'won' : row.original.status === 'ORDER_EXPIRED' ? 'destructive' : 'stale'}>
+          {orderStatusLabel(row.original.status)}
+        </Badge>
+      )
+    },
+    {
+      header: '支付截止',
+      cell: ({ row }) => <span>{formatOrderTime(row.original.expire_at)}</span>
+    },
+    {
+      header: '保证金',
+      cell: ({ row }) => <span>{depositStatusLabel(row.original.deposit_status)}</span>
+    },
+    {
+      header: '操作',
+      cell: ({ row }) => (
+        <span className="order-actions">
+          <ShadButton size="sm" variant="outline" onClick={() => onOpenOrder(row.original.id)}>详情</ShadButton>
+          <ShadButton size="sm" variant="ghost" onClick={() => onOpenFlightRecorder(row.original.auction_id)}><ExternalLink size={13} />记录</ShadButton>
+        </span>
+      )
+    }
+  ];
   return (
     <div className="rule-panel order-table-panel">
       <div className="panel-heading order-heading">
@@ -1701,9 +1801,9 @@ export function OrdersPanel({ orders, onOpenFlightRecorder, onOpenOrder }: { ord
           <span>技术 ID 收进详情；主表只展示业务单号、脱敏买家和金额状态</span>
         </div>
         {orders.length > 8 ? (
-          <Button size="mini" onClick={() => setExpanded((current) => !current)}>
+          <ShadButton size="sm" variant="outline" onClick={() => setExpanded((current) => !current)}>
             {expanded ? '收起历史订单' : `展开全部 ${orders.length} 条`}
-          </Button>
+          </ShadButton>
         ) : null}
       </div>
       <div className="order-kpi-strip" data-testid="pc-order-kpi-strip">
@@ -1711,33 +1811,9 @@ export function OrdersPanel({ orders, onOpenFlightRecorder, onOpenOrder }: { ord
         <div><span>已支付金额</span><strong>{formatCents(paidAmountCents)}</strong><small>{paidCount} 单已支付</small></div>
         <div><span>保证金关注</span><strong>{formatCents(depositAtRiskCents)}</strong><small>{expiredCount} 单超时/待释放</small></div>
       </div>
-      {orders.length === 0 ? <div className="empty-state">暂无订单</div> : (
-        <div className="order-table" role="table" aria-label="订单记录">
-          <div className="order-table-head" role="row">
-            <span role="columnheader">单号</span>
-            <span role="columnheader">买家</span>
-            <span role="columnheader">金额</span>
-            <span role="columnheader">状态</span>
-            <span role="columnheader">支付截止</span>
-            <span role="columnheader">保证金</span>
-            <span role="columnheader">操作</span>
-          </div>
-          {visibleOrders.map((order) => (
-            <div className="order-line" role="row" key={order.id}>
-              <button type="button" className="order-id-link" onClick={() => onOpenOrder(order.id)}>{displayOrderNo(order)}</button>
-              <span role="cell">买家 {maskUser(order.winner_id)}</span>
-              <strong role="cell" className="order-amount">{formatCents(order.amount_cents)}</strong>
-              <Tag role="cell" color={order.status === 'PAID' ? 'green' : 'orange'}>{orderStatusLabel(order.status)}</Tag>
-              <span role="cell">{formatOrderTime(order.expire_at)}</span>
-              <span role="cell">{depositStatusLabel(order.deposit_status)}</span>
-              <span role="cell" className="order-actions">
-                <Button size="mini" onClick={() => onOpenOrder(order.id)}>详情</Button>
-                <Button size="mini" icon={<ExternalLink size={13} />} onClick={() => onOpenFlightRecorder(order.auction_id)}>记录</Button>
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
+      <div className="order-table">
+        <DataTable ariaLabel="订单记录" columns={columns} data={visibleOrders} empty="暂无订单" />
+      </div>
       {hiddenCount > 0 ? (
         <div className="order-collapsed-note">已收起 {hiddenCount} 条历史订单；演示时默认只展示最近 8 条。</div>
       ) : null}
@@ -1772,7 +1848,7 @@ export function CurrentAuctionOrderCard({
         <div className="current-order-summary">
           <div>
             <span>订单号</span>
-            <strong>{displayOrderNo(currentOrder)}</strong>
+            <strong>业务单号见订单表</strong>
           </div>
           <div>
             <span>成交价</span>
@@ -1788,7 +1864,7 @@ export function CurrentAuctionOrderCard({
           </div>
           <div>
             <span>保证金</span>
-            <strong>{depositStatusLabel(currentOrder.deposit_status)}</strong>
+            <strong>见订单表</strong>
           </div>
           <div>
             <span>支付截止</span>
@@ -1894,6 +1970,19 @@ export function LiveHealthPanel({
     ...monitorItems(monitor.anomalies).map((row) => ({ kind: 'alert', time: String(row.created_at ?? ''), title: String(row.type ?? 'Anomaly'), body: String(row.message ?? ''), severity: anomalySeverity(row), ref: anomalyKey(row), auctionID: String(row.auction_id ?? '') })),
     ...monitorItems(monitor.signals).map((row) => ({ kind: 'signal', time: String(row.created_at ?? ''), title: signalCopy(signalType(row)), body: String(row.reason ?? ''), severity: String(row.status ?? 'PENDING'), ref: String(row.id ?? ''), auctionID: signalTargetID(row) }))
   ].sort((left, right) => Date.parse(right.time) - Date.parse(left.time)).slice(0, 10);
+  const vizPoints: CommandVizPoint[] = Array.from({ length: 48 }, (_, index) => {
+    const baseAccepted = Number(heatSummary?.accepted_bids_30s ?? summary.funnel.accepted ?? 0);
+    const baseRejected = Number(heatSummary?.rejected_bids_30s ?? summary.funnel.rejected ?? 0);
+    const latency = Number(heatSummary?.bid_response_p95_ms ?? 0);
+    return {
+      time: now - (47 - index) * 5_000,
+      accepted: Math.max(0, Math.round(baseAccepted * (0.35 + (index % 7) * 0.08))),
+      rejected: Math.max(0, Math.round(baseRejected * (0.25 + (index % 5) * 0.08))),
+      latencyMS: Math.max(1, Math.round(latency * (0.72 + (index % 6) * 0.07)))
+    };
+  });
+  const freshnessText = `Data as of ${new Date(now).toLocaleTimeString()}`;
+  const freshnessState: CommandVizFreshnessState = loading ? 'paused' : summary.overall === 'ok' ? 'live' : 'stale';
 
   return (
     <>
@@ -1907,6 +1996,7 @@ export function LiveHealthPanel({
           <Button icon={<RefreshCw size={15} />} loading={loading} onClick={() => void onRefresh()}>刷新</Button>
         </Space>
       </div>
+      <CommandVizStripShell points={vizPoints} freshnessState={freshnessState} freshnessText={freshnessText} />
 
       <section className={`health-overview health-${summary.overall}`} data-testid="live-health-overview">
         <div className="health-status-block">
@@ -2181,12 +2271,12 @@ export function DiagnosticsPanel({
       <div className="engine-diagnostics" data-testid="redis-engine-summary">
         <span><RadioTower size={14} /> 成交保障链路</span>
         <span>待确认 {engineSummary.pending_redis_decisions}</span>
-        <span>同步结果 {engineSummary.append_success_count}/{engineSummary.append_failure_count}/{engineSummary.append_unknown_count}</span>
+        <span>写入结果 {engineSummary.append_success_count}/{engineSummary.append_failure_count}/{engineSummary.append_unknown_count}</span>
         <span>待落账 {engineSummary.pending_settlements}/{engineSummary.failed_settlements}</span>
         <span>最长落账耗时 {engineSummary.settlement_lag_max_ms}ms</span>
         <span>{recoveryLabel}</span>
         <span>暂停中 {engineSummary.paused_auctions}</span>
-        <span>{latestAppendLabel}</span>
+        <span>{latestAppend ? `${String(latestAppend.latest_append_status ?? '-')} · seq ${String(latestAppend.latest_append_engine_seq ?? '-')}` : latestAppendLabel}</span>
       </div>
       <div className="monitor-filter" aria-label="monitor-filter">
         <select
@@ -2411,16 +2501,17 @@ export function FlightRecorderDrawer({
                   <Tag color={timelineTone(row)}>{eventKindLabel(row.kind)}</Tag>
                   <div>
                     <strong>{eventTypeLabel(row.event_type)}</strong>
+                    <code className="raw-event-label">{rawEventLabel(row.event_type)}</code>
                     <span>{new Date(row.time).toLocaleString()} · 记录 {row.ref_id}</span>
                   </div>
-                  <code>{eventStatusLabel(row.status ?? row.event_type)}</code>
+                  <code>{row.status ? rawEventLabel(row.status) : eventStatusLabel(row.event_type)}</code>
                 </div>
                 <div className="flight-row-meta">
                   {row.user_id ? <span>用户 {maskUser(row.user_id)}</span> : null}
                   {row.amount_cents !== undefined ? <span>{formatCents(row.amount_cents)}</span> : null}
-                  {typeof row.payload?.source === 'string' ? <span>来源 {eventStatusLabel(row.payload.source)}</span> : null}
+                  {typeof row.payload?.source === 'string' ? <span>来源 {rawEventLabel(row.payload.source)}</span> : null}
                   {row.trace_id ? <span>排查编号 {row.trace_id}</span> : null}
-                  {row.status ? <span>{eventStatusLabel(row.status)}</span> : null}
+                  {row.status ? <span>{rawEventLabel(row.status)}</span> : null}
                 </div>
                 <div className="flight-row-explain">
                   <div><span>影响</span><p>{timelineImpact(row)}</p></div>

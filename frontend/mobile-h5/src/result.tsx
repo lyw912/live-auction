@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AlertTriangle, Clock3, Copy, Download, Trophy } from 'lucide-react';
+import { AlertTriangle, Clock3, Copy, Download, Film, Trophy } from 'lucide-react';
 import type { AuctionItem, AuctionSummary, BottomSheetKey, HeatSnapshot, LeaderboardPayload, PaymentPhase, ResultRecap, ResultSheetKind, Scenario } from './domain';
 import { auctionStatusLabel, buildHighlightCard, buildResultRecap, formatCents } from './domain';
 
@@ -239,8 +239,9 @@ export function ResultSheet({
   const sourceFacts = [
     defeatedBidders > 0 ? `击败 ${defeatedBidders} 位有效出价者` : '',
     totalAcceptedBids > 0 ? `本场 ${totalAcceptedBids} 次有效出价` : '',
-    orderID ? `订单 ${displayOrderNo(orderID)}` : '',
-    knownLeaderboardEntries > 0 ? `榜单前 ${knownLeaderboardEntries} 名已确认` : ''
+    settlementSeq ? `成交回链 seq ${settlementSeq}` : '',
+    orderID ? `订单回链 ${displayOrderNo(orderID)}` : '',
+    knownLeaderboardEntries > 0 ? `榜单锁定 Top ${knownLeaderboardEntries}` : ''
   ].filter(Boolean);
   const recap: ResultRecap = buildResultRecap({
     itemTitle: item.title ?? scenario.title,
@@ -274,6 +275,23 @@ export function ResultSheet({
     link.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 250);
     setShareFeedback('已保存');
+  };
+  const downloadHighlightVideo = async () => {
+    if (!recap) return;
+    try {
+      const video = await buildHighlightVideo(recap);
+      const url = URL.createObjectURL(video.blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = video.filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 250);
+      setShareFeedback('视频已保存');
+    } catch {
+      setShareFeedback('视频生成失败');
+    }
   };
   return (
     <section className={`result-sheet ${kind} ${compact ? 'is-compact' : ''}`} data-testid="result-sheet" aria-label={title}>
@@ -318,8 +336,11 @@ export function ResultSheet({
             <button type="button" aria-label="copy-result-recap" onClick={() => void copyRecap()}>
               <Copy size={14} /> 复制
             </button>
-            <button type="button" aria-label="download-result-credential" onClick={downloadHighlight}>
+            <button type="button" aria-label="download-highlight-card" onClick={downloadHighlight}>
               <Download size={14} /> 保存凭证
+            </button>
+            <button type="button" aria-label="download-highlight-video" onClick={() => void downloadHighlightVideo()}>
+              <Film size={14} /> 保存视频
             </button>
             {shareFeedback ? <b>{shareFeedback}</b> : null}
           </div>
@@ -327,7 +348,7 @@ export function ResultSheet({
       ) : null}
       {kind === 'winner' ? (
         <div className="result-climax-card" data-testid="result-climax-card" aria-label="成交凭证">
-          <span>成交凭证</span>
+          <span>落槌高光</span>
           <strong>{soldPrice}</strong>
           <p>{Math.max(kind === 'winner' ? 1 : 0, recapHeat.acceptedBidderCount)} 人有效出价 · {totalAcceptedBids} 次真实出价</p>
           {sourceFacts.length ? (
@@ -335,7 +356,7 @@ export function ResultSheet({
               {sourceFacts.map((fact) => <small key={fact}>{fact}</small>)}
             </div>
           ) : null}
-          <em>成交事实已确认，可继续支付或查看订单</em>
+          <em>先确认成交事实再进入支付</em>
         </div>
       ) : null}
       {kind !== 'winner' && nextAuction ? (

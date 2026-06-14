@@ -1,0 +1,81 @@
+# Phase 1 Progress Log
+
+## 2026-06-14
+
+- Read governing planning docs:
+  - `planning/01-frontend-media-payment-refactor.md`
+  - `planning/02-phase1-rebuild-execution-guide.md`
+- Activated Serena project and read Serena instructions.
+- Confirmed user authorization to install missing dependencies and request escalated permissions if sandbox/network blocks installation.
+- Started WP-0.
+- Created persistent planning files: `task_plan.md`, `findings.md`, `progress.md`.
+- Installed Phase 1 dependencies:
+  - root dev: `tailwindcss`, `@tailwindcss/vite`
+  - H5: TanStack Query, Zustand, XState, Radix primitives, CVA/class helpers
+  - PC: same foundations plus TanStack Table/Virtual, Motion OSS, ECharts, visx, Recharts, Tremor
+- Baseline checks passed: `pnpm test:frontend:domain`, `pnpm build`.
+- Added red-line contract modules and tests for I1-I7:
+  - `frontend/mobile-h5/src/features/contracts/bid-contract.ts`
+  - `frontend/mobile-h5/src/features/contracts/payment-contract.ts`
+  - `frontend/mobile-h5/src/features/contracts/recovery-contract.ts`
+  - `frontend/mobile-h5/src/features/contracts/ws-contract.ts`
+  - `frontend/pc-console/src/features/contracts/payment-readonly-contract.ts`
+- Added `AppProviders` for H5 and PC with TanStack Query and Motion OSS reduced-motion config.
+- Added `frontend/shared-design` as a workspace package with shadcn-style base UI primitives.
+- WP-0 verification passed after scaffolding: `pnpm test:frontend:domain`, `pnpm build`.
+- Started WP-1.
+- Replaced `frontend/shared-design/tokens.css` with Auction Terminal shadcn-compatible token system, auction semantic tokens, chart/sidebar tokens, typography roles, and legacy compatibility variables.
+- Added shared-design README and static token/export assertions to `test:frontend:domain`.
+- WP-1 verification passed: `pnpm test:frontend:domain`, `pnpm build`.
+- Started WP-2.
+- Added H5 state migration boundaries:
+  - Query keys/cache patch shell in `entities/auction/query.ts`
+  - XState bid and connection machines
+  - ReconnectionManager shell
+  - Zustand UI store shell
+- Rewired H5 bid submission, WS ticket/subprotocol URL construction, pending order selection, and mock payment request through tested contract helpers.
+- WP-2 verification passed: `pnpm test:frontend:domain`, `pnpm build`.
+- Started WP-3.
+- Added H5 Auction Terminal stage CSS overrides: full-screen video scrim, stable bottom action dock, semantic status colors, responsive spacing, and text overflow constraints.
+- Split `LiveStage` internals for video backdrop and atmosphere cue notice inside `components.tsx`.
+- Playwright mobile check opened H5 at `http://127.0.0.1:5277`; console errors were backend auth/login 500 and favicon 404 because backend was not running, while the H5 stage rendered. Screenshot saved by Playwright as `phase1-h5-wp3-mobile.png`.
+- WP-3 verification passed: `pnpm --filter mobile-h5 build`, `pnpm test:frontend:domain`.
+- Started WP-4.
+- Added Phase 1 media seam:
+  - `features/live-media/useLiveMediaSource.ts`
+  - `widgets/live-stage/LiveBackdrop.tsx`
+- `LiveStage` now consumes the `video-file` source seam instead of directly referencing `demoLiveVideoURL` or owning the video element.
+- Verified `demoLiveVideoURL` appears only in `domain.ts` and the live-media seam.
+- WP-4 verification passed: `pnpm test:frontend:domain`, `pnpm build`.
+- Started WP-5.
+- Added rAF-based `PriceOdometer` and wired it into the H5 floating auction price.
+- Added reduced-motion CSS, one-shot price flash animations, and event-cue visual states for leading/outbid/sold.
+- Added static checks preventing Motion+ paid components and continuous blink-style effects.
+- WP-5 verification passed: `pnpm test:frontend:domain`, `pnpm build`.
+- Started WP-6.
+- Added PC `PageShell` and TanStack `DataTable` widgets.
+- Migrated `OrdersPanel` read-only order table to shared-design Button/Badge and TanStack Table while preserving PC no-payment-control behavior.
+- `pnpm --filter @live-auction/shared-design install` was needed so TypeScript could resolve workspace package dependencies while compiling source from PC.
+- WP-6 verification passed: `pnpm test:frontend:domain`, `pnpm build`.
+- Started WP-7.
+- Completed WP-7 command-center visualization and realtime UX:
+  - Added PC command visualization strip with ECharts/visx-backed shell.
+  - Added freshness/live/stale/paused UI, heat/max-bid summaries, workflow chain, and dense diagnostics/flight-recorder surfaces.
+  - Fixed PC shell to stay viewport-height with internal content scrolling.
+- Completed WP-8 payment UI rebuild with behavior preserved:
+  - Kept H5 mock payment action on `/api/orders/{id}/pay-mock` with `Idempotency-Key`.
+  - Kept `order_status === 'PAID'` as payment success truth and PC order/payment surfaces read-only.
+- Final review found PC still imported Arco despite WP-6 status. Replaced remaining PC Arco usage with local shadcn-style console primitives:
+  - `frontend/pc-console/src/shared/ui/console-primitives.tsx`
+  - Removed `@arco-design/web-react` dependency and Vite Arco chunk.
+  - Removed stale `.arco-*` CSS selectors.
+- Updated intentional visual regression baselines for Phase 1:
+  - H5 visual states: active, self-leading, outbid-rejected, recovering, sold-winner, sold-loser, unsold-ended.
+  - PC command/diagnostics state.
+- Verification after final fixes:
+  - `pnpm exec playwright test --project=pc-console --workers=1 --reporter=line` passed: 14/14.
+  - `pnpm exec playwright test --project=visual-pc-console --workers=1 --reporter=line` passed: 1/1.
+  - `pnpm test:e2e` passed: 84/84.
+  - `pnpm test:frontend:domain` passed.
+  - `pnpm build` passed.
+- Build note: PC still emits a >500 kB chunk warning for `CommandVizStrip` (ECharts/visx realtime visualization), but Arco is no longer present and the warning is non-blocking.

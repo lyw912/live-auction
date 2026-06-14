@@ -57,7 +57,7 @@ export type BidderRequirement = {
   reason?: string;
 };
 
-export type BidPhase = 'idle' | 'pending' | 'engine_pending' | 'engine_sold_pending' | 'accepted' | 'rejected' | 'uncertain' | 'confirm_required' | 'confirming';
+export type BidPhase = 'idle' | 'pending' | 'engine_pending' | 'engine_sold_pending' | 'accepted' | 'rejected' | 'processing_retry' | 'uncertain' | 'confirm_required' | 'confirming';
 export type PaymentPhase = 'idle' | 'pending' | 'paid' | 'failed' | 'expired';
 export type RecoveryPhase = 'idle' | 'recovering';
 export type ConnectionPhase = 'connecting' | 'connected' | 'recovering' | 'disconnected';
@@ -851,7 +851,7 @@ export function buildResultRecap(input: {
     ...(input.sourceFacts ?? [])
   ].filter(Boolean);
   const nextAction = input.kind === 'winner'
-    ? '完成订单支付'
+    ? '先确认成交事实再进入支付'
     : input.nextTitle
       ? `继续看 ${input.nextTitle}`
       : '回到商品列表';
@@ -893,7 +893,7 @@ export function buildHighlightCard(recap: ResultRecap): HighlightCard {
   <text x="120" y="1260" fill="rgba(255,255,255,0.72)" font-size="28" font-family="Arial, sans-serif">仅展示系统真实竞拍记录，用户身份已脱敏。</text>
 </svg>`;
   return {
-    filename: `${filenameTitle}-credential.svg`,
+    filename: `${filenameTitle}-highlight.svg`,
     mimeType: 'image/svg+xml;charset=utf-8',
     content
   };
@@ -1035,7 +1035,7 @@ export function maxBidErrorCopy(code?: string | null) {
     case 'MAX_BID_ABOVE_CAP':
       return '最高价超过本场封顶价';
     case 'PROCESSING_RETRY_LATER':
-      return '上一笔自动加价正在确认，稍后刷新后再取消';
+      return '上一笔自动加价仍在确认，稍后刷新后再试';
     case 'AUCTION_NOT_ACTIVE':
       return '当前拍品已结束，自动加价不会再执行';
     case 'AUCTION_NOT_FOUND':

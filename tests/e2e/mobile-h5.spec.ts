@@ -206,7 +206,7 @@ test.beforeEach(async ({ page }) => {
       }
     });
   });
-  await page.route('/api/users/me/orders', async (route) => {
+  await page.route('**/api/users/me/orders**', async (route) => {
     await route.fulfill({
       json: {
         items: [
@@ -294,7 +294,7 @@ test.beforeEach(async ({ page }) => {
       constructor(url: string | URL, protocols?: string | string[]) {
         super();
         this.url = String(url);
-        this.shouldRecord = this.url.includes('/ws?');
+        this.shouldRecord = this.url.includes('/ws/auctions?');
         const protocolList = Array.isArray(protocols) ? protocols : protocols ? [protocols] : [];
         if (this.shouldRecord) {
           (window as typeof window & { __auctionWS?: unknown[] }).__auctionWS = [
@@ -472,8 +472,9 @@ test('H5 disables bid CTA for unsafe states and keeps text inside controls', asy
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
   await expect(page.getByTestId('auction-countdown')).toBeVisible();
   await page.getByRole('button', { name: '出价榜' }).click();
-  await expect(page.getByText('2 次')).toBeVisible();
-  await expect(page.getByText('1 次')).toBeVisible();
+  const leaderboardPanel = page.getByTestId('leaderboard-panel');
+  await expect(leaderboardPanel.getByText('2 次')).toBeVisible();
+  await expect(leaderboardPanel.getByText('1 次')).toBeVisible();
 
   const buttons = await page.locator('button').all();
   for (const button of buttons) {
@@ -502,22 +503,22 @@ test('H5 opens browser WebSocket with ticket subprotocol and consumes authoritat
   await expectDockConnection(page, '已连接');
   const expectedWSURL = await page.evaluate(() => {
     const wsScheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${wsScheme}//${window.location.host}/ws?room_id=room_main&auction_id=auc_live&last_seq=41`;
+    return `${wsScheme}//${window.location.host}/ws/auctions?room_id=room_main&auction_id=auc_live&last_seq=41`;
   });
   await expect.poll(async () => page.evaluate(() => {
     const entries = (window as typeof window & { __auctionWS?: Array<{ url: string; protocols: string[] }> }).__auctionWS ?? [];
-    return entries.filter(({ url }) => url.includes('/ws?')).map(({ url, protocols }) => ({ url, protocols }));
+    return entries.filter(({ url }) => url.includes('/ws/auctions?')).map(({ url, protocols }) => ({ url, protocols }));
   })).toEqual([
     {
       url: expectedWSURL,
       protocols: ['auction.v1', 'ticket.ticket_live']
     }
   ]);
-  await expect(ticketRequest).resolves.toEqual({ room_id: 'room_main', auction_id: 'auc_live' });
+  await expect(ticketRequest).resolves.toEqual({ room_id: 'room_main', auction_id: 'auc_live', user_id: 'user_1' });
 
   await page.evaluate(() => {
     const [entry] = ((window as typeof window & { __auctionWS?: Array<{ url: string; socket: { dispatchServerMessage: (payload: unknown) => void } }> }).__auctionWS ?? [])
-      .filter(({ url }) => url.includes('/ws?'));
+      .filter(({ url }) => url.includes('/ws/auctions?'));
     entry.socket.dispatchServerMessage({
       auction_id: 'auc_live',
       event_type: 'bid_accepted',
@@ -548,7 +549,7 @@ test('H5 applies WebSocket leaderboard delta without polling leaderboard', async
 
   await page.evaluate(() => {
     const [entry] = ((window as typeof window & { __auctionWS?: Array<{ url: string; socket: { dispatchServerMessage: (payload: unknown) => void } }> }).__auctionWS ?? [])
-      .filter(({ url }) => url.includes('/ws?'));
+      .filter(({ url }) => url.includes('/ws/auctions?'));
     entry.socket.dispatchServerMessage({
       auction_id: 'auc_live',
       event_type: 'leaderboard_delta',
@@ -579,13 +580,13 @@ test('H5 renders always-on race board and waterfall from authoritative leaderboa
   await page.goto('/');
   await expect.poll(async () => page.evaluate(() => {
     return ((window as typeof window & { __auctionWS?: Array<{ url: string }> }).__auctionWS ?? [])
-      .some(({ url }) => url.includes('/ws?'));
+      .some(({ url }) => url.includes('/ws/auctions?'));
   })).toBe(true);
   await expect(page.getByTestId('live-stage').getByTestId('race-board')).toBeVisible();
 
   await page.evaluate(() => {
     const [entry] = ((window as typeof window & { __auctionWS?: Array<{ url: string; socket: { dispatchServerMessage: (payload: unknown) => void } }> }).__auctionWS ?? [])
-      .filter(({ url }) => url.includes('/ws?'));
+      .filter(({ url }) => url.includes('/ws/auctions?'));
     entry.socket.dispatchServerMessage({
       auction_id: 'auc_live',
       event_type: 'leaderboard_delta',
@@ -615,7 +616,7 @@ test('H5 renders always-on race board and waterfall from authoritative leaderboa
 
   await page.evaluate(() => {
     const [entry] = ((window as typeof window & { __auctionWS?: Array<{ url: string; socket: { dispatchServerMessage: (payload: unknown) => void } }> }).__auctionWS ?? [])
-      .filter(({ url }) => url.includes('/ws?'));
+      .filter(({ url }) => url.includes('/ws/auctions?'));
     entry.socket.dispatchServerMessage({
       auction_id: 'auc_live',
       event_type: 'leaderboard_delta',
@@ -651,13 +652,13 @@ test('H5 coalesces burst leaderboard deltas to the latest visible rank state', a
   await expectDockConnection(page, '已连接');
   await expect.poll(async () => page.evaluate(() => {
     return ((window as typeof window & { __auctionWS?: Array<{ url: string }> }).__auctionWS ?? [])
-      .some(({ url }) => url.includes('/ws?'));
+      .some(({ url }) => url.includes('/ws/auctions?'));
   })).toBe(true);
   const readsAfterInitialLoad = leaderboardReads;
 
   await page.evaluate(() => {
     const [entry] = ((window as typeof window & { __auctionWS?: Array<{ url: string; socket: { dispatchServerMessage: (payload: unknown) => void } }> }).__auctionWS ?? [])
-      .filter(({ url }) => url.includes('/ws?'));
+      .filter(({ url }) => url.includes('/ws/auctions?'));
     for (const payload of [
       { seq: 44, current_price_cents: 52000, user: '张**', bids: 4 },
       { seq: 45, current_price_cents: 57000, user: '陈**', bids: 5 },
@@ -1491,7 +1492,7 @@ test('H5 atmosphere engine dedupes strong effects after recovery snapshot', asyn
 });
 
 test('H5 renders bid and order history from user APIs', async ({ page }) => {
-  await page.route('/api/users/me/bids', async (route) => {
+  await page.route('**/api/users/me/bids**', async (route) => {
     await route.fulfill({
       json: {
         items: [
@@ -1501,7 +1502,7 @@ test('H5 renders bid and order history from user APIs', async ({ page }) => {
       }
     });
   });
-  await page.route('/api/users/me/orders', async (route) => {
+  await page.route('**/api/users/me/orders**', async (route) => {
     await route.fulfill({
       json: {
         items: [
@@ -1710,7 +1711,7 @@ test('H5 automatic bidding sheet surfaces server abuse rejects without optimisti
 });
 
 test('H5 bottom sheet history and orders use existing user APIs', async ({ page }) => {
-  await page.route('/api/users/me/bids', async (route) => {
+  await page.route('**/api/users/me/bids**', async (route) => {
     await route.fulfill({
       json: {
         items: [
@@ -1719,7 +1720,7 @@ test('H5 bottom sheet history and orders use existing user APIs', async ({ page 
       }
     });
   });
-  await page.route('/api/users/me/orders', async (route) => {
+  await page.route('**/api/users/me/orders**', async (route) => {
     await route.fulfill({
       json: {
         items: [
