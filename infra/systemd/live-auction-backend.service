@@ -1,0 +1,16 @@
+[Unit]
+Description=Live Auction Backend API
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/live-auction/backend
+EnvironmentFile=/root/live-auction/.env
+ExecStart=/root/live-auction/bin/live-auction-server
+Restart=always
+RestartSec=3
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target

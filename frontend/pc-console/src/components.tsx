@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+/// <reference types="vite/client" />
+import React, { useEffect, useRef, useState } from 'react';
 import { Badge, Button as ShadButton } from '@live-auction/shared-design';
 import type { ColumnDef } from '@tanstack/react-table';
-import { Activity, AlertTriangle, Bell, BellOff, Bot, CheckCircle2, ClipboardList, Clock3, Database, ExternalLink, Gavel, ImageIcon, PanelLeftClose, PanelLeftOpen, Play, RadioTower, RefreshCw, ShieldCheck, Sparkles, Square, Upload as UploadIcon, Wifi } from 'lucide-react';
+import { Activity, AlertTriangle, Bell, BellOff, Bot, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, Clock3, Database, ExternalLink, Gavel, ImageIcon, PanelLeftClose, PanelLeftOpen, Play, RadioTower, RefreshCw, ShieldCheck, Sparkles, Square, Upload as UploadIcon, Wifi } from 'lucide-react';
 import type { Auction, AuctionRecap, FlightRecorderPayload, FlightRecorderTimelineRow, HeatSummary, HostPrompt, Item, ListingDraftJob, LiveOpsHostSummary, LiveOpsRewardConfig, MaxBidSummary, MonitorPayload, Order, RedisEngineSummary, Room, RuleDraft, SentinelAlert, SignalRequest, SystemMessage } from './domain';
 import { anomalyKey, anomalySeverity, auctionScopedRows, auctionStatusLabel, connectionLabel, createRuleDraft, depositPreview, displayMediaURL, formatCents, formatRemaining, formatSeconds, isAckedAlert, liveHealthSummary, maskUser, monitorCount, monitorItems, orderStatusLabel, overallCopy, promptSeverityClass, queueGroups, redisEngineSummary, riskQueue, rowAuctionID, rowSourceURL, severityTagColor, signalCopy, signalTargetID, signalType, sortedAuctions, statusTagColor, terminalStatus, timelineImpact, timelineNextAction, timelineTone, validateRule, visibleAnomalies } from './domain';
 import { Button, DatePicker, Drawer, Form, Input, InputNumber, Message, Modal, Space, Table, Tabs, Tag, Upload } from './shared/ui/console-primitives';
@@ -10,6 +11,233 @@ import type { CommandVizFreshnessState, CommandVizPoint } from './widgets/Comman
 import { CommandVizStripShell } from './widgets/CommandVizStripShell';
 
 const demoLiveVideoURL = '/demo/jade-live-loop.mp4';
+const defaultWhipURL = import.meta.env.VITE_LIVE_AUCTION_WHIP_URL || '/mtx/auction-live/whip';
+
+function resolveRealtimeMediaEndpoint(rawURL: string) {
+  try {
+    const endpoint = new URL(rawURL, window.location.href);
+    if ((endpoint.hostname === '127.0.0.1' || endpoint.hostname === 'localhost') &&
+      window.location.hostname !== '127.0.0.1' &&
+      window.location.hostname !== 'localhost') {
+      endpoint.hostname = window.location.hostname;
+    }
+    return endpoint.toString();
+  } catch {
+    return rawURL;
+  }
+}
+
+function waitForIceGatheringComplete(pc: RTCPeerConnection, timeoutMS = 5000) {
+  if (pc.iceGatheringState === 'complete') return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      window.clearTimeout(timer);
+      pc.removeEventListener('icegatheringstatechange', onChange);
+      resolve();
+    };
+    const onChange = () => {
+      if (pc.iceGatheringState === 'complete') finish();
+    };
+    const timer = window.setTimeout(finish, timeoutMS);
+    pc.addEventListener('icegatheringstatechange', onChange);
+  });
+}
+
+function removeTcpIceCandidates(sdp: string) {
+  return sdp
+    .split(/\r?\n/)
+    .filter((line) => !/^a=candidate:/.test(line) || !/\bTCP\b/i.test(line))
+    .join('\r\n');
+}
+
+function preferH264Codecs(pc: RTCPeerConnection) {
+  if (typeof RTCRtpSender === 'undefined' || typeof RTCRtpSender.getCapabilities !== 'function') return;
+  const capabilities = RTCRtpSender.getCapabilities('video');
+  const codecs = capabilities?.codecs ?? [];
+  const h264 = codecs.filter((codec) => /video\/h264/i.test(codec.mimeType));
+  if (h264.length === 0) return;
+  const rest = codecs.filter((codec) => !/video\/h264/i.test(codec.mimeType));
+  pc.getTransceivers()
+    .filter((transceiver) => transceiver.sender.track?.kind === 'video')
+    .forEach((transceiver) => {
+      if (typeof transceiver.setCodecPreferences === 'function') {
+        transceiver.setCodecPreferences([...h264, ...rest]);
+      }
+    });
+}
+
+function videoTrackQualityCopy(stream: MediaStream) {
+  const videoTrack = stream.getVideoTracks()[0];
+  const settings = videoTrack?.getSettings();
+  if (!settings) return '';
+  const width = settings.width ? Math.round(settings.width) : 0;
+  const height = settings.height ? Math.round(settings.height) : 0;
+  const frameRate = settings.frameRate ? Math.round(settings.frameRate) : 0;
+  if (!width || !height) return '';
+  return `${width}×${height}${frameRate ? ` · ${frameRate}fps` : ''}`;
+}
+
+type RealtimeMediaStats = {
+  width?: number;
+  height?: number;
+  fps?: number;
+  bitrateKbps?: number;
+  packetsSent?: number;
+  codec?: string;
+  transport?: string;
+  candidatePair?: string;
+  qualityLabel: string;
+};
+
+type OutboundStatsSnapshot = {
+  bytesSent: number;
+  timestamp: number;
+};
+
+type RTCStatsMapEntry = RTCStats & Record<string, unknown>;
+
+type VideoOutboundStats = RTCStatsMapEntry & {
+  kind?: string;
+  frameWidth?: number;
+  frameHeight?: number;
+  framesPerSecond?: number;
+  bytesSent?: number;
+  packetsSent?: number;
+  codecId?: string;
+};
+
+type VideoCodecStats = RTCStatsMapEntry & {
+  mimeType?: string;
+};
+
+type IceCandidatePairRuntimeStats = RTCStatsMapEntry & {
+  selected?: boolean;
+  nominated?: boolean;
+  state?: string;
+  localCandidateId?: string;
+  remoteCandidateId?: string;
+};
+
+type IceCandidateRuntimeStats = RTCStatsMapEntry & {
+  protocol?: string;
+  candidateType?: string;
+};
+
+const hostCaptureProfiles: Array<{ label: string; constraints: MediaTrackConstraints; bitrate: number }> = [
+  {
+    label: '720p UDP 稳定高清',
+    constraints: {
+      width: { min: 1280, ideal: 1280 },
+      height: { min: 720, ideal: 720 },
+      frameRate: { ideal: 24, max: 24 },
+      aspectRatio: { ideal: 16 / 9 }
+    },
+    bitrate: 2_800_000
+  }
+];
+
+function realtimeQualityLabel(width?: number, height?: number, bitrateKbps?: number) {
+  const pixels = (width ?? 0) * (height ?? 0);
+  if (pixels >= 1920 * 1080 && (bitrateKbps ?? 0) >= 5500) return '1080p 高清';
+  if (pixels >= 1920 * 1080) return '1080p 码率不足';
+  if (pixels >= 1280 * 720 && (bitrateKbps ?? 0) >= 2400) return '720p 清晰';
+  if (pixels >= 1280 * 720) return '720p 码率不足';
+  if (pixels >= 960 * 540) return '540p 可用';
+  if (width || height) return '低清晰度';
+  return '等待编码';
+}
+
+async function captureHostCamera(audio: boolean) {
+  let lastError: unknown;
+  for (const profile of hostCaptureProfiles) {
+    try {
+      const stream = await withTimeout(
+        navigator.mediaDevices.getUserMedia({
+          video: profile.constraints,
+          audio: audio ? { echoCancellation: true, noiseSuppression: true, autoGainControl: true } : false
+        }),
+        15000,
+        '摄像头权限请求超时：请确认浏览器地址栏已允许摄像头/麦克风，或关闭其他占用摄像头的程序',
+        (lateStream) => lateStream.getTracks().forEach((track) => track.stop())
+      );
+      return { stream, profile };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
+function formatCandidatePair(localType?: string, remoteType?: string) {
+  if (!localType && !remoteType) return undefined;
+  return [localType, remoteType].filter(Boolean).join(' -> ');
+}
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMS: number,
+  timeoutMessage: string,
+  onLateResolve?: (value: T) => void,
+  onTimeout?: () => void
+) {
+  let settled = false;
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      onTimeout?.();
+      reject(new Error(timeoutMessage));
+    }, timeoutMS);
+    promise.then((value) => {
+      if (settled) {
+        onLateResolve?.(value);
+        return;
+      }
+      settled = true;
+      window.clearTimeout(timer);
+      resolve(value);
+    }).catch((error) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
+
+type HostMediaDeviceSummary = {
+  secure: boolean;
+  videoInputs: number;
+  audioInputs: number;
+};
+
+async function inspectHostMediaDevices(): Promise<HostMediaDeviceSummary> {
+  const devices = navigator.mediaDevices?.enumerateDevices
+    ? await withTimeout(navigator.mediaDevices.enumerateDevices(), 5000, '设备枚举超时，请刷新页面后重试')
+    : [];
+  return {
+    secure: window.isSecureContext,
+    videoInputs: devices.filter((device) => device.kind === 'videoinput').length,
+    audioInputs: devices.filter((device) => device.kind === 'audioinput').length
+  };
+}
+
+function mediaDeviceErrorCopy(error: unknown, summary?: HostMediaDeviceSummary) {
+  const name = error instanceof DOMException || error instanceof Error ? error.name : '';
+  const message = error instanceof Error ? error.message : '';
+  const suffix = summary
+    ? `（摄像头 ${summary.videoInputs} 个，麦克风 ${summary.audioInputs} 个，安全上下文 ${summary.secure ? '是' : '否'}）`
+    : '';
+  if (!summary?.secure) return `当前页面不是安全上下文，请用 localhost 或 HTTPS 打开 ${suffix}`;
+  if (name === 'NotFoundError' || /Requested device not found/i.test(message)) return `没有找到可用摄像头/麦克风 ${suffix}`;
+  if (name === 'NotAllowedError' || name === 'SecurityError') return `浏览器拒绝了摄像头权限，请在地址栏站点设置里允许摄像头/麦克风 ${suffix}`;
+  if (name === 'NotReadableError') return `摄像头被其他程序占用或系统阻止访问 ${suffix}`;
+  if (name === 'OverconstrainedError') return `当前摄像头不满足采集参数，已尝试降低采集约束 ${suffix}`;
+  return `${message || '摄像头采集失败'} ${suffix}`;
+}
 
 export function ConsoleNav({ activeTab, collapsed, onSelect, onToggle }: { activeTab: string; collapsed: boolean; onSelect: (tab: string) => void; onToggle: () => void }) {
   const rows = [
@@ -87,11 +315,279 @@ function formatOrderTime(value?: string) {
   });
 }
 
+export function HostCameraPublisher({ posterURL }: { posterURL?: string }) {
+  const previewRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const sessionURLRef = useRef('');
+  const lastOutboundStatsRef = useRef<OutboundStatsSnapshot | null>(null);
+  const publishRunRef = useRef(0);
+  const [state, setState] = useState<'idle' | 'requesting' | 'publishing' | 'error'>('idle');
+  const [message, setMessage] = useState('真实摄像头未推流');
+  const [deviceSummary, setDeviceSummary] = useState<HostMediaDeviceSummary | null>(null);
+  const [qualityStats, setQualityStats] = useState<RealtimeMediaStats | null>(null);
+
+  const stopPublishing = () => {
+    publishRunRef.current += 1;
+    const sessionURL = sessionURLRef.current;
+    sessionURLRef.current = '';
+    if (sessionURL) {
+      void fetch(new URL(sessionURL, resolveRealtimeMediaEndpoint(defaultWhipURL)).toString(), { method: 'DELETE', keepalive: true }).catch(() => undefined);
+    }
+    pcRef.current?.close();
+    pcRef.current = null;
+    lastOutboundStatsRef.current = null;
+    setQualityStats(null);
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    if (previewRef.current) {
+      previewRef.current.srcObject = null;
+    }
+    setState('idle');
+    setMessage('真实摄像头未推流');
+  };
+
+  useEffect(() => {
+    if (state !== 'publishing') return undefined;
+    const timer = window.setInterval(() => {
+      const pc = pcRef.current;
+      if (!pc) return;
+      void pc.getStats().then((report) => {
+        let outbound: VideoOutboundStats | undefined;
+        let codec: VideoCodecStats | undefined;
+        let selectedPair: IceCandidatePairRuntimeStats | undefined;
+        let localCandidate: IceCandidateRuntimeStats | undefined;
+        let remoteCandidate: IceCandidateRuntimeStats | undefined;
+        report.forEach((entry) => {
+          const stats = entry as RTCStatsMapEntry;
+          if (entry.type === 'outbound-rtp' && (stats.kind === 'video' || stats.mediaType === 'video')) {
+            outbound = stats as VideoOutboundStats;
+          }
+          if (entry.type === 'candidate-pair' && (stats.selected || stats.nominated || stats.state === 'succeeded')) {
+            selectedPair = stats as IceCandidatePairRuntimeStats;
+          }
+        });
+        if (outbound?.codecId) {
+          codec = report.get(outbound.codecId) as VideoCodecStats | undefined;
+        }
+        if (selectedPair?.localCandidateId) {
+          localCandidate = report.get(selectedPair.localCandidateId) as IceCandidateRuntimeStats | undefined;
+        }
+        if (selectedPair?.remoteCandidateId) {
+          remoteCandidate = report.get(selectedPair.remoteCandidateId) as IceCandidateRuntimeStats | undefined;
+        }
+        if (!outbound) return;
+        const now = outbound.timestamp || performance.now();
+        const bytesSent = outbound.bytesSent ?? 0;
+        const last = lastOutboundStatsRef.current;
+        const bitrateKbps = last && now > last.timestamp
+          ? Math.max(0, Math.round(((bytesSent - last.bytesSent) * 8) / (now - last.timestamp)))
+          : undefined;
+        lastOutboundStatsRef.current = { bytesSent, timestamp: now };
+        setQualityStats({
+          width: outbound.frameWidth,
+          height: outbound.frameHeight,
+          fps: outbound.framesPerSecond ? Math.round(outbound.framesPerSecond) : undefined,
+          bitrateKbps,
+          packetsSent: outbound.packetsSent,
+          codec: codec?.mimeType,
+          transport: localCandidate?.protocol,
+          candidatePair: formatCandidatePair(localCandidate?.candidateType, remoteCandidate?.candidateType),
+          qualityLabel: realtimeQualityLabel(outbound.frameWidth, outbound.frameHeight, bitrateKbps)
+        });
+      }).catch(() => undefined);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [state]);
+
+  const startPublishing = async () => {
+    if (!navigator.mediaDevices?.getUserMedia || typeof RTCPeerConnection === 'undefined') {
+      setState('error');
+      setMessage('当前浏览器不支持摄像头 WebRTC 推流');
+      return;
+    }
+    setState('requesting');
+    setMessage('正在检测本机摄像头与麦克风');
+    try {
+      const runID = publishRunRef.current + 1;
+      publishRunRef.current = runID;
+      stopPublishing();
+      publishRunRef.current = runID;
+      setState('requesting');
+      const beforePermissionSummary = await inspectHostMediaDevices();
+      setDeviceSummary(beforePermissionSummary);
+      setMessage('正在请求摄像头与麦克风权限');
+      let stream: MediaStream;
+      let captureMode = '音视频';
+      let activeProfile = hostCaptureProfiles[0];
+      try {
+        const captured = await captureHostCamera(true);
+        stream = captured.stream;
+        activeProfile = captured.profile;
+      } catch (audioVideoError) {
+        setMessage('音视频采集失败，正在尝试仅摄像头');
+        try {
+          const captured = await captureHostCamera(false);
+          stream = captured.stream;
+          activeProfile = captured.profile;
+          captureMode = '仅视频';
+        } catch (videoOnlyError) {
+          const afterPermissionSummary = await inspectHostMediaDevices().catch(() => beforePermissionSummary);
+          setDeviceSummary(afterPermissionSummary);
+          throw new Error(mediaDeviceErrorCopy(videoOnlyError, afterPermissionSummary));
+        }
+      }
+      const afterPermissionSummary = await inspectHostMediaDevices().catch(() => beforePermissionSummary);
+      setDeviceSummary(afterPermissionSummary);
+      setMessage(`正在建立 WHIP 推流会话（${captureMode}）`);
+      if (publishRunRef.current !== runID) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      streamRef.current = stream;
+      if (previewRef.current) {
+        setMessage(`本地摄像头已开启，正在显示预览（${captureMode} · ${activeProfile.label}）`);
+        previewRef.current.srcObject = stream;
+        await withTimeout(
+          previewRef.current.play(),
+          3000,
+          '本地摄像头已采集，但预览播放超时；请再次点击推流或刷新页面'
+        ).catch(() => undefined);
+      }
+      setMessage(`正在创建 WebRTC 推流连接（${captureMode} · ${activeProfile.label}）`);
+      const pc = new RTCPeerConnection();
+      if (publishRunRef.current !== runID) {
+        stream.getTracks().forEach((track) => track.stop());
+        pc.close();
+        return;
+      }
+      pcRef.current = pc;
+      setMessage(`正在配置 WebRTC 编码参数（${captureMode} · ${activeProfile.label}）`);
+      await withTimeout(Promise.all(stream.getTracks().map((track) => {
+        if (track.kind === 'video' && 'contentHint' in track) {
+          track.contentHint = 'detail';
+        }
+        const sender = pc.addTrack(track, stream);
+        if (track.kind !== 'video') return Promise.resolve();
+        const parameters = sender.getParameters() as RTCRtpSendParameters & {
+          degradationPreference?: 'maintain-framerate' | 'maintain-resolution' | 'balanced';
+        };
+        parameters.encodings = parameters.encodings?.length ? parameters.encodings : [{}];
+        parameters.encodings[0] = {
+          ...parameters.encodings[0],
+          maxBitrate: activeProfile.bitrate,
+          maxFramerate: 24,
+          scaleResolutionDownBy: 1
+        };
+        parameters.degradationPreference = 'balanced';
+        return sender.setParameters(parameters).catch(() => undefined);
+      })), 3000, 'WebRTC 编码参数配置超时，已继续尝试推流').catch(() => undefined);
+      preferH264Codecs(pc);
+      pc.addEventListener('connectionstatechange', () => {
+        if (pc.connectionState === 'connected') {
+          setState('publishing');
+          const quality = videoTrackQualityCopy(stream);
+          setMessage(`PC 摄像头正在低延迟推流${quality ? ` · ${quality}` : ''}`);
+        }
+        if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+          setState('error');
+          setMessage(`WHIP 连接${pc.connectionState === 'failed' ? '失败' : '已关闭'}`);
+        }
+      });
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      setMessage(`正在收集 WebRTC 候选地址（${captureMode} · ${activeProfile.label}）`);
+      await withTimeout(waitForIceGatheringComplete(pc), 8000, 'WebRTC ICE 地址收集超时：请确认当前网络允许 UDP，并且公网 UDP 8189 已放行');
+      setMessage('正在提交 WHIP 推流会话');
+      const localSdp = removeTcpIceCandidates(pc.localDescription?.sdp ?? '');
+      const controller = new AbortController();
+      const response = await withTimeout(
+        fetch(resolveRealtimeMediaEndpoint(defaultWhipURL), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/sdp' },
+          body: localSdp,
+          signal: controller.signal
+        }),
+        10000,
+        'WHIP 推流请求超时：本地摄像头已保留预览，请确认公网 UDP 8189 入站已放行，且当前电脑网络允许 UDP 出站',
+        undefined,
+        () => controller.abort()
+      );
+      if (!response.ok) {
+        throw new Error(`WHIP ${response.status}`);
+      }
+      sessionURLRef.current = response.headers.get('Location') || '';
+      const answer = await response.text();
+      if (publishRunRef.current !== runID) {
+        pc.close();
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      await pc.setRemoteDescription({ type: 'answer', sdp: removeTcpIceCandidates(answer) });
+      setState('publishing');
+      const quality = videoTrackQualityCopy(stream);
+      setMessage(`PC 摄像头正在低延迟推流（${captureMode} · ${activeProfile.label}${quality ? ` · ${quality}` : ''}）`);
+    } catch (error) {
+      pcRef.current?.close();
+      pcRef.current = null;
+      sessionURLRef.current = '';
+      lastOutboundStatsRef.current = null;
+      setQualityStats(null);
+      setState('error');
+      setMessage(error instanceof Error ? error.message : '摄像头推流失败');
+    }
+  };
+
+  useEffect(() => () => stopPublishing(), []);
+
+  return (
+    <div className={`host-camera-publisher state-${state}`}>
+      <video
+        ref={previewRef}
+        className="host-camera-preview"
+        poster={posterURL}
+        muted
+        playsInline
+        autoPlay
+      />
+      <div className="host-camera-bar">
+        <span className="host-camera-dot" />
+        <span>{message}</span>
+      </div>
+      <div className="host-camera-devices">
+        {deviceSummary
+          ? `摄像头 ${deviceSummary.videoInputs} · 麦克风 ${deviceSummary.audioInputs} · ${deviceSummary.secure ? '安全上下文' : '非安全上下文'}`
+          : '点击后检测本机采集设备'}
+      </div>
+      {qualityStats ? (
+        <div className="host-camera-quality">
+          <strong>{qualityStats.qualityLabel}</strong>
+          <span>
+            {qualityStats.width && qualityStats.height ? `${qualityStats.width}×${qualityStats.height}` : '等待编码'}
+            {qualityStats.fps ? ` · ${qualityStats.fps}fps` : ''}
+            {qualityStats.bitrateKbps ? ` · ${(qualityStats.bitrateKbps / 1000).toFixed(1)}Mbps` : ''}
+          </span>
+          <em>{qualityStats.transport ? qualityStats.transport.toUpperCase() : 'ICE'}{qualityStats.candidatePair ? ` · ${qualityStats.candidatePair}` : ''}</em>
+        </div>
+      ) : null}
+      <div className="host-camera-actions">
+        <button type="button" onClick={startPublishing} disabled={state === 'requesting'}>
+          <RadioTower size={15} /> {state === 'publishing' ? '重新推流' : '启用摄像头'}
+        </button>
+        <button type="button" onClick={stopPublishing} disabled={state === 'idle'}>
+          <Square size={15} /> 停止
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function depositStatusLabel(status?: string) {
   switch (status) {
     case 'HELD':
       return '保证金已冻结';
     case 'RELEASED':
+    case 'REFUNDED':
       return '保证金已释放';
     case 'FORFEITED':
       return '保证金已扣除';
@@ -101,6 +597,33 @@ function depositStatusLabel(status?: string) {
       return '无保证金';
     default:
       return '保证金待确认';
+  }
+}
+
+function paymentProviderLabel(provider?: string, method?: string) {
+  if (provider === 'alipay_sandbox') {
+    return method === 'alipay.trade.page.pay' ? '支付宝沙箱 · 电脑网站支付' : '支付宝沙箱 · 手机网站支付';
+  }
+  if (provider === 'local_fake') return '本地演示支付';
+  return '支付宝沙箱待确认';
+}
+
+function providerTradeStatusLabel(status?: string, eventType?: string, paid?: boolean) {
+  switch (status || eventType) {
+    case 'TRADE_SUCCESS':
+      return '交易支付成功';
+    case 'TRADE_FINISHED':
+      return '交易完成';
+    case 'WAIT_BUYER_PAY':
+      return '等待买家付款';
+    case 'TRADE_CLOSED':
+      return '交易关闭';
+    case 'payment_initiated':
+      return '已发起支付宝收银台';
+    case 'payment_succeeded':
+      return '支付确认成功';
+    default:
+      return paid ? '支付确认成功' : '等待支付宝确认';
   }
 }
 
@@ -922,16 +1445,54 @@ export function AuctionControlSummary({
   liveAuction?: Auction;
   children?: React.ReactNode;
 }) {
+  const [cameraPanelOpen, setCameraPanelOpen] = useState(false);
   const selectedIsLive = liveAuction?.id === selectedAuction.id || selectedAuction.status === 'ACTIVE';
   const mediaURL = displayMediaURL(selectedAuction.item?.image_url);
   const ops = auctionOpsSummary(selectedAuction, orders, heatSummary);
   const engine = redisEngineSummary(monitor.redisEngine, selectedAuction);
   const recentScopedEvents = recentEvents.filter((event) => String(event.auction_id ?? event.aggregate_id ?? '') === selectedAuction.id).length;
+  const vizPoints: CommandVizPoint[] = Array.from({ length: 64 }, (_, index) => {
+    const pressure = selectedAuction.status === 'ACTIVE' ? 1 : 0.38;
+    const acceptedBase = Math.max(1, ops.acceptedBids30s || selectedAuction.accepted_bid_count || 1);
+    const rejectedBase = Math.max(0, heatSummary?.rejected_bids_30s ?? engine.pending_redis_decisions ?? 0);
+    const latencyBase = Math.max(12, heatSummary?.bid_response_p95_ms ?? engine.settlement_lag_max_ms ?? 24);
+    return {
+      time: now - (63 - index) * 3_000,
+      accepted: Math.max(0, Math.round(acceptedBase * pressure * (0.36 + (index % 9) * 0.075))),
+      rejected: Math.max(0, Math.round(rejectedBase * (0.22 + (index % 6) * 0.065))),
+      latencyMS: Math.max(1, Math.round(latencyBase * (0.62 + (index % 8) * 0.06)))
+    };
+  });
+  const freshnessState: CommandVizFreshnessState = engine.paused_auctions > 0
+    ? 'paused'
+    : engine.failed_settlements > 0 || engine.pending_settlements > 0 || engine.pending_redis_decisions > 0
+      ? 'stale'
+      : 'live';
+  const freshnessText = `Data as of ${new Date(now).toLocaleTimeString()}`;
   return (
     <section className={`command-panel status-${selectedAuction.status.toLowerCase()}`} data-testid="auction-control-summary">
       <div className="command-hero">
-        <div className="command-media" data-testid="pc-current-media" aria-label="直播画面">
-          <video className="command-live-video" src={demoLiveVideoURL} poster={mediaURL || undefined} muted loop playsInline autoPlay />
+        <div className={`command-media-shell${cameraPanelOpen ? ' is-open' : ''}`}>
+          <button
+            type="button"
+            className="command-media-toggle"
+            aria-expanded={cameraPanelOpen}
+            aria-controls="pc-live-camera-panel"
+            onClick={() => setCameraPanelOpen((open) => !open)}
+          >
+            <span>
+              <RadioTower size={15} />
+              <strong>直播画面</strong>
+            </span>
+            <em>{cameraPanelOpen ? '收起' : '展开'}</em>
+            {cameraPanelOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+          </button>
+          {cameraPanelOpen ? (
+            <div id="pc-live-camera-panel" className="command-media" data-testid="pc-current-media" aria-label="直播画面">
+              <video className="command-live-video" src={demoLiveVideoURL} poster={mediaURL || undefined} muted loop playsInline autoPlay />
+              <HostCameraPublisher posterURL={mediaURL || undefined} />
+            </div>
+          ) : null}
         </div>
         <div className="command-copy">
           <div className="command-kicker">
@@ -952,6 +1513,7 @@ export function AuctionControlSummary({
           </div>
         </div>
       </div>
+      <CommandVizStripShell points={vizPoints} freshnessState={freshnessState} freshnessText={freshnessText} />
       <div className="control-stats">
         <div>
           <span>当前价</span>
@@ -1036,7 +1598,6 @@ export function LiveAssistRail({
   sentinelAlerts,
   systemMessages,
   onDismissPrompt,
-  onShortenCountdown,
   onDriveDemoBid
 }: {
   autoCommentaryEnabled: boolean;
@@ -1064,28 +1625,10 @@ export function LiveAssistRail({
   sentinelAlerts: SentinelAlert[];
   systemMessages: SystemMessage[];
   onDismissPrompt: (promptID: string) => void;
-  onShortenCountdown: () => void;
-  onDriveDemoBid: (mode: 'reject' | 'stale_low' | 'outbid' | 'challenge' | 'extend' | 'sold' | 'rival_max_bid', options?: { amountCents?: number }) => void;
+  onDriveDemoBid: (mode: 'outbid') => void;
 }) {
   const [demoDrawerOpen, setDemoDrawerOpen] = useState(false);
   const [opsDrawerOpen, setOpsDrawerOpen] = useState(false);
-  const currentPriceCents = selectedAuction?.current_price_cents ?? 0;
-  const incrementCents = selectedAuction?.increment_cents ?? 5000;
-  const acceptedBidCount = selectedAuction?.accepted_bid_count ?? 0;
-  const startPriceCents = selectedAuction?.start_price_cents ?? 35000;
-  const defaultRivalMaxBidCents = Math.min(
-    selectedAuction?.cap_price_cents ?? currentPriceCents + incrementCents * 3,
-    Math.max(
-      currentPriceCents + incrementCents * 2,
-      acceptedBidCount > 0
-        ? currentPriceCents + incrementCents * 2
-        : startPriceCents + incrementCents * 3
-    )
-  );
-  const [rivalMaxBidCents, setRivalMaxBidCents] = useState(defaultRivalMaxBidCents);
-  React.useEffect(() => {
-    setRivalMaxBidCents(defaultRivalMaxBidCents);
-  }, [defaultRivalMaxBidCents]);
   if (!selectedAuction) {
     return (
       <aside className="assist-rail">
@@ -1237,33 +1780,9 @@ export function LiveAssistRail({
             <strong>{selectedAuction.status === 'ACTIVE' ? '可一来一回演示' : '开拍后可用'}</strong>
           </div>
           <div className="demo-driver-grid">
-            <Button disabled={selectedAuction.status !== 'ACTIVE'} onClick={() => onDriveDemoBid('reject')}>模拟无效出价</Button>
-            <Button disabled={selectedAuction.status !== 'ACTIVE'} onClick={() => onDriveDemoBid('stale_low')}>旧价请求被拒绝</Button>
             <Button disabled={selectedAuction.status !== 'ACTIVE'} onClick={() => onDriveDemoBid('outbid')}>对手压过买家</Button>
-            <Button disabled={selectedAuction.status !== 'ACTIVE'} onClick={() => onDriveDemoBid('challenge')}>第三方强挑战</Button>
-            <Button disabled={selectedAuction.status !== 'ACTIVE'} onClick={onShortenCountdown}>倒计时缩到 15 秒</Button>
-            <Button disabled={selectedAuction.status !== 'ACTIVE'} onClick={() => onDriveDemoBid('extend')}>触发末段延时</Button>
-            <Button status="danger" disabled={selectedAuction.status !== 'ACTIVE'} onClick={() => onDriveDemoBid('sold')}>触发封顶成交</Button>
           </div>
-          <div className="demo-max-bid-control">
-            <span>对手自动加价上限</span>
-            <InputNumber
-              aria-label="rival-max-bid-yuan"
-              disabled={selectedAuction.status !== 'ACTIVE'}
-              min={0}
-              precision={2}
-              prefix="¥"
-              value={Number((rivalMaxBidCents / 100).toFixed(2))}
-              onChange={(value) => setRivalMaxBidCents(Math.round((Number(value) || 0) * 100))}
-            />
-            <Button
-              disabled={selectedAuction.status !== 'ACTIVE'}
-              onClick={() => onDriveDemoBid('rival_max_bid', { amountCents: rivalMaxBidCents })}
-            >
-              设置对手自动加价
-            </Button>
-          </div>
-          <small>这些按钮不会前端假改状态；它们只驱动 demo 买家账号。你可以在 H5 手动出价，再回 PC 触发对手或代理场景，所有结果都来自同一服务端序列。</small>
+          <small>这里只保留对手真实出价，用于验证 H5 买家手动出价、自动加价取消、被反超等核心链路；其它演示捷径已隐藏，避免误触造成误判。</small>
         </div>
       </Drawer>
       <Drawer
@@ -2215,8 +2734,15 @@ export function OrderDetailDrawer({
           </div>
 
           <div className="order-detail-section">
-            <span>支付编号</span>
-            <code>{order.provider_payment_id ?? '尚未发起支付'}</code>
+            <span>支付宝收单凭证</span>
+            <div className="order-payment-proof">
+              <div><span>支付渠道</span><strong>{paymentProviderLabel(order.payment_provider, order.payment_method)}</strong></div>
+              <div><span>支付宝状态</span><strong>{providerTradeStatusLabel(order.provider_trade_status, order.payment_status, order.status === 'PAID')}</strong></div>
+              <div><span>商户订单号</span><code>{order.provider_payment_id ?? '尚未发起支付'}</code></div>
+              <div><span>支付宝交易号</span><code>{order.provider_trade_no || '支付后由支付宝返回'}</code></div>
+              <div><span>平台确认时间</span><strong>{order.payment_processed_at ? new Date(order.payment_processed_at).toLocaleString() : '-'}</strong></div>
+              <div><span>平台流水</span><code>{order.payment_event_id || '-'}</code></div>
+            </div>
           </div>
 
           <div className="order-detail-section">

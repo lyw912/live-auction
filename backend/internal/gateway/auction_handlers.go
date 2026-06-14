@@ -728,6 +728,8 @@ func (h AuctionHandler) liveSessionPlayback(row auction.Auction) liveSessionPlay
 	mimeType := strings.TrimSpace(h.Config.LiveDemoMimeType)
 	if mimeType == "" {
 		switch protocol {
+		case "whep":
+			mimeType = "application/sdp"
 		case "hls", "ll-hls":
 			mimeType = "application/vnd.apple.mpegurl"
 		case "mp4":
@@ -775,7 +777,7 @@ func (h AuctionHandler) liveSessionPlayback(row auction.Auction) liveSessionPlay
 		Capabilities: liveSessionCapabilities{
 			NativeHlsOnSafari: true,
 			MSEHls:            true,
-			WebRTC:            false,
+			WebRTC:            protocol == "whep",
 		},
 	}
 }

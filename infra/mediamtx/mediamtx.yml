@@ -23,15 +23,20 @@ hlsPartDuration: 200ms
 hlsSegmentMaxSize: 50M
 hlsDirectory: ""
 hlsMuxerCloseAfter: 60s
-webrtc: no
+webrtc: yes
+webrtcAddress: :8889
+webrtcAllowOrigins:
+  - "*"
+webrtcLocalUDPAddress: :8189
+webrtcLocalTCPAddress: ""
+webrtcIPsFromInterfaces: no
+webrtcIPsFromInterfacesList: []
+webrtcAdditionalHosts:
+  - 106.52.68.95
+webrtcICEServers2: []
 srt: no
 
 paths:
   auction-live:
     source: publisher
     sourceOnDemand: no
-    runOnInit: >
-      ffmpeg -hide_banner -loglevel warning -re -stream_loop -1
-      -i /media/jade-live-loop.mp4
-      -c copy -f rtsp rtsp://127.0.0.1:8554/auction-live
-    runOnInitRestart: yes

@@ -4173,14 +4173,15 @@ func (w *Worker) existingSettlementAttempt(ctx context.Context, auctionID string
 	var existingRequestHash string
 	var existingPayloadHash string
 	var conflictScope string
+	var updatedAt time.Time
 	err := w.db.QueryRow(ctx, `
-		SELECT stream_id, attempts, status, COALESCE(payload_json->>'request_hash', ''), payload_sha256, conflict_scope
+		SELECT stream_id, attempts, status, COALESCE(payload_json->>'request_hash', ''), payload_sha256, conflict_scope, updated_at
 		FROM (
-		  SELECT stream_id, attempts, status, payload_json, payload_sha256, 'stream_id' AS conflict_scope, 1 AS priority
+		  SELECT stream_id, attempts, status, payload_json, payload_sha256, updated_at, 'stream_id' AS conflict_scope, 1 AS priority
 		  FROM redis_engine_settlements
 		  WHERE auction_id = $1 AND stream_id = $4
 		  UNION ALL
-		  SELECT stream_id, attempts, status, payload_json, payload_sha256, 'kafka_offset' AS conflict_scope, 2 AS priority
+		  SELECT stream_id, attempts, status, payload_json, payload_sha256, updated_at, 'kafka_offset' AS conflict_scope, 2 AS priority
 		  FROM redis_engine_settlements
 		  WHERE ledger_source = 'kafka'
 		    AND ledger_topic = $5
@@ -4190,19 +4191,46 @@ func (w *Worker) existingSettlementAttempt(ctx context.Context, auctionID string
 		    AND $6 >= 0
 		    AND $7 >= 0
 		  UNION ALL
-		  SELECT stream_id, attempts, status, payload_json, payload_sha256, 'engine_seq' AS conflict_scope, 3 AS priority
+		  SELECT stream_id, attempts, status, payload_json, payload_sha256, updated_at, 'engine_seq' AS conflict_scope, 3 AS priority
 		  FROM redis_engine_settlements
 		  WHERE auction_id = $1 AND engine_epoch = $2 AND engine_seq = $3
 		) matches
 		ORDER BY priority
 		LIMIT 1
-	`, auctionID, result.EngineEpoch, result.EngineSeq, streamID, message.Topic, message.Partition, message.Offset).Scan(&existingStreamID, &attempt.attempts, &attempt.status, &existingRequestHash, &existingPayloadHash, &conflictScope)
+	`, auctionID, result.EngineEpoch, result.EngineSeq, streamID, message.Topic, message.Partition, message.Offset).Scan(&existingStreamID, &attempt.attempts, &attempt.status, &existingRequestHash, &existingPayloadHash, &conflictScope, &updatedAt)
 	if err != nil {
 		return settlementAttempt{}, err
 	}
 	if existingPayloadHash == payloadHash {
 		if attempt.status == "SETTLED" || attempt.status == "SKIPPED" {
 			return attempt, nil
+		}
+		if attempt.status == "PROCESSING" && time.Since(updatedAt) >= settlementTerminalGrace {
+			err = w.db.QueryRow(ctx, `
+				UPDATE redis_engine_settlements
+				SET stream_id = $4,
+				    ledger_source = CASE WHEN $5 <> '' AND $6 >= 0 AND $7 >= 0 THEN 'kafka' ELSE ledger_source END,
+				    ledger_topic = CASE WHEN $5 <> '' THEN $5 ELSE ledger_topic END,
+				    ledger_partition = CASE WHEN $6 >= 0 THEN $6 ELSE ledger_partition END,
+				    ledger_offset = CASE WHEN $7 >= 0 THEN $7 ELSE ledger_offset END,
+				    ledger_key = CASE WHEN $8 <> '' THEN $8 ELSE ledger_key END,
+				    attempts = attempts + 1,
+				    last_error = 'stale duplicate settlement processing attempt claimed by matching payload',
+				    updated_at = now()
+				WHERE auction_id = $1
+				  AND engine_epoch = $2
+				  AND engine_seq = $3
+				  AND payload_sha256 = $9
+				  AND status = 'PROCESSING'
+				  AND updated_at <= now() - make_interval(secs => $10)
+				RETURNING attempts, status
+			`, auctionID, result.EngineEpoch, result.EngineSeq, streamID, message.Topic, message.Partition, message.Offset, message.Key, payloadHash, int(settlementTerminalGrace.Seconds())).Scan(&attempt.attempts, &attempt.status)
+			if err == nil {
+				return attempt, nil
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return settlementAttempt{}, err
+			}
 		}
 		return attempt, transientSettlementError{err: fmt.Errorf("duplicate settlement waiting for first attempt auction=%s epoch=%d seq=%d existing_stream=%s new_stream=%s status=%s", auctionID, result.EngineEpoch, result.EngineSeq, existingStreamID, streamID, attempt.status)}
 	}

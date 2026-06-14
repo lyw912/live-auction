@@ -60,6 +60,19 @@ type Config struct {
 	BidRedisGuardTimeout         time.Duration
 	RedisEngineSettlementWorkers int
 	FakePaymentWebhookSecret     string
+	AlipaySandboxEnabled         bool
+	AlipayAppID                  string
+	AlipayPrivateKey             string
+	AlipayPrivateKeyPath         string
+	AlipayPublicKey              string
+	AlipayPublicKeyPath          string
+	AlipayGatewayURL             string
+	AlipayNotifyURL              string
+	AlipayIncludeNotifyURL       bool
+	AlipayReturnURL              string
+	AlipayIncludeReturnURL       bool
+	AlipayPayMethod              string
+	AlipayProductCode            string
 
 	AIProviderMode               string
 	AIRelayBaseURL               string
@@ -137,11 +150,11 @@ func Load() Config {
 		AllowMockAuth:  getEnvBool("ALLOW_MOCK_AUTH", false),
 		SessionTTL:     getEnvDuration("SESSION_TTL", 12*time.Hour),
 
-		LiveDemoMediaProtocol: getEnv("LIVE_DEMO_MEDIA_PROTOCOL", "mp4"),
-		LiveDemoMediaURL:      getEnv("LIVE_DEMO_MEDIA_URL", "/demo/jade-live-loop.mp4"),
-		LiveDemoMimeType:      getEnv("LIVE_DEMO_MIME_TYPE", "video/mp4"),
-		LiveDemoIsLive:        getEnvBool("LIVE_DEMO_IS_LIVE", false),
-		LiveDemoLatencyMs:     getEnvInt("LIVE_DEMO_LATENCY_MS", 0),
+		LiveDemoMediaProtocol: getEnv("LIVE_DEMO_MEDIA_PROTOCOL", "whep"),
+		LiveDemoMediaURL:      getEnv("LIVE_DEMO_MEDIA_URL", "/mtx/auction-live/whep"),
+		LiveDemoMimeType:      getEnv("LIVE_DEMO_MIME_TYPE", "application/sdp"),
+		LiveDemoIsLive:        getEnvBool("LIVE_DEMO_IS_LIVE", true),
+		LiveDemoLatencyMs:     getEnvInt("LIVE_DEMO_LATENCY_MS", 800),
 		LiveFallbackMP4URL:    getEnv("LIVE_MEDIA_FALLBACK_MP4_URL", ""),
 
 		BidUserLimitPerSecond:        getEnvInt("BID_USER_LIMIT_PER_SECOND", 3),
@@ -159,6 +172,19 @@ func Load() Config {
 		BidRedisGuardTimeout:         getEnvDuration("BID_REDIS_GUARD_TIMEOUT", 30*time.Millisecond),
 		RedisEngineSettlementWorkers: getEnvInt("REDIS_ENGINE_SETTLEMENT_WORKERS", 1),
 		FakePaymentWebhookSecret:     getEnv("FAKE_PAYMENT_WEBHOOK_SECRET", "local_fake_payment_secret"),
+		AlipaySandboxEnabled:         getEnvBool("ALIPAY_SANDBOX_ENABLED", false),
+		AlipayAppID:                  getEnv("ALIPAY_APP_ID", ""),
+		AlipayPrivateKey:             getEnv("ALIPAY_PRIVATE_KEY", ""),
+		AlipayPrivateKeyPath:         getEnv("ALIPAY_PRIVATE_KEY_PATH", ""),
+		AlipayPublicKey:              getEnv("ALIPAY_PUBLIC_KEY", ""),
+		AlipayPublicKeyPath:          getEnv("ALIPAY_PUBLIC_KEY_PATH", ""),
+		AlipayGatewayURL:             getEnv("ALIPAY_GATEWAY_URL", "https://openapi-sandbox.dl.alipaydev.com/gateway.do"),
+		AlipayNotifyURL:              getEnv("ALIPAY_NOTIFY_URL", ""),
+		AlipayIncludeNotifyURL:       getEnvBool("ALIPAY_INCLUDE_NOTIFY_URL", false),
+		AlipayReturnURL:              getEnv("ALIPAY_RETURN_URL", ""),
+		AlipayIncludeReturnURL:       getEnvBool("ALIPAY_INCLUDE_RETURN_URL", false),
+		AlipayPayMethod:              getEnv("ALIPAY_PAY_METHOD", "alipay.trade.page.pay"),
+		AlipayProductCode:            getEnv("ALIPAY_PRODUCT_CODE", "FAST_INSTANT_TRADE_PAY"),
 
 		AIProviderMode:               getEnv("AI_PROVIDER_MODE", "provider"),
 		AIRelayBaseURL:               getEnv("AI_RELAY_BASE_URL", "https://api.gptgod.online/v1"),

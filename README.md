@@ -2,11 +2,11 @@
 
 > 抖音电商 AI 全栈挑战赛参赛作品
 
-一套落地了 **Redis Lua 原子决策 → Kafka 有序决策 WAL → PostgreSQL 结算真相 → Reconciler 校验闭环** 的失败关闭(fail-closed)实时竞拍内核，配合 AI 智能运营助手与极致竞价氛围体验。
+一套落地了 **Redis Lua 原子决策 → Kafka 有序决策 WAL → PostgreSQL 结算真相 → Reconciler 校验闭环** 的失败关闭(fail-closed)实时竞拍内核，配合 AI 智能运营助手、支付宝沙箱支付、WebRTC 直播推流与极致竞价氛围体验。
 
 ```
 商品上架 → 规则配置 → 排期开拍 → 实时出价(原子Lua决策) → 动态排名
-→ 反狙击延时/封顶成交 → Kafka WAL → PG 结算建单 → mock 支付
+→ 反狙击延时/封顶成交 → Kafka WAL → PG 结算建单 → 支付宝沙箱支付
 → 监控诊断 / AI 解说 / 复盘高光
 ```
 
@@ -20,7 +20,9 @@
 | 真相 | PostgreSQL 16 | 结算/审计/订单，exactly-once 边界 |
 | 前端 H5 | React 18 · TypeScript · Vite | 服务器权威 · 断线重连 · 氛围动效 |
 | 前端 PC | React 18 · Arco Design · Vite | 商家后台 · AI 工具 · 监控 |
-| AI | DeepSeek V4 Flash · Qwen-VL-Max | 选品/解说/哨兵/Q&A/复盘 |
+| AI | OpenAI-compatible relay · GLM-4.6V/Qwen-VL 等可配 | 选品/解说/哨兵/Q&A/复盘 |
+| 支付 | Alipay OpenAPI Sandbox · 本地 fake provider | 电脑网站/手机网站支付表单、支付查询、回调/事件入账 |
+| 直播 | MediaMTX · WHIP/WHEP WebRTC | PC 摄像头推流，H5 低延迟观看，MP4 显式 fallback |
 | 可观测 | Prometheus · Grafana · Tempo · OTel | 指标/追踪/告警 |
 | 存储 | MinIO (S3) | 商品图片 |
 | 测试 | Go tests · Playwright · K6 · Toxiproxy · PTS | 90+ 集成 · 35 正确性门禁 |
@@ -43,7 +45,7 @@ npm run dev:h5         # H5 竞拍端 :5276
 npm run dev:pc         # PC 商家端 :5277
 ```
 
-详细步骤见 [docs/setup_guide.md](docs/setup_guide.md)。
+详细架构与答辩阅读入口见 [docs/README.md](docs/README.md)，本地基础设施说明见 [infra/README.md](infra/README.md)。
 
 ## 目录结构
 
@@ -54,7 +56,7 @@ backend/                    Go 后端 (25,928 行)
     redisengine/            热竞价引擎 — Lua 决策 + Relay + 结算 + 重建 (5,495 行)
     auction/                领域模型 / 规则校验 / 出价逻辑 / 状态机
     ai/                     AI Generator / 安全护栏 / Provider 路由
-    gateway/                Chi 路由 / 鉴权 / Admission / Handler
+    gateway/                Chi 路由 / 鉴权 / Admission / 支付宝 / Handler
     realtime/               WebSocket Hub / 排行榜投影 / 背压
     reconcile/              Redis↔Kafka↔PG 漂移检测
     scheduler/              终态转换(SOLD/ENDED) + Fencer
@@ -70,12 +72,14 @@ tests/
   load/                     K6 压测脚本 (18 个)
   chaos/                    Toxiproxy 混沌测试 (8 场景)
   e2e/                      Playwright E2E (7 spec)
-infra/                      Docker Compose — 11 容器
+infra/                      Docker Compose / MediaMTX / systemd / nginx
 docs/
   README.md                 评委阅读入口
-  design/                   最新架构合同 / SLO / 证据策略
-  s1-s5/                    S1-S5 评测设计与门禁
-  judge/                    终审报告 / 答辩材料 / 演示脚本
+  00-project/               项目总览 / 产品范围 / 覆盖矩阵
+  01-architecture/          系统架构 / 数据一致性 / 技术选型
+  03-backend/               出价 / 结算 / 恢复 / AI / 工程难点
+  05-frontend/              H5 与 PC 闭环
+  09-judge-defense/         答辩材料
 ```
 
 ## 架构概览
@@ -115,7 +119,11 @@ HTTP POST /bids
 
 **实时体验** — 服务器权威(无乐观成功) / 时钟漂移免疫倒计时 / 断线重连+序号空洞快照恢复 / 房间级 WS 隔离+背压
 
-**竞价氛围** — 领先/被超越/延时/落槌分阶段动效+音效+触觉 / 心跳音床 / 竞速榜瀑布 / 热度计
+**竞价氛围** — 领先/被超越/自动防守/延时/落槌分阶段动效+音效+触觉 / 心跳音床 / 竞速榜瀑布 / 热度计
+
+**支付宝沙箱闭环** — 中拍订单发起 `alipay.trade.page.pay` / `wap.pay` 表单跳转，回调与主动查询都落到统一 payment event，订单详情展示 provider、trade status、支付宝交易号与处理时间；本地 fake provider 只作为配置缺失时的开发兜底。
+
+**低延迟直播链路** — PC 端摄像头通过 WHIP 推到 MediaMTX，H5 通过 WHEP 播放；公网 IP HTTPS、UDP/TCP ICE、端口代理和浏览器安全上下文都有独立配置。
 
 **AI 智能运营** — 选品 Copilot / 自动解说 / 哨兵告警 / 商品 Q&A / 复盘高光；AI 永不碰钱/胜者/终态
 
@@ -147,6 +155,15 @@ WS_RECOVERY_MAX_EVENTS=300
 AI_PROVIDER_MODE=provider
 AI_TEXT_MODEL=deepseek-v4-flash
 AI_COMMENTARY_BATCH_SIZE=4
+
+# 支付宝沙箱
+ALIPAY_SANDBOX_ENABLED=true
+ALIPAY_GATEWAY_URL=https://openapi-sandbox.dl.alipaydev.com/gateway.do
+ALIPAY_PAY_METHOD=alipay.trade.page.pay
+
+# WebRTC 直播
+LIVE_DEMO_MEDIA_PROTOCOL=whep
+LIVE_DEMO_MEDIA_URL=/mtx/auction-live/whep
 ```
 
 完整参数见 `.env.example` (91 项)。

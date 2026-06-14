@@ -148,7 +148,7 @@ assert.equal(h5BidContract.BID_REQUEST_TIMEOUT_MS, 8000);
   assert.deepEqual(JSON.parse(ticketRequest.init.body), { room_id: 'room_main', auction_id: 'auc_live', user_id: 'user_1' });
   assert.deepEqual(h5WSContract.auctionWSProtocols('ticket-abc'), ['auction.v1', 'ticket.ticket-abc']);
   const wsURL = h5WSContract.auctionWSURL('https://example.test/live', 'room_main', 'auc_live', 42);
-  assert.match(wsURL, /^wss:\/\/example\.test\/ws\/auctions\?/);
+  assert.match(wsURL, /^wss:\/\/example\.test\/ws\?/);
   assert.match(wsURL, /room_id=room_main/);
   assert.match(wsURL, /auction_id=auc_live/);
   assert.match(wsURL, /last_seq=42/);
@@ -205,13 +205,23 @@ assert.deepEqual(h5LiveMediaSelector.liveSessionQueryKey('auc_live'), ['live-ses
   assert.equal(playback.latencyTargetMs, 3000);
   assert.deepEqual(playback.capabilities, { nativeHlsOnSafari: true, mseHls: true, webrtc: false });
   const fallback = h5LiveSessionModel.normalizeLiveSessionResponse({}, 'auc_fallback', '/api/media/poster.jpg');
-  assert.deepEqual(fallback.sources, [{ protocol: 'mp4', url: '/demo/jade-live-loop.mp4', mimeType: 'video/mp4', priority: 90 }]);
+  assert.deepEqual(fallback.sources, [{ protocol: 'whep', url: '/mtx/auction-live/whep', mimeType: 'application/sdp', priority: 10 }]);
+  assert.equal(fallback.isLive, false);
+  assert.equal(fallback.capabilities.webrtc, false);
   assert.equal(fallback.posterURL, '/api/media/poster.jpg');
-  assert.equal(h5WhepAdapter.whepAdapter.canPlay(), false);
+  const posterOnly = h5LiveSessionModel.posterOnlyPlayback('auc_fallback', '/api/media/poster.jpg');
+  assert.deepEqual(posterOnly.sources.map((source) => source.protocol), ['whep']);
+  assert.equal(posterOnly.isLive, true);
+  assert.equal(posterOnly.capabilities.webrtc, true);
+  assert.equal(h5WhepAdapter.whepAdapter.canPlay(), typeof RTCPeerConnection !== 'undefined');
   const playable = h5LiveMediaSelector.choosePlayableSource(playback.sources, { canNativeHls: true, mseHlsSupported: false });
-  assert.equal(playable.source.protocol, 'll-hls');
+  if (typeof RTCPeerConnection !== 'undefined') {
+    assert.equal(playable?.source.protocol, 'whep');
+  } else {
+    assert.equal(playable, null);
+  }
   const mp4Only = h5LiveMediaSelector.choosePlayableSource(playback.sources, { canNativeHls: false, mseHlsSupported: false });
-  assert.equal(mp4Only.source.protocol, 'mp4');
+  assert.equal(mp4Only, null);
 }
 assert.throws(() => h5MediaContract.assertMediaPlaybackShape({
   auctionId: 'auc_live',
@@ -250,6 +260,18 @@ assert.equal(h5PaymentContract.payMockEndpoint('ord_1'), '/api/orders/ord_1/pay-
   assert.equal(fetchCalls[0].init.method, 'POST');
   assert.equal(result.phase, 'paid');
   assert.equal(result.orderStatus, 'PAID');
+  const queryCalls = [];
+  const queryResult = await h5PayMockAction.queryOrderPayment('ord_1', async (url, init) => {
+    queryCalls.push({ url, init });
+    return {
+      ok: true,
+      json: async () => ({ order_status: 'PAID', trade_status: 'TRADE_SUCCESS' })
+    };
+  });
+  assert.equal(queryCalls[0].url, '/api/orders/ord_1/pay/query');
+  assert.equal(queryCalls[0].init.method, 'POST');
+  assert.equal(queryResult.phase, 'paid');
+  assert.equal(queryResult.orderStatus, 'PAID');
   assert.equal(h5PaymentContract.interpretPaymentResponse({ ok: true, orderStatus: 'PAID' }), 'paid');
   assert.equal(h5PaymentContract.interpretPaymentResponse({ ok: true, orderStatus: 'ORDER_PENDING' }), 'failed');
   assert.equal(h5PaymentContract.interpretPaymentResponse({ ok: false, orderStatus: 'PAID' }), 'failed');
@@ -323,7 +345,7 @@ assert.deepEqual(pcPaymentContract.pcOrderPaymentFields({
   assert.match(h5Styles, /prefers-reduced-motion: reduce/);
   assert.doesNotMatch(h5Styles, /blink/i);
   assert.match(h5Components, /order_status=PAID/);
-  assert.match(h5Components, /pay-mock/);
+  assert.match(h5Components, /支付宝沙箱/);
   assert.match(pcViz, /from 'echarts\/core'/);
   assert.match(pcViz, /points\.slice\(-120\)/);
   assert.match(pcViz, /CommandVizFreshnessState = 'live' \| 'stale' \| 'paused'/);

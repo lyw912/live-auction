@@ -15,6 +15,7 @@ Thumbs.db
 
 # Go
 backend/bin/
+bin/
 backend/coverage.out
 backend/tmp/
 

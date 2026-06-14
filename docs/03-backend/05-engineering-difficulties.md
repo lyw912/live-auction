@@ -156,6 +156,32 @@
 
 ## 表 3-5-7：困难与验证总表
 
+## 表 3-5-7：困难 7 - 公网 IP 双端口演示导致支付身份串号
+
+| 项 | 内容 |
+|---|---|
+| 现象 | H5 中拍后点击“立即支付”偶发一直停在“支付确认中”，后端日志显示 `/api/orders/{id}/pay` 返回 403。 |
+| 根因 | H5 `5276` 和 PC `5277` 都使用同一个公网 IP，浏览器 Cookie 不按端口隔离。PC 登录主播会覆盖 H5 买家 `la_session`，H5 支付请求因此可能带 host 身份；Vite proxy 又把 Host 改成后端地址，后端无法按入口端口区分。 |
+| 尝试/备选 | 让演示者用两个浏览器、要求清 Cookie、改用域名子域名、只在前端重登买家。 |
+| 最终方案 | 后端增加端口作用域 session cookie：H5 使用 `la_session_h5`，PC 使用 `la_session_pc`；H5/PC Vite proxy 显式转发 `X-Forwarded-Host`；支付发起失败不再伪装成确认中。 |
+| 代价 | 本地 dev proxy 需要知道公网端口；正式环境建议用域名/子域名和标准反向代理统一处理。 |
+| 验证 | `curl` 登录 `5276` 返回 `Set-Cookie: la_session_h5`，登录 `5277` 返回 `Set-Cookie: la_session_pc`；重置后数据库 0 出价/0 订单/0 支付事件。 |
+| 代码 | `backend/internal/gateway/auth.go` 的 `scopedSessionCookieName`；`frontend/mobile-h5/vite.config.ts`、`frontend/pc-console/vite.config.ts` 的 `X-Forwarded-Host`；`frontend/mobile-h5/src/features/pay-order/pay-mock-action.ts`。 |
+
+这个问题有答辩价值：它不是“支付宝沙箱不稳定”一句话能解释的，而是浏览器 cookie 域模型、dev proxy 头部、后端身份鉴权和前端支付状态机叠加后的真实工程事故。修复后即使 PC/H5 同时打开，主播和买家身份也不会互相覆盖。
+
+## 表 3-5-8：困难 8 - AI relay 返回残缺 JSON
+
+| 项 | 内容 |
+|---|---|
+| 现象 | PC 智能草稿上传图片和备注后偶发“生成失败”，日志显示 AI relay 返回残缺或包在 markdown code fence 中的 JSON。 |
+| 根因 | OpenAI-compatible relay/model 在视觉大输入下可能截断，或者返回带说明文字的 JSON 片段；原逻辑只做一次严格 `json.Unmarshal`。 |
+| 最终方案 | listing draft 提高最小 `max_tokens`，解析时兼容 code fence 和首个 JSON object 抽取；视觉模型失败时降级为去图片的文本草稿，并在 safety 中标记 `vision_fallback`。 |
+| 边界 | AI 仍只生成运营草稿，不自动发布商品、规则、价格或成交结果。 |
+| 代码 | `backend/internal/ai/chat_provider.go` 的 `parseStructuredJSONContent`/`maxTokensForKind`；`backend/internal/ai/types.go` 的 vision fallback。 |
+
+## 表 3-5-9：困难与验证总表
+
 | 困难 | 最终方案 | 证明方式 | 仍需承认的边界 |
 |---|---|---|---|
 | PG 热行锁 | Redis Lua 单写者 | engine tests + S1/S2 verifier | 单拍品仍受 Redis 单线程上限 |
@@ -164,6 +190,8 @@
 | H5 弱网 | 8s timeout + 同 key 重试 | 当前 TS 代码 + 幂等链路 | 还需弱网自动化覆盖更多机型 |
 | Go/Lua 漂移 | 线上以 Lua 为准 + parity plan | 代码审查 + 后续 property test | 当前应主动承认为技术债 |
 | AI 幻觉 | 运营辅助 + fallback | AI tests + safety flags | 不宣传 AI 自动定价/成交 |
+| 双端口支付串号 | 端口作用域 cookie + proxy forwarded host | curl cookie 验证 + 支付 403 根因日志 | 正式环境应使用标准域名/反代策略 |
+| AI 残缺 JSON | 增量解析 + token 下限 + vision fallback | PC 智能草稿可恢复 | relay/model 质量仍需生产 SLA |
 
 ## 评委拷问
 

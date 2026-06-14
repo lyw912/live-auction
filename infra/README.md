@@ -42,21 +42,45 @@ Runbooks for those local alerts are in `docs/design/05-alert-runbooks.md`; no Al
 
 Data is stored in Docker named volumes. Use `docker compose -f infra\docker-compose.yml down -v` only when you intentionally want to delete local data.
 
-## MediaMTX LL-HLS
+## MediaMTX WebRTC Live Loop
 
-Phase 3 adds `mediamtx`, which loops `frontend/mobile-h5/public/demo/jade-live-loop.mp4` through FFmpeg copy mode and exposes LL-HLS at:
+The default live-media path is now a real browser WebRTC loop:
 
 ```text
-http://127.0.0.1:8888/auction-live/index.m3u8?cookieCheck=1
+PC console getUserMedia() -> WHIP publish -> MediaMTX -> WHEP playback -> H5 bidder
 ```
 
-Smoke check:
+MediaMTX exposes the default path at:
 
-```powershell
-.\scripts\smoke-mediamtx-llhls.ps1
+```text
+http://127.0.0.1:8889/auction-live/whip
+http://127.0.0.1:8889/auction-live/whep
 ```
 
-Backend descriptor env for the LL-HLS demo path:
+The backend descriptor defaults to WHEP and keeps MP4 only as an explicit fallback:
+
+```text
+LIVE_DEMO_MEDIA_PROTOCOL=whep
+LIVE_DEMO_MEDIA_URL=http://127.0.0.1:8889/auction-live/whep
+LIVE_DEMO_MIME_TYPE=application/sdp
+LIVE_DEMO_IS_LIVE=true
+LIVE_DEMO_LATENCY_MS=800
+LIVE_MEDIA_FALLBACK_MP4_URL=/demo/jade-live-loop.mp4
+```
+
+For a LAN/mobile device, use HTTPS for the PC console page before expecting camera permission. Browsers allow camera capture on `localhost`, but non-localhost origins require a secure context. Production deployment also needs proper TLS, STUN/TURN/ICE policy, and auth around WHIP/WHEP.
+
+When developing through a remote server, prefer a dedicated OpenSSH tunnel from your local machine instead of VS Code's Ports panel for WebRTC media. The WHIP HTTP request goes through `5277`, but the actual WebRTC ICE TCP connection uses `8189`; if the `8189` tunnel drops or is not forwarded, the browser can show a local camera preview while the WHIP publish request eventually times out:
+
+```bash
+ssh -N \
+  -L 5277:127.0.0.1:5277 \
+  -L 5276:127.0.0.1:5276 \
+  -L 8189:127.0.0.1:8189 \
+  root@SERVER_IP
+```
+
+The older LL-HLS demo path is still available as a fallback profile if needed:
 
 ```powershell
 $env:LIVE_DEMO_MEDIA_PROTOCOL='ll-hls'

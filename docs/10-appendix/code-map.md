@@ -17,8 +17,10 @@
 |---|---|
 | `backend/internal/gateway/router.go` | 全部 REST/WS 路由装配、AIGenerator 装配、Redis engine 装配 |
 | `backend/internal/gateway/auction_handlers.go` | 商品、拍品、出价、订单、WS ticket、demo、chat/liveops |
+| `backend/internal/gateway/alipay_handlers.go` | 支付宝沙箱 page/wap pay 表单、主动查询、回调验签与订单事件入账 |
 | `backend/internal/gateway/bid_admission.go` | 出价 admission / 限流 / replay |
 | `backend/internal/gateway/acl.go` | 房间成员 ACL |
+| `backend/internal/gateway/auth.go` | session 鉴权；公网 IP 双端口演示下按 `5276/5277` 隔离 H5/PC cookie |
 | `backend/internal/gateway/monitor_handlers.go` | 监控/诊断 API |
 | `backend/internal/gateway/ai_handlers.go` | AI API |
 
@@ -95,9 +97,22 @@
 | `frontend/mobile-h5/src/atmosphere.ts` | 氛围 cue 归一化和强度 |
 | `frontend/mobile-h5/src/components.tsx` | H5 组件 |
 | `frontend/mobile-h5/src/result.tsx` | 结果/支付页 |
+| `frontend/mobile-h5/src/features/pay-order/pay-mock-action.ts` | 支付宝发起、查询、表单跳转和失败状态解释 |
+| `frontend/mobile-h5/src/features/live-media/usePlaybackEngine.ts` | H5 直播播放引擎，选择 WHEP/MP4 等媒体路径 |
+| `frontend/mobile-h5/src/features/live-media/adapters/whep.ts` | WHEP SDP/ICE 播放适配 |
 | `frontend/pc-console/src/main.tsx` | PC 主应用和 API |
 | `frontend/pc-console/src/components.tsx` | PC 控制台组件 |
+| `frontend/pc-console/vite.config.ts` | PC 代理后端时转发 `X-Forwarded-Host: 106.52.68.95:5277` |
+| `frontend/mobile-h5/vite.config.ts` | H5 代理后端时转发 `X-Forwarded-Host: 106.52.68.95:5276` |
 | `frontend/shared-design` | 共享设计令牌 |
+
+## 直播与部署
+
+| 文件 | 作用 |
+|---|---|
+| `infra/mediamtx/mediamtx.yml` | MediaMTX WebRTC/WHIP/WHEP 配置，包含公网 IP 和 ICE 端口 |
+| `infra/nginx/live-auction-mediamtx-whip.conf` | MediaMTX WHIP/WHEP 反代参考配置 |
+| `infra/systemd/live-auction-backend.service` | 后端 systemd 运行单元 |
 
 ## 测试与证据
 

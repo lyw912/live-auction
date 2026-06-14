@@ -58,6 +58,7 @@ function auctionLiveStatusCopy(auction: AuctionSummary, activeAuctionID: string)
 
 const iconParkProofFill = ['#D4AF37', '#2c2c2c', '#EFBF04', '#F7E6CA'];
 const iconParkActionFill = ['#fff', '#fff', '#fff', '#fff'];
+const iconParkRailFill = ['#171922', '#171922', '#171922', '#171922'];
 
 function AtmosphereCueNotice({ cue }: { cue: AtmosphereCue | null }) {
   if (!cue) return null;
@@ -66,12 +67,13 @@ function AtmosphereCueNotice({ cue }: { cue: AtmosphereCue | null }) {
       <div className="atmosphere-effect-layer" aria-hidden="true">
         <span className="effect-leading-ring" />
         <span className="effect-outbid-edge" />
+        <span className="effect-extension-spark" />
         <span className="effect-hammer-mark" />
       </div>
       <div
         className={`atmosphere-cue ${cue.kind}`}
-        role="status"
-        aria-live="polite"
+        role={cue.kind === 'extended' ? 'alert' : 'status'}
+        aria-live={cue.kind === 'extended' ? 'assertive' : 'polite'}
         key={cue.id}
         data-testid="atmosphere-cue"
         data-auction-id={cue.auction_id}
@@ -156,9 +158,11 @@ export function LiveStage({
   onToggleSound: () => void;
 }) {
   const shouldReduceMotion = useReducedMotion();
-  const posterCandidate = item.video_poster_url ?? item.videoPosterURL ?? item.image_url ?? item.imageURL;
-  const media = useLiveMediaSource(activeAuctionID, posterCandidate);
-  const mediaURL = media.data?.posterURL || displayMediaURL(posterCandidate);
+  const stagePosterCandidate = item.video_poster_url ?? item.videoPosterURL;
+  const productMediaCandidate = item.image_url ?? item.imageURL ?? stagePosterCandidate;
+  const media = useLiveMediaSource(activeAuctionID, stagePosterCandidate);
+  const stagePosterURL = media.data?.posterURL || displayMediaURL(stagePosterCandidate);
+  const productMediaURL = displayMediaURL(productMediaCandidate);
   const activeAuction = auctions.find((auction) => auction.id === activeAuctionID);
   const queuedCount = auctions.filter((auction) => auction.id !== activeAuctionID).length;
   const proofChips: Array<{ icon: React.ReactNode; label: string }> = [];
@@ -204,9 +208,11 @@ export function LiveStage({
     : scenario.status === 'ACTIVE' && !scenario.ctaDisabled
       ? `出一手 ${formatCents(nextBidCents)}`
       : '看拍品信息';
+  const floatingTitle = activeAuction?.item?.title ?? lotTitle;
+  const isLongFloatingTitle = floatingTitle.length > 12;
   return (
     <section
-      className={`video-stage ${mediaURL ? 'has-media' : 'no-media'}`}
+      className={`video-stage ${stagePosterURL ? 'has-media' : 'no-media'}`}
       aria-label="live-stage"
       data-testid="live-stage"
       data-atmosphere-kind={atmosphereCue?.kind ?? 'none'}
@@ -214,9 +220,9 @@ export function LiveStage({
       data-race-board={raceBoardExpanded ? 'expanded' : 'rest'}
       data-atmosphere-intensity={atmosphereIntensity}
       data-atmosphere-gated={atmosphereGated ? 'true' : 'false'}
-      style={mediaURL ? { '--stage-media-url': `url("${mediaURL}")` } as React.CSSProperties : undefined}
+      style={stagePosterURL ? { '--stage-media-url': `url("${stagePosterURL}")` } as React.CSSProperties : undefined}
     >
-      <LiveBackdrop playback={media.data} poster={mediaURL} mediaError={media.isError} />
+      <LiveBackdrop playback={media.data} poster={stagePosterURL} mediaError={media.isError} />
       <AtmosphereCueNotice cue={atmosphereCue} />
       <BidWaterfall chips={atmosphereGated ? [] : waterfallChips} intensity={atmosphereIntensity} />
       <ClimaxLayer
@@ -229,7 +235,7 @@ export function LiveStage({
       <BarrageLayer messages={barrageMessages} />
       <div className="video-topbar">
         <div className="host-profile">
-          <span className={`host-avatar ${mediaURL ? 'has-media' : ''}`} style={mediaURL ? { '--host-avatar-url': `url("${mediaURL}")` } as React.CSSProperties : undefined}>
+          <span className={`host-avatar ${productMediaURL ? 'has-media' : ''}`} style={productMediaURL ? { '--host-avatar-url': `url("${productMediaURL}")` } as React.CSSProperties : undefined}>
             <span className="host-live-dot" aria-hidden="true" />
           </span>
           <span><strong>{roomCopy}</strong><em><span aria-hidden="true" /> 正在直播</em></span>
@@ -273,7 +279,7 @@ export function LiveStage({
       <div className="stage-safe-zone">
         <div className="live-topic-row" aria-label="live-topic">
           <span>{auctionStatusLabel(scenario.status)}</span>
-          <span>{stageStatusCopy}</span>
+          {stageStatusCopy !== auctionStatusLabel(scenario.status) ? <span>{stageStatusCopy}</span> : null}
         </div>
         {proofChips.length > 0 && <div className="proof-chip-row" aria-label="product-proof">
           {proofChips.map((chip) => (
@@ -306,19 +312,23 @@ export function LiveStage({
         transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
       >
         <span className="floating-live-badge"><Sparkles size={12} /> 讲解中</span>
-        <span className={`floating-thumb ${mediaURL ? 'has-media' : ''}`} style={mediaURL ? { '--floating-media-url': `url("${mediaURL}")` } as React.CSSProperties : undefined}>
-          {!mediaURL && <ShoppingBagIcon size={18} theme="multi-color" fill={['#FE2C55', '#2c2c2c', '#F7E6CA', '#D4AF37']} />}
+        <span className={`floating-thumb ${productMediaURL ? 'has-media' : ''}`} style={productMediaURL ? { '--floating-media-url': `url("${productMediaURL}")` } as React.CSSProperties : undefined}>
+          {!productMediaURL && <ShoppingBagIcon size={18} theme="multi-color" fill={['#FE2C55', '#2c2c2c', '#F7E6CA', '#D4AF37']} />}
         </span>
         <span className="floating-product-copy">
-          <strong>{activeAuction?.item?.title ?? lotTitle}</strong>
+          <strong className={isLongFloatingTitle ? 'is-marquee' : undefined}>
+            <span className="floating-title-track">{floatingTitle}</span>
+          </strong>
           <span className="floating-auction-meta">
             <em data-testid="floating-auction-price">
               {scenario.status === 'ACTIVE' ? (
                 <>当前最高价 <PriceOdometer valueCents={currentPriceCents} reducedMotion={Boolean(shouldReduceMotion || atmosphereGated)} /></>
               ) : `${auctionStatusLabel(scenario.status)} · ${scenario.price}`}
             </em>
-            <small data-testid="floating-auction-countdown"><Clock3 size={12} />{scenario.countdown ?? countdownCopy}</small>
-            <small data-testid="floating-auction-status">{auctionStatusLabel(scenario.status)} · {connectionCopy}</small>
+            {scenario.status === 'ACTIVE' ? (
+              <small data-testid="floating-auction-countdown"><Clock3 size={12} />{scenario.countdown ?? countdownCopy}</small>
+            ) : null}
+            <small data-testid="floating-auction-status">{connectionCopy}</small>
           </span>
         </span>
         <span className="floating-bid-strip" data-testid="h5-sticky-bid-strip">
@@ -327,21 +337,21 @@ export function LiveStage({
       </motion.button>
       <div className="live-action-rail" aria-label="live-actions">
         <button type="button" className="rail-product" onClick={onOpenProducts} aria-label="商品列表">
-          <ShoppingBagIcon className="action-rail-icon" size={24} theme="outline" fill={iconParkActionFill} strokeWidth={4} />
+          <ShoppingBagIcon className="action-rail-icon" size={24} theme="outline" fill={iconParkRailFill} strokeWidth={4} />
           <span className="rail-label">商品</span>
           <span className="live-action-badge">{queuedCount + 1}</span>
         </button>
         <button type="button" onClick={onOpenLiveOps} aria-label="直播互动">
-          <CommentIcon className="action-rail-icon" size={24} theme="outline" fill={iconParkActionFill} strokeWidth={4} />
+          <CommentIcon className="action-rail-icon" size={24} theme="outline" fill={iconParkRailFill} strokeWidth={4} />
           <span className="rail-label">互动</span>
         </button>
         <button type="button" onClick={onLike} aria-label="点赞">
-          <LikeIcon className="action-rail-icon" size={24} theme="outline" fill={iconParkActionFill} strokeWidth={4} />
+          <LikeIcon className="action-rail-icon" size={24} theme="outline" fill={iconParkRailFill} strokeWidth={4} />
           <span className="rail-label">喜欢</span>
           <span className="live-action-badge">{likeCount}</span>
         </button>
         <button type="button" onClick={onOpenMore} aria-label="更多">
-          <MoreIcon className="action-rail-icon" size={24} theme="outline" fill={iconParkActionFill} strokeWidth={4} />
+          <MoreIcon className="action-rail-icon" size={24} theme="outline" fill={iconParkRailFill} strokeWidth={4} />
           <span className="rail-label">更多</span>
         </button>
       </div>
@@ -616,30 +626,35 @@ function PressureActionCard({
   const isOutbid = state === 'OUTBID' || (isSelfCue && atmosphereCue?.kind === 'outbid');
   const isLeading = state === 'LEADING' || (isSelfCue && atmosphereCue?.kind === 'leading');
   const isFinal = countdownPhase.phase === 'critical' || countdownPhase.phase === 'hammer';
-  if (!isOutbid && !isLeading && !isFinal) return null;
+  const isExtended = atmosphereCue?.kind === 'extended';
+  if (!isExtended && !isOutbid && !isLeading && !isFinal) return null;
 
   const leader = leaderboard?.entries?.[0];
   const gap = leaderboard?.gap_to_leader_cents;
-  const mode = isOutbid ? 'outbid' : isFinal ? 'final' : 'leading';
-  const title = mode === 'outbid' ? '被超越' : mode === 'final' ? '最后窗口' : '领先中';
+  const mode = isExtended ? 'extended' : isOutbid ? 'outbid' : isFinal ? 'final' : 'leading';
+  const title = mode === 'extended' ? '加时继续抢' : mode === 'outbid' ? '被超越' : mode === 'final' ? '最后窗口' : '领先中';
   const detail = mode === 'outbid'
     ? `${leader?.user_masked ?? '对手'} 当前领先${gap != null && gap > 0 ? `，差 ${formatCents(gap)}` : ''}`
     : mode === 'final'
       ? '有效出价会刷新倒计时，别把最后一口让出去'
-      : `当前最高 ${formatCents(leaderboard?.leader_amount_cents ?? leader?.amount_cents ?? nextBidCents)}`;
+      : mode === 'extended'
+        ? '最后窗口触发延时，倒计时已刷新，还有机会反超'
+        : `当前最高 ${formatCents(leaderboard?.leader_amount_cents ?? leader?.amount_cents ?? nextBidCents)}`;
   const action = mode === 'outbid'
     ? `立即反超 ${formatCents(nextBidCents)}`
     : mode === 'final'
       ? `抢最后一口 ${formatCents(nextBidCents)}`
-      : '查看出价榜';
+      : mode === 'extended'
+        ? `继续出价 ${formatCents(nextBidCents)}`
+        : '查看出价榜';
 
   return (
     <div
       className={`pressure-action-card is-${mode}`}
       data-testid="pressure-action-card"
       data-pressure-state={mode}
-      role={mode === 'outbid' ? 'alert' : 'status'}
-      aria-live={mode === 'outbid' ? 'assertive' : 'polite'}
+      role={mode === 'outbid' || mode === 'extended' ? 'alert' : 'status'}
+      aria-live={mode === 'outbid' || mode === 'extended' ? 'assertive' : 'polite'}
     >
       <div>
         <span>{title}</span>
@@ -769,6 +784,65 @@ function historyTime(row: HistoryRow) {
   return time.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 }
 
+function detailDateTime(raw?: string) {
+  if (!raw) return '';
+  const time = new Date(raw);
+  if (Number.isNaN(time.getTime())) return '';
+  return time.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+}
+
+function alipayProviderLabel(provider?: string, method?: string) {
+  if (provider === 'alipay_sandbox') {
+    return method === 'alipay.trade.page.pay' ? '支付宝沙箱 · 电脑网站支付' : '支付宝沙箱 · 手机网站支付';
+  }
+  if (provider === 'local_fake') return '本地演示支付';
+  return '支付宝沙箱待确认';
+}
+
+function alipayTradeStatusLabel(status?: string, eventType?: string, paid?: boolean) {
+  switch (status || eventType) {
+    case 'TRADE_SUCCESS':
+      return '交易支付成功';
+    case 'TRADE_FINISHED':
+      return '交易完成';
+    case 'WAIT_BUYER_PAY':
+      return '等待买家付款';
+    case 'TRADE_CLOSED':
+      return '交易关闭';
+    case 'payment_initiated':
+      return '已发起支付宝收银台';
+    case 'payment_succeeded':
+      return '支付确认成功';
+    default:
+      return paid ? '支付确认成功' : '等待支付宝确认';
+  }
+}
+
+function depositProofLabel(status?: string) {
+  switch (status) {
+    case 'REFUNDED':
+    case 'RELEASED':
+      return '保证金已释放';
+    case 'HELD':
+      return '保证金冻结中';
+    case 'FORFEITED':
+      return '保证金已扣罚';
+    case 'NONE':
+    case '':
+    case undefined:
+      return '无保证金';
+    default:
+      return '保证金待确认';
+  }
+}
+
 function buyerHistorySecondary(row: HistoryRow) {
   const time = historyTime(row);
   const status = buyerHistoryStatus(row);
@@ -852,10 +926,10 @@ function PaymentConfirmDialog({
         </div>
         <div className="payment-confirm-grid">
           <div><span>订单号</span><strong>{displayOrderNo(orderID)}</strong></div>
-          <div><span>支付方式</span><strong>演示支付 pay-mock</strong></div>
+          <div><span>支付方式</span><strong>支付宝沙箱</strong></div>
           <div><span>成功真相</span><strong>仅以 order_status=PAID 为准</strong></div>
         </div>
-        <p>本期不接真实资金通道。确认后只调用 mock 支付边界，界面等待服务端订单状态返回，不用本地回跳或 HTTP 200 断言成功。</p>
+        <p>确认后将跳转到支付宝沙箱收银台。请使用支付宝开放平台沙箱买家账号完成支付，成功后订单以服务端查询到的 PAID 状态为准。</p>
         <div className="payment-confirm-actions">
           <ShadButton type="button" variant="outline" onClick={onCancel}>稍后支付</ShadButton>
           <ShadButton type="button" variant="bid" onClick={onConfirm}>确认支付 {formatCents(amountCents)}</ShadButton>
@@ -1078,6 +1152,9 @@ export function AuctionStatePanel({
   terminalWinnerID,
   terminalWinnerMasked,
   onClose,
+  bidAmountText,
+  onBidAmountChange,
+  onBidAmountCommit,
   onDecreaseBid,
   onIncreaseBid,
   onOpenOrders,
@@ -1107,6 +1184,9 @@ export function AuctionStatePanel({
   terminalPriceCents: number;
   terminalWinnerID: string;
   terminalWinnerMasked: string;
+  bidAmountText: string;
+  onBidAmountChange: (value: string) => void;
+  onBidAmountCommit: () => void;
   onClose: () => void;
   onDecreaseBid: () => void;
   onIncreaseBid: () => void;
@@ -1116,7 +1196,15 @@ export function AuctionStatePanel({
   onPrimaryAction: () => void;
 }) {
   const unsafeAction = isDangerousActionDisabled(scenario, connectionPhase);
-  const primaryDisabled = scenario.sold ? scenario.ctaDisabled : unsafeAction;
+  const paymentLocked = paymentPhase !== 'idle' && paymentPhase !== 'failed';
+  const primaryDisabled = scenario.sold || paymentLocked ? (scenario.ctaDisabled || paymentLocked) : unsafeAction;
+  const primaryCopy = paymentPhase === 'paid'
+    ? '已支付'
+    : paymentPhase === 'pending'
+      ? '等待支付确认'
+      : paymentPhase === 'expired'
+        ? '已超时'
+        : scenario.cta;
   const dockState = scenario.pending
     ? 'PENDING'
     : unsafeAction && !scenario.sold
@@ -1277,13 +1365,33 @@ export function AuctionStatePanel({
       />
       <div className="bid-stepper">
         <button type="button" aria-label="decrease" onClick={onDecreaseBid}>-</button>
-        <span>{scenario.sold ? '查看订单' : formatCents(nextBidCents)}</span>
+        {scenario.sold ? (
+          <span>查看订单</span>
+        ) : (
+          <label className="bid-amount-field">
+            <small>出价金额</small>
+            <input
+              inputMode="decimal"
+              aria-label="出价金额"
+              value={bidAmountText}
+              onChange={(event) => onBidAmountChange(event.target.value)}
+              onBlur={onBidAmountCommit}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.currentTarget.blur();
+                }
+              }}
+            />
+          </label>
+        )}
         <button type="button" aria-label="increase" onClick={onIncreaseBid}><ChevronUp size={18} /></button>
       </div>
       <button
         ref={slideTrackRef}
         className={`primary-cta ${slideConfirmEnabled ? 'slide-confirm-cta' : ''}`}
         data-testid="bid-cta"
+        data-payment-phase={paymentPhase}
+        data-primary-disabled={primaryDisabled ? 'true' : 'false'}
         data-slide-progress={Math.round(slideProgress)}
         disabled={primaryDisabled}
         onClick={() => {
@@ -1324,13 +1432,13 @@ export function AuctionStatePanel({
           </>
         )}
         {scenario.winner ? <CreditCard size={18} /> : scenario.rejected ? <AlertTriangle size={18} /> : <CheckCircle2 size={18} />}
-        <span>{slideConfirmEnabled ? `滑动${scenario.cta}` : scenario.cta}</span>
+        <span>{slideConfirmEnabled ? `滑动${primaryCopy}` : primaryCopy}</span>
       </button>
       <div className="dock-shortcuts" aria-label="bid-dock-shortcuts">
-        <button type="button" onClick={() => onOpenSheet('details')}>拍品与规则</button>
-        <button type="button" onClick={() => onOpenSheet('leaderboard')}>出价榜</button>
-        <button type="button" onClick={() => onOpenSheet('maxBid')}>自动加价</button>
-        <button type="button" onClick={() => onOpenSheet('more')}>保护</button>
+        <button type="button" onClick={() => onOpenSheet('details')}>拍品</button>
+        <button type="button" onClick={() => onOpenSheet('leaderboard')}>榜单</button>
+        <button type="button" onClick={() => onOpenSheet('maxBid')}>自动</button>
+        <button type="button" onClick={() => onOpenSheet('more')}>保障</button>
       </div>
     </section>
   );
@@ -1465,10 +1573,10 @@ export function BottomSheet({
     more: '我的'
   };
   const sheetGroups: Record<BottomSheetKey, Array<[BottomSheetKey, string]>> = {
-    products: [['products', '本场'], ['details', '详情'], ['maxBid', '自动加价'], ['leaderboard', '出价榜']],
-    details: [['products', '本场'], ['details', '详情'], ['maxBid', '自动加价'], ['leaderboard', '出价榜']],
-    maxBid: [['products', '本场'], ['details', '详情'], ['maxBid', '自动加价'], ['leaderboard', '出价榜']],
-    leaderboard: [['products', '本场'], ['details', '详情'], ['maxBid', '自动加价'], ['leaderboard', '出价榜']],
+    products: [['products', '本场'], ['details', '规则'], ['maxBid', '自动'], ['leaderboard', '榜单']],
+    details: [['products', '本场'], ['details', '规则'], ['maxBid', '自动'], ['leaderboard', '榜单']],
+    maxBid: [['products', '本场'], ['details', '规则'], ['maxBid', '自动'], ['leaderboard', '榜单']],
+    leaderboard: [['products', '本场'], ['details', '规则'], ['maxBid', '自动'], ['leaderboard', '榜单']],
     liveops: [['liveops', '互动任务'], ['qa', '拍品问答']],
     qa: [['liveops', '互动任务'], ['qa', '拍品问答']],
     more: [['more', '更多'], ['orders', '我的订单']],
@@ -2127,7 +2235,17 @@ function BuyerOrderDetail({
   const ruleDeposit = depositCap > 0 ? Math.min(estimateDeposit, depositCap) : estimateDeposit;
   const deposit = Number(order.deposit_cents ?? 0) || ruleDeposit;
   const providerPaymentID = String(order.provider_payment_id ?? '');
+  const paymentProvider = String(order.payment_provider ?? '');
+  const paymentStatus = String(order.payment_status ?? '');
+  const paymentEventID = String(order.payment_event_id ?? '');
+  const providerTradeNo = String(order.provider_trade_no ?? '');
+  const providerTradeStatus = String(order.provider_trade_status ?? '');
+  const paymentMethod = String(order.payment_method ?? '');
+  const paymentProcessedAt = detailDateTime(String(order.payment_processed_at ?? ''));
+  const paidAt = detailDateTime(String(order.paid_at ?? ''));
   const paid = String(order.order_status ?? order.status ?? '') === 'PAID';
+  const providerLabel = alipayProviderLabel(paymentProvider, paymentMethod);
+  const tradeStatusLabel = alipayTradeStatusLabel(providerTradeStatus, paymentStatus, paid);
   return (
     <div className="buyer-order-detail" data-testid="buyer-order-detail">
       <div className="buyer-order-detail-head">
@@ -2136,7 +2254,7 @@ function BuyerOrderDetail({
           <strong>{displayOrderNo(orderIDFromRow(order))}</strong>
         </div>
         <div className="buyer-order-detail-actions">
-          <Badge variant={paid ? 'won' : 'stale'}>{paid ? 'PAID' : 'SERVER PENDING'}</Badge>
+          <Badge variant={paid ? 'won' : 'stale'}>{paid ? '已支付' : '待支付确认'}</Badge>
           <ShadButton type="button" size="sm" variant="outline" onClick={onClose}>收起</ShadButton>
         </div>
       </div>
@@ -2156,12 +2274,24 @@ function BuyerOrderDetail({
         <div><span>支付截止</span><strong>{historyTime({ created_at: order.expire_at }) || '以订单为准'}</strong></div>
         <div><span>加价阶梯</span><strong>{formatCents(Number(order.increment_cents ?? auction?.increment_cents ?? 0))}</strong></div>
         <div><span>封顶价</span><strong>{formatCents(Number(order.cap_price_cents ?? auction?.cap_price_cents ?? amount))}</strong></div>
-        <div><span>支付状态</span><strong>{String(order.deposit_status ?? '以服务端为准')}</strong></div>
-        <div><span>支付流水</span><strong>{providerPaymentID ? providerPaymentID : '待支付后生成'}</strong></div>
+        <div><span>支付状态</span><strong>{paid ? '支付宝已支付' : orderStatus(order)}</strong></div>
+        <div><span>保证金状态</span><strong>{depositProofLabel(String(order.deposit_status ?? ''))}</strong></div>
+        <div><span>支付渠道</span><strong>{providerLabel}</strong></div>
+        <div><span>支付完成</span><strong>{paidAt || '等待支付宝确认'}</strong></div>
+        <div><span>支付宝状态</span><strong>{tradeStatusLabel}</strong></div>
+        <div><span>商户订单号</span><strong>{providerPaymentID ? providerPaymentID : '待发起支付'}</strong></div>
       </div>
+      {providerPaymentID || providerTradeNo || paymentEventID ? (
+        <div className="buyer-order-payment-proof">
+          <span>支付宝收单凭证</span>
+          <div><em>商户订单号</em><code>{providerPaymentID || '待发起支付'}</code></div>
+          <div><em>支付宝交易号</em><code>{providerTradeNo || '支付后由支付宝返回'}</code></div>
+          <small>{paymentProcessedAt ? `平台确认时间 ${paymentProcessedAt}` : '等待支付宝异步通知或主动查单'}{paymentEventID ? ` · 平台流水 ${paymentEventID}` : ''}</small>
+        </div>
+      ) : null}
       <div className="buyer-order-section">
-        <span>订单状态口径</span>
-        <p>买家端只展示服务端订单字段。支付完成必须来自订单重查或支付接口返回的 <code>order_status=PAID</code>，不会根据按钮点击、页面回跳或 HTTP 状态自行判成功。</p>
+        <span>支付确认口径</span>
+        <p>订单支付结果以支付宝异步通知和服务端主动查单为准；页面回跳只负责返回订单页，不直接判定成交收款。</p>
       </div>
       <div className="buyer-order-section">
         <span>商品详情</span>

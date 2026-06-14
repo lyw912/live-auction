@@ -21,7 +21,11 @@ import (
 	"live-auction/backend/internal/redisx"
 )
 
-const sessionCookieName = "la_session"
+const (
+	sessionCookieName          = "la_session"
+	h5SessionCookieName        = "la_session_h5"
+	pcConsoleSessionCookieName = "la_session_pc"
+)
 
 type authUserKey struct{}
 
@@ -156,7 +160,7 @@ func (h AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "failed to persist session", http.StatusInternalServerError))
 		return
 	}
-	setSessionCookie(w, token, expiresAt)
+	setSessionCookie(w, r, token, expiresAt)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"user":          user,
 		"expires_at":    expiresAt,
@@ -177,7 +181,7 @@ func (h AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 			h.Redis.Del(r.Context(), redisx.AuthSessionKey(hash))
 		}
 	}
-	clearSessionCookie(w)
+	clearSessionCookie(w, r)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -257,6 +261,11 @@ func demoAccountUserID(cfg config.Config, account string, role string) string {
 }
 
 func sessionTokenFromRequest(r *http.Request) string {
+	if scopedName := scopedSessionCookieName(r); scopedName != sessionCookieName {
+		if cookie, err := r.Cookie(scopedName); err == nil {
+			return cookie.Value
+		}
+	}
 	if cookie, err := r.Cookie(sessionCookieName); err == nil {
 		return cookie.Value
 	}
@@ -319,7 +328,16 @@ func hashSessionToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func setSessionCookie(w http.ResponseWriter, token string, expiresAt time.Time) {
+func setSessionCookie(w http.ResponseWriter, r *http.Request, token string, expiresAt time.Time) {
+	name := scopedSessionCookieName(r)
+	http.SetCookie(w, &http.Cookie{
+		Name:     name,
+		Value:    token,
+		Path:     "/",
+		Expires:  expiresAt,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    token,
@@ -330,9 +348,15 @@ func setSessionCookie(w http.ResponseWriter, token string, expiresAt time.Time) 
 	})
 }
 
-func clearSessionCookie(w http.ResponseWriter) {
+func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
+	for _, name := range []string{scopedSessionCookieName(r), sessionCookieName, h5SessionCookieName, pcConsoleSessionCookieName} {
+		clearNamedSessionCookie(w, name)
+	}
+}
+
+func clearNamedSessionCookie(w http.ResponseWriter, name string) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookieName,
+		Name:     name,
 		Value:    "",
 		Path:     "/",
 		MaxAge:   -1,
@@ -340,6 +364,31 @@ func clearSessionCookie(w http.ResponseWriter) {
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	})
+}
+
+func scopedSessionCookieName(r *http.Request) string {
+	host := r.Host
+	if forwardedHost := strings.TrimSpace(r.Header.Get("X-Forwarded-Host")); forwardedHost != "" {
+		host = forwardedHost
+	}
+	_, port, err := net.SplitHostPort(host)
+	if err != nil {
+		if strings.Contains(host, ":5276") {
+			return h5SessionCookieName
+		}
+		if strings.Contains(host, ":5277") {
+			return pcConsoleSessionCookieName
+		}
+		return sessionCookieName
+	}
+	switch port {
+	case "5276":
+		return h5SessionCookieName
+	case "5277":
+		return pcConsoleSessionCookieName
+	default:
+		return sessionCookieName
+	}
 }
 
 func clientIP(r *http.Request) string {

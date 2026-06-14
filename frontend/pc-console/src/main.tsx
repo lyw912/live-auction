@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { AppProviders } from './app/providers';
-import { AICopilotDrawer, AuctionCommandPanel, AuctionControlSummary, AuctionQueue, ConsoleNav, CurrentAuctionOrderCard, DiagnosticsPanel, EventTimeline, FlightRecorderDrawer, HealthRibbon, InventoryLotsPanel, ItemCreatePanel, LiveAssistRail, LiveHealthPanel, OrderDetailDrawer, OrdersPanel, RuleEditor } from './components';
+import { AICopilotDrawer, AuctionCommandPanel, AuctionControlSummary, AuctionQueue, ConsoleNav, CurrentAuctionOrderCard, DiagnosticsPanel, EventTimeline, FlightRecorderDrawer, HealthRibbon, HostCameraPublisher, InventoryLotsPanel, ItemCreatePanel, LiveAssistRail, LiveHealthPanel, OrderDetailDrawer, OrdersPanel, RuleEditor } from './components';
 import type { Auction, AuctionAISettings, AuctionRecap, AuthUser, FlightRecorderPayload, HeatSummary, HighlightAsset, HostPrompt, HostPromptsPayload, Item, ListingDraftJob, LiveOpsHostSummary, LiveOpsRewardConfig, MaxBidSummary, MonitorPayload, Order, RedisEngineMonitorPayload, Room, RuleAPIError, RuleDraft, SentinelAlert, SignalRequest, SystemMessage } from './domain';
 import { activeAuction, auctionStatusLabel, createRuleDraft, defaultRoomID, depositPreview, ensureDemoSession, liveHealthSummary, monitorQuery, narratingAuction, readJSON, rulePayload, signalCopy, sortedAuctions, validateRule } from './domain';
 import { Button, Layout, Message, Modal } from './shared/ui/console-primitives';
@@ -56,6 +56,9 @@ type UploadURLResponse = {
   object_name?: string;
   message?: string;
 };
+
+const listingDraftVisionTimeoutMS = 75_000;
+const listingDraftMaxImageDataURLBytes = 2_500_000;
 
 const idleWorkbenchTask: WorkbenchTask = {
   active: false,
@@ -150,7 +153,7 @@ function App() {
   const [liveOpsSaving, setLiveOpsSaving] = useState(false);
   const [listingCopilotOpen, setListingCopilotOpen] = useState(false);
   const [listingNotes, setListingNotes] = useState('');
-  const [listingCategory, setListingCategory] = useState('collectibles');
+  const [listingCategory, setListingCategory] = useState('珠宝玉石');
   const [listingDraftJob, setListingDraftJob] = useState<ListingDraftJob | undefined>();
   const [selectedListingDraftTitle, setSelectedListingDraftTitle] = useState('');
   const [listingDraftLoading, setListingDraftLoading] = useState(false);
@@ -673,24 +676,12 @@ function App() {
 
   const uploadItemImage = async (file: File) => {
     await ensureHostSession();
-    const { response, payload } = await fetchJSONWithTimeout<UploadURLResponse>('/api/items/upload-url', {
+    const form = new FormData();
+    form.append('file', file);
+    const { response, payload } = await fetchJSONWithTimeout<UploadURLResponse>('/api/items/upload', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        object_name: file.name,
-        content_type: file.type || 'application/octet-stream',
-        size: file.size
-      })
-    }, 12000);
-    if (!response.ok) throw new Error(payload.message || 'image upload-url failed');
-    const uploadURL = payload.upload_url ?? payload.url;
-    if (!uploadURL) throw new Error('missing upload url');
-    const upload = await fetch(uploadURL, {
-      method: 'PUT',
-      headers: file.type ? { 'Content-Type': file.type } : undefined,
-      body: file
+      body: form
     });
-    if (!upload.ok) throw new Error('image upload failed');
     if (!payload.public_url) throw new Error('missing uploaded image url');
     return payload.public_url ?? '';
   };
@@ -910,10 +901,7 @@ function App() {
     });
   };
 
-  const driveDemoBid = async (
-    mode: 'reject' | 'stale_low' | 'outbid' | 'challenge' | 'extend' | 'sold' | 'rival_max_bid',
-    options: { amountCents?: number } = {}
-  ) => {
+  const driveDemoBid = async (mode: 'outbid') => {
     if (!selectedAuction || selectedAuction.status !== 'ACTIVE') {
       Message.warning('请选择开拍中的拍品后再演示');
       return;
@@ -924,47 +912,19 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           mode: stepMode,
-          amount_cents: options.amountCents,
           client_bid_id: `host-demo-${stepMode}-${Date.now()}-${index}`
         })
       }, 12000);
-      const proxyDefenseAccepted = payload.reject_reason === 'BID_TOO_LOW' &&
-        stepMode !== 'reject' &&
-        stepMode !== 'stale_low' &&
-        payload.current_winner_id === 'user_1' &&
-        Number(payload.current_price_cents ?? 0) > Number(selectedAuction.current_price_cents ?? 0);
-      if (!response.ok || (payload.reject_reason && stepMode !== 'reject' && stepMode !== 'stale_low' && !proxyDefenseAccepted)) {
+      if (!response.ok || payload.reject_reason) {
         throw new Error(businessErrorMessage(payload.code ?? payload.reject_reason, payload.message ?? payload.reject_reason ?? '演示出价失败'));
       }
       return payload;
     };
     try {
       await ensureHostSession();
-      if (mode === 'rival_max_bid') {
-        const payload = await runOne(mode);
-        applyAuctionDecisionPreview(selectedAuction.id, payload);
-        Message.success(`已为演示对手设置自动加价${options.amountCents ? `：¥${(options.amountCents / 100).toFixed(2)}` : ''}`);
-      } else {
-        const payload = await runOne(mode);
-        applyAuctionDecisionPreview(selectedAuction.id, payload);
-        const proxyDefenseAccepted = payload.reject_reason === 'BID_TOO_LOW' &&
-          payload.current_winner_id === 'user_1' &&
-          Number(payload.current_price_cents ?? 0) > Number(selectedAuction.current_price_cents ?? 0);
-        const copy = proxyDefenseAccepted
-          ? `买家自动代理已防守到 ¥${((payload.current_price_cents ?? 0) / 100).toFixed(2)}`
-          : mode === 'outbid'
-            ? '对手已真实压过买家'
-            : mode === 'challenge'
-              ? '第三方挑战已写入'
-            : mode === 'extend'
-              ? '末段延时出价已写入'
-              : mode === 'sold'
-                ? '封顶成交已写入'
-                : mode === 'stale_low'
-                  ? '旧价请求已被热引擎拒绝'
-                  : '无效出价已写入';
-        Message.success(proxyDefenseAccepted ? `${copy}：代理防守成功` : `${copy}：${payload.result ?? mode}`);
-      }
+      const payload = await runOne(mode);
+      applyAuctionDecisionPreview(selectedAuction.id, payload);
+      Message.success(`对手已真实压过买家：${payload.result ?? mode}`);
       void refreshAuctionRows(roomID, selectedAuction.id);
     } catch (error) {
       const timeout = error instanceof Error && (error.name === 'AbortError' || error.message.includes('timeout'));
@@ -1004,15 +964,19 @@ function App() {
       let imageURL = copilotImageURL.trim() || itemDraft.imageURL.trim();
       let imageDataURL = '';
       if (copilotImageFile) {
-        if (copilotImageFile.size <= 2_000_000) {
-          imageDataURL = await fileToDataURL(copilotImageFile);
-        } else {
-          Message.warning('图片超过 2MB，已保存到表单，智能草稿将按文字备注生成');
+        try {
+          imageDataURL = await compressImageFileToDataURL(copilotImageFile, listingDraftMaxImageDataURLBytes);
+        } catch (error) {
+          Message.warning(error instanceof Error ? error.message : '图片压缩失败，智能草稿将按文字备注生成');
         }
-        imageURL = await uploadItemImage(copilotImageFile) || imageURL;
-        setCopilotImageURL(imageURL);
+        try {
+          imageURL = await uploadItemImage(copilotImageFile) || imageURL;
+          setCopilotImageURL(imageURL);
+          setItemDraft((current) => ({ ...current, imageURL: imageURL || current.imageURL }));
+        } catch {
+          Message.warning('图片暂未保存到拍品表单，但智能草稿会继续识别本地图片');
+        }
         setCopilotImageFile(null);
-        setItemDraft((current) => ({ ...current, imageURL: imageURL || current.imageURL }));
       }
       const providerImageURLs = imageURL.startsWith('https://') ? [imageURL] : [];
       const providerImageDataURLs = imageDataURL ? [imageDataURL] : [];
@@ -1031,7 +995,7 @@ function App() {
           seller_notes: sellerNotes,
           target_category: listingCategory.trim()
         })
-      }, 30000);
+      }, listingDraftVisionTimeoutMS);
       if (!response.ok) {
         Message.error(payload.message ?? '智能草稿生成失败');
         return;
@@ -1042,8 +1006,14 @@ function App() {
         Message.warning('图片已保存到拍品表单；智能草稿未读取大图，请在备注里补充关键信息');
       }
       Message.success('智能草稿已生成，需商家确认后采用');
-    } catch {
-      Message.error('智能草稿生成失败');
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : '';
+      const aborted = error instanceof Error && (error.name === 'AbortError' || detail.toLowerCase().includes('aborted'));
+      if (aborted) {
+        Message.error('智能草稿生成超时，请稍后再试或先用文字备注生成');
+      } else {
+        Message.error(detail ? `智能草稿生成失败：${detail}` : '智能草稿生成失败');
+      }
     } finally {
       setListingDraftLoading(false);
     }
@@ -1225,6 +1195,15 @@ function App() {
             setRoomID(nextRoomID);
           }}
         />
+        {!selectedAuction ? (
+          <section className="fallback-camera-publisher" aria-label="PC 摄像头低延迟推流">
+            <div>
+              <strong>PC 摄像头推流</strong>
+              <span>未加载到中控拍品时的备用入口；正常开播后会收进直播窗口。</span>
+            </div>
+            <HostCameraPublisher />
+          </section>
+        ) : null}
         <div className={`workbench-status status-${visibleTask.tone}`} role="status" aria-live="polite" data-testid="pc-workbench-status">
           <div>
             <strong>{visibleTask.title}</strong>
@@ -1348,7 +1327,6 @@ function App() {
                 sentinelAlerts={sentinelAlerts}
                 systemMessages={(auctionAISettings?.auto_commentary_enabled ?? true) ? systemMessages : systemMessages.filter((row) => row.safety_json?.auto_generated !== true)}
                 onDismissPrompt={(promptID) => setDismissedPromptIDs((current) => Array.from(new Set([...current, promptID])))}
-                onShortenCountdown={shortenDemoCountdown}
                 onDriveDemoBid={driveDemoBid}
               />
             </div>
@@ -1447,6 +1425,60 @@ function fileToDataURL(file: File): Promise<string> {
     reader.onerror = () => reject(reader.error ?? new Error('read image file'));
     reader.readAsDataURL(file);
   });
+}
+
+function loadImageForCompression(dataURL: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('图片读取失败，智能草稿将按文字备注生成'));
+    image.src = dataURL;
+  });
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement, quality: number): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error('图片压缩失败，智能草稿将按文字备注生成'));
+    }, 'image/jpeg', quality);
+  });
+}
+
+async function blobToDataURL(blob: Blob): Promise<string> {
+  return fileToDataURL(new File([blob], 'listing-draft.jpg', { type: blob.type || 'image/jpeg' }));
+}
+
+async function compressImageFileToDataURL(file: File, maxBytes: number): Promise<string> {
+  if (!file.type.startsWith('image/')) {
+    throw new Error('请选择图片文件');
+  }
+  const original = await fileToDataURL(file);
+  if (original.length <= maxBytes) return original;
+
+  const image = await loadImageForCompression(original);
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('浏览器不支持图片压缩，智能草稿将按文字备注生成');
+
+  let maxSide = 1600;
+  let quality = 0.82;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const scale = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
+    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const blob = await canvasToBlob(canvas, quality);
+    const dataURL = await blobToDataURL(blob);
+    if (dataURL.length <= maxBytes) return dataURL;
+    if (quality > 0.58) {
+      quality -= 0.08;
+    } else {
+      maxSide = Math.max(720, Math.round(maxSide * 0.82));
+    }
+  }
+  throw new Error('图片过大，智能草稿将按文字备注生成');
 }
 
 createRoot(document.getElementById('root')!).render(

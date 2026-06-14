@@ -71,7 +71,7 @@ func (g ChatCompletionsGenerator) GenerateStructured(ctx context.Context, req St
 		"model":       g.cfg.Model,
 		"messages":    g.chatMessagesForRequest(req, schema),
 		"temperature": temperatureForKind(req.Kind),
-		"max_tokens":  g.cfg.MaxTokens,
+		"max_tokens":  maxTokensForKind(req.Kind, g.cfg.MaxTokens),
 	}
 	if g.cfg.ResponseFormat == "json_object" {
 		payload["response_format"] = map[string]any{"type": "json_object"}
@@ -108,8 +108,8 @@ func (g ChatCompletionsGenerator) GenerateStructured(ctx context.Context, req St
 	if err != nil {
 		return StructuredResult{}, err
 	}
-	output := map[string]any{}
-	if err := json.Unmarshal([]byte(content), &output); err != nil {
+	output, err := parseStructuredJSONContent(content)
+	if err != nil {
 		return StructuredResult{}, fmt.Errorf("AI relay returned invalid JSON: %w", err)
 	}
 	if len(output) == 0 {
@@ -127,6 +127,76 @@ func (g ChatCompletionsGenerator) GenerateStructured(ctx context.Context, req St
 			"no_auto_publish":       req.Kind == "listing_draft",
 		},
 	}, nil
+}
+
+func maxTokensForKind(kind string, configured int) int {
+	if kind == "listing_draft" && configured < 2048 {
+		return 2048
+	}
+	return configured
+}
+
+func parseStructuredJSONContent(content string) (map[string]any, error) {
+	content = strings.TrimSpace(content)
+	candidates := []string{content}
+	if stripped := strings.TrimSpace(strings.TrimPrefix(strings.TrimSuffix(content, "```"), "```json")); stripped != content {
+		candidates = append(candidates, stripped)
+	}
+	if extracted, ok := extractFirstJSONObject(content); ok {
+		candidates = append(candidates, extracted)
+	}
+	var lastErr error
+	for _, candidate := range candidates {
+		out := map[string]any{}
+		if err := json.Unmarshal([]byte(strings.TrimSpace(candidate)), &out); err != nil {
+			lastErr = err
+			continue
+		}
+		return out, nil
+	}
+	if lastErr == nil {
+		lastErr = errors.New("no JSON object found")
+	}
+	return nil, lastErr
+}
+
+func extractFirstJSONObject(content string) (string, bool) {
+	start := strings.Index(content, "{")
+	if start < 0 {
+		return "", false
+	}
+	inString := false
+	escaped := false
+	depth := 0
+	for index := start; index < len(content); index++ {
+		ch := content[index]
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return content[start : index+1], true
+			}
+		}
+	}
+	return "", false
 }
 
 type strictSchema struct {

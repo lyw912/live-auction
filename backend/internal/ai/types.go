@@ -50,7 +50,28 @@ type RoutedGenerator struct {
 
 func (g RoutedGenerator) GenerateStructured(ctx context.Context, req StructuredRequest) (StructuredResult, error) {
 	if g.NeedsVision != nil && g.NeedsVision(req) && g.Vision != nil {
-		return g.Vision.GenerateStructured(ctx, req)
+		result, err := g.Vision.GenerateStructured(ctx, req)
+		if err == nil || g.Text == nil {
+			return result, err
+		}
+		textReq := req
+		if textReq.Input != nil {
+			textInput := map[string]any{}
+			for key, value := range textReq.Input {
+				textInput[key] = value
+			}
+			textInput["image_urls"] = []string{}
+			textInput["image_data_urls"] = []string{}
+			textReq.Input = textInput
+		}
+		textResult, textErr := g.Text.GenerateStructured(ctx, textReq)
+		if textErr != nil {
+			return StructuredResult{}, err
+		}
+		textResult.Safety = ensureMap(textResult.Safety)
+		textResult.Safety["vision_fallback"] = true
+		textResult.Safety["vision_error"] = cleanText(err.Error(), 180)
+		return textResult, nil
 	}
 	if g.Text != nil {
 		return g.Text.GenerateStructured(ctx, req)

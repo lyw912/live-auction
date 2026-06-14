@@ -37,6 +37,8 @@
 | 快照恢复 | `recoverFromSnapshot` |
 | 排行榜合帧 | `pendingLeaderboardDeltaRef` + RAF burst |
 | 氛围引擎 | `atmosphere.ts`, `loadAuctionSoundPack`, `playLayeredCue`, `vibratePattern` |
+| 支付宝支付 | `features/pay-order/pay-mock-action.ts`, `features/contracts/payment-contract.ts` |
+| WHEP 直播播放 | `features/live-media/usePlaybackEngine.ts`, `features/live-media/adapters/whep.ts` |
 
 ## 倒计时为什么不信客户端时钟
 
@@ -59,6 +61,27 @@ remaining = end_at_ms - server_time_ms - (local_now_ms - server_time_synced_at)
 
 答辩时可以把它讲成工程演进：评审发现真实体验漏洞，后续用幂等能力补上弱网闭环。
 
+## 支付闭环为什么不再卡死
+
+H5 支付有两条明确边界：
+
+- `/api/orders/{id}/pay` 成功并返回支付宝表单后，才进入“等待支付确认”；
+- `/api/orders/{id}/pay` 返回 401/403/409/5xx 时，前端进入失败或可重试状态，不能把发起失败伪装成“支付确认中”。
+
+本次录屏前遇到的真实问题是公网 IP 双端口 cookie 串号：`5277` PC 主播登录覆盖了 `5276` H5 买家的 `la_session`。后端已经按端口隔离为 `la_session_h5` 和 `la_session_pc`，Vite proxy 通过 `X-Forwarded-Host` 把原入口端口传给后端。这个修复让 H5/PC 同时打开时不会互相抢身份。
+
+订单详情展示的支付宝字段来自后端 `payment_events`，包括 provider、provider event id、provider payment id、trade status、payment method 和 processed_at。这样评委能看到它不是前端写死的“支付成功”文案，而是支付事件入账后的订单状态口径。
+
+## 直播播放闭环
+
+H5 默认读取后端 live session descriptor。当前低延迟路径是：
+
+```text
+PC camera -> WHIP publish -> MediaMTX auction-live -> WHEP playback -> H5
+```
+
+H5 WHEP adapter 负责 SDP offer/answer、ICE candidate、连接状态、弱网失败切换。MP4 demo 只作为显式 fallback，不再是默认直播路径。
+
 ## 评委拷问
 
 | 问题 | 回答 |
@@ -66,6 +89,8 @@ remaining = end_at_ms - server_time_ms - (local_now_ms - server_time_synced_at)
 | 两个客户端会看到不同排名吗？ | 到达时间可能不同，但最终状态由同一服务端 seq/快照收敛；seq gap 会恢复。 |
 | 客户端倒计时到 0 能否自行宣布成交？ | 不行。倒计时到 0 进入 settling/syncing，终态必须由服务端事件或快照给出。 |
 | 网络超时后用户重复点会不会重复扣款？ | H5 复用同 `client_bid_id`，服务端 request hash 幂等，安全重试。 |
+| 支付确认中卡住怎么办？ | 先看 `/pay` 是否真正 200。当前前端只在发起成功后 pending；403 的根因已修成 H5/PC 端口隔离 cookie。 |
+| H5 直播为什么需要 HTTPS？ | 浏览器摄像头和 WebRTC 在公网 IP 下需要安全上下文；否则 PC 端可能无法稳定拿到 camera/WHIP。 |
 
 ## 继续下钻到 L4
 

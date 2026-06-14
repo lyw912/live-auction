@@ -10,6 +10,22 @@ export interface AdapterCallbacks {
   onPlaying(): void;
   onFatal(reason: string): void;
   onRecoverableError?(reason: string): void;
+  onStats?(stats: RealtimeMediaStats): void;
+}
+
+export interface RealtimeMediaStats {
+  direction: 'inbound' | 'outbound';
+  width?: number;
+  height?: number;
+  fps?: number;
+  bitrateKbps?: number;
+  packetsLost?: number;
+  jitterMs?: number;
+  codec?: string;
+  transport?: string;
+  candidatePair?: string;
+  qualityLabel: string;
+  updatedAt: number;
 }
 
 export interface MediaAdapterHandle {

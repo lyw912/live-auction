@@ -1,4 +1,4 @@
-import { demoLiveVideoURL, displayMediaURL } from '../../domain';
+import { displayMediaURL } from '../../domain';
 import { assertMediaPlaybackShape, type MediaPlayback, type MediaProtocol, type MediaSource } from '../../shared/media/contract';
 
 const allowedProtocols = new Set<MediaProtocol>(['mp4', 'hls', 'll-hls', 'whep']);
@@ -39,7 +39,7 @@ export function normalizeLiveSessionResponse(raw: unknown, auctionId: string, po
     posterURL,
     sources: sources.length > 0
       ? sources
-      : [{ protocol: 'mp4', url: demoLiveVideoURL, mimeType: 'video/mp4', priority: 90 }],
+      : [{ protocol: 'whep', url: '/mtx/auction-live/whep', mimeType: 'application/sdp', priority: 10 }],
     latencyTargetMs: typeof record.latencyTargetMs === 'number' && Number.isFinite(record.latencyTargetMs) ? record.latencyTargetMs : undefined,
     capabilities: {
       nativeHlsOnSafari: capabilities.nativeHlsOnSafari === true,
@@ -53,13 +53,15 @@ export function normalizeLiveSessionResponse(raw: unknown, auctionId: string, po
 export function posterOnlyPlayback(auctionId: string, posterCandidate?: string): MediaPlayback {
   return assertMediaPlaybackShape({
     auctionId,
-    isLive: false,
+    isLive: true,
     posterURL: displayMediaURL(posterCandidate),
-    sources: [{ protocol: 'mp4', url: demoLiveVideoURL, mimeType: 'video/mp4', priority: 90 }],
+    sources: [
+      { protocol: 'whep', url: '/mtx/auction-live/whep', mimeType: 'application/sdp', priority: 10 }
+    ],
     capabilities: {
       nativeHlsOnSafari: false,
       mseHls: false,
-      webrtc: false
+      webrtc: true
     }
   });
 }

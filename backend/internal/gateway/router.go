@@ -126,6 +126,7 @@ func NewRouterWithRealtimeAndLedger(cfg config.Config, deps *storage.Dependencie
 		r.Post("/auth/login", authHandler.Login)
 		r.Post("/auth/logout", authHandler.Logout)
 		r.Post("/payments/fake-provider/webhook", auctionHandler.FakePaymentWebhook)
+		r.Post("/payments/alipay/notify", auctionHandler.AlipayNotify)
 		r.Get("/media/*", auctionHandler.ServeMedia)
 		r.Group(func(r chi.Router) {
 			r.Use(authMiddleware(cfg, deps.Postgres, deps.Redis))
@@ -158,6 +159,8 @@ func NewRouterWithRealtimeAndLedger(cfg config.Config, deps *storage.Dependencie
 			r.Get("/orders", auctionHandler.ListOrders)
 			r.Get("/users/me/bids", auctionHandler.ListBidHistory)
 			r.Get("/users/me/orders", auctionHandler.ListUserOrders)
+			r.Post("/orders/{id}/pay", auctionHandler.PayOrder)
+			r.Post("/orders/{id}/pay/query", auctionHandler.QueryAlipayOrder)
 			r.Post("/orders/{id}/pay-mock", auctionHandler.PayMock)
 			r.Post("/auth/ws-ticket", auctionHandler.CreateWSTicket)
 			r.Get("/rooms/{room_id}/auctions", auctionHandler.ListRoomAuctions)

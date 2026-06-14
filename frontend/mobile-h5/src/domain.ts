@@ -288,6 +288,13 @@ export type OrderRow = {
   expire_at?: string;
   paid_at?: string;
   provider_payment_id?: string;
+  payment_provider?: string;
+  payment_event_id?: string;
+  payment_status?: string;
+  provider_trade_no?: string;
+  provider_trade_status?: string;
+  payment_method?: string;
+  payment_processed_at?: string;
   created_at?: string;
   increment_cents?: number;
   cap_price_cents?: number;

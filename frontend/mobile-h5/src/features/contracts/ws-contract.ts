@@ -16,7 +16,7 @@ export function auctionWSProtocols(ticket: string) {
 }
 
 export function auctionWSURL(origin: string, roomID: string, auctionID: string, lastSeq: number) {
-  const wsURL = new URL('/ws/auctions', origin);
+  const wsURL = new URL('/ws', origin);
   wsURL.protocol = wsURL.protocol === 'https:' ? 'wss:' : 'ws:';
   wsURL.searchParams.set('room_id', roomID);
   wsURL.searchParams.set('auction_id', auctionID);

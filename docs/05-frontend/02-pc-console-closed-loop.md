@@ -9,6 +9,7 @@ PC 端不是营销页，而是主播/商家的作业台：
 
 - 商品上传与 AI 选品草稿；
 - 拍品创建、规则配置、排期、启动、取消；
+- PC 摄像头采集并通过 WHIP 推流到 MediaMTX；
 - 活跃拍品队列、订单和支付状态；
 - AI 解说、热度摘要、哨兵告警、复盘；
 - 飞行记录器和监控面板。
@@ -39,6 +40,29 @@ PC 端不是营销页，而是主播/商家的作业台：
 | AI 解说 | `/api/host/auctions/{id}/commentary` |
 | 风险与复盘 | `/sentinel-alerts`, `/sentinel-evaluate`, `/recap` |
 | 监控 | `/api/monitor/auctions`, `/flight-recorder`, `/outbox`, `/scheduler`, `/redis-engine` |
+| 直播推流 | getUserMedia -> WHIP `/mtx/auction-live/whip` |
+| 订单支付 | `/api/orders`, 支付事件字段来自 `payment_events` |
+
+## 本轮演示前新增/修复
+
+| 能力 | 说明 |
+|---|---|
+| 智能草稿更稳 | AI relay 返回 code fence、说明文字或残缺 JSON 时，后端会抽取首个 JSON object；视觉模型失败时 fallback 到文本草稿并标记 safety。 |
+| 商品类目中文化 | 默认类目从 `collectibles` 调整为中文展示口径，减少演示时的英文杂项。 |
+| 图片上传同源化 | PC 上传商品图片走 `/api/items/upload`，避免 MinIO presigned URL 暴露 `localhost:9000` 导致公网浏览器失败。 |
+| 直播助手收敛 | 演示助手保留“对手压过买家”核心功能，避免无关按钮干扰录屏。 |
+| PC/H5 身份隔离 | PC `5277` 使用 `la_session_pc`，H5 `5276` 使用 `la_session_h5`，防止同公网 IP 下 cookie 串号。 |
+
+## 直播推流注意事项
+
+PC 端摄像头预览不等于 H5 已收到直播。完整链路还要满足：
+
+- 页面是 HTTPS 安全上下文；
+- `/mtx/auction-live/whip` 可访问；
+- MediaMTX WebRTC ICE 端口 `8189/udp` 或 TCP 路径可达；
+- H5 端 WHEP 播放拿到 answer 并进入 connected。
+
+浏览器摄像头版本适合演示“端到端低延迟直播闭环”。如果要追求更高画质和更稳定码率，可以扩展 OBS/WHIP 作为专业推流端，但当前录屏版本保持浏览器直采，降低演示操作成本。
 
 ## 图 5-2-2：PC 到后端的数据流
 
@@ -61,3 +85,4 @@ PC 端不是营销页，而是主播/商家的作业台：
 | 主播改规则会不会影响正在竞拍用户？ | 排期/启动后规则冻结，热路径使用服务端规则；PC 端错误会展示后端权威拒绝。 |
 | 诊断面板是不是静态假数据？ | 监控路由来自 `MonitorHandler` 查询 PG/Redis/outbox/scheduler，不是纯前端 mock。 |
 | AI 选品会不会直接发布假信息？ | listing draft 要 host apply，且 `human_review_required/no_auto_publish` 写入 safety。 |
+| 为什么支付曾经卡住？ | PC/H5 共公网 IP 时 cookie 串号，H5 带 host session 支付被后端 403；现在用端口作用域 cookie 解决。 |

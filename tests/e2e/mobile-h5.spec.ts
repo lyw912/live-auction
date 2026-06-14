@@ -20,13 +20,13 @@ async function expectDockConnection(page: Page, text: string) {
 }
 
 async function raisePreparedBid(page: Page, amountText: string) {
-  const amount = page.getByLabel('auction-state').locator('.bid-stepper').locator('span');
+  const amount = page.getByLabel('出价金额');
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    if ((await amount.textContent().catch(() => ''))?.includes(amountText)) return;
+    if ((await amount.inputValue().catch(() => '')).includes(amountText)) return;
     await page.getByRole('button', { name: 'increase' }).click();
     await page.waitForTimeout(50);
   }
-  await expect(amount).toContainText(amountText);
+  await expect(amount).toHaveValue(new RegExp(amountText.replace('.', '\\.')));
 }
 
 async function openLiveOpsPanel(page: Page) {
@@ -796,6 +796,42 @@ test('H5 bid stays pending until authoritative accepted response', async ({ page
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
 });
 
+test('H5 lets bidder enter a higher valid ladder amount', async ({ page }) => {
+  const bidArrived = new Promise<{ idempotencyKey: string | null; body: Record<string, unknown> }>((resolve) => {
+    void page.route('/api/auctions/auc_live/bids', async (route, request) => {
+      resolve({
+        idempotencyKey: request.headers()['idempotency-key'] ?? null,
+        body: request.postDataJSON() as Record<string, unknown>
+      });
+      await route.fulfill({
+        json: {
+          result: 'ACCEPTED',
+          bid_id: 'bid_manual_500',
+          auction_id: 'auc_live',
+          seq: 42,
+          current_price_cents: 50000,
+          current_winner_id: 'user_1',
+          end_at: '2099-05-22T14:00:00Z',
+          server_time_ms: Date.parse('2099-05-22T13:59:00Z'),
+          reject_reason: null
+        }
+      });
+    });
+  });
+
+  await page.goto('/?stateMatrix=1');
+  await page.getByRole('button', { name: '竞价中' }).click();
+  const amount = page.getByLabel('出价金额');
+  await amount.fill('500');
+  await expect(page.getByTestId('bid-cta')).toHaveText(/出一手 ¥500.00/);
+  await page.getByTestId('bid-cta').click();
+  const bidRequest = await bidArrived;
+
+  expect(bidRequest.idempotencyKey).toBe(bidRequest.body.client_bid_id);
+  expect(bidRequest.body.amount_cents).toBe(50000);
+  expect(bidRequest.body.client_seen_seq).toBe(41);
+});
+
 test('H5 local bid lock suppresses rapid duplicate clicks', async ({ page }) => {
   let bidRequests = 0;
   let releaseBid: (value?: unknown) => void = () => undefined;
@@ -1165,11 +1201,11 @@ test('H5 fat-finger confirm waits for confirm API before accepted UI', async ({ 
   await expect(page.getByTestId('bid-cta')).toBeDisabled();
 });
 
-test('H5 payment double click sends one mock payment and reaches paid UI', async ({ page }) => {
+test('H5 payment double click sends one alipay request and submits the cashier form', async ({ page }) => {
   let payCount = 0;
   let releasePayment: (value?: unknown) => void = () => undefined;
   const paymentArrived = new Promise<{ idempotencyKey: string | null; body: Record<string, unknown> }>((resolve) => {
-    void page.route('/api/orders/ord_pending/pay-mock', async (route, request) => {
+    void page.route('/api/orders/ord_pending/pay', async (route, request) => {
       payCount += 1;
       resolve({
         idempotencyKey: request.headers()['idempotency-key'] ?? null,
@@ -1181,9 +1217,15 @@ test('H5 payment double click sends one mock payment and reaches paid UI', async
       await route.fulfill({
         json: {
           order_id: 'ord_pending',
-          order_status: 'PAID',
-          paid_at: '2026-05-22T13:10:00Z',
-          deposit_status: 'REFUNDED'
+          order_status: 'PAYMENT_INITIATED',
+          provider: 'alipay_sandbox',
+          provider_payment_id: 'alipay_ord_pending',
+          client_action: {
+            type: 'redirect_form',
+            method: 'GET',
+            url: 'https://openapi-sandbox.dl.alipaydev.com/gateway.do',
+            html: '<!doctype html><html><body><form id="alipay-submit" method="get" action="https://openapi-sandbox.dl.alipaydev.com/gateway.do"><input name="out_trade_no" value="alipay_ord_pending"></form></body></html>'
+          }
         }
       });
     });
@@ -1195,29 +1237,29 @@ test('H5 payment double click sends one mock payment and reaches paid UI', async
   await payButton.dblclick();
   const paymentRequest = await paymentArrived;
 
-  await expect(page.getByText('等待支付确认')).toBeVisible();
+  await expect(page.getByText('等待支付确认').first()).toBeVisible();
   await expect(payButton).toBeDisabled();
   expect(paymentRequest.idempotencyKey).toBeTruthy();
   expect(paymentRequest.body.confirm).toBe(true);
   expect(payCount).toBe(1);
 
   releasePayment();
-  await expect(page.getByLabel('auction-state').locator('.eyebrow')).toHaveText('已支付');
-  await expect(page.getByText('保证金已处理')).toBeVisible();
-  await expect(payButton).toHaveText(/已支付/);
-  await expect(payButton).toBeDisabled();
+  await expect(page.locator('form#alipay-submit')).toHaveAttribute('action', 'https://openapi-sandbox.dl.alipaydev.com/gateway.do');
+  await expect(page.locator('input[name="out_trade_no"]')).toHaveValue('alipay_ord_pending');
   expect(payCount).toBe(1);
 });
 
 test('H5 winner result sheet locks order and shares the single payment path', async ({ page }) => {
   await page.context().grantPermissions(['clipboard-write']);
   let payCount = 0;
-  await page.route('/api/orders/ord_pending/pay-mock', async (route) => {
+  await page.route('/api/orders/ord_pending/pay', async (route) => {
     payCount += 1;
     await route.fulfill({
       json: {
         order_id: 'ord_pending',
         order_status: 'PAID',
+        provider: 'alipay_sandbox',
+        provider_payment_id: 'alipay_ord_pending',
         paid_at: '2026-05-22T13:10:00Z',
         deposit_status: 'REFUNDED'
       }
@@ -1991,6 +2033,30 @@ test('H5 renders realtime leaderboard and event atmosphere controls', async ({ p
   await expect(cue).toHaveAttribute('data-cause-seq', '42');
   await expect(cue).toHaveAttribute('data-event-type', 'bid_accepted');
   await expect(cue).toHaveAttribute('data-user-scope', 'self');
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('auction:event', {
+      detail: {
+        auction_id: 'auc_live',
+        event_type: 'bid_accepted',
+        seq: 43,
+        payload: {
+          current_price_cents: 45000,
+          current_winner_id: 'user_2',
+          user_id: 'user_2',
+          leader_user_masked: '陈**',
+          end_at: '2099-05-22T14:00:25Z',
+          server_time: '2099-05-22T13:59:54Z'
+        }
+      }
+    }));
+  });
+
+  await expect(cue).toContainText('已延时');
+  await expect(cue).toContainText('最后窗口出价，竞拍继续');
+  await expect(page.getByTestId('pressure-action-card')).toContainText('加时继续抢');
+  await expect(page.getByTestId('pressure-action-card')).toContainText('继续出价 ¥500.00');
+  await expect(page.getByTestId('auction-countdown')).toHaveAttribute('data-effect', 'extension-stretch');
 });
 
 test('H5 leaderboard sheet shows action metrics without moving the bid CTA', async ({ page }) => {

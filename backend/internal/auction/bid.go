@@ -111,29 +111,40 @@ type PaymentInput struct {
 }
 
 type ProviderPaymentWebhook struct {
+	Provider          string `json:"provider,omitempty"`
 	ProviderEventID   string `json:"provider_event_id"`
 	ProviderPaymentID string `json:"provider_payment_id"`
 	OrderID           string `json:"order_id"`
 	EventType         string `json:"event_type"`
 	Signature         string `json:"signature"`
+	ProviderTradeNo   string `json:"provider_trade_no,omitempty"`
+	TradeStatus       string `json:"trade_status,omitempty"`
+	PaymentMethod     string `json:"payment_method,omitempty"`
 }
 
 type Order struct {
-	ID             string     `json:"id"`
-	AuctionID      string     `json:"auction_id"`
-	WinnerID       string     `json:"winner_id"`
-	AmountCents    int64      `json:"amount_cents"`
-	Status         string     `json:"status"`
-	DepositCents   int64      `json:"deposit_cents"`
-	DepositStatus  string     `json:"deposit_status"`
-	ExpireAt       time.Time  `json:"expire_at"`
-	PaidAt         *time.Time `json:"paid_at,omitempty"`
-	ProviderID     *string    `json:"provider_payment_id,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
-	IncrementCents int64      `json:"increment_cents"`
-	CapPriceCents  *int64     `json:"cap_price_cents,omitempty"`
-	Item           Item       `json:"item"`
-	Rule           Rule       `json:"rule"`
+	ID                  string     `json:"id"`
+	AuctionID           string     `json:"auction_id"`
+	WinnerID            string     `json:"winner_id"`
+	AmountCents         int64      `json:"amount_cents"`
+	Status              string     `json:"status"`
+	DepositCents        int64      `json:"deposit_cents"`
+	DepositStatus       string     `json:"deposit_status"`
+	ExpireAt            time.Time  `json:"expire_at"`
+	PaidAt              *time.Time `json:"paid_at,omitempty"`
+	ProviderID          *string    `json:"provider_payment_id,omitempty"`
+	PaymentProvider     string     `json:"payment_provider,omitempty"`
+	PaymentEventID      string     `json:"payment_event_id,omitempty"`
+	PaymentStatus       string     `json:"payment_status,omitempty"`
+	ProviderTradeNo     string     `json:"provider_trade_no,omitempty"`
+	ProviderTradeStatus string     `json:"provider_trade_status,omitempty"`
+	PaymentMethod       string     `json:"payment_method,omitempty"`
+	PaymentProcessedAt  *time.Time `json:"payment_processed_at,omitempty"`
+	CreatedAt           time.Time  `json:"created_at"`
+	IncrementCents      int64      `json:"increment_cents"`
+	CapPriceCents       *int64     `json:"cap_price_cents,omitempty"`
+	Item                Item       `json:"item"`
+	Rule                Rule       `json:"rule"`
 }
 
 type PaymentResponse struct {
@@ -159,20 +170,27 @@ type BidHistoryRow struct {
 }
 
 type OrderHistoryRow struct {
-	OrderID        string     `json:"order_id"`
-	AuctionID      string     `json:"auction_id"`
-	AmountCents    int64      `json:"amount_cents"`
-	OrderStatus    string     `json:"order_status"`
-	DepositCents   int64      `json:"deposit_cents"`
-	DepositStatus  string     `json:"deposit_status"`
-	ExpireAt       time.Time  `json:"expire_at"`
-	PaidAt         *time.Time `json:"paid_at,omitempty"`
-	ProviderID     *string    `json:"provider_payment_id,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
-	IncrementCents int64      `json:"increment_cents"`
-	CapPriceCents  *int64     `json:"cap_price_cents,omitempty"`
-	Item           Item       `json:"item"`
-	Rule           Rule       `json:"rule"`
+	OrderID             string     `json:"order_id"`
+	AuctionID           string     `json:"auction_id"`
+	AmountCents         int64      `json:"amount_cents"`
+	OrderStatus         string     `json:"order_status"`
+	DepositCents        int64      `json:"deposit_cents"`
+	DepositStatus       string     `json:"deposit_status"`
+	ExpireAt            time.Time  `json:"expire_at"`
+	PaidAt              *time.Time `json:"paid_at,omitempty"`
+	ProviderID          *string    `json:"provider_payment_id,omitempty"`
+	PaymentProvider     string     `json:"payment_provider,omitempty"`
+	PaymentEventID      string     `json:"payment_event_id,omitempty"`
+	PaymentStatus       string     `json:"payment_status,omitempty"`
+	ProviderTradeNo     string     `json:"provider_trade_no,omitempty"`
+	ProviderTradeStatus string     `json:"provider_trade_status,omitempty"`
+	PaymentMethod       string     `json:"payment_method,omitempty"`
+	PaymentProcessedAt  *time.Time `json:"payment_processed_at,omitempty"`
+	CreatedAt           time.Time  `json:"created_at"`
+	IncrementCents      int64      `json:"increment_cents"`
+	CapPriceCents       *int64     `json:"cap_price_cents,omitempty"`
+	Item                Item       `json:"item"`
+	Rule                Rule       `json:"rule"`
 }
 
 // PlaceBidPostgresLegacyForTests is the pre-Redis PostgreSQL decision path.
@@ -486,6 +504,10 @@ func (r *Repository) HandleProviderWebhook(ctx context.Context, input ProviderPa
 	if input.ProviderEventID == "" || input.ProviderPaymentID == "" || input.OrderID == "" || input.EventType == "" {
 		return PaymentResponse{}, apierrors.New(apierrors.CodeInvalidArgument, "provider_event_id, provider_payment_id, order_id, and event_type are required", http.StatusBadRequest)
 	}
+	provider := input.Provider
+	if provider == "" {
+		provider = "local_fake"
+	}
 	signatureValid := VerifyProviderWebhook(input, secret)
 	tx, err := r.beginTx(ctx)
 	if err != nil {
@@ -498,6 +520,9 @@ func (r *Repository) HandleProviderWebhook(ctx context.Context, input ProviderPa
 		"provider_payment_id": input.ProviderPaymentID,
 		"order_id":            input.OrderID,
 		"event_type":          input.EventType,
+		"provider_trade_no":   input.ProviderTradeNo,
+		"trade_status":        input.TradeStatus,
+		"payment_method":      input.PaymentMethod,
 	})
 	if err != nil {
 		return PaymentResponse{}, err
@@ -505,10 +530,10 @@ func (r *Repository) HandleProviderWebhook(ctx context.Context, input ProviderPa
 	inserted := false
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO payment_events (provider, provider_event_id, provider_payment_id, order_id, event_type, signature_valid, processed_at, payload_json, trace_id)
-		VALUES ('local_fake', $1, $2, $3, $4, $5, CASE WHEN $5 THEN now() ELSE NULL END, $6, $7)
+		VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $6 THEN now() ELSE NULL END, $7, $8)
 		ON CONFLICT (provider, provider_event_id) DO NOTHING
 		RETURNING true
-	`, input.ProviderEventID, input.ProviderPaymentID, input.OrderID, input.EventType, signatureValid, payload, traceID).Scan(&inserted); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	`, provider, input.ProviderEventID, input.ProviderPaymentID, input.OrderID, input.EventType, signatureValid, payload, traceID).Scan(&inserted); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return PaymentResponse{}, err
 	}
 	if !signatureValid {
@@ -637,6 +662,7 @@ func (r *Repository) ReconcileProviderPayments(ctx context.Context, limit int, g
 		`, orderID, providerPaymentID).Scan(&providerEventID)
 		if err == nil {
 			webhook := ProviderPaymentWebhook{
+				Provider:          "local_fake",
 				ProviderEventID:   providerEventID + "_reconcile",
 				ProviderPaymentID: providerPaymentID,
 				OrderID:           orderID,
@@ -1422,6 +1448,8 @@ func (r *Repository) ListOrdersFiltered(ctx context.Context, userID string, role
 			SELECT o.id, o.auction_id, o.winner_id, o.amount_cents, o.status,
 			       o.deposit_cents, o.deposit_status, o.expire_at, o.paid_at,
 			       o.provider_payment_id, o.created_at,
+			       COALESCE(pe.provider, ''), COALESCE(pe.provider_event_id, ''), COALESCE(pe.event_type, ''), pe.processed_at,
+			       COALESCE(pe.payload_json->>'provider_trade_no', ''), COALESCE(pe.payload_json->>'trade_status', ''), COALESCE(pe.payload_json->>'payment_method', ''),
 			       a.increment_cents, a.cap_price_cents,
 			       i.id, i.title, i.image_url, i.description, i.status, i.created_at,
 			       ar.duration_seconds, ar.extend_window_seconds, ar.extend_by_seconds,
@@ -1433,6 +1461,13 @@ func (r *Repository) ListOrdersFiltered(ctx context.Context, userID string, role
 			JOIN rooms rm ON rm.id = a.room_id
 			JOIN items i ON i.id = a.item_id
 			JOIN auction_rules ar ON ar.auction_id = a.id AND ar.rule_version = a.rule_version
+			LEFT JOIN LATERAL (
+				SELECT provider, provider_event_id, event_type, processed_at, payload_json
+				FROM payment_events
+				WHERE order_id = o.id
+				ORDER BY CASE WHEN event_type = 'payment_succeeded' THEN 0 ELSE 1 END, processed_at DESC, id DESC
+				LIMIT 1
+			) pe ON true
 			WHERE rm.host_id = $1
 			  AND ($2 = '' OR o.auction_id = $2)
 			ORDER BY o.created_at DESC
@@ -1444,6 +1479,8 @@ func (r *Repository) ListOrdersFiltered(ctx context.Context, userID string, role
 			SELECT o.id, o.auction_id, o.winner_id, o.amount_cents, o.status,
 			       o.deposit_cents, o.deposit_status, o.expire_at, o.paid_at,
 			       o.provider_payment_id, o.created_at,
+			       COALESCE(pe.provider, ''), COALESCE(pe.provider_event_id, ''), COALESCE(pe.event_type, ''), pe.processed_at,
+			       COALESCE(pe.payload_json->>'provider_trade_no', ''), COALESCE(pe.payload_json->>'trade_status', ''), COALESCE(pe.payload_json->>'payment_method', ''),
 			       a.increment_cents, a.cap_price_cents,
 			       i.id, i.title, i.image_url, i.description, i.status, i.created_at,
 			       ar.duration_seconds, ar.extend_window_seconds, ar.extend_by_seconds,
@@ -1454,6 +1491,13 @@ func (r *Repository) ListOrdersFiltered(ctx context.Context, userID string, role
 			JOIN auctions a ON a.id = o.auction_id
 			JOIN items i ON i.id = a.item_id
 			JOIN auction_rules ar ON ar.auction_id = a.id AND ar.rule_version = a.rule_version
+			LEFT JOIN LATERAL (
+				SELECT provider, provider_event_id, event_type, processed_at, payload_json
+				FROM payment_events
+				WHERE order_id = o.id
+				ORDER BY CASE WHEN event_type = 'payment_succeeded' THEN 0 ELSE 1 END, processed_at DESC, id DESC
+				LIMIT 1
+			) pe ON true
 			WHERE o.winner_id = $1
 			  AND ($2 = '' OR o.auction_id = $2)
 			ORDER BY o.created_at DESC
@@ -1472,7 +1516,9 @@ func (r *Repository) ListOrdersFiltered(ctx context.Context, userID string, role
 		if err := rows.Scan(
 			&order.ID, &order.AuctionID, &order.WinnerID, &order.AmountCents, &order.Status,
 			&order.DepositCents, &order.DepositStatus, &order.ExpireAt, &order.PaidAt,
-			&order.ProviderID, &order.CreatedAt, &order.IncrementCents, &order.CapPriceCents,
+			&order.ProviderID, &order.CreatedAt, &order.PaymentProvider, &order.PaymentEventID,
+			&order.PaymentStatus, &order.PaymentProcessedAt, &order.ProviderTradeNo, &order.ProviderTradeStatus,
+			&order.PaymentMethod, &order.IncrementCents, &order.CapPriceCents,
 			&order.Item.ID, &order.Item.Title, &order.Item.ImageURL, &order.Item.Description,
 			&order.Item.Status, &order.Item.CreatedAt,
 			&order.Rule.DurationSeconds, &order.Rule.ExtendWindowSeconds, &order.Rule.ExtendBySeconds,
@@ -1522,20 +1568,27 @@ func ToOrderHistoryRows(orders []Order) []OrderHistoryRow {
 	rows := make([]OrderHistoryRow, 0, len(orders))
 	for _, order := range orders {
 		rows = append(rows, OrderHistoryRow{
-			OrderID:        order.ID,
-			AuctionID:      order.AuctionID,
-			AmountCents:    order.AmountCents,
-			OrderStatus:    order.Status,
-			DepositCents:   order.DepositCents,
-			DepositStatus:  order.DepositStatus,
-			ExpireAt:       order.ExpireAt,
-			PaidAt:         order.PaidAt,
-			ProviderID:     order.ProviderID,
-			CreatedAt:      order.CreatedAt,
-			IncrementCents: order.IncrementCents,
-			CapPriceCents:  order.CapPriceCents,
-			Item:           order.Item,
-			Rule:           order.Rule,
+			OrderID:             order.ID,
+			AuctionID:           order.AuctionID,
+			AmountCents:         order.AmountCents,
+			OrderStatus:         order.Status,
+			DepositCents:        order.DepositCents,
+			DepositStatus:       order.DepositStatus,
+			ExpireAt:            order.ExpireAt,
+			PaidAt:              order.PaidAt,
+			ProviderID:          order.ProviderID,
+			PaymentProvider:     order.PaymentProvider,
+			PaymentEventID:      order.PaymentEventID,
+			PaymentStatus:       order.PaymentStatus,
+			ProviderTradeNo:     order.ProviderTradeNo,
+			ProviderTradeStatus: order.ProviderTradeStatus,
+			PaymentMethod:       order.PaymentMethod,
+			PaymentProcessedAt:  order.PaymentProcessedAt,
+			CreatedAt:           order.CreatedAt,
+			IncrementCents:      order.IncrementCents,
+			CapPriceCents:       order.CapPriceCents,
+			Item:                order.Item,
+			Rule:                order.Rule,
 		})
 	}
 	return rows
