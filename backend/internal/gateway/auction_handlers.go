@@ -59,6 +59,29 @@ type currentUserAuctionSnapshot struct {
 	MaxBidIntent *auction.MaxBidIntent `json:"max_bid_intent,omitempty"`
 }
 
+type liveSessionSource struct {
+	Protocol string `json:"protocol"`
+	URL      string `json:"url"`
+	MimeType string `json:"mimeType,omitempty"`
+	Priority int    `json:"priority"`
+}
+
+type liveSessionCapabilities struct {
+	NativeHlsOnSafari bool `json:"nativeHlsOnSafari"`
+	MSEHls            bool `json:"mseHls"`
+	WebRTC            bool `json:"webrtc"`
+}
+
+type liveSessionPlayback struct {
+	AuctionID       string                  `json:"auctionId"`
+	IsLive          bool                    `json:"isLive"`
+	PosterURL       *string                 `json:"posterURL,omitempty"`
+	Sources         []liveSessionSource     `json:"sources"`
+	LatencyTargetMS *int                    `json:"latencyTargetMs,omitempty"`
+	Capabilities    liveSessionCapabilities `json:"capabilities"`
+	SessionEpoch    string                  `json:"sessionEpoch,omitempty"`
+}
+
 const (
 	// HTTP polling is a follower/read path. A short public cache absorbs
 	// live-room refresh storms without making bid decisions depend on cached
@@ -667,6 +690,94 @@ func (h AuctionHandler) GetAuction(w http.ResponseWriter, r *http.Request) {
 		snapshot.MaxBidIntent = &intent
 	}
 	writeResult(w, r, http.StatusOK, snapshot, nil)
+}
+
+func (h AuctionHandler) LiveSession(w http.ResponseWriter, r *http.Request) {
+	user, ok := currentUser(r)
+	if !ok {
+		writeError(w, r, apierrors.New(apierrors.CodeUnauthorized, "missing auth user", http.StatusUnauthorized))
+		return
+	}
+	auctionID := chi.URLParam(r, "id")
+	if auctionID == "" {
+		writeError(w, r, apierrors.New(apierrors.CodeInvalidArgument, "missing auction id", http.StatusBadRequest))
+		return
+	}
+	if _, err := h.ACL.requireActiveMembershipForAuction(r.Context(), user, auctionID, traceID(r.Context())); err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	result, err := h.getAuctionForHTTPSnapshot(r.Context(), auctionID)
+	if err != nil {
+		writeResult(w, r, http.StatusOK, nil, err)
+		return
+	}
+	playback := h.liveSessionPlayback(result)
+	writeResult(w, r, http.StatusOK, playback, nil)
+}
+
+func (h AuctionHandler) liveSessionPlayback(row auction.Auction) liveSessionPlayback {
+	protocol := strings.TrimSpace(h.Config.LiveDemoMediaProtocol)
+	if protocol == "" {
+		protocol = "mp4"
+	}
+	mediaURL := strings.TrimSpace(h.Config.LiveDemoMediaURL)
+	if mediaURL == "" {
+		mediaURL = "/demo/jade-live-loop.mp4"
+	}
+	mimeType := strings.TrimSpace(h.Config.LiveDemoMimeType)
+	if mimeType == "" {
+		switch protocol {
+		case "hls", "ll-hls":
+			mimeType = "application/vnd.apple.mpegurl"
+		case "mp4":
+			mimeType = "video/mp4"
+		}
+	}
+	priority := 10
+	if protocol == "mp4" {
+		priority = 90
+	}
+	sources := []liveSessionSource{
+		{
+			Protocol: protocol,
+			URL:      mediaURL,
+			MimeType: mimeType,
+			Priority: priority,
+		},
+	}
+	if protocol != "mp4" && strings.TrimSpace(h.Config.LiveFallbackMP4URL) != "" {
+		sources = append(sources, liveSessionSource{
+			Protocol: "mp4",
+			URL:      strings.TrimSpace(h.Config.LiveFallbackMP4URL),
+			MimeType: "video/mp4",
+			Priority: 90,
+		})
+	}
+	var latencyTarget *int
+	if h.Config.LiveDemoLatencyMs > 0 {
+		latencyTarget = &h.Config.LiveDemoLatencyMs
+	}
+	var posterURL *string
+	if row.Item.ImageURL != nil && strings.TrimSpace(*row.Item.ImageURL) != "" {
+		value := *row.Item.ImageURL
+		if !strings.HasPrefix(value, "http://") && !strings.HasPrefix(value, "https://") && !strings.HasPrefix(value, "/api/media/") && !strings.HasPrefix(value, "/demo/") {
+			value = publicMediaURL(value)
+		}
+		posterURL = &value
+	}
+	return liveSessionPlayback{
+		AuctionID:       row.ID,
+		IsLive:          h.Config.LiveDemoIsLive,
+		PosterURL:       posterURL,
+		Sources:         sources,
+		LatencyTargetMS: latencyTarget,
+		Capabilities: liveSessionCapabilities{
+			NativeHlsOnSafari: true,
+			MSEHls:            true,
+			WebRTC:            false,
+		},
+	}
 }
 
 func (h AuctionHandler) getAuctionForHTTPSnapshot(ctx context.Context, auctionID string) (auction.Auction, error) {

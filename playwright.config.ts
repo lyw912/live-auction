@@ -36,7 +36,7 @@ export default defineConfig({
         ...devices['Pixel 5'],
         baseURL: h5URL
       },
-      testMatch: /(?:mobile-h5|atmosphere-engine)\.spec\.ts/
+      testMatch: /(?:mobile-h5(?:-media-isolation)?|atmosphere-engine)\.spec\.ts/
     },
     {
       name: 'pc-console',

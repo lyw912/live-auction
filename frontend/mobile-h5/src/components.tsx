@@ -158,7 +158,7 @@ export function LiveStage({
   const shouldReduceMotion = useReducedMotion();
   const posterCandidate = item.video_poster_url ?? item.videoPosterURL ?? item.image_url ?? item.imageURL;
   const media = useLiveMediaSource(activeAuctionID, posterCandidate);
-  const mediaURL = media.posterURL || displayMediaURL(posterCandidate);
+  const mediaURL = media.data?.posterURL || displayMediaURL(posterCandidate);
   const activeAuction = auctions.find((auction) => auction.id === activeAuctionID);
   const queuedCount = auctions.filter((auction) => auction.id !== activeAuctionID).length;
   const proofChips: Array<{ icon: React.ReactNode; label: string }> = [];
@@ -216,7 +216,7 @@ export function LiveStage({
       data-atmosphere-gated={atmosphereGated ? 'true' : 'false'}
       style={mediaURL ? { '--stage-media-url': `url("${mediaURL}")` } as React.CSSProperties : undefined}
     >
-      <LiveBackdrop source={media} poster={mediaURL} />
+      <LiveBackdrop playback={media.data} poster={mediaURL} mediaError={media.isError} />
       <AtmosphereCueNotice cue={atmosphereCue} />
       <BidWaterfall chips={atmosphereGated ? [] : waterfallChips} intensity={atmosphereIntensity} />
       <ClimaxLayer

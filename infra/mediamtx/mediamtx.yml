@@ -1,0 +1,37 @@
+logLevel: info
+readTimeout: 10s
+writeTimeout: 10s
+writeQueueSize: 512
+udpMaxPayloadSize: 1472
+
+rtsp: yes
+rtspAddress: :8554
+rtmp: no
+hls: yes
+hlsAddress: :8888
+hlsEncryption: no
+hlsServerKey: server.key
+hlsServerCert: server.crt
+hlsAllowOrigins:
+  - "*"
+hlsTrustedProxies: []
+hlsAlwaysRemux: yes
+hlsVariant: lowLatency
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+hlsSegmentMaxSize: 50M
+hlsDirectory: ""
+hlsMuxerCloseAfter: 60s
+webrtc: no
+srt: no
+
+paths:
+  auction-live:
+    source: publisher
+    sourceOnDemand: no
+    runOnInit: >
+      ffmpeg -hide_banner -loglevel warning -re -stream_loop -1
+      -i /media/jade-live-loop.mp4
+      -c copy -f rtsp rtsp://127.0.0.1:8554/auction-live
+    runOnInitRestart: yes

@@ -38,6 +38,13 @@ type Config struct {
 	AllowMockAuth  bool
 	SessionTTL     time.Duration
 
+	LiveDemoMediaProtocol string
+	LiveDemoMediaURL      string
+	LiveDemoMimeType      string
+	LiveDemoIsLive        bool
+	LiveDemoLatencyMs     int
+	LiveFallbackMP4URL    string
+
 	BidUserLimitPerSecond        int
 	BidIPLimitPerSecond          int
 	BidAuctionLimitPerSecond     int
@@ -129,6 +136,13 @@ func Load() Config {
 		MockUserID:     getEnv("MOCK_USER_ID", "user_1"),
 		AllowMockAuth:  getEnvBool("ALLOW_MOCK_AUTH", false),
 		SessionTTL:     getEnvDuration("SESSION_TTL", 12*time.Hour),
+
+		LiveDemoMediaProtocol: getEnv("LIVE_DEMO_MEDIA_PROTOCOL", "mp4"),
+		LiveDemoMediaURL:      getEnv("LIVE_DEMO_MEDIA_URL", "/demo/jade-live-loop.mp4"),
+		LiveDemoMimeType:      getEnv("LIVE_DEMO_MIME_TYPE", "video/mp4"),
+		LiveDemoIsLive:        getEnvBool("LIVE_DEMO_IS_LIVE", false),
+		LiveDemoLatencyMs:     getEnvInt("LIVE_DEMO_LATENCY_MS", 0),
+		LiveFallbackMP4URL:    getEnv("LIVE_MEDIA_FALLBACK_MP4_URL", ""),
 
 		BidUserLimitPerSecond:        getEnvInt("BID_USER_LIMIT_PER_SECOND", 3),
 		BidIPLimitPerSecond:          getEnvInt("BID_IP_LIMIT_PER_SECOND", 10),

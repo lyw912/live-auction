@@ -193,6 +193,8 @@ body {
 }
 
 .console-shell {
+  display: flex;
+  width: 100vw;
   height: 100vh;
   min-height: 100vh;
   overflow: hidden;
@@ -200,6 +202,8 @@ body {
 }
 
 .sider {
+  flex-shrink: 0;
+  box-sizing: border-box;
   height: 100vh;
   overflow-y: auto;
   background: #171923;
@@ -327,6 +331,7 @@ body {
 }
 
 .content {
+  flex: 1 1 auto;
   height: 100vh;
   min-width: 0;
   box-sizing: border-box;

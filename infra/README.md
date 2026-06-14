@@ -41,3 +41,28 @@ Prometheus alert rules are loaded from `infra/prometheus/rules/live-auction-aler
 Runbooks for those local alerts are in `docs/design/05-alert-runbooks.md`; no Alertmanager receiver is configured in this local stack.
 
 Data is stored in Docker named volumes. Use `docker compose -f infra\docker-compose.yml down -v` only when you intentionally want to delete local data.
+
+## MediaMTX LL-HLS
+
+Phase 3 adds `mediamtx`, which loops `frontend/mobile-h5/public/demo/jade-live-loop.mp4` through FFmpeg copy mode and exposes LL-HLS at:
+
+```text
+http://127.0.0.1:8888/auction-live/index.m3u8?cookieCheck=1
+```
+
+Smoke check:
+
+```powershell
+.\scripts\smoke-mediamtx-llhls.ps1
+```
+
+Backend descriptor env for the LL-HLS demo path:
+
+```powershell
+$env:LIVE_DEMO_MEDIA_PROTOCOL='ll-hls'
+$env:LIVE_DEMO_MEDIA_URL='http://127.0.0.1:8888/auction-live/index.m3u8?cookieCheck=1'
+$env:LIVE_DEMO_MIME_TYPE='application/vnd.apple.mpegurl'
+$env:LIVE_DEMO_IS_LIVE='true'
+$env:LIVE_DEMO_LATENCY_MS='3000'
+$env:LIVE_MEDIA_FALLBACK_MP4_URL='/demo/jade-live-loop.mp4'
+```

@@ -1,4 +1,4 @@
-# Phase 1 Progress Log
+# Phase 1/2/3 Progress Log
 
 ## 2026-06-14
 
@@ -79,3 +79,47 @@
   - `pnpm test:frontend:domain` passed.
   - `pnpm build` passed.
 - Build note: PC still emits a >500 kB chunk warning for `CommandVizStrip` (ECharts/visx realtime visualization), but Arco is no longer present and the warning is non-blocking.
+
+## 2026-06-14 Phase 2/3
+
+- Resumed from Phase 1 commit `732dd3d60aae0e6a7ecaa416b85b04e40dfd9f3b`.
+- Read governing docs:
+  - `planning/01-frontend-media-payment-refactor.md`
+  - `planning/03-phase2-media-contract-execution-guide.md`
+- Confirmed current dirty/untracked state includes unrelated leftovers and the required untracked Phase 2 execution guide.
+- Started Phase 2 WP-1/WP-2 planning.
+- Verified Phase 2 scope:
+  - Add `MediaPlayback` contract and frontend adapters.
+  - Add backend `GET /api/live/sessions/{id}` descriptor API in authenticated API group.
+  - Keep Live Session API free of auction truth fields.
+  - Keep media failure isolated from bidding, WS, recovery, countdown, and payment.
+  - Add `hls.js` dynamically for HLS/LL-HLS on non-Safari browsers.
+- Verified current official MediaMTX direction for Phase 3:
+  - Latest release observed: v1.19.1 on 2026-06-10.
+  - Official config supports `hlsAddress: :8888`, `hlsVariant: lowLatency`, and `alwaysAvailableFile`.
+  - Phase 3 will use MediaMTX LL-HLS plus MP4 fallback through the Phase 2 descriptor, not a static-MP4 downgrade.
+- Implemented Phase 2 backend descriptor path:
+  - Config fields: `LIVE_DEMO_MEDIA_PROTOCOL`, `LIVE_DEMO_MEDIA_URL`, `LIVE_DEMO_MIME_TYPE`, `LIVE_DEMO_IS_LIVE`, `LIVE_DEMO_LATENCY_MS`, `LIVE_MEDIA_FALLBACK_MP4_URL`.
+  - Route: `GET /api/live/sessions/{id}` inside authenticated API group.
+  - Handler returns a media-only DTO and uses existing auction ACL for access.
+  - Added gateway integration tests for media-only schema and membership enforcement.
+- Implemented Phase 2 frontend media contract:
+  - `shared/media/contract.ts`
+  - `shared/media/detect.ts`
+  - `entities/live-session/api.ts`
+  - `entities/live-session/model.ts`
+  - `features/live-media/select-source.ts`
+  - `features/live-media/usePlaybackEngine.ts`
+  - `features/live-media/adapters/{types,mp4,hls,whep}.ts`
+  - Updated `useLiveMediaSource` and `LiveBackdrop`.
+- Installed `hls.js` in `frontend/mobile-h5`.
+- Added frontend domain contract tests for allowed MediaPlayback keys, forbidden auction truth keys, fallback sorting, disabled WHEP seam, and dynamic hls.js import boundary.
+- Added Playwright media isolation test file for descriptor 404, pending descriptor, and bad HLS fallback to MP4.
+- Implemented Phase 3 MediaMTX LL-HLS assets:
+  - `infra/mediamtx/mediamtx.yml`
+  - `mediamtx` service in `infra/docker-compose.yml`
+  - `scripts/smoke-mediamtx-llhls.ps1`
+  - `docs/05-frontend/mobile-h5/04-media-playback-contract.md`
+- Verification so far:
+  - `pnpm --filter mobile-h5 build` passed.
+  - `pnpm test:frontend:domain` passed after splitting pure media selector tests.

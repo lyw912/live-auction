@@ -137,6 +137,7 @@ func NewRouterWithRealtimeAndLedger(cfg config.Config, deps *storage.Dependencie
 			r.With(requireHost).Post("/auctions", auctionHandler.CreateAuction)
 			r.Get("/auctions", auctionHandler.ListAuctions)
 			r.Get("/auctions/{id}", auctionHandler.GetAuction)
+			r.Get("/live/sessions/{id}", auctionHandler.LiveSession)
 			r.With(requireHost).Patch("/auctions/{id}/rules", auctionHandler.UpdateRules)
 			r.With(requireHost).Post("/auctions/{id}/schedule", auctionHandler.Schedule)
 			r.With(requireHost).Post("/auctions/{id}/unschedule", auctionHandler.Unschedule)

@@ -89,6 +89,16 @@ services:
       timeout: 3s
       retries: 20
 
+  mediamtx:
+    image: bluenviron/mediamtx:1.19.1-ffmpeg
+    container_name: live-auction-mediamtx
+    ports:
+      - "8554:8554"
+      - "8888:8888"
+    volumes:
+      - ./mediamtx/mediamtx.yml:/mediamtx.yml:ro
+      - ../frontend/mobile-h5/public/demo/jade-live-loop.mp4:/media/jade-live-loop.mp4:ro
+
   prometheus:
     image: prom/prometheus:v2.54.1
     container_name: live-auction-prometheus

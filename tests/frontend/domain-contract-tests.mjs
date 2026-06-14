@@ -47,7 +47,10 @@ const h5WSContract = await bundle('frontend/mobile-h5/src/features/contracts/ws-
 const h5BidMachine = await bundle('frontend/mobile-h5/src/features/place-bid/bid-machine.ts', 'h5-bid-machine');
 const h5ConnectionMachine = await bundle('frontend/mobile-h5/src/features/connection/connection-machine.ts', 'h5-connection-machine');
 const h5AuctionQuery = await bundle('frontend/mobile-h5/src/entities/auction/query.ts', 'h5-auction-query');
-const h5LiveMedia = await bundle('frontend/mobile-h5/src/features/live-media/useLiveMediaSource.ts', 'h5-live-media');
+const h5MediaContract = await bundle('frontend/mobile-h5/src/shared/media/contract.ts', 'h5-media-contract');
+const h5LiveSessionModel = await bundle('frontend/mobile-h5/src/entities/live-session/model.ts', 'h5-live-session-model');
+const h5LiveMediaSelector = await bundle('frontend/mobile-h5/src/features/live-media/select-source.ts', 'h5-live-media-selector');
+const h5WhepAdapter = await bundle('frontend/mobile-h5/src/features/live-media/adapters/whep.ts', 'h5-whep-adapter');
 const h5PayMockAction = await bundle('frontend/mobile-h5/src/features/pay-order/pay-mock-action.ts', 'h5-pay-mock-action');
 const pcPaymentContract = await bundle('frontend/pc-console/src/features/contracts/payment-readonly-contract.ts', 'pc-payment-contract');
 
@@ -168,12 +171,66 @@ assert.equal(h5BidMachine.bidStateToPhase('confirmRequired'), 'confirm_required'
 assert.equal(h5BidMachine.bidStateToPhase('uncertain'), 'uncertain');
 assert.equal(h5ConnectionMachine.connectionStateToPhase('resuming'), 'recovering');
 assert.equal(h5ConnectionMachine.connectionStateToPhase('connected'), 'connected');
-assert.deepEqual(h5LiveMedia.useLiveMediaSource('auc_live', '/api/media/poster.jpg'), {
-  kind: 'video-file',
-  url: '/demo/jade-live-loop.mp4',
-  posterURL: '/api/media/poster.jpg',
-  isLive: false
-});
+assert.deepEqual(h5LiveMediaSelector.liveSessionQueryKey('auc_live'), ['live-session', 'auc_live']);
+{
+  assert.deepEqual(h5MediaContract.mediaPlaybackAllowedKeys, [
+    'auctionId',
+    'isLive',
+    'posterURL',
+    'sources',
+    'latencyTargetMs',
+    'capabilities',
+    'sessionEpoch'
+  ]);
+  for (const forbidden of ['current_price_cents', 'currentWinnerId', 'status', 'seq', 'endAt', 'settlement_status', 'rule']) {
+    assert.ok(h5MediaContract.mediaPlaybackForbiddenAuctionTruthKeys.includes(forbidden), `${forbidden} must be forbidden in media contract`);
+  }
+  const playback = h5LiveSessionModel.normalizeLiveSessionResponse({
+    auctionId: 'auc_live',
+    isLive: true,
+    posterURL: '/api/media/poster.jpg',
+    sources: [
+      { protocol: 'mp4', url: '/demo/jade-live-loop.mp4', mimeType: 'video/mp4', priority: 90 },
+      { protocol: 'll-hls', url: '/demo/sample-llhls/index.m3u8', mimeType: 'application/vnd.apple.mpegurl', priority: 10 },
+      { protocol: 'whep', url: 'https://example.test/whep', priority: 1 },
+      { protocol: 'unknown', url: '/bad', priority: 0 }
+    ],
+    latencyTargetMs: 3000,
+    capabilities: { nativeHlsOnSafari: true, mseHls: true, webrtc: false }
+  }, 'fallback');
+  assert.equal(playback.auctionId, 'auc_live');
+  assert.equal(playback.isLive, true);
+  assert.equal(playback.sources.length, 3);
+  assert.deepEqual(playback.sources.map((source) => source.protocol), ['whep', 'll-hls', 'mp4']);
+  assert.equal(playback.latencyTargetMs, 3000);
+  assert.deepEqual(playback.capabilities, { nativeHlsOnSafari: true, mseHls: true, webrtc: false });
+  const fallback = h5LiveSessionModel.normalizeLiveSessionResponse({}, 'auc_fallback', '/api/media/poster.jpg');
+  assert.deepEqual(fallback.sources, [{ protocol: 'mp4', url: '/demo/jade-live-loop.mp4', mimeType: 'video/mp4', priority: 90 }]);
+  assert.equal(fallback.posterURL, '/api/media/poster.jpg');
+  assert.equal(h5WhepAdapter.whepAdapter.canPlay(), false);
+  const playable = h5LiveMediaSelector.choosePlayableSource(playback.sources, { canNativeHls: true, mseHlsSupported: false });
+  assert.equal(playable.source.protocol, 'll-hls');
+  const mp4Only = h5LiveMediaSelector.choosePlayableSource(playback.sources, { canNativeHls: false, mseHlsSupported: false });
+  assert.equal(mp4Only.source.protocol, 'mp4');
+}
+assert.throws(() => h5MediaContract.assertMediaPlaybackShape({
+  auctionId: 'auc_live',
+  isLive: false,
+  current_price_cents: 35000,
+  sources: [],
+  capabilities: { nativeHlsOnSafari: false, mseHls: false, webrtc: false }
+}), /unsupported key|auction truth key/);
+{
+  const sourceText = await readFile('frontend/mobile-h5/src/features/live-media/useLiveMediaSource.ts', 'utf8');
+  const playbackText = await readFile('frontend/mobile-h5/src/features/live-media/usePlaybackEngine.ts', 'utf8');
+  const hlsAdapterText = await readFile('frontend/mobile-h5/src/features/live-media/adapters/hls.ts', 'utf8');
+  assert.match(sourceText, /queryKey: liveSessionQueryKey\(auctionID\)/);
+  assert.match(sourceText, /throwOnError: false/);
+  assert.doesNotMatch(sourceText, /auctionWSURL|auctionWSProtocols|deriveCountdown|currentTime|buffered|readyState/);
+  assert.doesNotMatch(playbackText, /deriveCountdown|currentPrice|winner|endAt|currentTime|buffered/);
+  assert.match(hlsAdapterText, /import\('hls\.js'\)/);
+  assert.doesNotMatch(playbackText, /from 'hls\.js'/);
+}
 assert.equal(h5PaymentContract.payMockEndpoint('ord_1'), '/api/orders/ord_1/pay-mock');
 {
   const request = h5PayMockAction.createPaymentRequest('pay-key-1');
